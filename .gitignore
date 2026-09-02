@@ -1,0 +1,44 @@
+# macOS metadata
+.DS_Store
+
+# Local Python environment
+.venv/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Test, type-checker, and formatter caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.coverage
+htmlcov/
+
+# Jupyter temporary files
+.ipynb_checkpoints/
+
+# Local secrets; a documented example may still be committed
+.env
+.env.*
+!.env.example
+
+# Local model caches and model weights
+.genrag/
+models/
+weights/
+*.safetensors
+*.gguf
+*.bin
+*.onnx
+*.pt
+*.pth
+*.ckpt
+
+# Runtime output
+logs/
+*.log
