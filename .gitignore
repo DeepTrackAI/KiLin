@@ -1,6 +1,9 @@
 # macOS metadata
 .DS_Store
 
+# Local editor settings (not required to run or test the project)
+/.vscode/
+
 # Local Python environment
 .venv/
 
