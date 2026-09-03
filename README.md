@@ -1,36 +1,72 @@
 # QAChat
 
-This version sets up a local Python environment and checks the automatically chosen backend: MLX on Apple Silicon Macs, or PyTorch on supported Windows/Linux computers.
+This version sets up MLX/PyTorch and lets you list, check, and download chat-model files; chatting and RAG come next.
 
-## Setup
+## One-time setup
 
-From the QAChat folder, with internet access:
+On a new computer, run the command for your system below from the QAChat folder, with internet access. You only need this initial setup once.
+
+Already finished setup? Go straight to [the notebooks](#start-with-the-notebooks).
 
 Mac/Linux:
+
 ```sh
 sh scripts/setup.sh
 ```
 
 Windows x64 (PowerShell):
+
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
 ```
 
-The setup script installs `uv` if needed, prepares Python 3.12 and the packages using the shared `uv.lock`, then runs `scripts/check_setup.py`. On Apple Silicon it installs both backends, so you can also choose PyTorch.
+The script installs `uv` if needed, prepares Python 3.12 and the packages using `uv.lock`, then runs the backend check. On Apple Silicon it installs both MLX and PyTorch.
 
-`uv.lock` is generated but kept in Git: it records the chosen package versions, including packages required by other packages, so users can repeat our setup instead of choosing versions again. It contains no installed packages or model weights.
-
-After success, you get:
-
-- `.venv/` — each user's own Python environment and installed packages; created locally and excluded from Git.
-- A simple calculation check: the selected backend (MLX or PyTorch) adds `2 + 3`, and the script checks that the answer is `5`. This confirms the backend can run a calculation. It prints the backend, device, and `result: 5.0`, followed by `Setup complete`.
-
-No model weights or API key are needed. This checks the tools; it does not yet answer questions.
+Expect the selected backend/device, `result: 5.0` from the backend calculating `2 + 3`, and `Setup complete`. Setup downloads no model weights and needs no API key. Once you see `Setup complete`, continue to the notebooks below.
 
 Verified on an Apple Silicon Mac. Windows x64 and Linux x64/ARM64 still need real-machine installation tests; Intel Macs and Windows ARM64 are not supported by this setup.
 
-## Try the notebooks
+## Start with the notebooks
 
-After setup finishes, use these examples to see what works and try it yourself. Open a notebook, select Python from QAChat's `.venv`, and run cells from the top, one at a time with Shift+Enter.
+After setup, open these notebooks in order, select Python from QAChat's `.venv`, and run one cell at a time with Shift+Enter:
 
-- [Setup and backend check](notebooks/setup.ipynb) — see which backend and device are used. Edit `A` and `B`, then run the check: `2 + 3` should give `5`. This calls the same code as setup; no LLM is loaded.
+1. [Setup and backend check](notebooks/setup.ipynb) — choose a backend and enter two numbers. The backend calculates their sum and checks the answer, showing that it can run a calculation.
+2. [Model check and download](notebooks/models.ipynb) — choose a model folder, see available models and required package versions, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
+
+After one-time setup, you can do these checks and model downloads through the notebooks; the model commands below are optional. Both notebooks call the same shared code as the application. Neither loads an LLM or starts a chat yet.
+
+## Where files go
+
+- `.venv/` — Python and installed packages; excluded from Git.
+- `models/<model-name>/<revision>/` — weights, tokenizer files, and model settings; inside QAChat, but excluded from Git. Download bookkeeping also stays under `models/`.
+- `uv.lock` — generated package-version record, including packages required by other packages; keep it in Git so others can repeat the setup. It contains no installed packages or weights.
+
+To choose your own storage folder, set `MODEL_DIRECTORY` in the notebook, `--directory` on a command, or `QACHAT_MODEL_HOME` in your environment. An explicit folder overrides the environment setting. Relative paths start at QAChat; absolute paths can point elsewhere, including another drive. Existing files are reused when they match the catalog's `<model-name>/<revision>/` layout.
+
+Never commit model files. If you choose another folder inside the repository, ignore that whole folder too. Git ignore rules do not prevent cloud-sync tools from copying it.
+
+## Optional model commands
+
+Use these instead of the model notebook if you prefer the terminal.
+
+List choices, sizes, local status, and the storage folder without downloading:
+
+```sh
+.venv/bin/python -m qachat.models
+```
+
+Download the 8.32 GB MLX model for Apple Silicon into QAChat's `models/` folder:
+
+```sh
+.venv/bin/python -m qachat.models download qwen3-14b-mlx
+```
+
+Or choose your own storage folder:
+
+```sh
+.venv/bin/python -m qachat.models download qwen3-14b-mlx --directory "~/my-models"
+```
+
+On Windows, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`. The list also includes a smaller PyTorch model. MLX and PyTorch need different weight files.
+
+Correct files are reused and checked before acceptance. Press Ctrl+C to stop, then rerun to retry. These public models need no API key.
