@@ -2,6 +2,7 @@
 
 import argparse
 from importlib import import_module
+import math
 import platform
 import sys
 
@@ -39,14 +40,14 @@ def choose_torch_device(cuda_available: bool, mps_available: bool) -> str:
     return "cpu"
 
 
-def run_calculation(backend: str) -> tuple[str, float]:
-    """Import only the selected library, then calculate 1 + 2 + 3."""
+def run_calculation(backend: str, a: float, b: float) -> tuple[str, float]:
+    """Import only the selected library, then add the two supplied numbers."""
     if backend == "mlx":
         mx = import_module("mlx.core")
         if not mx.metal.is_available():
             raise RuntimeError("MLX Metal is unavailable. Try --backend torch.")
         with mx.stream(mx.gpu):
-            numbers = mx.array([1.0, 2.0, 3.0])
+            numbers = mx.array([a, b], dtype=mx.float32)
             result = float(mx.sum(numbers).item())
         return "metal", result
 
@@ -55,26 +56,36 @@ def run_calculation(backend: str) -> tuple[str, float]:
         device = choose_torch_device(
             torch.cuda.is_available(), torch.backends.mps.is_available()
         )
-        numbers = torch.tensor([1.0, 2.0, 3.0], device=device)
+        numbers = torch.tensor([a, b], dtype=torch.float32, device=device)
         result = float(numbers.sum().item())
         return device, result
 
     raise ValueError("The calculation needs mlx or torch, not auto.")
 
 
-def check_setup(requested: str = "auto") -> dict[str, str | float]:
+def check_setup(
+    requested: str = "auto", *, a: float = 2.0, b: float = 3.0
+) -> dict[str, str | float]:
     """This is the main flow to follow in the debugger or notebook."""
+    a, b = float(a), float(b)
+    expected = a + b  # Ordinary Python calculates the answer independently.
+    if not all(math.isfinite(value) for value in (a, b, expected)):
+        raise ValueError("Use finite numbers whose sum is also finite.")
     system = platform.system()
     machine = platform.machine()
     backend = choose_backend(system, machine, requested)  # Breakpoint 1
-    device, result = run_calculation(backend)  # Breakpoint 2: Step Into here
-    if result != 6.0:
-        raise RuntimeError(f"The calculation returned {result}; expected 6.0.")
+    device, result = run_calculation(backend, a, b)  # Breakpoint 2: Step Into here
+    # Allow tiny rounding differences when using decimal numbers on the backend.
+    if not math.isclose(result, expected, rel_tol=1e-6, abs_tol=1e-6):
+        raise RuntimeError(f"The calculation returned {result}; expected {expected}.")
     return {  # Breakpoint 3: inspect the result before returning
         "python": sys.executable,
         "platform": f"{system}/{machine}",
         "backend": backend,
         "device": device,
+        "a": a,
+        "b": b,
+        "expected": expected,
         "result": result,
     }
 
@@ -82,16 +93,21 @@ def check_setup(requested: str = "auto") -> dict[str, str | float]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("auto", "mlx", "torch"), default="auto")
+    parser.add_argument("--a", type=float, default=2.0, help="First number (default: 2).")
+    parser.add_argument("--b", type=float, default=3.0, help="Second number (default: 3).")
     args = parser.parse_args(argv)
     try:
-        report = check_setup(args.backend)
+        report = check_setup(args.backend, a=args.a, b=args.b)
     except (ImportError, OSError, RuntimeError, ValueError) as error:
         print(f"Setup check failed: {error}", file=sys.stderr)
-        print("Run the setup script for your operating system, then retry.", file=sys.stderr)
+        print("Check your numbers and backend choice. Run the setup script if packages are missing.", file=sys.stderr)
         return 1
     for label, value in report.items():
         print(f"{label}: {value}")
-    print("Backend check passed: 1 + 2 + 3 = 6. No model was loaded.")
+    print(
+        f"Backend check passed: {report['a']:g} + {report['b']:g} = "
+        f"{report['result']:g}. No model was loaded."
+    )
     return 0
 
 
