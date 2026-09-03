@@ -1,6 +1,6 @@
 # QAChat
 
-This version sets up MLX/PyTorch, downloads a supported model, and lets you chat with it locally; RAG and the GUI come later.
+This version sets up local model chat and lets you preview which repository files to use; repository search, RAG, and the GUI come later.
 
 ## One-time setup
 
@@ -33,6 +33,9 @@ After setup, open these notebooks in order, select Python from QAChat's `.venv`,
 1. [Setup and backend check](notebooks/setup.ipynb) — choose a backend and enter two numbers. The backend calculates their sum and checks the answer, showing that it can run a calculation.
 2. [Model check and download](notebooks/model_download.ipynb) — choose a model folder, see supported models and required packages, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
 3. [Load a model and chat](notebooks/model_chat.ipynb) — choose a downloaded model, load it, say hello, ask a follow-up, then release its memory. Expect real model replies. `BACKEND = "auto"` uses the engine matching the chosen model; MLX and PyTorch weights are not interchangeable.
+4. [Choose repository files](notebooks/repository_files.ipynb) — choose a local folder, select file types or paths, and see candidate files, sizes, and reasons for skipping entries. No LLM is needed; you can open this directly after setup. It creates no files and does not read source contents or build an index.
+
+The repository preview uses its own selection rules, not `.gitignore`. Hidden entries, common model/generated folders, and links are skipped. Add custom private folders to `EXCLUDE_PATHS`; the preview is not a secret scanner.
 
 These notebooks call the shared code; they are examples, not separate implementations. Chat never downloads missing files. Use one model at a time: large models need several GB of free memory. Messages stay in memory unless you save notebook outputs; clear those outputs before committing.
 
