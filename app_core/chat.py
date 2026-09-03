@@ -8,7 +8,7 @@ import platform
 from app_core.models import check_model, model_info, package_versions
 
 
-def load_model(name: str, directory: str | Path | None = None, *, backend: str = "auto"):
+def load_model(name: str, directory: str | Path | None = None, *, backend: str = "auto") -> "ChatSession":
     """Use the model's matching engine. Check all file contents before loading."""
     engine = model_info(name)["backend"]
     if backend not in {"auto", "mlx", "torch"}:
@@ -39,7 +39,11 @@ def load_model(name: str, directory: str | Path | None = None, *, backend: str =
     else:
         torch = import_module("torch")
         transformers = import_module("transformers")
-        device = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
+        device = "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
         tokenizer = transformers.AutoTokenizer.from_pretrained(path, **local_only)
         model = transformers.AutoModelForCausalLM.from_pretrained(
             path, **local_only, use_safetensors=True,
