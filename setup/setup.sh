@@ -9,7 +9,7 @@ cd "$project_dir"
 case "$(uname -s):$(uname -m)" in
     Darwin:arm64|Linux:x86_64|Linux:aarch64) ;;
     Darwin:*) echo "Use native Apple Silicon. Intel Macs/Rosetta are not supported by these package versions."; exit 1 ;;
-    *) echo "Use an Apple Silicon Mac, 64-bit Linux, or scripts/setup.ps1 on Windows."; exit 1 ;;
+    *) echo "Use an Apple Silicon Mac, 64-bit Linux, or setup/setup.ps1 on Windows."; exit 1 ;;
 esac
 
 # Reuse uv, including a previous install not yet on the terminal's PATH.
@@ -38,7 +38,7 @@ fi
 "$uv_command" sync --extra mlx --extra torch
 
 # Use the new environment directly, without needing terminal activation.
-.venv/bin/python scripts/check_setup.py
+.venv/bin/python setup/check_setup.py
 
 echo "Setup complete. The project environment is in .venv"
 echo "No model weights were downloaded."

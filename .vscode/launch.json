@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Check setup (automatic backend)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/setup/check_setup.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "windows": {
+                "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "args": ["--backend", "auto"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "Check setup (PyTorch)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/setup/check_setup.py",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "windows": {
+                "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "args": ["--backend", "torch"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        }
+    ]
+}

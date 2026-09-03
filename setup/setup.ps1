@@ -24,7 +24,7 @@ try {
     # Windows uses PyTorch; MLX is for the Apple Silicon path in this project.
     & $uvCommand sync --extra torch
     if ($LASTEXITCODE -ne 0) { throw "Package setup failed. See the error above." }
-    & ".venv\Scripts\python.exe" "scripts\check_setup.py"
+    & ".venv\Scripts\python.exe" "setup\check_setup.py"
     if ($LASTEXITCODE -ne 0) { throw "Backend check failed. See the error above." }
 
     Write-Host "Setup complete. The project environment is in .venv"

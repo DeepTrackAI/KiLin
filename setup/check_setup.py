@@ -1,14 +1,44 @@
-"""Choose a local backend and check a tiny calculation. No model downloads."""
+"""Choose MLX or PyTorch and verify it with a small calculation."""
+
+from __future__ import annotations
 
 import argparse
 from importlib import import_module
 import math
 import platform
 import sys
+from typing import Literal
+
+Backend = Literal["auto", "mlx", "torch"]
+SelectedBackend = Literal["mlx", "torch"]
 
 
-def choose_backend(system: str, machine: str, requested: str = "auto") -> str:
-    """Keep the platform rules separate so we can test them without any GPU."""
+def choose_backend(
+    system: str,
+    machine: str,
+    requested: Backend = "auto",
+) -> SelectedBackend:
+    """Choose an available calculation engine.
+
+    Parameters
+    ----------
+    system: str
+        Operating-system name reported by Python.
+    machine: str
+        Processor name reported by Python.
+    requested: "auto" | "mlx" | "torch", optional
+        ``auto``, ``mlx``, or ``torch``.
+
+    Returns
+    -------
+    Literal["mlx", "torch"]
+        Selected engine.
+
+    Raises
+    ------
+    ValueError
+        If the platform or requested engine is not supported.
+    """
     if requested not in {"auto", "mlx", "torch"}:
         raise ValueError("Choose auto, mlx, or torch.")
 
@@ -16,26 +46,41 @@ def choose_backend(system: str, machine: str, requested: str = "auto") -> str:
     apple_silicon = system == "Darwin" and machine == "arm64"
     supported = (
         apple_silicon
-        or (system == "Linux" and machine in {"x86_64", "aarch64"})
-        or (system == "Windows" and machine in {"amd64", "x86_64"})
+        or system == "Linux"
+        and machine in {"x86_64", "aarch64"}
+        or system == "Windows"
+        and machine in {"amd64", "x86_64"}
     )
     if not supported:
         raise ValueError(
-            f"Unsupported platform: {system}/{machine}. "
-            "Use native Apple Silicon, Linux x64/ARM64, or Windows x64. "
-            "Intel Macs/Rosetta are not supported."
+            f"Unsupported platform: {system}/{machine}. Use Apple Silicon, "
+            "Linux x64/ARM64, or Windows x64."
         )
     if requested == "mlx" and not apple_silicon:
-        raise ValueError(
-            "This project's MLX path requires an Apple Silicon Mac."
-        )
+        raise ValueError("MLX requires a native Apple Silicon Mac.")
     if requested == "auto":
         return "mlx" if apple_silicon else "torch"
     return requested
 
 
-def choose_torch_device(cuda_available: bool, mps_available: bool) -> str:
-    """Use an available accelerator; otherwise use the ordinary processor."""
+def choose_torch_device(
+    cuda_available: bool,
+    mps_available: bool,
+) -> str:
+    """Choose the best available PyTorch device.
+
+    Parameters
+    ----------
+    cuda_available: bool
+        Whether a CUDA device is available.
+    mps_available: bool
+        Whether an Apple MPS device is available.
+
+    Returns
+    -------
+    str
+        ``cuda``, ``mps``, or ``cpu``.
+    """
     if cuda_available:
         return "cuda"
     if mps_available:
@@ -43,14 +88,31 @@ def choose_torch_device(cuda_available: bool, mps_available: bool) -> str:
     return "cpu"
 
 
-def run_calculation(backend: str, a: float, b: float) -> tuple[str, float]:
-    """Import only the selected library, then add the two supplied numbers."""
+def run_calculation(
+    backend: SelectedBackend,
+    a: float,
+    b: float,
+) -> tuple[str, float]:
+    """Add two numbers using the selected engine.
+
+    Parameters
+    ----------
+    backend: "mlx" | "torch"
+        ``mlx`` or ``torch``.
+    a: float
+        First number.
+    b: float
+        Second number.
+
+    Returns
+    -------
+    tuple[str, float]
+        Device name and calculated sum.
+    """
     if backend == "mlx":
         mx = import_module("mlx.core")
         if not mx.metal.is_available():
-            raise RuntimeError(
-                "MLX Metal is unavailable. Try --backend torch."
-            )
+            raise RuntimeError("MLX Metal is unavailable.")
         with mx.stream(mx.gpu):
             numbers = mx.array([a, b], dtype=mx.float32)
             result = float(mx.sum(numbers).item())
@@ -59,27 +121,51 @@ def run_calculation(backend: str, a: float, b: float) -> tuple[str, float]:
     if backend == "torch":
         torch = import_module("torch")
         device = choose_torch_device(
-            torch.cuda.is_available(), torch.backends.mps.is_available()
+            torch.cuda.is_available(),
+            torch.backends.mps.is_available(),
         )
-        numbers = torch.tensor([a, b], dtype=torch.float32, device=device)
-        result = float(numbers.sum().item())
-        return device, result
+        numbers = torch.tensor(
+            [a, b],
+            dtype=torch.float32,
+            device=device,
+        )
+        return device, float(numbers.sum().item())
 
     raise ValueError("The calculation needs mlx or torch, not auto.")
 
 
 def check_setup(
-    requested: str = "auto", *, a: float = 2.0, b: float = 3.0
+    requested: Backend = "auto",
+    *,
+    a: float = 2.0,
+    b: float = 3.0,
 ) -> dict[str, str | float]:
-    """This is the main flow to follow in the debugger or notebook."""
-    a, b = float(a), float(b)
-    expected = a + b  # Ordinary Python calculates the answer independently.
-    if not all(math.isfinite(value) for value in (a, b, expected)):
+    """Check one engine by comparing its sum with ordinary Python.
+
+    Parameters
+    ----------
+    requested: "auto" | "mlx" | "torch", optional
+        ``auto``, ``mlx``, or ``torch``.
+    a: float, optional
+        First number.
+    b: float, optional
+        Second number.
+
+    Returns
+    -------
+    dict[str, str | float]
+        Environment, engine, input, and calculation details.
+    """
+    first = float(a)
+    second = float(b)
+    expected = first + second
+    if not all(math.isfinite(value) for value in (first, second, expected)):
         raise ValueError("Use finite numbers whose sum is also finite.")
+
     system = platform.system()
     machine = platform.machine()
     backend = choose_backend(system, machine, requested)
-    device, result = run_calculation(backend, a, b)
+    device, result = run_calculation(backend, first, second)
     if not math.isclose(result, expected, rel_tol=1e-6, abs_tol=1e-6):
         raise RuntimeError(
             f"The calculation returned {result}; expected {expected}."
@@ -89,35 +175,55 @@ def check_setup(
         "platform": f"{system}/{machine}",
         "backend": backend,
         "device": device,
-        "a": a,
-        "b": b,
+        "a": first,
+        "b": second,
         "expected": expected,
         "result": result,
     }
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the setup check from a terminal.
+
+    Parameters
+    ----------
+    argv: list[str] | None, optional
+        Optional command-line arguments used by tests.
+
+    Returns
+    -------
+    int
+        ``0`` after success and ``1`` after a handled error.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--backend", choices=("auto", "mlx", "torch"), default="auto"
+        "--backend",
+        choices=("auto", "mlx", "torch"),
+        default="auto",
     )
     parser.add_argument(
-        "--a", type=float, default=2.0, help="First number (default: 2)."
+        "--a",
+        type=float,
+        default=2.0,
+        help="First number (default: 2).",
     )
     parser.add_argument(
-        "--b", type=float, default=3.0, help="Second number (default: 3)."
+        "--b",
+        type=float,
+        default=3.0,
+        help="Second number (default: 3).",
     )
-    args = parser.parse_args(argv)
+    arguments = parser.parse_args(argv)
     try:
-        report = check_setup(args.backend, a=args.a, b=args.b)
+        report = check_setup(
+            arguments.backend,
+            a=arguments.a,
+            b=arguments.b,
+        )
     except (ImportError, OSError, RuntimeError, ValueError) as error:
         print(f"Setup check failed: {error}", file=sys.stderr)
-        print(
-            "Check your numbers and backend choice. "
-            "Run the setup script if packages are missing.",
-            file=sys.stderr,
-        )
         return 1
+
     for label, value in report.items():
         print(f"{label}: {value}")
     print(
