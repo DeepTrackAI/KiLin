@@ -43,19 +43,29 @@ downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
 when allowed, missing files are downloaded to that same cache. Model weights
 are not committed to QAChat. MLX and PyTorch may require different weights.
 
-## Check the repository
+## Verify the repository
 
-Run all tests:
+These commands are optional when only using the tutorials. Run them to verify
+the installation or before committing code.
+
+Run all automated tests:
 
 ```sh
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Check the 79-character Python style:
+Verify that Python files already follow the 79-character format and contain no
+common code errors:
 
 ```sh
 .venv/bin/black --check qachat setup tests
 .venv/bin/ruff check qachat setup tests
+```
+
+If Black reports formatting problems, let it format the files:
+
+```sh
+.venv/bin/black qachat setup tests
 ```
 
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
