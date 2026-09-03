@@ -16,12 +16,13 @@ Windows x64 (PowerShell):
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1
 ```
 
-The setup script installs `uv` if needed, prepares Python 3.12 and the packages, then runs `scripts/check_setup.py`. On Apple Silicon it installs both backends, so you can also choose PyTorch.
+The setup script installs `uv` if needed, prepares Python 3.12 and the packages using the shared `uv.lock`, then runs `scripts/check_setup.py`. On Apple Silicon it installs both backends, so you can also choose PyTorch.
+
+`uv.lock` is generated but kept in Git: it records the chosen package versions, including packages required by other packages, so users can repeat our setup instead of choosing versions again. It contains no installed packages or model weights.
 
 After success, you get:
 
-- `.venv/` — local Python and packages; excluded from Git.
-- `uv.lock` — resolved package versions; keep in Git.
+- `.venv/` — each user's own Python environment and installed packages; created locally and excluded from Git.
 - A printed backend/device and `result: 6.0`, followed by `Setup complete`.
 
 No model weights or API key are needed. This checks the tools; it does not yet answer questions.
