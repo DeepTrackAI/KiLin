@@ -1,6 +1,6 @@
 # QAChat
 
-This version sets up MLX/PyTorch and lets you list, check, and download chat-model files; chatting and RAG come next.
+This version sets up MLX/PyTorch, downloads a supported model, and lets you chat with it locally; RAG and the GUI come later.
 
 ## One-time setup
 
@@ -31,9 +31,10 @@ Verified on an Apple Silicon Mac. Windows x64 and Linux x64/ARM64 still need rea
 After setup, open these notebooks in order, select Python from QAChat's `.venv`, and run one cell at a time with Shift+Enter:
 
 1. [Setup and backend check](notebooks/setup.ipynb) — choose a backend and enter two numbers. The backend calculates their sum and checks the answer, showing that it can run a calculation.
-2. [Model check and download](notebooks/models.ipynb) — choose a model folder, see available models and required package versions, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
+2. [Model check and download](notebooks/model_download.ipynb) — choose a model folder, see supported models and required packages, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
+3. [Load a model and chat](notebooks/model_chat.ipynb) — choose a downloaded model, load it, say hello, ask a follow-up, then release its memory. Expect real model replies. `BACKEND = "auto"` uses the engine matching the chosen model; MLX and PyTorch weights are not interchangeable.
 
-After one-time setup, you can do these checks and model downloads through the notebooks; the model commands below are optional. Both notebooks call the same shared code as the application. Neither loads an LLM or starts a chat yet.
+These notebooks call the shared code; they are examples, not separate implementations. Chat never downloads missing files. Use one model at a time: large models need several GB of free memory. Messages stay in memory unless you save notebook outputs; clear those outputs before committing.
 
 ## Where files go
 
@@ -47,26 +48,38 @@ Never commit model files. If you choose another folder inside the repository, ig
 
 ## Optional model commands
 
-Use these instead of the model notebook if you prefer the terminal.
+Use `scripts/download_model.py` instead of the download notebook if you prefer the terminal. It calls the same shared downloader.
 
 List choices, sizes, local status, and the storage folder without downloading:
 
 ```sh
-.venv/bin/python -m app_core.models
+.venv/bin/python scripts/download_model.py
 ```
 
 Download the 8.32 GB MLX model for Apple Silicon into QAChat's `models/` folder:
 
 ```sh
-.venv/bin/python -m app_core.models download qwen3-14b-mlx
+.venv/bin/python scripts/download_model.py download qwen3-14b-mlx
 ```
 
 Or choose your own storage folder:
 
 ```sh
-.venv/bin/python -m app_core.models download qwen3-14b-mlx --directory "~/my-models"
+.venv/bin/python scripts/download_model.py download qwen3-14b-mlx --directory "~/my-models"
 ```
 
 On Windows, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`. The list also includes a smaller PyTorch model. MLX and PyTorch need different weight files.
 
 Correct files are reused and checked before acceptance. Press Ctrl+C to stop, then rerun to retry. These public models need no API key.
+
+## Run all tests
+
+After setup, run from QAChat:
+
+```sh
+.venv/bin/python -m pytest -q
+```
+
+On Windows: `.venv\Scripts\python.exe -m pytest -q`.
+
+Expect a summary ending in `passed`. Tests need no internet or downloaded LLMs; they use small stand-ins and, when PyTorch is installed, a tiny locally created CPU model. They do not prove that a full LLM fits your computer—use the chat notebook for that.
