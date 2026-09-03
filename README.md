@@ -52,19 +52,19 @@ Use these instead of the model notebook if you prefer the terminal.
 List choices, sizes, local status, and the storage folder without downloading:
 
 ```sh
-.venv/bin/python -m qachat.models
+.venv/bin/python -m app_core.models
 ```
 
 Download the 8.32 GB MLX model for Apple Silicon into QAChat's `models/` folder:
 
 ```sh
-.venv/bin/python -m qachat.models download qwen3-14b-mlx
+.venv/bin/python -m app_core.models download qwen3-14b-mlx
 ```
 
 Or choose your own storage folder:
 
 ```sh
-.venv/bin/python -m qachat.models download qwen3-14b-mlx --directory "~/my-models"
+.venv/bin/python -m app_core.models download qwen3-14b-mlx --directory "~/my-models"
 ```
 
 On Windows, use `.venv\Scripts\python.exe` instead of `.venv/bin/python`. The list also includes a smaller PyTorch model. MLX and PyTorch need different weight files.

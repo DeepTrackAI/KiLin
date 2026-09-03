@@ -10,7 +10,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from qachat import models
+from app_core import models
 
 
 @pytest.fixture
@@ -262,7 +262,7 @@ def test_download_child_uses_same_python_and_private_cache(tiny_model, monkeypat
     monkeypatch.setattr(models.subprocess, "Popen", start)
     assert models.download_model("tiny") == models.model_path("tiny")
     args, kwargs = start.call_args
-    assert args[0][:5] == [sys.executable, "-u", "-m", "qachat.models", "_fetch"]
+    assert args[0][:5] == [sys.executable, "-u", "-m", "app_core.models", "_fetch"]
     assert kwargs["env"]["HF_HOME"] == str(models.model_home() / ".huggingface")
     assert kwargs["env"]["HF_HUB_DISABLE_IMPLICIT_TOKEN"] == "1"
     child.stdout.close.assert_called_once()
@@ -356,7 +356,7 @@ def test_cli_bad_model_is_clear(tiny_model, capsys):
 
 def test_import_does_not_load_backend_libraries():
     result = subprocess.run(
-        [sys.executable, "-c", "from qachat import models; import sys; "
+        [sys.executable, "-c", "from app_core import models; import sys; "
          "assert not {'mlx.core', 'torch', 'transformers', 'huggingface_hub'} & sys.modules.keys()"],
         cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
     )
@@ -369,7 +369,7 @@ def test_notebook_is_clean_and_downloads_are_opt_in():
     cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
     assert all(cell["execution_count"] is None and cell["outputs"] == [] for cell in cells)
     source = "\n".join("".join(cell["source"]) for cell in cells)
-    assert "from qachat.models import" in source
+    assert "from app_core.models import" in source
     assert "DOWNLOAD = False" in source
     assert "if DOWNLOAD:" in source
     assert "MODEL_DIRECTORY = None" in source

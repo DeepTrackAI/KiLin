@@ -141,7 +141,7 @@ def download_model(name: str, directory: str | Path | None = None) -> Path:
         "HF_HUB_DISABLE_PROGRESS_BARS": "1",
     }
     command = [
-        sys.executable, "-u", "-m", "qachat.models", "_fetch", name,
+        sys.executable, "-u", "-m", "app_core.models", "_fetch", name,
         "--directory", str(home),
     ]
     process = subprocess.Popen(  # Breakpoint 3: the cancellable download starts.
