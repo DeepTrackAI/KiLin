@@ -365,7 +365,7 @@ def test_import_does_not_load_backend_libraries():
 
 def test_notebook_is_clean_and_downloads_are_opt_in():
     root = Path(__file__).resolve().parents[1]
-    notebook = json.loads((root / "notebooks/models.ipynb").read_text())
+    notebook = json.loads((root / "notebooks/model_download.ipynb").read_text())
     cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
     assert all(cell["execution_count"] is None and cell["outputs"] == [] for cell in cells)
     source = "\n".join("".join(cell["source"]) for cell in cells)
@@ -377,3 +377,23 @@ def test_notebook_is_clean_and_downloads_are_opt_in():
     assert "list_models(directory=MODEL_DIRECTORY)" in source
     assert "download_model(MODEL, directory=MODEL_DIRECTORY)" in source
     assert source.count("check_model(MODEL, directory=MODEL_DIRECTORY)") == 2
+
+
+def test_download_script_lists_offline_from_another_directory(tmp_path):
+    import os
+    root = Path(__file__).resolve().parents[1]
+    home = tmp_path / "unused-models"
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts/download_model.py"), "--directory", str(home)],
+        cwd=tmp_path, env={**os.environ, "HF_HUB_OFFLINE": "1"},
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert all(name in result.stdout for name in models.CATALOG)
+    assert "missing" in result.stdout
+    assert not home.exists()
+
+
+def test_download_script_reuses_the_shared_command():
+    from scripts import download_model
+    assert download_model.main is models.main
