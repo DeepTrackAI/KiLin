@@ -1,6 +1,6 @@
 # QAChat
 
-This version sets up local model chat and lets you preview which repository files to use; repository search, RAG, and the GUI come later.
+This version sets up a local model chat and lets you preview which repository files to use; repository search, RAG, and the GUI come later.
 
 ## One-time setup
 
