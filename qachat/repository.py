@@ -7,8 +7,20 @@ import stat
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSIONS = (
-    ".py", ".md", ".txt", ".rst", ".m", ".toml", ".json", ".yaml",
-    ".yml", ".ini", ".cfg", ".sh", ".ps1", ".ipynb",
+    ".py",
+    ".md",
+    ".txt",
+    ".rst",
+    ".m",
+    ".toml",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".sh",
+    ".ps1",
+    ".ipynb",
 )
 SKIP_DIRECTORIES = {
     "models", "weights", "venv", "env", "node_modules", "build", "dist",
@@ -81,22 +93,27 @@ def scan_repository(
     exclude_paths=(),
     max_file_bytes: int = 1_048_576,
     max_entries: int = 10_000,
-) -> dict:
+) -> dict[str, object]:
     """Return selected file paths and explained skips. Create or change nothing.
 
     Relative repository paths start at QAChat. Include/exclude paths start at
     the chosen repository. Exclusions win. Skipped folders are not entered.
     This is a metadata preview, not a Git-ignore parser or a text/security check.
     """
+
     if not isinstance(repository, (str, Path)) or not str(repository).strip():
         raise ValueError("Choose a local project folder.")
+
     if str(repository).lower().startswith(("https:", "http:", "git@")):
         raise ValueError("Choose a local folder. GitHub downloading comes later.")
+
     for value, label in ((max_file_bytes, "max_file_bytes"), (max_entries, "max_entries")):
         if type(value) is not int or value < 1:
             raise ValueError(f"{label} must be a positive whole number.")
+
     if not isinstance(extensions, (list, tuple)):
         raise ValueError("extensions must be a list, for example ['.py', '.md'].")
+
     normalized_extensions = []
     for extension in extensions:
         if not isinstance(extension, str):
@@ -110,13 +127,15 @@ def scan_repository(
     excludes = _paths(exclude_paths, "exclude_paths")
     chosen = Path(repository).expanduser()
     root = (chosen if chosen.is_absolute() else PROJECT_ROOT / chosen).resolve(strict=True)
+
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a folder, not a file: {root}")
+
     if root == Path(root.anchor) or root == Path.home().resolve():
         raise ValueError("Choose a project folder, not your whole home folder or drive.")
 
     rows = []
-    pending = [root]  # Breakpoint 1: inspect the root and selection rules.
+    pending = [root]
     visited = 0
     complete = True
     while pending:
@@ -157,7 +176,7 @@ def scan_repository(
                 else:
                     kind = "other"
                 size = metadata.st_size if kind == "file" else None
-                reason = _skip_reason(  # Breakpoint 2: follow why this entry is selected or skipped.
+                reason = _skip_reason(
                     relative, kind, size, extensions, includes, excludes, max_file_bytes,
                 )
             except OSError as error:
@@ -172,10 +191,15 @@ def scan_repository(
 
     rows.sort(key=lambda row: row["path"])
     selected = [row for row in rows if row["status"] == "selected"]
-    return {  # Breakpoint 3: inspect the report; these are candidates, not ingested text.
-        "repository": str(root), "extensions": list(extensions),
-        "include_paths": list(includes), "exclude_paths": list(excludes),
-        "max_file_bytes": max_file_bytes, "visited_entries": visited, "complete": complete,
+    return {
+        "repository": str(root),
+        "extensions": list(extensions),
+        "include_paths": list(includes),
+        "exclude_paths": list(excludes),
+        "max_file_bytes": max_file_bytes,
+        "visited_entries": visited,
+        "complete": complete,
         "selected_files": [row["path"] for row in selected],
-        "selected_bytes": sum(row["size_bytes"] for row in selected), "entries": rows,
+        "selected_bytes": sum(row["size_bytes"] for row in selected),
+        "entries": rows,
     }

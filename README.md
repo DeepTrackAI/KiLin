@@ -30,10 +30,10 @@ Verified on an Apple Silicon Mac. Windows x64 and Linux x64/ARM64 still need rea
 
 After setup, open these notebooks in order, select Python from QAChat's `.venv`, and run one cell at a time with Shift+Enter:
 
-1. [Setup and backend check](notebooks/setup.ipynb) — choose a backend and enter two numbers. The backend calculates their sum and checks the answer, showing that it can run a calculation.
-2. [Model check and download](notebooks/model_download.ipynb) — choose a model folder, see supported models and required packages, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
-3. [Load a model and chat](notebooks/model_chat.ipynb) — choose a downloaded model, load it, say hello, ask a follow-up, then release its memory. Expect real model replies. `BACKEND = "auto"` uses the engine matching the chosen model; MLX and PyTorch weights are not interchangeable.
-4. [Choose repository files](notebooks/repository_files.ipynb) — choose a local folder, select file types or paths, and see candidate files, sizes, and reasons for skipping entries. No LLM is needed; you can open this directly after setup. It creates no files and does not read source contents or build an index.
+1. [Setup and backend check](notebooks/10_setup.ipynb) — choose a backend and enter two numbers. The backend calculates their sum and checks the answer, showing that it can run a calculation.
+2. [Model check and download](notebooks/20_model_download.ipynb) — choose a model folder, see supported models and required packages, and check or download the files. Keep `MODEL_DIRECTORY = None` for the default folder, or enter your own path. Downloading starts only if you set `DOWNLOAD = True`.
+3. [Load a model and chat](notebooks/30_model_chat.ipynb) — choose a downloaded model, load it, say hello, ask a follow-up, then release its memory. Expect real model replies. `BACKEND = "auto"` uses the engine matching the chosen model; MLX and PyTorch weights are not interchangeable.
+4. [Choose repository files](notebooks/40_repository_files.ipynb) — choose a local folder, select file types or paths, and see candidate files, sizes, and reasons for skipping entries. No LLM is needed; you can open this directly after setup. It creates no files and does not read source contents or build an index.
 
 The repository preview uses its own selection rules, not `.gitignore`. Hidden entries, common model/generated folders, and links are skipped. Add custom private folders to `EXCLUDE_PATHS`; the preview is not a secret scanner.
 

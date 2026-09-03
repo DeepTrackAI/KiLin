@@ -21,7 +21,7 @@ def load_model(name: str, directory: str | Path | None = None, *, backend: str =
     if missing:
         raise RuntimeError(f"Missing packages: {', '.join(missing)}. Rerun setup with the {engine} extra.")
 
-    report = check_model(name, directory, verify=True)  # Breakpoint 1: inspect the local files.
+    report = check_model(name, directory, verify=True)
     if report["status"] != "verified":
         raise FileNotFoundError(
             f"Model files are {report['status']} at {report['path']}. "
@@ -34,7 +34,7 @@ def load_model(name: str, directory: str | Path | None = None, *, backend: str =
         if not mx.metal.is_available():
             raise RuntimeError("MLX Metal is unavailable. Check setup before loading this model.")
         mlx_lm = import_module("mlx_lm")
-        model, tokenizer = mlx_lm.load(path, tokenizer_config=local_only)  # Breakpoint 2: load weights.
+        model, tokenizer = mlx_lm.load(path, tokenizer_config=local_only)
         device = "metal"
     else:
         torch = import_module("torch")
@@ -65,42 +65,60 @@ class ChatSession:
         self._model = model
         self._tokenizer = tokenizer
 
-    def reply(self, message: str, *, max_new_tokens: int = 128) -> str:
+    def reply(self, message: str, *, out_tokens: int = 128) -> str:
         """Generate a reply; save the turn only after generation succeeds."""
+
         if self._model is None:
             raise RuntimeError("This chat is closed. Load a model again.")
+
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
-        if type(max_new_tokens) is not int or not 1 <= max_new_tokens <= 512:
-            raise ValueError("max_new_tokens must be a whole number from 1 to 512.")
+
+        if type(out_tokens) is not int or out_tokens < 1:
+            raise ValueError("The `out_tokens` must be a positive integer.")
+
         messages = [*self.messages, {"role": "user", "content": message.strip()}]
         # The model's own template formats roles and turns into input tokens.
-        tokens = self._tokenizer.apply_chat_template(  # Breakpoint 3: inspect the conversation.
-            messages, tokenize=True, return_dict=False,
-            add_generation_prompt=True, enable_thinking=False,
+        tokens = self._tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            return_dict=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
         )
-        if len(tokens) + max_new_tokens > 4096:
-            raise ValueError("This small example allows 4096 tokens. Shorten the message or call chat.reset().")
+
         if self.backend == "mlx":
             mlx_lm = import_module("mlx_lm")
             sampling = import_module("mlx_lm.sample_utils")
-            answer = mlx_lm.generate(  # Breakpoint 4: generate new text.
-                self._model, self._tokenizer, prompt=tokens,
-                max_tokens=max_new_tokens, sampler=sampling.make_sampler(temp=0.0), verbose=False,
+            answer = mlx_lm.generate(
+                self._model,
+                self._tokenizer,
+                prompt=tokens,
+                max_tokens=out_tokens,
+                sampler=sampling.make_sampler(temp=0.0),
+                verbose=False,
             )
         else:
             torch = import_module("torch")
             inputs = torch.tensor([tokens], dtype=torch.long, device=self.device)
             with torch.inference_mode():
                 output = self._model.generate(
-                    input_ids=inputs, attention_mask=torch.ones_like(inputs),
-                    max_new_tokens=max_new_tokens, do_sample=False,
+                    input_ids=inputs,
+                    attention_mask=torch.ones_like(inputs),
+                    out_tokens=out_tokens,
+                    do_sample=False,
                     pad_token_id=self._tokenizer.eos_token_id,
                 )
+
             # Generated output includes the input; decode only the new tokens.
-            answer = self._tokenizer.decode(output[0, len(tokens):].tolist(), skip_special_tokens=True)
+            answer = self._tokenizer.decode(
+                output[0, len(tokens):].tolist(),
+                skip_special_tokens=True,
+            )
+
         if not isinstance(answer, str) or not answer.strip():
             raise RuntimeError("The model returned no text. Try another short message.")
+
         answer = answer.strip()
         self.messages = [*messages, {"role": "assistant", "content": answer}]
         return answer
@@ -111,12 +129,15 @@ class ChatSession:
 
     def close(self):
         """Release this session's weights, history, and unused engine memory."""
+
         if self._model is None:
             return
-        self._model = None  # Breakpoint 5: drop our references to the loaded model.
+
+        self._model = None
         self._tokenizer = None
         self.reset()
         gc.collect()
+
         if self.backend == "mlx":
             import_module("mlx.core").clear_cache()
         elif self.device == "cuda":
