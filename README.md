@@ -29,4 +29,4 @@ No model weights or API key are needed. This checks the tools; it does not yet a
 
 Verified on an Apple Silicon Mac. Windows x64 and Linux x64/ARM64 still need real-machine installation tests; Intel Macs and Windows ARM64 are not supported by this setup.
 
-For breakpoints and explanations, see [DEVELOPER_NOTES.md](DEVELOPER_NOTES.md). For a cell-by-cell example, open [notebooks/setup.ipynb](notebooks/setup.ipynb).
+For a cell-by-cell example, open [notebooks/setup.ipynb](notebooks/setup.ipynb).
