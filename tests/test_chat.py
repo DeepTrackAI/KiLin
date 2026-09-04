@@ -1,4 +1,4 @@
-"""Tests for Hugging Face model discovery and chat sessions."""
+"""Tests for backend selection and local chat sessions."""
 
 # pylint: disable=C0115:missing-class-docstring
 # pylint: disable=C0116:missing-function-docstring
@@ -17,9 +17,11 @@ from unittest.mock import patch
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
-from transformers import PreTrainedTokenizerFast
-from transformers import Qwen3Config
-from transformers import Qwen3ForCausalLM
+from transformers import (
+    PreTrainedTokenizerFast,
+    Qwen3Config,
+    Qwen3ForCausalLM,
+)
 
 from qachat import chat
 
@@ -41,6 +43,7 @@ def _save_tokenizer(path: Path) -> None:
         "assistant": 5,
         "system": 6,
     }
+
     raw = Tokenizer(
         WordLevel(
             vocab=vocabulary,
@@ -48,6 +51,7 @@ def _save_tokenizer(path: Path) -> None:
         )
     )
     raw.pre_tokenizer = Whitespace()
+
     tokenizer = PreTrainedTokenizerFast(
         tokenizer_object=raw,
         unk_token="<unk>",
@@ -62,6 +66,7 @@ def _save_tokenizer(path: Path) -> None:
 def _save_torch_model(path: Path) -> None:
     path.mkdir()
     _save_tokenizer(path)
+
     configuration = Qwen3Config(
         vocab_size=7,
         hidden_size=8,
@@ -73,9 +78,11 @@ def _save_torch_model(path: Path) -> None:
         max_position_embeddings=64,
         tie_word_embeddings=False,
     )
+
     model = Qwen3ForCausalLM(configuration)
     for parameter in model.parameters():
         parameter.data.zero_()
+
     model.save_pretrained(path)
 
 
@@ -85,6 +92,7 @@ def _save_mlx_model(path: Path) -> None:
 
     path.mkdir()
     _save_tokenizer(path)
+
     arguments = qwen3.ModelArgs(
         model_type="qwen3",
         hidden_size=8,
@@ -99,25 +107,31 @@ def _save_mlx_model(path: Path) -> None:
         head_dim=8,
         tie_word_embeddings=False,
     )
+
     model = qwen3.Model(arguments)
     model.apply(mx.zeros_like)
     model.eval()
+
     configuration = asdict(arguments)
     configuration["eos_token_id"] = 3
     (path / "config.json").write_text(
         json.dumps(configuration),
         encoding="utf-8",
     )
+
     model.save_weights(str(path / "model.safetensors"))
 
 
 class TestChat(unittest.TestCase):
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.temporary_directory = TemporaryDirectory()
         cls.root = Path(cls.temporary_directory.name)
+
         cls.torch_model = cls.root / "torch-model"
         _save_torch_model(cls.torch_model)
+
         cls.mlx_model = cls.root / "mlx-model"
         if APPLE_SILICON:
             _save_mlx_model(cls.mlx_model)
@@ -126,21 +140,72 @@ class TestChat(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls.temporary_directory.cleanup()
 
+    def test_choose_backend(self) -> None:
+        choices = (
+            ("Darwin", "arm64", "auto", "mlx"),
+            ("Darwin", "arm64", "torch", "torch"),
+            ("Linux", "x86_64", "auto", "torch"),
+        )
+        for system, machine, requested, expected in choices:
+            with self.subTest(system=system, machine=machine):
+                with patch.object(
+                    chat.platform,
+                    "system",
+                    return_value=system,
+                ):
+                    with patch.object(
+                        chat.platform,
+                        "machine",
+                        return_value=machine,
+                    ):
+                        self.assertEqual(
+                            chat._choose_backend(requested),
+                            expected,
+                        )
+
+        with self.assertRaises(ValueError):
+            chat._choose_backend("invalid")
+
+        with patch.object(chat.platform, "system", return_value="Linux"):
+            with patch.object(
+                chat.platform,
+                "machine",
+                return_value="x86_64",
+            ):
+                with self.assertRaises(ValueError):
+                    chat._choose_backend("mlx")
+
+    def test_torch_device(self) -> None:
+        self.assertEqual(chat._torch_device(True, True), "cuda")
+        self.assertEqual(chat._torch_device(False, True), "mps")
+        self.assertEqual(chat._torch_device(False, False), "cpu")
+
     def test_chat_session(self) -> None:
-        invalid: list[dict[str, object]] = [
-            {"model_id": ""},
+        with self.assertRaises(TypeError):
+            chat.ChatSession()
+
+        invalid_model_ids = ("", " ", None)
+        with patch.object(chat.ChatSession, "_load"):
+            for model_id in invalid_model_ids:
+                with self.subTest(model_id=model_id):
+                    with self.assertRaises(ValueError):
+                        chat.ChatSession(model_id)
+
+        invalid_settings: tuple[dict[str, object], ...] = (
             {"backend": "invalid"},
             {"thinking": "yes"},
             {"temperature": -1},
+            {"temperature": True},
             {"max_new_tokens": 0},
-            {"system_prompt": ""},
+            {"max_new_tokens": True},
+            {"system_prompt": " "},
             {"allow_download": "yes"},
-        ]
+        )
         with patch.object(chat.ChatSession, "_load"):
-            for settings in invalid:
+            for settings in invalid_settings:
                 with self.subTest(settings=settings):
                     with self.assertRaises(ValueError):
-                        chat.ChatSession(**settings)
+                        chat.ChatSession("group/model", **settings)
 
         session = chat.ChatSession(
             str(self.torch_model),
@@ -159,10 +224,30 @@ class TestChat(unittest.TestCase):
                 ["system", "user", "assistant"],
             )
             self.assertEqual(session.messages[1]["content"], "hello")
+
+            for message in ("", " "):
+                with self.subTest(message=message):
+                    with self.assertRaises(ValueError):
+                        session.reply(message)
+
+            with self.assertRaises(ValueError):
+                session.reply("hello", max_new_tokens=0)
+
             session.reset()
+            self.assertEqual(len(session.messages), 1)
+
+            with patch.object(
+                session,
+                "_torch_reply",
+                return_value="",
+            ):
+                with self.assertRaises(RuntimeError):
+                    session.reply("hello")
+
             self.assertEqual(len(session.messages), 1)
         finally:
             session.close()
+
         with self.assertRaises(RuntimeError):
             session.reply("hello")
 
@@ -195,6 +280,7 @@ class TestChat(unittest.TestCase):
                 backend="torch",
                 max_new_tokens=None,
             )
+
         self.assertIsNone(session.max_new_tokens)
         self.assertEqual(chat._check_max_new_tokens(1_000_000), 1_000_000)
 
