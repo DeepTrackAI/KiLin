@@ -3,20 +3,14 @@
 This module is a thin connection to ``huggingface_hub``. It lists cached
 models and requests downloads. Hugging Face chooses and manages the cache
 location.
+
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from huggingface_hub import CacheNotFound
-from huggingface_hub import scan_cache_dir
-from huggingface_hub import snapshot_download
-
-DEFAULT_MODELS: dict[str, str] = {
-    "mlx": "mlx-community/Qwen3-0.6B-4bit",
-    "torch": "Qwen/Qwen3-0.6B",
-}
+from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
 
 
 def available_models(
@@ -35,7 +29,9 @@ def available_models(
     list[dict[str, object]]
         Model IDs, local paths, sizes, and cached revisions. The result is
         sorted by model ID.
+
     """
+
     try:
         cache = scan_cache_dir(cache_dir=cache_directory)
     except CacheNotFound:
@@ -43,8 +39,10 @@ def available_models(
 
     models: list[dict[str, object]] = []
     for repository in cache.repos:
+
         if repository.repo_type != "model":
             continue
+
         revisions = sorted(
             revision.commit_hash for revision in repository.revisions
         )
@@ -56,6 +54,7 @@ def available_models(
                 "revisions": revisions,
             }
         )
+
     return sorted(models, key=lambda model: str(model["model_id"]))
 
 
@@ -81,8 +80,11 @@ def model_is_available(
     ------
     ValueError
         If ``model_id`` is empty.
+
     """
+
     _check_model_id(model_id)
+
     return any(
         model["model_id"] == model_id
         for model in available_models(cache_directory)
@@ -116,14 +118,19 @@ def download_model(
         If ``model_id`` is empty.
     RuntimeError
         If Hugging Face does not return a path.
+
     """
+
     _check_model_id(model_id)
+
     path = snapshot_download(
         repo_id=model_id,
         revision=revision,
     )
+
     if not isinstance(path, str):
         raise RuntimeError("Hugging Face did not return a model path.")
+
     return Path(path)
 
 
@@ -139,6 +146,8 @@ def _check_model_id(model_id: str) -> None:
     ------
     ValueError
         If ``model_id`` is empty.
+
     """
+
     if not isinstance(model_id, str) or not model_id.strip():
         raise ValueError("Enter a Hugging Face model ID or local model path.")

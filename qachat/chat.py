@@ -2,6 +2,7 @@
 
 ``ChatSession`` selects MLX or PyTorch, loads one compatible model, formats
 messages, generates replies, and releases the model when finished.
+
 """
 
 from __future__ import annotations
@@ -10,15 +11,9 @@ import gc
 from importlib import import_module
 from pathlib import Path
 import platform
-from typing import Any
-from typing import Literal
-from typing import TYPE_CHECKING
-from typing import TypeAlias
-from typing import cast
+from typing import Any, cast, Literal, TYPE_CHECKING, TypeAlias
 
 from huggingface_hub import snapshot_download
-
-from qachat.huggingface import DEFAULT_MODELS
 
 if TYPE_CHECKING:
     from mlx.nn import Module as MlxModel
@@ -49,17 +44,22 @@ def _choose_backend(requested: Backend) -> SelectedBackend:
     -------
     Literal["mlx", "torch"]
         The selected engine.
-    """
-    if requested not in {"auto", "mlx", "torch"}:
-        raise ValueError("Choose auto, mlx, or torch.")
 
-    apple_silicon = (
+    """
+
+    if requested not in {"auto", "mlx", "torch"}:
+        raise ValueError("Choose `auto`, `mlx`, or `torch`.")
+
+    is_apple_silicon = (
         platform.system() == "Darwin" and platform.machine().lower() == "arm64"
     )
-    if requested == "mlx" and not apple_silicon:
-        raise ValueError("MLX requires a native Apple Silicon Mac.")
+
+    if requested == "mlx" and not is_apple_silicon:
+        raise ValueError("`mlx` requires a native Apple Silicon Mac.")
+
     if requested == "auto":
-        return "mlx" if apple_silicon else "torch"
+        return "mlx" if is_apple_silicon else "torch"
+
     return requested
 
 
@@ -80,11 +80,15 @@ def _torch_device(
     -------
     str
         ``cuda``, ``mps``, or ``cpu``.
+
     """
+
     if cuda_available:
         return "cuda"
+
     if mps_available:
         return "mps"
+
     return "cpu"
 
 
@@ -93,9 +97,8 @@ class ChatSession:
 
     Parameters
     ----------
-    model_id: str | None, optional
-        A Hugging Face model ID or local model directory. ``None`` uses a
-        small default model for the selected engine.
+    model_id: str
+        A Hugging Face model ID or local model directory.
     backend: "auto" | "mlx" | "torch", optional
         ``auto`` selects MLX on Apple Silicon and PyTorch elsewhere.
     thinking: bool, optional
@@ -129,6 +132,7 @@ class ChatSession:
         Optional session-level reply length.
     messages: list[dict[str, str]]
         Conversation kept in memory.
+
     """
 
     model_id: str
@@ -144,7 +148,7 @@ class ChatSession:
 
     def __init__(
         self: ChatSession,
-        model_id: str | None = None,
+        model_id: str,
         *,
         backend: Backend = "auto",
         thinking: bool = False,
@@ -155,10 +159,9 @@ class ChatSession:
         revision: str | None = None,
     ) -> None:
         """Initialize settings, history, tokenizer, and model."""
+
         self.backend = _choose_backend(backend)
-        self.model_id = (
-            DEFAULT_MODELS[self.backend] if model_id is None else model_id
-        )
+        self.model_id = model_id
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError(
                 "Enter a Hugging Face model ID or local model path."
@@ -172,10 +175,7 @@ class ChatSession:
         self._tokenizer = None
         self.device = ""
         self._load(
-            allow_download=_check_bool(
-                allow_download,
-                "allow_download",
-            ),
+            allow_download=_check_bool(allow_download, "allow_download"),
             revision=revision,
         )
 
@@ -193,7 +193,9 @@ class ChatSession:
             Whether Hugging Face may fetch missing files.
         revision: str | None
             Optional Hugging Face revision.
+
         """
+
         source_path = Path(self.model_id).expanduser()
         source = str(source_path) if source_path.is_dir() else self.model_id
         if not allow_download and not source_path.is_dir():
@@ -273,9 +275,12 @@ class ChatSession:
             If the session is closed or the model returns no text.
         ValueError
             If the message or token setting is invalid.
+
         """
+
         if self._model is None or self._tokenizer is None:
             raise RuntimeError("This chat is closed. Create a new session.")
+
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
 
@@ -299,6 +304,7 @@ class ChatSession:
             answer = self._mlx_reply(tokens, token_budget)
         else:
             answer = self._torch_reply(tokens, token_budget)
+
         if not isinstance(answer, str) or not answer.strip():
             raise RuntimeError("The model returned no text.")
 
@@ -324,21 +330,27 @@ class ChatSession:
         -------
         int
             Tokens available for generation.
+
         """
+
         if self.backend == "mlx":
             model = cast("MlxModel", self._model)
             context = model.args.max_position_embeddings
         else:
             model = cast("TorchModel", self._model)
             context = model.config.max_position_embeddings
+
         if not isinstance(context, int) or context < 1:
             raise ValueError(
                 "This model does not report its context size. Set "
                 "max_new_tokens when creating the session or sending a reply."
             )
+
         remaining = context - prompt_tokens
+
         if remaining < 1:
             raise ValueError("The conversation has filled the model context.")
+
         return remaining
 
     def _mlx_reply(
@@ -359,7 +371,9 @@ class ChatSession:
         -------
         str
             Decoded reply.
+
         """
+
         mlx_lm = import_module("mlx_lm")
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
@@ -390,7 +404,9 @@ class ChatSession:
         -------
         str
             Decoded reply.
+
         """
+
         torch = import_module("torch")
         model = cast("TorchModel", self._model)
         tokenizer = cast("TorchTokenizer", self._tokenizer)
@@ -418,12 +434,15 @@ class ChatSession:
 
     def reset(self: ChatSession) -> None:
         """Forget the conversation while keeping the model loaded."""
+
         self.messages = self._new_history()
 
     def close(self: ChatSession) -> None:
         """Release the model, tokenizer, conversation, and engine cache."""
+
         if self._model is None:
             return
+
         self._model = None
         self._tokenizer = None
         self.reset()
@@ -442,9 +461,12 @@ class ChatSession:
         -------
         list[dict[str, str]]
             Initial conversation messages.
+
         """
+
         if self._system_prompt is None:
             return []
+
         return [
             {
                 "role": "system",
@@ -467,9 +489,12 @@ def _check_bool(value: bool, label: str) -> bool:
     -------
     bool
         Checked value.
+
     """
+
     if not isinstance(value, bool):
         raise ValueError(f"{label} must be True or False.")
+
     return value
 
 
@@ -485,11 +510,15 @@ def _check_temperature(value: float) -> float:
     -------
     float
         Checked temperature.
+
     """
+
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError("temperature must be zero or a positive number.")
+
     if value < 0:
         raise ValueError("temperature must be zero or a positive number.")
+
     return float(value)
 
 
@@ -505,9 +534,12 @@ def _check_max_new_tokens(value: int | None) -> int | None:
     -------
     int | None
         Checked value.
+
     """
+
     if value is not None and (type(value) is not int or value < 1):
         raise ValueError("max_new_tokens must be a positive integer or None.")
+
     return value
 
 
@@ -523,9 +555,13 @@ def _check_system_prompt(value: str | None) -> str | None:
     -------
     str | None
         Stripped instruction or ``None``.
+
     """
+
     if value is None:
         return None
+
     if not isinstance(value, str) or not value.strip():
         raise ValueError("system_prompt must be non-empty text or None.")
+
     return value.strip()

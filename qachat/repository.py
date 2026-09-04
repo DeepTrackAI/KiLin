@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-from pathlib import PurePosixPath
-from pathlib import PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
@@ -78,14 +76,18 @@ def _selection_paths(
     -------
     tuple[str, ...]
         Normalized paths with duplicates removed.
+
     """
+
     if not isinstance(values, (list, tuple)):
         raise ValueError(f"{label} must be a list, for example ['qachat'].")
 
     result: list[str] = []
     for value in values:
+
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{label} needs non-empty relative paths.")
+
         normalized = value.replace("\\", "/")
         path = PurePosixPath(normalized)
         invalid_character = any(
@@ -101,7 +103,9 @@ def _selection_paths(
                 f"{label} must contain relative paths without wildcards "
                 "or '..'."
             )
+
         result.append(path.as_posix())
+
     return tuple(dict.fromkeys(result))
 
 
@@ -119,7 +123,9 @@ def _within(path: str, parent: str) -> bool:
     -------
     bool
         Whether the path is inside the parent.
+
     """
+
     return parent == "." or path == parent or path.startswith(parent + "/")
 
 
@@ -155,18 +161,26 @@ def _skip_reason(
     -------
     str | None
         Skip reason, or ``None`` when the entry is selected or entered.
+
     """
+
     name = PurePosixPath(relative).name.lower()
+
     if kind == "link":
         return "links are not followed"
+
     if name.startswith("."):
         return "hidden entry"
+
     if kind == "folder" and name in SKIP_DIRECTORIES:
         return "model, environment, or generated folder"
+
     if name in SKIP_FILES:
         return "model weights or potentially secret file"
+
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
         return "model weights or potentially secret file"
+
     if any(_within(relative, excluded) for excluded in excludes):
         return "excluded by your selection"
 
@@ -176,18 +190,25 @@ def _skip_reason(
     leads_to_scope = kind == "folder" and any(
         _within(included, relative) for included in includes
     )
+
     if not in_scope and not leads_to_scope:
         return "outside your included paths"
+
     if kind == "folder":
         return None
+
     if kind != "file":
         return "not a regular file"
+
     if not any(name.endswith(extension) for extension in extensions):
         return "file type not selected"
+
     if size == 0:
         return "empty file"
+
     if size is not None and size > max_file_bytes:
         return "larger than the file-size limit"
+
     return None
 
 
@@ -205,21 +226,28 @@ def _normalize_extensions(
     -------
     tuple[str, ...]
         Lowercase extensions with duplicates removed.
+
     """
+
     if not isinstance(extensions, (list, tuple)):
         raise ValueError("extensions must be a list, such as ['.py', '.md'].")
 
     normalized: list[str] = []
     for extension in extensions:
+
         if not isinstance(extension, str):
             raise ValueError("Use file extensions such as '.py' or '.md'.")
+
         value = "." + extension.lower().lstrip(".")
+
         if not re.fullmatch(r"\.[a-z0-9_]+(?:\.[a-z0-9_]+)*", value):
             raise ValueError(
                 "Use file extensions such as '.py' or '.md', without "
                 "wildcards."
             )
+
         normalized.append(value)
+
     return tuple(dict.fromkeys(normalized))
 
 
@@ -246,7 +274,9 @@ def _entry_row(
     -------
     dict[str, object]
         Result row used by :func:`scan_repository`.
+
     """
+
     return {
         "path": path,
         "kind": kind,
@@ -295,9 +325,12 @@ def scan_repository(
         If the selected path is a file.
     ValueError
         If a setting is invalid or the entry limit is reached.
+
     """
+
     if not isinstance(repository, (str, Path)) or not str(repository).strip():
         raise ValueError("Choose a local project folder.")
+
     if str(repository).lower().startswith(("https:", "http:", "git@")):
         raise ValueError("Choose a local folder, not a remote address.")
 
