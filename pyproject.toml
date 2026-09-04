@@ -1,0 +1,40 @@
+[project]
+name = "qachat"
+version = "0.1.0"
+description = "Local, provider-independent question-answering application"
+requires-python = ">=3.12,<3.13"
+
+# Packages required regardless of the selected LLM backend.
+dependencies = [
+    "huggingface-hub==1.29.0",
+]
+
+# Install one or both backend groups without changing application code.
+[project.optional-dependencies]
+mlx = [
+    "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+torch = [
+    "torch==2.14.0",
+    "transformers==5.16.1",
+]
+
+# Development tools are installed by `uv sync` but are not runtime dependencies.
+[dependency-groups]
+dev = [
+    "black==26.5.1",
+    "ipykernel==7.3.0",
+    "jupyterlab==4.6.3",
+    "ruff==0.16.6",
+]
+
+[tool.black]
+line-length = 79
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F"]
