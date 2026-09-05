@@ -32,6 +32,8 @@ class Chunk:
         Original symbol name.
     section: str | None
         Original document section.
+    cell: int | None
+        One-based notebook cell number when available.
 
     """
 
@@ -43,6 +45,7 @@ class Chunk:
     kind: str
     symbol: str | None
     section: str | None
+    cell: int | None = None
 
 
 def chunk_source_units(
@@ -218,6 +221,8 @@ def _make_chunk(
     text: str,
     start_line: int,
     end_line: int,
+    *,
+    part: int = 0,
 ) -> Chunk:
     """Create one stable chunk.
 
@@ -231,6 +236,8 @@ def _make_chunk(
         First source line.
     end_line: int
         Last source line.
+    part: int, optional
+        Character offset used to distinguish pieces of one long line.
 
     Returns
     -------
@@ -247,6 +254,8 @@ def _make_chunk(
             unit.kind,
             unit.symbol or "",
             unit.section or "",
+            str(unit.cell or ""),
+            str(part),
             text,
         )
     )
@@ -260,6 +269,7 @@ def _make_chunk(
         kind=unit.kind,
         symbol=unit.symbol,
         section=unit.section,
+        cell=unit.cell,
     )
 
 
@@ -460,6 +470,7 @@ def _split_long_line(
 
     chunks: list[Chunk] = []
     remaining = unit.text
+    start_character = 0
     while remaining:
         if count(remaining) <= max_tokens:
             chunks.append(
@@ -468,6 +479,7 @@ def _split_long_line(
                     remaining,
                     unit.start_line,
                     unit.end_line,
+                    part=start_character,
                 )
             )
             break
@@ -486,6 +498,7 @@ def _split_long_line(
                 piece,
                 unit.start_line,
                 unit.end_line,
+                part=start_character,
             )
         )
         overlap = _largest_suffix(piece, overlap_tokens, count)
@@ -493,6 +506,7 @@ def _split_long_line(
         if consumed <= 0:
             raise ValueError("Token overlap prevented chunking progress.")
 
+        start_character += consumed
         remaining = overlap + remaining[fitting:]
 
     return chunks
@@ -568,6 +582,7 @@ def _split_unit(
                 kind=unit.kind,
                 symbol=unit.symbol,
                 section=unit.section,
+                cell=unit.cell,
             )
             chunks.extend(
                 _split_long_line(

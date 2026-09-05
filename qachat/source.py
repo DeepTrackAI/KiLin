@@ -1,8 +1,9 @@
 """Read selected repository files and identify natural source units.
 
-Files are treated as text, never imported or executed. Python files are split
-with the standard-library abstract syntax tree, Markdown files by headings,
-and other supported text files remain whole.
+Files are treated as text, never imported or executed. Python uses the
+standard-library syntax tree, MATLAB uses bounded declaration parsing,
+Markdown uses headings, and notebooks use their code and Markdown cells.
+Other supported text files remain whole.
 
 """
 

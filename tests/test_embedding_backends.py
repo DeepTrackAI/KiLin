@@ -18,6 +18,8 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import PreTrainedTokenizerFast, Qwen3Config, Qwen3Model
 
 from qachat.embeddings import EmbeddingSession
+from qachat.rag import RagSession, build_rag_index
+from qachat.source import SourceFile
 
 APPLE_SILICON = (
     platform.system() == "Darwin" and platform.machine().lower() == "arm64"
@@ -98,6 +100,15 @@ def _save_mlx_model(path: Path) -> None:
     model.save_weights(str(path / "model.safetensors"))
 
 
+class FakeChat:
+    """Return a fixed answer while testing real embedding backends."""
+
+    def reply(self, message: str) -> str:
+        if not message:
+            raise ValueError("A prompt is required.")
+        return "Addition returns the sum [SOURCE 1]."
+
+
 class TestEmbeddingBackends(unittest.TestCase):
 
     @classmethod
@@ -132,6 +143,25 @@ class TestEmbeddingBackends(unittest.TestCase):
                         ["hello document", "repository question"]
                     )
                     query = session.embed_query("hello question")
+                    source_files = [
+                        SourceFile(
+                            Path("add.py"),
+                            "def add(left, right):\n"
+                            "    return left + right\n",
+                        ),
+                        SourceFile(
+                            Path("add_values.m"),
+                            "function value = add_values(left, right)\n"
+                            "value = left + right;\n"
+                            "end\n",
+                        ),
+                    ]
+                    index = build_rag_index(source_files, session)
+                    answer = RagSession(
+                        index,
+                        session,
+                        FakeChat(),
+                    ).ask("How is addition implemented?")
                 finally:
                     session.close()
 
@@ -141,6 +171,21 @@ class TestEmbeddingBackends(unittest.TestCase):
                 for vector in [*vectors, query]:
                     length = sum(value * value for value in vector) ** 0.5
                     self.assertAlmostEqual(length, 1.0, places=5)
+                self.assertTrue(answer.citations)
+                self.assertEqual(
+                    index.graph.count_nodes(
+                        kind="function",
+                        language="python",
+                    ),
+                    1,
+                )
+                self.assertEqual(
+                    index.graph.count_nodes(
+                        kind="function",
+                        language="matlab",
+                    ),
+                    1,
+                )
 
 
 if __name__ == "__main__":

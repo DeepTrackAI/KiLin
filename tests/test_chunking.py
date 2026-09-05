@@ -35,6 +35,20 @@ class TestChunking(unittest.TestCase):
         self.assertEqual(chunks[0].start_line, 4)
         self.assertEqual(chunks[0].symbol, "small")
 
+        notebook = SourceUnit(
+            path=Path("guide.ipynb"),
+            text="value = 1\n",
+            start_line=1,
+            end_line=1,
+            kind="notebook_code",
+            cell=4,
+        )
+        notebook_chunk = chunk_source_units(
+            [notebook],
+            count_tokens=lambda text: len(text.split()),
+        )[0]
+        self.assertEqual(notebook_chunk.cell, 4)
+
         long = SourceUnit(
             path=Path("long.py"),
             text="one two\nthree four\nfive six\n",
@@ -53,6 +67,42 @@ class TestChunking(unittest.TestCase):
         self.assertEqual([chunk.start_line for chunk in chunks], [10, 11, 12])
         self.assertTrue(all(len(chunk.text.split()) <= 3 for chunk in chunks))
         self.assertEqual(len({chunk.identifier for chunk in chunks}), 3)
+
+        repeated = chunk_source_units(
+            [long],
+            count_tokens=lambda text: len(text.split()),
+            target_tokens=2,
+            max_tokens=3,
+            overlap_tokens=1,
+        )
+        self.assertEqual(
+            [chunk.identifier for chunk in repeated],
+            [chunk.identifier for chunk in chunks],
+        )
+
+        long_line = SourceUnit(
+            path=Path("generated.m"),
+            text="aaaaaaa",
+            start_line=8,
+            end_line=8,
+            kind="matlab_function",
+            symbol="generated",
+        )
+        pieces = chunk_source_units(
+            [long_line],
+            count_tokens=len,
+            target_tokens=3,
+            max_tokens=3,
+            overlap_tokens=1,
+        )
+        self.assertTrue(all(len(chunk.text) <= 3 for chunk in pieces))
+        self.assertEqual(pieces[0].text, "aaa")
+        self.assertEqual(pieces[-1].text, "aaa")
+        self.assertEqual(
+            len({chunk.identifier for chunk in pieces}),
+            len(pieces),
+        )
+        self.assertTrue(all(chunk.start_line == 8 for chunk in pieces))
 
         child = SourceUnit(
             path=Path("class.py"),

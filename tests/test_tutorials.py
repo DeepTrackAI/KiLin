@@ -17,8 +17,13 @@ TUTORIALS = (
     "30_model_chat.ipynb",
     "40_repository_files.ipynb",
     "50_source_structure.ipynb",
-    "60_semantic_retrieval.ipynb",
-    "70_lexical_retrieval.ipynb",
+    "60_embeddings.ipynb",
+    "70_semantic_retrieval.ipynb",
+    "80_lexical_retrieval.ipynb",
+    "90_hybrid_retrieval.ipynb",
+    "100_repository_graph.ipynb",
+    "110_question_intent.ipynb",
+    "120_rag.ipynb",
 )
 
 
@@ -49,6 +54,19 @@ class TestTutorials(unittest.TestCase):
                     for line in source.splitlines():
                         self.assertLessEqual(len(line), 79)
 
+    def test_every_tutorial_is_checked(self) -> None:
+        tutorial_directory = ROOT / "tutorials"
+        paths = tutorial_directory.glob("*.ipynb")
+        names = tuple(
+            path.name
+            for path in sorted(
+                paths,
+                key=lambda path: int(path.name.split("_", 1)[0]),
+            )
+        )
+
+        self.assertEqual(names, TUTORIALS)
+
     def test_notebooks_use_application_functions(self) -> None:
         expected = {
             "10_setup.ipynb": "from setup.check_setup import check_setup",
@@ -62,12 +80,25 @@ class TestTutorials(unittest.TestCase):
             "50_source_structure.ipynb": (
                 "from qachat.source import extract_source_units"
             ),
-            "60_semantic_retrieval.ipynb": (
+            "60_embeddings.ipynb": (
+                "from qachat.embeddings import EmbeddingSession"
+            ),
+            "70_semantic_retrieval.ipynb": (
                 "from qachat.retrieval import semantic_search"
             ),
-            "70_lexical_retrieval.ipynb": (
+            "80_lexical_retrieval.ipynb": (
                 "from qachat.retrieval import lexical_search"
             ),
+            "90_hybrid_retrieval.ipynb": (
+                "from qachat.hybrid import reciprocal_rank_fusion"
+            ),
+            "100_repository_graph.ipynb": (
+                "from qachat.graph import build_repository_graph"
+            ),
+            "110_question_intent.ipynb": (
+                "from qachat.intent import plan_question"
+            ),
+            "120_rag.ipynb": "from qachat.rag import RagSession",
         }
 
         for name, required in expected.items():
