@@ -23,9 +23,18 @@ DEFAULT_EXTENSIONS = (
     ".sh",
     ".ps1",
     ".ipynb",
+    ".gitattributes",
+    ".gitignore",
+    ".python-version",
 )
 SKIP_DIRECTORIES = {
-    "models",
+    ".genrag",
+    ".git",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
     "weights",
     "venv",
     "env",
@@ -37,6 +46,8 @@ SKIP_DIRECTORIES = {
     "htmlcov",
 }
 SKIP_FILES = {
+    ".ds_store",
+    ".env",
     "credentials.json",
     "secrets.json",
     "id_rsa",
@@ -169,17 +180,15 @@ def _skip_reason(
     if kind == "link":
         return "links are not followed"
 
-    if name.startswith("."):
-        return "hidden entry"
-
     if kind == "folder" and name in SKIP_DIRECTORIES:
-        return "model, environment, or generated folder"
+        return "environment, cache, or generated folder"
 
-    if name in SKIP_FILES:
-        return "model weights or potentially secret file"
+    protected_environment = name.startswith(".env.")
+    if name in SKIP_FILES or protected_environment:
+        return "potentially secret or generated file"
 
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
-        return "model weights or potentially secret file"
+        return "model weight or potentially secret file"
 
     if any(_within(relative, excluded) for excluded in excludes):
         return "excluded by your selection"
@@ -240,7 +249,7 @@ def _normalize_extensions(
 
         value = "." + extension.lower().lstrip(".")
 
-        if not re.fullmatch(r"\.[a-z0-9_]+(?:\.[a-z0-9_]+)*", value):
+        if not re.fullmatch(r"\.[a-z0-9_-]+(?:\.[a-z0-9_-]+)*", value):
             raise ValueError(
                 "Use file extensions such as '.py' or '.md', without "
                 "wildcards."

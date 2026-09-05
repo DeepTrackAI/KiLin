@@ -16,6 +16,9 @@ TUTORIALS = (
     "20_huggingface_models.ipynb",
     "30_model_chat.ipynb",
     "40_repository_files.ipynb",
+    "50_source_structure.ipynb",
+    "60_semantic_retrieval.ipynb",
+    "70_lexical_retrieval.ipynb",
 )
 
 
@@ -55,6 +58,15 @@ class TestTutorials(unittest.TestCase):
             "30_model_chat.ipynb": "from qachat.chat import ChatSession",
             "40_repository_files.ipynb": (
                 "from qachat.repository import scan_repository"
+            ),
+            "50_source_structure.ipynb": (
+                "from qachat.source import extract_source_units"
+            ),
+            "60_semantic_retrieval.ipynb": (
+                "from qachat.retrieval import semantic_search"
+            ),
+            "70_lexical_retrieval.ipynb": (
+                "from qachat.retrieval import lexical_search"
             ),
         }
 

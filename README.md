@@ -1,7 +1,8 @@
 # QAChat
 
 QAChat currently sets up MLX and PyTorch, finds or downloads Hugging Face
-models, runs a local chat, and previews files in a local repository.
+models, runs a local chat, and retrieves relevant source from a local
+repository.
 
 ## Start once on a new computer
 
@@ -37,6 +38,12 @@ does not require another tutorial to run first.
    load a compatible model, configure thinking and sampling, chat, and close.
 4. [Choose repository files](tutorials/40_repository_files.ipynb) — preview
    file names, sizes, selections, and skip reasons without reading source.
+5. [Read source and make chunks](tutorials/50_source_structure.ipynb) — read
+   selected text safely, identify natural source units, and keep provenance.
+6. [Semantic retrieval](tutorials/60_semantic_retrieval.ipynb) — load an MLX
+   or PyTorch embedding model and find source with a similar meaning.
+7. [Lexical and structural retrieval](tutorials/70_lexical_retrieval.ipynb) — find exact
+   code words, identifiers, paths, and symbols without loading a model.
 
 Hugging Face owns the model cache. If another Hugging Face program already
 downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
@@ -70,4 +77,5 @@ If Black reports formatting problems, let it format the files:
 
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
 
-Repository search, RAG answers, and the Qt interface come in later steps.
+Hybrid retrieval, the repository graph, RAG answers, and the Qt interface come
+in later steps.

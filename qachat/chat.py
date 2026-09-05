@@ -10,10 +10,16 @@ from __future__ import annotations
 import gc
 from importlib import import_module
 from pathlib import Path
-import platform
-from typing import Any, cast, Literal, TYPE_CHECKING, TypeAlias
+from typing import Any, cast, TYPE_CHECKING, TypeAlias
 
 from huggingface_hub import snapshot_download
+
+from qachat.runtime import (
+    Backend,
+    SelectedBackend,
+    choose_backend as _choose_backend,
+    torch_device as _torch_device,
+)
 
 if TYPE_CHECKING:
     from mlx.nn import Module as MlxModel
@@ -26,70 +32,8 @@ else:
     TorchModel = Any
     TorchTokenizer = Any
 
-Backend = Literal["auto", "mlx", "torch"]
-SelectedBackend = Literal["mlx", "torch"]
 Model: TypeAlias = MlxModel | TorchModel
 Tokenizer: TypeAlias = MlxTokenizer | TorchTokenizer
-
-
-def _choose_backend(requested: Backend) -> SelectedBackend:
-    """Choose an engine for this computer.
-
-    Parameters
-    ----------
-    requested: "auto" | "mlx" | "torch"
-        ``auto``, ``mlx``, or ``torch``.
-
-    Returns
-    -------
-    Literal["mlx", "torch"]
-        The selected engine.
-
-    """
-
-    if requested not in {"auto", "mlx", "torch"}:
-        raise ValueError("Choose `auto`, `mlx`, or `torch`.")
-
-    is_apple_silicon = (
-        platform.system() == "Darwin" and platform.machine().lower() == "arm64"
-    )
-
-    if requested == "mlx" and not is_apple_silicon:
-        raise ValueError("`mlx` requires a native Apple Silicon Mac.")
-
-    if requested == "auto":
-        return "mlx" if is_apple_silicon else "torch"
-
-    return requested
-
-
-def _torch_device(
-    cuda_available: bool,
-    mps_available: bool,
-) -> str:
-    """Choose the best available PyTorch device.
-
-    Parameters
-    ----------
-    cuda_available: bool
-        Whether a CUDA device is available.
-    mps_available: bool
-        Whether an Apple MPS device is available.
-
-    Returns
-    -------
-    str
-        ``cuda``, ``mps``, or ``cpu``.
-
-    """
-
-    if cuda_available:
-        return "cuda"
-
-    if mps_available:
-        return "mps"
-
-    return "cpu"
 
 
 class ChatSession:
