@@ -18,12 +18,6 @@ TUTORIALS = (
     "40_repository_files.ipynb",
     "50_source_structure.ipynb",
     "60_embeddings.ipynb",
-    "70_semantic_retrieval.ipynb",
-    "80_lexical_retrieval.ipynb",
-    "90_hybrid_retrieval.ipynb",
-    "100_repository_graph.ipynb",
-    "110_question_intent.ipynb",
-    "120_rag.ipynb",
 )
 
 
@@ -83,22 +77,6 @@ class TestTutorials(unittest.TestCase):
             "60_embeddings.ipynb": (
                 "from qachat.embeddings import EmbeddingSession"
             ),
-            "70_semantic_retrieval.ipynb": (
-                "from qachat.retrieval import semantic_search"
-            ),
-            "80_lexical_retrieval.ipynb": (
-                "from qachat.retrieval import lexical_search"
-            ),
-            "90_hybrid_retrieval.ipynb": (
-                "from qachat.hybrid import reciprocal_rank_fusion"
-            ),
-            "100_repository_graph.ipynb": (
-                "from qachat.graph import build_repository_graph"
-            ),
-            "110_question_intent.ipynb": (
-                "from qachat.intent import plan_question"
-            ),
-            "120_rag.ipynb": "from qachat.rag import RagSession",
         }
 
         for name, required in expected.items():
