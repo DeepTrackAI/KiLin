@@ -1,0 +1,619 @@
+"""Split natural source units only when they exceed a token budget."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
+
+from qachat.sources.sources import SourceUnit
+
+
+@dataclass(frozen=True, slots=True)
+class Chunk:
+    """A searchable source fragment with its original location.
+
+    Attributes
+    ----------
+    identifier: str
+        Stable content-based identifier.
+    path: pathlib.Path
+        Relative source path.
+    text: str
+        Exact source fragment.
+    start_line: int
+        First one-based source line.
+    end_line: int
+        Last one-based source line.
+    kind: str
+        Original source-unit type.
+    symbol: str | None
+        Original symbol name.
+    section: str | None
+        Original document section.
+    cell: int | None
+        One-based notebook cell number when available.
+
+    """
+
+    identifier: str
+    path: Path
+    text: str
+    start_line: int
+    end_line: int
+    kind: str
+    symbol: str | None
+    section: str | None
+    cell: int | None = None
+
+
+def chunk_source_units(
+    units: list[SourceUnit],
+    *,
+    count_tokens: Callable[[str], int],
+    target_tokens: int = 500,
+    max_tokens: int = 700,
+    overlap_tokens: int = 80,
+) -> list[Chunk]:
+    """Create token-bounded chunks while preserving natural units.
+
+    Parameters
+    ----------
+    units: list[SourceUnit]
+        Natural source units.
+    count_tokens: collections.abc.Callable[[str], int]
+        Token counter from the selected embedding model.
+    target_tokens: int, optional
+        Preferred size when a unit must be split.
+    max_tokens: int, optional
+        Largest allowed chunk.
+    overlap_tokens: int, optional
+        Maximum repeated text between adjacent split chunks.
+
+    Returns
+    -------
+    list[Chunk]
+        Searchable chunks in source order.
+
+    Raises
+    ------
+    ValueError
+        If a size is invalid or the token counter returns an invalid value.
+
+    """
+
+    _check_sizes(target_tokens, max_tokens, overlap_tokens)
+    counts: dict[str, int] = {}
+
+    def count(text: str) -> int:
+        if text not in counts:
+            value = count_tokens(text) if text else 0
+            if type(value) is not int or value < 0:
+                raise ValueError(
+                    "count_tokens must return a non-negative whole number."
+                )
+            counts[text] = value
+        return counts[text]
+
+    chunks: list[Chunk] = []
+    for unit in units:
+        chunks.extend(
+            _chunk_source_unit(
+                unit,
+                count=count,
+                target_tokens=target_tokens,
+                max_tokens=max_tokens,
+                overlap_tokens=overlap_tokens,
+            )
+        )
+
+    return chunks
+
+
+def _check_sizes(
+    target_tokens: int,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> None:
+    """Check chunk size settings.
+
+    Parameters
+    ----------
+    target_tokens: int
+        Preferred split size.
+    max_tokens: int
+        Largest allowed chunk.
+    overlap_tokens: int
+        Maximum repeated text.
+
+    Raises
+    ------
+    ValueError
+        If the settings cannot produce bounded forward progress.
+
+    """
+
+    values = (target_tokens, max_tokens, overlap_tokens)
+    if any(type(value) is not int for value in values):
+        raise ValueError("Chunk sizes must be whole numbers.")
+
+    if target_tokens < 1:
+        raise ValueError("target_tokens must be at least 1.")
+
+    if max_tokens < target_tokens:
+        raise ValueError("max_tokens must be at least target_tokens.")
+
+    if not 0 <= overlap_tokens < target_tokens:
+        raise ValueError(
+            "overlap_tokens must be non-negative and below target_tokens."
+        )
+
+
+def _chunk_source_unit(
+    unit: SourceUnit,
+    *,
+    count: Callable[[str], int],
+    target_tokens: int,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> list[Chunk]:
+    """Keep one unit whole or split its smaller natural children.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Unit to process.
+    count: collections.abc.Callable[[str], int]
+        Checked and cached token counter.
+    target_tokens: int
+        Preferred split size.
+    max_tokens: int
+        Largest allowed chunk.
+    overlap_tokens: int
+        Maximum repeated text.
+
+    Returns
+    -------
+    list[Chunk]
+        Zero or more bounded chunks.
+
+    """
+
+    if not unit.text.strip():
+        return []
+
+    if count(unit.text) <= max_tokens:
+        return [
+            _make_chunk(
+                unit,
+                unit.text,
+                unit.start_line,
+                unit.end_line,
+            )
+        ]
+
+    if unit.children:
+        chunks: list[Chunk] = []
+        for child in unit.children:
+            chunks.extend(
+                _chunk_source_unit(
+                    child,
+                    count=count,
+                    target_tokens=target_tokens,
+                    max_tokens=max_tokens,
+                    overlap_tokens=overlap_tokens,
+                )
+            )
+        return chunks
+
+    return _split_unit(
+        unit,
+        count=count,
+        target_tokens=target_tokens,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+    )
+
+
+def _make_chunk(
+    unit: SourceUnit,
+    text: str,
+    start_line: int,
+    end_line: int,
+    *,
+    part: int = 0,
+) -> Chunk:
+    """Create one stable chunk.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Source provenance.
+    text: str
+        Chunk text.
+    start_line: int
+        First source line.
+    end_line: int
+        Last source line.
+    part: int, optional
+        Character offset used to distinguish pieces of one long line.
+
+    Returns
+    -------
+    Chunk
+        New chunk with a content-based identifier.
+
+    """
+
+    identity = ":".join(
+        (
+            unit.path.as_posix(),
+            str(start_line),
+            str(end_line),
+            unit.kind,
+            unit.symbol or "",
+            unit.section or "",
+            str(unit.cell or ""),
+            str(part),
+            text,
+        )
+    )
+    identifier = sha256(identity.encode("utf-8")).hexdigest()[:16]
+    return Chunk(
+        identifier=identifier,
+        path=unit.path,
+        text=text,
+        start_line=start_line,
+        end_line=end_line,
+        kind=unit.kind,
+        symbol=unit.symbol,
+        section=unit.section,
+        cell=unit.cell,
+    )
+
+
+def _largest_prefix(
+    text: str,
+    limit: int,
+    count: Callable[[str], int],
+) -> int:
+    """Find the largest character prefix within a token limit.
+
+    Parameters
+    ----------
+    text: str
+        Text to search.
+    limit: int
+        Token limit.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+
+    Returns
+    -------
+    int
+        Number of fitting characters.
+
+    """
+
+    low = 1
+    high = len(text)
+    fitting = 0
+    while low <= high:
+        middle = (low + high) // 2
+        if count(text[:middle]) <= limit:
+            fitting = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+
+    return fitting
+
+
+def _largest_suffix(
+    text: str,
+    limit: int,
+    count: Callable[[str], int],
+) -> str:
+    """Find the largest text suffix within a token limit.
+
+    Parameters
+    ----------
+    text: str
+        Text to search.
+    limit: int
+        Token limit.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+
+    Returns
+    -------
+    str
+        Fitting suffix.
+
+    """
+
+    if limit == 0 or not text:
+        return ""
+
+    low = 0
+    high = len(text)
+    fitting_start = len(text)
+    while low <= high:
+        middle = (low + high) // 2
+        if count(text[middle:]) <= limit:
+            fitting_start = middle
+            high = middle - 1
+        else:
+            low = middle + 1
+
+    return text[fitting_start:]
+
+
+def _largest_line_end(
+    lines: list[tuple[str, int]],
+    start: int,
+    limit: int,
+    count: Callable[[str], int],
+) -> int:
+    """Find the farthest whole-line boundary within a token limit.
+
+    Parameters
+    ----------
+    lines: list[tuple[str, int]]
+        Text and one-based line number pairs.
+    start: int
+        Zero-based starting item.
+    limit: int
+        Token limit.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+
+    Returns
+    -------
+    int
+        Exclusive ending item.
+
+    """
+
+    low = start + 1
+    high = len(lines)
+    fitting = start
+    while low <= high:
+        middle = (low + high) // 2
+        text = "".join(line for line, _ in lines[start:middle])
+        if count(text) <= limit:
+            fitting = middle
+            low = middle + 1
+        else:
+            high = middle - 1
+
+    return fitting
+
+
+def _overlap_start(
+    lines: list[tuple[str, int]],
+    start: int,
+    end: int,
+    limit: int,
+    count: Callable[[str], int],
+) -> int:
+    """Find the earliest whole-line suffix within an overlap limit.
+
+    Parameters
+    ----------
+    lines: list[tuple[str, int]]
+        Text and line number pairs.
+    start: int
+        Current zero-based starting item.
+    end: int
+        Current exclusive ending item.
+    limit: int
+        Token limit.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+
+    Returns
+    -------
+    int
+        Start of the overlapping suffix.
+
+    """
+
+    if limit == 0:
+        return end
+
+    low = start + 1
+    high = end
+    fitting = end
+    while low <= high:
+        middle = (low + high) // 2
+        text = "".join(line for line, _ in lines[middle:end])
+        if count(text) <= limit:
+            fitting = middle
+            high = middle - 1
+        else:
+            low = middle + 1
+
+    return fitting
+
+
+def _split_long_line(
+    unit: SourceUnit,
+    *,
+    count: Callable[[str], int],
+    target_tokens: int,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> list[Chunk]:
+    """Split one oversized source line by characters.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Single-line source unit.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+    target_tokens: int
+        Preferred split size.
+    max_tokens: int
+        Largest allowed chunk.
+    overlap_tokens: int
+        Maximum repeated text.
+
+    Returns
+    -------
+    list[Chunk]
+        Bounded chunks covering the source line.
+
+    """
+
+    chunks: list[Chunk] = []
+    remaining = unit.text
+    start_character = 0
+    while remaining:
+        if count(remaining) <= max_tokens:
+            chunks.append(
+                _make_chunk(
+                    unit,
+                    remaining,
+                    unit.start_line,
+                    unit.end_line,
+                    part=start_character,
+                )
+            )
+            break
+
+        fitting = _largest_prefix(remaining, target_tokens, count)
+        if fitting == 0:
+            raise ValueError(
+                "The tokenizer reports that one character exceeds the "
+                "target token budget."
+            )
+
+        piece = remaining[:fitting]
+        chunks.append(
+            _make_chunk(
+                unit,
+                piece,
+                unit.start_line,
+                unit.end_line,
+                part=start_character,
+            )
+        )
+        overlap = _largest_suffix(piece, overlap_tokens, count)
+        consumed = fitting - len(overlap)
+        if consumed <= 0:
+            raise ValueError("Token overlap prevented chunking progress.")
+
+        start_character += consumed
+        remaining = overlap + remaining[fitting:]
+
+    return chunks
+
+
+def _split_unit(
+    unit: SourceUnit,
+    *,
+    count: Callable[[str], int],
+    target_tokens: int,
+    max_tokens: int,
+    overlap_tokens: int,
+) -> list[Chunk]:
+    """Split an oversized unit at line boundaries when possible.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Source unit to split.
+    count: collections.abc.Callable[[str], int]
+        Token counter.
+    target_tokens: int
+        Preferred split size.
+    max_tokens: int
+        Largest allowed chunk.
+    overlap_tokens: int
+        Maximum repeated text.
+
+    Returns
+    -------
+    list[Chunk]
+        Bounded chunks in source order.
+
+    """
+
+    source_lines = unit.text.splitlines(keepends=True)
+    if len(source_lines) == 1:
+        return _split_long_line(
+            unit,
+            count=count,
+            target_tokens=target_tokens,
+            max_tokens=max_tokens,
+            overlap_tokens=overlap_tokens,
+        )
+
+    lines = [
+        (line, unit.start_line + offset)
+        for offset, line in enumerate(source_lines)
+    ]
+    chunks: list[Chunk] = []
+    start = 0
+    while start < len(lines):
+        remaining = "".join(line for line, _ in lines[start:])
+        if count(remaining) <= max_tokens:
+            chunks.append(
+                _make_chunk(
+                    unit,
+                    remaining,
+                    lines[start][1],
+                    lines[-1][1],
+                )
+            )
+            break
+
+        end = _largest_line_end(lines, start, target_tokens, count)
+        if end == start:
+            line, line_number = lines[start]
+            line_unit = SourceUnit(
+                path=unit.path,
+                text=line,
+                start_line=line_number,
+                end_line=line_number,
+                kind=unit.kind,
+                symbol=unit.symbol,
+                section=unit.section,
+                cell=unit.cell,
+            )
+            chunks.extend(
+                _split_long_line(
+                    line_unit,
+                    count=count,
+                    target_tokens=target_tokens,
+                    max_tokens=max_tokens,
+                    overlap_tokens=overlap_tokens,
+                )
+            )
+            start += 1
+            continue
+
+        text = "".join(line for line, _ in lines[start:end])
+        chunks.append(
+            _make_chunk(
+                unit,
+                text,
+                lines[start][1],
+                lines[end - 1][1],
+            )
+        )
+        if end == len(lines):
+            break
+
+        start = _overlap_start(
+            lines,
+            start,
+            end,
+            overlap_tokens,
+            count,
+        )
+
+    return [chunk for chunk in chunks if chunk.text.strip()]

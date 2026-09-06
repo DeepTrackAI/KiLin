@@ -12,6 +12,7 @@ dependencies = [
 # Install one or both backend groups without changing application code.
 [project.optional-dependencies]
 mlx = [
+    "mlx-embeddings==0.0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 torch = [

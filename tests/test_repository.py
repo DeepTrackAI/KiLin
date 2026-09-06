@@ -31,8 +31,14 @@ class TestRepository(unittest.TestCase):
             "empty.py": "",
             "image.png": "not selected",
             ".env": "FAKE_SECRET=not-real",
+            ".env.local": "FAKE_SECRET=not-real",
+            ".git/config": "generated metadata",
+            ".gitignore": ".venv/",
+            ".github/workflow.yml": "name: checks",
             ".venv/package.py": "installed package",
+            ".vscode/settings.json": "{}",
             "models/config.json": "{}",
+            "models/layer.py": "class Layer: pass",
             "cache.safetensors": "fake weights",
             "credentials.json": "{}",
         }
@@ -66,8 +72,13 @@ class TestRepository(unittest.TestCase):
         self.assertEqual(
             report["selected_files"],
             [
+                ".github/workflow.yml",
+                ".gitignore",
+                ".vscode/settings.json",
                 "README.md",
                 "docs/guide.MD",
+                "models/config.json",
+                "models/layer.py",
                 "settings.toml",
                 "src/helpers.py",
                 "src/main.py",
@@ -78,8 +89,15 @@ class TestRepository(unittest.TestCase):
         rows = self._by_path(report)
         self.assertEqual(rows["image.png"]["reason"], "file type not selected")
         self.assertEqual(rows["empty.py"]["reason"], "empty file")
-        self.assertEqual(rows[".env"]["reason"], "hidden entry")
-        self.assertNotIn("models/config.json", rows)
+        self.assertEqual(
+            rows[".env"]["reason"],
+            "potentially secret or generated file",
+        )
+        self.assertEqual(
+            rows[".env.local"]["reason"],
+            "potentially secret or generated file",
+        )
+        self.assertNotIn(".git/config", rows)
 
     def _check_preview_never_reads_or_runs_files(self) -> None:
         message = "The scanner must only inspect metadata."
@@ -138,7 +156,6 @@ class TestRepository(unittest.TestCase):
                 "credentials.json",
                 "cache.safetensors",
                 ".venv",
-                "models",
             ],
         )
         self.assertEqual(report["selected_files"], [])

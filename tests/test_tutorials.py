@@ -16,6 +16,8 @@ TUTORIALS = (
     "20_huggingface_models.ipynb",
     "30_model_chat.ipynb",
     "40_repository_files.ipynb",
+    "50_source_structure.ipynb",
+    "60_embeddings.ipynb",
 )
 
 
@@ -46,6 +48,19 @@ class TestTutorials(unittest.TestCase):
                     for line in source.splitlines():
                         self.assertLessEqual(len(line), 79)
 
+    def test_every_tutorial_is_checked(self) -> None:
+        tutorial_directory = ROOT / "tutorials"
+        paths = tutorial_directory.glob("*.ipynb")
+        names = tuple(
+            path.name
+            for path in sorted(
+                paths,
+                key=lambda path: int(path.name.split("_", 1)[0]),
+            )
+        )
+
+        self.assertEqual(names, TUTORIALS)
+
     def test_notebooks_use_application_functions(self) -> None:
         expected = {
             "10_setup.ipynb": "from setup.check_setup import check_setup",
@@ -55,6 +70,12 @@ class TestTutorials(unittest.TestCase):
             "30_model_chat.ipynb": "from qachat.chat import ChatSession",
             "40_repository_files.ipynb": (
                 "from qachat.repository import scan_repository"
+            ),
+            "50_source_structure.ipynb": (
+                "from qachat.sources.sources import extract_source_units"
+            ),
+            "60_embeddings.ipynb": (
+                "from qachat.embeddings import EmbeddingSession"
             ),
         }
 

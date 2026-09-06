@@ -1,7 +1,9 @@
 # QAChat
 
-QAChat currently sets up MLX and PyTorch, finds or downloads Hugging Face
-models, runs a local chat, and previews files in a local repository.
+QAChat currently sets up MLX and PyTorch, uses Hugging Face models, runs a
+local chat, reads selected repository source, turns it into traceable chunks,
+and creates embedding vectors. Nothing is searched or retrieved in this
+branch.
 
 ## Start once on a new computer
 
@@ -33,10 +35,14 @@ does not require another tutorial to run first.
    MLX or PyTorch calculates the correct sum.
 2. [Use Hugging Face models](tutorials/20_huggingface_models.ipynb) — list
    models in Hugging Face's normal cache and optionally download one there.
-3. [Load a model and chat](tutorials/30_model_chat.ipynb) — choose MLX or PyTorch,
-   load a compatible model, configure thinking and sampling, chat, and close.
+3. [Load a model and chat](tutorials/30_model_chat.ipynb) — choose MLX or
+   PyTorch, load a compatible model, configure it, chat, and close.
 4. [Choose repository files](tutorials/40_repository_files.ipynb) — preview
    file names, sizes, selections, and skip reasons without reading source.
+5. [Read source and make chunks](tutorials/50_source_structure.ipynb) — find
+   natural source units, make bounded chunks, and keep their file and lines.
+6. [Create embeddings](tutorials/60_embeddings.ipynb) — count model tokens and
+   turn real chunks and one question into vectors without searching them.
 
 Hugging Face owns the model cache. If another Hugging Face program already
 downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
@@ -68,6 +74,14 @@ If Black reports formatting problems, let it format the files:
 .venv/bin/black qachat setup tests
 ```
 
+Clear saved notebook outputs before committing. This keeps the code and
+Markdown:
+
+```sh
+.venv/bin/jupyter nbconvert --clear-output --inplace tutorials/*.ipynb
+```
+
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
 
-Repository search, RAG answers, and the Qt interface come in later steps.
+Semantic, lexical, and hybrid retrieval, the repository graph, question
+intent, RAG answers, and the Qt and optional MCP interfaces come later.
