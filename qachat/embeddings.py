@@ -82,10 +82,10 @@ class EmbeddingSession:
             )
 
         if not isinstance(allow_download, bool):
-            raise ValueError("allow_download must be True or False.")
+            raise ValueError("`allow_download` must be True or False.")
 
         if not isinstance(query_instruction, str):
-            raise ValueError("query_instruction must be text.")
+            raise ValueError("`query_instruction` must be text.")
 
         self.model_id = model_id.strip()
         self.backend = choose_backend(backend)
