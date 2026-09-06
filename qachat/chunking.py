@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from qachat.source import SourceUnit
+from qachat.souces.sources import SourceUnit
 
 
 @dataclass(frozen=True, slots=True)
