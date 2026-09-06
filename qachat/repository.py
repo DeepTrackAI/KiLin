@@ -188,7 +188,7 @@ def _skip_reason(
         return "potentially secret or generated file"
 
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
-        return "model weight or potentially secret file"
+        return "model weights or potentially secret file"
 
     if any(_within(relative, excluded) for excluded in excludes):
         return "excluded by your selection"
