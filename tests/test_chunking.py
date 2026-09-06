@@ -9,7 +9,7 @@ from pathlib import Path
 import unittest
 
 from qachat.chunking import chunk_source_units
-from qachat.source import SourceUnit
+from qachat.sources.sources import SourceUnit
 
 
 class TestChunking(unittest.TestCase):

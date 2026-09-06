@@ -72,7 +72,7 @@ class TestTutorials(unittest.TestCase):
                 "from qachat.repository import scan_repository"
             ),
             "50_source_structure.ipynb": (
-                "from qachat.source import extract_source_units"
+                "from qachat.sources.sources import extract_source_units"
             ),
             "60_embeddings.ipynb": (
                 "from qachat.embeddings import EmbeddingSession"

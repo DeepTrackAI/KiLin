@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from qachat.repository import scan_repository
-from qachat.source import (
+from qachat.sources.sources import (
     SourceFile,
     extract_source_units,
     read_repository_files,
