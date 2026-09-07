@@ -95,9 +95,7 @@ class TestEmbeddings(unittest.TestCase):
 
         self.assertEqual(documents, [[3.0, 4.0]])
         self.assertEqual(query, [3.0, 4.0])
-        self.assertEqual(captured[0], "document")
-        self.assertIn("Instruct:", captured[1])
-        self.assertIn("Query: question", captured[1])
+        self.assertEqual(captured, ["document", "question"])
 
         with patch.object(
             mlx_session,
@@ -113,7 +111,6 @@ class TestEmbeddings(unittest.TestCase):
         invalid_settings = (
             {"model_id": ""},
             {"model_id": "group/model", "allow_download": "yes"},
-            {"model_id": "group/model", "query_instruction": None},
         )
         for settings in invalid_settings:
             with self.subTest(settings=settings):

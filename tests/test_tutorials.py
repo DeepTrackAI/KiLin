@@ -88,6 +88,10 @@ class TestTutorials(unittest.TestCase):
                     "".join(cell["source"]) for cell in notebook["cells"]
                 )
 
+                self.assertIn(
+                    "from setup.notebook import prepare_notebook",
+                    source,
+                )
                 self.assertIn(required, source)
 
 
