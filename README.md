@@ -55,7 +55,7 @@ downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
 when allowed, missing files are downloaded to that same cache. Model weights
 are not committed to QAChat. MLX and PyTorch may require different weights.
 
-## Verify the repository## Verify the repository
+## Verify the repository
 
 These steps are optional when only using the tutorials. Run them when
 developing QAChat and before committing changes.
