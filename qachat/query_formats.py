@@ -4,6 +4,8 @@ Attributes
 ----------
 SOFTWARE_REPOSITORY_INSTRUCTION
     Default retrieval goal for a software repository.
+LITERATURE_REPOSITORY_INSTRUCTION
+    Default retrieval goal for an academic literature repository.
 
 Functions
 ---------
@@ -17,6 +19,11 @@ from __future__ import annotations
 SOFTWARE_REPOSITORY_INSTRUCTION = (
     "Given a question about a software repository, retrieve relevant code "
     "and documentation that help answer the question."
+)
+
+LITERATURE_REPOSITORY_INSTRUCTION = (
+    "Given a question about academic literature, retrieve relevant research "
+    "papers, abstracts, and citations that help answer the question."
 )
 
 
