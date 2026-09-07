@@ -1,8 +1,13 @@
 """Load one embedding model and turn text into comparable vectors.
 
-``EmbeddingSession`` uses Hugging Face's normal cache. MLX and PyTorch remain
-behind the same small application interface, but each backend needs compatible
-model weights.
+Classes
+-------
+EmbeddingSession
+    Load compatible MLX or PyTorch embedding weights, count tokens, and embed
+    document or query text supplied by the caller.
+
+Chat models and embedding models are independent. A later RAG layer can use
+any supported chat model with any supported embedding model.
 
 """
 
@@ -23,11 +28,6 @@ from qachat.runtime import (
     torch_device,
 )
 
-QUERY_INSTRUCTION = (
-    "Given a question about a software repository, retrieve relevant code "
-    "and documentation that help answer the question."
-)
-
 
 class EmbeddingSession:
     """One loaded embedding model and tokenizer.
@@ -42,8 +42,6 @@ class EmbeddingSession:
         Whether Hugging Face may download missing files to its normal cache.
     revision: str | None, optional
         Optional Hugging Face branch, tag, or commit.
-    query_instruction: str, optional
-        Instruction added only to search questions.
 
     Attributes
     ----------
@@ -53,15 +51,12 @@ class EmbeddingSession:
         Selected calculation backend.
     device: str
         Device used for embedding calculations.
-    query_instruction: str
-        Instruction added to search questions.
 
     """
 
     model_id: str
     backend: SelectedBackend
     device: str
-    query_instruction: str
     _model: Any | None
     _tokenizer: Any | None
 
@@ -72,7 +67,6 @@ class EmbeddingSession:
         backend: Backend = "auto",
         allow_download: bool = True,
         revision: str | None = None,
-        query_instruction: str = QUERY_INSTRUCTION,
     ) -> None:
         """Check settings, find the snapshot, and load one backend."""
 
@@ -84,12 +78,8 @@ class EmbeddingSession:
         if not isinstance(allow_download, bool):
             raise ValueError("`allow_download` must be True or False.")
 
-        if not isinstance(query_instruction, str):
-            raise ValueError("`query_instruction` must be text.")
-
         self.model_id = model_id.strip()
         self.backend = choose_backend(backend)
-        self.query_instruction = query_instruction.strip()
         self.device = ""
         self._model = None
         self._tokenizer = None
@@ -178,32 +168,31 @@ class EmbeddingSession:
 
         return _check_vectors(vectors, len(checked))
 
-    def embed_query(self: EmbeddingSession, question: str) -> list[float]:
-        """Embed one search question with the retrieval instruction.
+    def embed_query(
+        self: EmbeddingSession,
+        query_text: str,
+    ) -> list[float]:
+        """Embed one query exactly as provided.
 
         Parameters
         ----------
-        question: str
-            Repository question.
+        query_text: str
+            Text formatted for the selected embedding model.
 
         Returns
         -------
         list[float]
-            Normalized question vector.
+            Normalized query vector.
 
         Raises
         ------
         ValueError
-            If the question is empty.
+            If the query text is empty.
 
         """
 
-        checked = _check_texts([question])[0]
-        text = checked
-        if self.query_instruction:
-            text = f"Instruct: {self.query_instruction}\n" f"Query: {checked}"
-
-        return self.embed_documents([text])[0]
+        checked = _check_texts([query_text])[0]
+        return self.embed_documents([checked])[0]
 
     def close(self: EmbeddingSession) -> None:
         """Release model references and backend caches."""

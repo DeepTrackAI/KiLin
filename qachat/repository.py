@@ -1,4 +1,11 @@
-"""Preview local file selection using names and metadata only."""
+"""Select local repository files without reading their contents.
+
+Functions
+---------
+scan_repository
+    Return selected paths, sizes, and skip reasons for inspection.
+
+"""
 
 from __future__ import annotations
 
@@ -23,6 +30,7 @@ DEFAULT_EXTENSIONS = (
     ".sh",
     ".ps1",
     ".ipynb",
+    ".pdf",
     ".gitattributes",
     ".gitignore",
     ".python-version",
