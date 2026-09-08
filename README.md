@@ -65,9 +65,18 @@ developing QAChat and before committing changes.
 Run all automated tests:
 
 ```sh
-.venv/bin/python -m unittest discover -s tests -v
+.venv/bin/python -m tests
 ```
 
+This short command uses `tests/__main__.py` to discover every test under the
+nested `tests/` folders. The equivalent standard-library command is:
+
+```sh
+.venv/bin/python -m unittest discover -s tests -t . -v
+```
+
+The `-t .` keeps the repository root as the import root, so `tests/qachat/`
+does not hide the real `qachat/` package.
 
 ### Clean and check before committing
 Format the Python code with Black, check and fix common code issues with
@@ -79,14 +88,15 @@ Ruff, and remove saved outputs from the tutorial notebooks:
 .venv/bin/jupyter nbconvert --clear-output --inplace tutorials/*.ipynb
 ```
 
- [Black](https://black.readthedocs.io/) automatically reformats files when needed. 
+ [Black](https://black.readthedocs.io/) automatically reformats files when needed.
  [Ruff](https://docs.astral.sh/ruff/) automatically fixes
 issues that can be safely corrected and reports any remaining problems.
 Clearing notebook outputs keeps committed notebooks clean.
 The 79-character line limit is defined in three places:
+
 - pyproject.toml under [tool.black]
 - pyproject.toml under [tool.ruff]
-- tests/test_tutorials.py, which checks tutorial code lines
+- tests/tutorials/test_tutorials.py, which checks tutorial code lines
 
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
 

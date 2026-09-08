@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 TUTORIALS = (
     "10_setup.ipynb",
     "20_huggingface_models.ipynb",
@@ -18,6 +18,7 @@ TUTORIALS = (
     "40_repository_files.ipynb",
     "50_source_structure.ipynb",
     "60_embeddings.ipynb",
+    "70_semantic_retrieval.ipynb",
 )
 
 
@@ -76,6 +77,9 @@ class TestTutorials(unittest.TestCase):
             ),
             "60_embeddings.ipynb": (
                 "from qachat.embeddings import EmbeddingSession"
+            ),
+            "70_semantic_retrieval.ipynb": (
+                "from qachat.retrieval import build_semantic_index"
             ),
         }
 

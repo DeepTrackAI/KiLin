@@ -13,7 +13,7 @@ import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _command(path: Path, body: str) -> None:
