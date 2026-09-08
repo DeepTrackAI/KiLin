@@ -2,8 +2,8 @@
 
 QAChat currently sets up MLX and PyTorch, uses Hugging Face models, runs a
 local chat, reads selected repository source, turns it into traceable chunks,
-and creates embedding vectors. Nothing is searched or retrieved in this
-branch.
+creates embedding vectors, and searches semantic, lexical, repository,
+and literature relationships.
 
 ## Start once on a new computer
 
@@ -49,6 +49,10 @@ selected. Each tutorial is standalone.
    natural source units, make bounded chunks, and keep their file and lines.
 6. [Create embeddings](tutorials/60_embeddings.ipynb) — count model tokens and
    turn real chunks and one question into vectors without searching them.
+7. [Semantic retrieval](tutorials/70_semantic_retrieval.ipynb) — build an
+   embedding index and rank chunks by meaning with cosine similarity.
+8. [Lexical retrieval](tutorials/80_lexical_retrieval.ipynb) — build a
+   TF-IDF index and rank exact words, phrases, and software identifiers.
 
 Hugging Face owns the model cache. If another Hugging Face program already
 downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
