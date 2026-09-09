@@ -34,7 +34,7 @@ from qachat.retrievals.code_graph import (
 from qachat.retrievals.strategies.retrieval_lexical import LexicalIndex
 from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
 
-_FORMAT_VERSION = 2
+_FORMAT_VERSION = 1
 
 
 @dataclass(frozen=True, slots=True)
