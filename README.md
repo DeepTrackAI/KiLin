@@ -2,8 +2,8 @@
 
 QAChat currently sets up MLX and PyTorch, uses Hugging Face models, runs a
 local chat, reads selected repository source, turns it into traceable chunks,
-creates embedding vectors, and searches semantic, lexical, repository,
-and literature relationships.
+creates embedding vectors, searches semantic and lexical indexes, follows code
+relationships, saves reusable indexes, and combines retrieval rankings.
 
 ## Start once on a new computer
 
@@ -53,6 +53,13 @@ selected. Each tutorial is standalone.
    embedding index and rank chunks by meaning with cosine similarity.
 8. [Lexical retrieval](tutorials/80_lexical_retrieval.ipynb) — build a
    TF-IDF index and rank exact words, phrases, and software identifiers.
+
+9. [Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb) — reuse
+   natural source units and follow Python or MATLAB code relationships.
+10. [Persistent indexes](tutorials/100_persistent_indexes.ipynb) — save,
+    reload, and check semantic and lexical indexes.
+11. [Hybrid ranking](tutorials/110_hybrid_ranking.ipynb) — combine semantic,
+    lexical, and code-aware rankings with Reciprocal Rank Fusion.
 
 Hugging Face owns the model cache. If another Hugging Face program already
 downloaded a model, QAChat can see it. Loading a model ID reuses cached files;

@@ -41,5 +41,6 @@ weights/
 *.incomplete
 
 # Runtime output
+indexes/
 logs/
 *.log
