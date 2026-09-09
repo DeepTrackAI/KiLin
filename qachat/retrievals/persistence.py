@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 from qachat.chunking import Chunk
-from qachat.retrievals.code_graph import (
+from qachat.retrievals.code_graph.code_graph import (
     CodeEntity,
     CodeGraph,
     CodeRelation,

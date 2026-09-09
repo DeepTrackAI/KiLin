@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 
-from qachat.retrievals.code_graph import (
+from qachat.retrievals.code_graph.code_graph import (
     CodeRelation,
     _module_name,
     _resolve_name,

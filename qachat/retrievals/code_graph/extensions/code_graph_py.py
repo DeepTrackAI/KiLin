@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import ast
 
-from qachat.retrievals.code_graph import (
+from qachat.retrievals.code_graph.code_graph import (
     CodeRelation,
     _module_name,
     _resolve_name,
@@ -77,9 +77,7 @@ class _Visitor(ast.NodeVisitor):
 
         module = node.module or ""
         for alias in node.names:
-            target = ".".join(
-                part for part in (module, alias.name) if part
-            )
+            target = ".".join(part for part in (module, alias.name) if part)
             self._add("imports", target)
 
     def visit_ClassDef(

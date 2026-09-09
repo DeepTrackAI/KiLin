@@ -35,7 +35,7 @@ from qachat.retrievals.persistence import (
     prepare_persistent_indexes,
     save_indexes,
 )
-from qachat.retrievals.code_graph import (
+from qachat.retrievals.code_graph.code_graph import (
     CodeEntity,
     CodeGraph,
     CodeRelation,

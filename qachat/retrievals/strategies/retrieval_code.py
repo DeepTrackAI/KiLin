@@ -20,7 +20,7 @@ from dataclasses import dataclass
 import re
 
 from qachat.chunking import Chunk
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph
+from qachat.retrievals.code_graph.code_graph import CodeEntity, CodeGraph
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
