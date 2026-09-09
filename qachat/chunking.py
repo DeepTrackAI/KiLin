@@ -10,6 +10,12 @@ from pathlib import Path
 from qachat.sources.sources import SourceUnit
 
 
+__all__ = [
+    "Chunk",
+    "chunk_source_units",
+]
+
+
 @dataclass(frozen=True, slots=True)
 class Chunk:
     """A searchable source fragment with its original location.

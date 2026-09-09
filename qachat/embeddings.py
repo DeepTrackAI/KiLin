@@ -29,6 +29,11 @@ from qachat.runtime import (
 )
 
 
+__all__ = [
+    "EmbeddingSession",
+]
+
+
 class EmbeddingSession:
     """One loaded embedding model and tokenizer.
 

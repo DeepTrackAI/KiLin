@@ -13,6 +13,13 @@ from pathlib import Path
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
 
 
+__all__ = [
+    "available_models",
+    "model_is_available",
+    "download_model",
+]
+
+
 def available_models(
     cache_directory: str | Path | None = None,
 ) -> list[dict[str, object]]:

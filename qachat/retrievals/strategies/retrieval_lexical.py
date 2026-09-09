@@ -27,6 +27,15 @@ import re
 
 from qachat.chunking import Chunk
 
+
+__all__ = [
+    "LexicalIndex",
+    "LexicalResult",
+    "lexical_terms",
+    "build_lexical_index",
+    "lexical_search",
+]
+
 _IDENTIFIER_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
 _WORD = re.compile(r"[A-Za-z0-9_]+")
 

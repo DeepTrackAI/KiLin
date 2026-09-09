@@ -1,6 +1,16 @@
-"""Source-file reading and natural-unit extraction.
+"""Expose source reading and natural-unit extraction contracts."""
 
-The public source data classes and coordinating functions live in sources.py.
-File-specific extraction lives in the extensions package.
+from .sources import (
+    SourceFile,
+    SourceUnit,
+    extract_source_units,
+    read_repository_files,
+)
 
-"""
+
+__all__ = [
+    "SourceFile",
+    "SourceUnit",
+    "extract_source_units",
+    "read_repository_files",
+]

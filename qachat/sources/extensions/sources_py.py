@@ -19,6 +19,11 @@ from qachat.sources.sources import (
 )
 
 
+__all__ = [
+    "extract_source_units",
+]
+
+
 def _node_start(node: ast.AST) -> int:
     """Return the first line of a Python definition and its decorators.
 

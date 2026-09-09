@@ -14,6 +14,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
+
+__all__ = [
+    "scan_repository",
+]
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSIONS = (
     ".py",

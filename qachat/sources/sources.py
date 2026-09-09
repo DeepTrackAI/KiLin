@@ -25,6 +25,14 @@ from importlib import import_module
 from pathlib import Path, PurePosixPath
 from types import ModuleType
 
+
+__all__ = [
+    "SourceFile",
+    "SourceUnit",
+    "read_repository_files",
+    "extract_source_units",
+]
+
 EXTENSION_PACKAGE = "qachat.sources.extensions"
 
 

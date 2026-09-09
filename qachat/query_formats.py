@@ -16,6 +16,13 @@ format_qwen3_query
 
 from __future__ import annotations
 
+
+__all__ = [
+    "SOFTWARE_REPOSITORY_INSTRUCTION",
+    "LITERATURE_REPOSITORY_INSTRUCTION",
+    "format_qwen3_query",
+]
+
 SOFTWARE_REPOSITORY_INSTRUCTION = (
     "Given a question about a software repository, retrieve relevant code "
     "and documentation that help answer the question."

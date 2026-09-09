@@ -24,6 +24,14 @@ from pathlib import Path
 
 from qachat.sources.sources import SourceFile, SourceUnit
 
+
+__all__ = [
+    "CodeEntity",
+    "CodeRelation",
+    "CodeGraph",
+    "build_code_graph",
+]
+
 _EXTENSION_PACKAGE = "qachat.retrievals.code_graph.extensions"
 
 

@@ -21,6 +21,11 @@ from qachat.runtime import (
     torch_device as _torch_device,
 )
 
+
+__all__ = [
+    "ChatSession",
+]
+
 if TYPE_CHECKING:
     from mlx.nn import Module as MlxModel
     from mlx_lm.tokenizer_utils import TokenizerWrapper as MlxTokenizer

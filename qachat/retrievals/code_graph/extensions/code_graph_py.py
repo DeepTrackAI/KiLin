@@ -19,6 +19,11 @@ from qachat.retrievals.code_graph.code_graph import (
 from qachat.sources.sources import SourceFile
 
 
+__all__ = [
+    "extract_code_relations",
+]
+
+
 def extract_code_relations(
     source_file: SourceFile,
     known: dict[str, set[str]],

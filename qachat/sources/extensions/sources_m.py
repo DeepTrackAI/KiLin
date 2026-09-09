@@ -18,6 +18,11 @@ from qachat.sources.sources import (
     _source_unit,
 )
 
+
+__all__ = [
+    "extract_source_units",
+]
+
 MATLAB_BLOCK = re.compile(
     r"^\s*(properties|methods|events|enumeration)\b",
     re.IGNORECASE,

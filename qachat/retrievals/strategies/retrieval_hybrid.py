@@ -21,6 +21,12 @@ from typing import Protocol
 from qachat.chunking import Chunk
 
 
+__all__ = [
+    "HybridResult",
+    "hybrid_search",
+]
+
+
 class RankedResult(Protocol):
     """Required shape of one result from a retrieval channel."""
 

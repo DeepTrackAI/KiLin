@@ -18,6 +18,11 @@ from qachat.retrievals.code_graph.code_graph import (
 )
 from qachat.sources.sources import SourceFile
 
+
+__all__ = [
+    "extract_code_relations",
+]
+
 # Match only structural forms needed by the graph. This keeps the parser
 # deterministic without attempting to interpret MATLAB at runtime.
 _CLASS = re.compile(

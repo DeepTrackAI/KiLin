@@ -34,6 +34,15 @@ from qachat.retrievals.code_graph.code_graph import (
 from qachat.retrievals.strategies.retrieval_lexical import LexicalIndex
 from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
 
+
+__all__ = [
+    "PersistentIndexes",
+    "prepare_persistent_indexes",
+    "save_indexes",
+    "load_indexes",
+    "indexes_are_current",
+]
+
 _FORMAT_VERSION = 1
 
 

@@ -25,6 +25,14 @@ from qachat.chunking import Chunk
 from qachat.embeddings import EmbeddingSession
 
 
+__all__ = [
+    "SemanticIndex",
+    "SemanticResult",
+    "build_semantic_index",
+    "semantic_search",
+]
+
+
 @dataclass(frozen=True, slots=True)
 class SemanticIndex:
     """Chunks paired with vectors prepared for semantic search.

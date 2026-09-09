@@ -5,6 +5,14 @@ from __future__ import annotations
 import platform
 from typing import Literal
 
+
+__all__ = [
+    "Backend",
+    "SelectedBackend",
+    "choose_backend",
+    "torch_device",
+]
+
 Backend = Literal["auto", "mlx", "torch"]
 SelectedBackend = Literal["mlx", "torch"]
 

@@ -22,6 +22,13 @@ import re
 from qachat.chunking import Chunk
 from qachat.retrievals.code_graph.code_graph import CodeEntity, CodeGraph
 
+
+__all__ = [
+    "CodeResult",
+    "resolve_code_entities",
+    "code_search",
+]
+
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
 
