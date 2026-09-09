@@ -108,9 +108,7 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
     payload = {
         "format_version": _FORMAT_VERSION,
         "fingerprint": indexes.fingerprint,
-        "chunks": [
-            _chunk_to_data(chunk) for chunk in indexes.semantic.chunks
-        ],
+        "chunks": [_chunk_to_data(chunk) for chunk in indexes.semantic.chunks],
         "semantic_embeddings": [
             list(vector) for vector in indexes.semantic.embeddings
         ],
@@ -140,9 +138,7 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
         if payload["format_version"] != _FORMAT_VERSION:
             raise ValueError("Unsupported index format version.")
 
-        chunks = tuple(
-            _chunk_from_data(item) for item in payload["chunks"]
-        )
+        chunks = tuple(_chunk_from_data(item) for item in payload["chunks"])
         semantic = SemanticIndex(
             chunks=chunks,
             embeddings=tuple(
@@ -153,10 +149,7 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
         lexical = LexicalIndex(
             chunks=chunks,
             vectors=tuple(
-                {
-                    str(term): float(value)
-                    for term, value in vector.items()
-                }
+                {str(term): float(value) for term, value in vector.items()}
                 for vector in payload["lexical_vectors"]
             ),
             inverse_document_frequency={
@@ -229,21 +222,11 @@ def _chunk_from_data(data: dict[str, object]) -> Chunk:
         start_line=int(data["start_line"]),
         end_line=int(data["end_line"]),
         kind=str(data["kind"]),
-        symbol=(
-            str(data["symbol"])
-            if data["symbol"] is not None
-            else None
-        ),
+        symbol=(str(data["symbol"]) if data["symbol"] is not None else None),
         section=(
-            str(data["section"])
-            if data["section"] is not None
-            else None
+            str(data["section"]) if data["section"] is not None else None
         ),
-        cell=(
-            int(data["cell"])
-            if data["cell"] is not None
-            else None
-        ),
+        cell=(int(data["cell"]) if data["cell"] is not None else None),
     )
 
 
@@ -259,9 +242,7 @@ def _code_graph_to_data(code_graph: CodeGraph) -> dict[str, object]:
             }
             for entity in code_graph.entities
         ],
-        "relations": [
-            asdict(relation) for relation in code_graph.relations
-        ],
+        "relations": [asdict(relation) for relation in code_graph.relations],
     }
 
 
