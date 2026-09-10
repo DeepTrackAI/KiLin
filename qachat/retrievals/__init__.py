@@ -10,6 +10,8 @@ PersistentIndexes
     Semantic, lexical, and code-graph data saved together.
 LexicalIndex, LexicalResult
     Data produced by lexical retrieval.
+RetrievalPlan
+    Exact repository context requested by one question.
 SemanticIndex, SemanticResult
     Data produced by semantic retrieval.
 
@@ -23,6 +25,8 @@ build_semantic_index, semantic_search
     Build and search an embedding index.
 hybrid_search
     Combine independent rankings with Reciprocal Rank Fusion.
+plan_retrieval, expand_retrieval_context
+    Detect and add explicitly requested repository context.
 prepare_persistent_indexes, save_indexes, load_indexes, indexes_are_current
     Save, restore, and validate reusable retrieval data.
 
@@ -63,6 +67,11 @@ from qachat.retrievals.strategies.retrieval_semantic import (
     build_semantic_index,
     semantic_search,
 )
+from qachat.retrievals.routing import (
+    RetrievalPlan,
+    expand_retrieval_context,
+    plan_retrieval,
+)
 
 __all__ = [
     "CodeEntity",
@@ -73,18 +82,21 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "RetrievalPlan",
     "SemanticIndex",
     "SemanticResult",
     "build_code_graph",
     "build_lexical_index",
     "build_semantic_index",
     "code_search",
+    "expand_retrieval_context",
     "hybrid_search",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
     "load_indexes",
     "prepare_persistent_indexes",
+    "plan_retrieval",
     "resolve_code_entities",
     "save_indexes",
     "semantic_search",
