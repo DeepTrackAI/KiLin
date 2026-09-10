@@ -19,6 +19,10 @@ TUTORIALS = (
     "50_source_structure.ipynb",
     "60_embeddings.ipynb",
     "70_semantic_retrieval.ipynb",
+    "80_lexical_retrieval.ipynb",
+    "90_code_aware_retrieval.ipynb",
+    "100_persistent_indexes.ipynb",
+    "110_hybrid_ranking.ipynb",
 )
 
 
@@ -66,21 +70,27 @@ class TestTutorials(unittest.TestCase):
         expected = {
             "10_setup.ipynb": "from setup.check_setup import check_setup",
             "20_huggingface_models.ipynb": (
-                "from qachat.huggingface import download_model"
+                "from qachat import download_model"
             ),
-            "30_model_chat.ipynb": "from qachat.chat import ChatSession",
-            "40_repository_files.ipynb": (
-                "from qachat.repository import scan_repository"
-            ),
+            "30_model_chat.ipynb": "from qachat import ChatSession",
+            "40_repository_files.ipynb": "from qachat import scan_repository",
             "50_source_structure.ipynb": (
-                "from qachat.sources.sources import extract_source_units"
+                "from qachat import extract_source_units"
             ),
-            "60_embeddings.ipynb": (
-                "from qachat.embeddings import EmbeddingSession"
-            ),
+            "60_embeddings.ipynb": ("from qachat import EmbeddingSession"),
             "70_semantic_retrieval.ipynb": (
-                "from qachat.retrieval import build_semantic_index"
+                "from qachat import build_semantic_index"
             ),
+            "80_lexical_retrieval.ipynb": (
+                "from qachat import build_lexical_index"
+            ),
+            "90_code_aware_retrieval.ipynb": (
+                "from qachat import build_code_graph"
+            ),
+            "100_persistent_indexes.ipynb": (
+                "from qachat import prepare_persistent_indexes"
+            ),
+            "110_hybrid_ranking.ipynb": ("from qachat import hybrid_search"),
         }
 
         for name, required in expected.items():
