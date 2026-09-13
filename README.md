@@ -3,7 +3,8 @@
 QAChat currently sets up MLX and PyTorch, uses Hugging Face models, runs a
 local chat, reads selected repository source, turns it into traceable chunks,
 creates embedding vectors, searches semantic and lexical indexes, follows code
-relationships, saves reusable indexes, and combines retrieval rankings.
+relationships, saves reusable indexes, combines retrieval rankings, and runs
+a persistent RAG conversation.
 
 ## Start once on a new computer
 
@@ -60,6 +61,24 @@ selected. Each tutorial is standalone.
     reload, and check semantic and lexical indexes.
 11. [Hybrid ranking](tutorials/110_hybrid_ranking.ipynb) — combine semantic,
     lexical, and code-aware rankings with Reciprocal Rank Fusion.
+12. [Retrieval routing](tutorials/120_retrieval_routing.ipynb) — preserve
+    ordinary ranking while guaranteeing explicitly requested code context.
+13. [RAG application](tutorials/130_rag_application.ipynb) — open a configured
+    project, ask grounded questions, inspect evidence, and restore the session.
+14. [Project chat](tutorials/140_project_chat.ipynb) — choose a project, resume
+    its conversation, ask repeatedly, and inspect saved evidence and settings.
+
+## Try a sandbox project
+
+The committed **sandbox/code** and **sandbox/literature** folders are small
+project templates. Each **profile.ini** selects the source, models, chunking,
+retrieval, and generation settings.
+
+QAChat writes reusable retrieval data to **indexes/** and full conversations,
+evidence, and parameter snapshots to **logs/**. Their generated contents are
+excluded from Git. Reopening the same project restores its current indexes and
+conversation. Calling **session.reset()** archives the active conversation
+under a timestamped file name and starts with empty conversation memory.
 
 Hugging Face owns the model cache. If another Hugging Face program already
 downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
@@ -110,4 +129,3 @@ The 79-character line limit is defined in three places:
 - tests/tutorials/test_tutorials.py, which checks tutorial code lines
 
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
-

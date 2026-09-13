@@ -386,6 +386,48 @@ class ChatSession:
 
         self.messages = self._new_history()
 
+    def restore_history(
+        self: ChatSession,
+        messages: list[dict[str, str]],
+    ) -> None:
+        """Replace the in-memory conversation with checked saved messages.
+
+        Parameters
+        ----------
+        messages: list[dict[str, str]]
+            Saved system, user, and assistant messages in conversation order.
+
+        Raises
+        ------
+        ValueError
+            If the saved conversation has an invalid message.
+
+        """
+
+        if not isinstance(messages, list):
+            raise ValueError("Saved chat history must be a list.")
+
+        checked: list[dict[str, str]] = []
+        for index, message in enumerate(messages):
+            if not isinstance(message, dict):
+                raise ValueError("Every saved chat message must be a mapping.")
+            role = message.get("role")
+            content = message.get("content")
+            if role not in {"system", "user", "assistant"}:
+                raise ValueError("A saved chat message has an invalid role.")
+            if role == "system" and index != 0:
+                raise ValueError("A system message can only appear first.")
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("A saved chat message has empty content.")
+            checked.append(
+                {
+                    "role": role,
+                    "content": content.strip(),
+                }
+            )
+
+        self.messages = checked
+
     def close(self: ChatSession) -> None:
         """Release the model, tokenizer, conversation, and engine cache."""
 

@@ -41,6 +41,8 @@ weights/
 *.incomplete
 
 # Runtime output
-indexes/
-logs/
+**/indexes/*
+!**/indexes/.gitkeep
+**/logs/*
+!**/logs/.gitkeep
 *.log
