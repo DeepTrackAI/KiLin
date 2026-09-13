@@ -9,6 +9,8 @@ QAProject
 
 Functions
 ---------
+initialize_project
+    Create a missing profile.ini, then open the project.
 open_project
     Read profile.ini and prepare the project output folders.
 
@@ -27,11 +29,40 @@ from qachat.runtime import Backend, SelectedBackend
 __all__ = [
     "ProjectProfile",
     "QAProject",
+    "initialize_project",
     "open_project",
 ]
 
 ProjectKind: TypeAlias = Literal["code", "literature"]
 QueryFormat: TypeAlias = Literal["plain", "qwen3"]
+_DEFAULT_PROFILE = """[project]
+kind = {kind}
+source = {source}
+extensions = {extensions}
+max_file_bytes = 1048576
+
+[models]
+backend = auto
+allow_download = true
+chat_mlx = Qwen/Qwen3-0.6B-MLX-4bit
+chat_torch = Qwen/Qwen3-0.6B
+embedding_mlx = mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ
+embedding_torch = Qwen/Qwen3-Embedding-0.6B
+query_format = qwen3
+
+[chunking]
+target_tokens = 300
+max_tokens = 400
+overlap_tokens = 40
+
+[retrieval]
+count = 5
+
+[generation]
+thinking = false
+temperature = 0.0
+max_new_tokens = 256
+"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +156,69 @@ class QAProject:
     indexes: Path
     logs: Path
     profile: ProjectProfile
+
+
+def initialize_project(
+    directory: str | Path,
+    kind: ProjectKind,
+) -> QAProject:
+    """Create a missing project profile, then open the project.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Existing project, repository, or document folder.
+    kind: "code" | "literature"
+        Type of source material in the project.
+
+    Returns
+    -------
+    QAProject
+        Initialized and opened project.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the selected directory does not exist.
+    NotADirectoryError
+        If the selected path is not a directory.
+    ValueError
+        If kind is invalid or conflicts with an existing profile.
+
+    """
+
+    if kind not in {"code", "literature"}:
+        raise ValueError("kind must be code or literature.")
+    root = Path(directory).expanduser().resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(f"Choose a project folder: {root}")
+
+    profile_path = root / "profile.ini"
+    if not profile_path.exists():
+        source_name = (
+            "repository" if kind == "code" else "documents"
+        )
+        source = source_name if (root / source_name).is_dir() else "."
+        extensions = (
+            ".py, .m, .md"
+            if kind == "code"
+            else ".pdf, .md, .txt"
+        )
+        profile_path.write_text(
+            _DEFAULT_PROFILE.format(
+                kind=kind,
+                source=source,
+                extensions=extensions,
+            ),
+            encoding="utf-8",
+        )
+
+    project = open_project(root)
+    if project.profile.kind != kind:
+        raise ValueError(
+            "PROJECT_KIND conflicts with the existing profile.ini."
+        )
+    return project
 
 
 def open_project(directory: str | Path) -> QAProject:

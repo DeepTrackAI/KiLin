@@ -13,7 +13,12 @@ from .query_formats import (
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
-from .project import ProjectProfile, QAProject, open_project
+from .project import (
+    ProjectProfile,
+    QAProject,
+    initialize_project,
+    open_project,
+)
 from .rag import ConversationTurn, Evidence, RAGSession
 from .repository import scan_repository
 from .retrievals import (
@@ -91,6 +96,7 @@ __all__ = [
     "extract_source_units",
     "format_qwen3_query",
     "hybrid_search",
+    "initialize_project",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
