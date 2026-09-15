@@ -1,6 +1,7 @@
 # QAChat
 
-QAChat answers questions about local code and literature.
+QAChat answers questions about local code and literature using a local LLM
+that ensures no data are shared outsde the local enviroment.
 
 ## 1. Install once
 
