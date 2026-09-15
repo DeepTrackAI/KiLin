@@ -13,6 +13,13 @@ from .query_formats import (
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
+from .project import (
+    ProjectProfile,
+    QAProject,
+    initialize_project,
+    open_project,
+)
+from .rag import ConversationTurn, Evidence, RAGSession
 from .repository import scan_repository
 from .retrievals import (
     CodeEntity,
@@ -59,12 +66,17 @@ __all__ = [
     "CodeGraph",
     "CodeRelation",
     "CodeResult",
+    "ConversationTurn",
     "EmbeddingSession",
+    "Evidence",
     "HybridResult",
     "LITERATURE_REPOSITORY_INSTRUCTION",
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "ProjectProfile",
+    "QAProject",
+    "RAGSession",
     "RetrievalPlan",
     "SOFTWARE_REPOSITORY_INSTRUCTION",
     "SelectedBackend",
@@ -84,11 +96,13 @@ __all__ = [
     "extract_source_units",
     "format_qwen3_query",
     "hybrid_search",
+    "initialize_project",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
     "load_indexes",
     "model_is_available",
+    "open_project",
     "plan_retrieval",
     "prepare_persistent_indexes",
     "read_repository_files",

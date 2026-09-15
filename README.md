@@ -1,13 +1,12 @@
 # QAChat
 
-QAChat currently sets up MLX and PyTorch, uses Hugging Face models, runs a
-local chat, reads selected repository source, turns it into traceable chunks,
-creates embedding vectors, searches semantic and lexical indexes, follows code
-relationships, saves reusable indexes, and combines retrieval rankings.
+QAChat answers questions about local code and literature using a local LLM
+that ensures no data are shared outsde the local enviroment.
 
-## Start once on a new computer
+## 1. Install once
 
-From the QAChat folder, run one command with internet access.
+**Do this once on each computer.** Open a terminal inside the QAChat
+repository, then run the command for your system.
 
 Mac or Linux:
 
@@ -21,77 +20,64 @@ Windows x64 PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -File setup/setup.ps1
 ```
 
-The script installs `uv` if needed, prepares Python 3.12 and `.venv`, installs
-the packages from `uv.lock`, and asks the selected engine to calculate
-`2 + 3`. Expect `result: 5.0` and `Setup complete`. No model is downloaded.
+When it finishes, you will see:
 
-Each tutorial also checks this environment near the top. If a declared package
-is missing, the tutorial repairs `.venv` with `uv`; it never needs `pip`. A
-running notebook cannot change its own Python kernel, so select QAChat's
-`.venv` kernel and rerun the setup cell if asked.
+```text
+Setup complete. The project environment is in .venv
+```
 
-## Try one tutorial
+Select the QAChat `.venv` kernel when opening a notebook.
 
-Open any tutorial directly and run one cell at a time with Shift+Enter. The
-first cells check the packages and show whether QAChat's `.venv` kernel is
-selected. Each tutorial is standalone.
+## 2. Chat with your project
 
-1. [Setup check](tutorials/10_setup.ipynb) — enter two numbers and confirm that
-   MLX or PyTorch calculates the correct sum.
-2. [Use Hugging Face models](tutorials/20_huggingface_models.ipynb) — list
-   models in Hugging Face's normal cache and optionally download one there.
-3. [Load a model and chat](tutorials/30_model_chat.ipynb) — choose MLX or
-   PyTorch, load a compatible model, configure it, chat, and close.
-4. [Choose repository files](tutorials/40_repository_files.ipynb) — preview
-   file names, sizes, selections, and skip reasons without reading source.
-   Python, MATLAB, Markdown, notebooks, and text-based PDFs are supported.
-5. [Read source and make chunks](tutorials/50_source_structure.ipynb) — find
-   natural source units, make bounded chunks, and keep their file and lines.
-6. [Create embeddings](tutorials/60_embeddings.ipynb) — count model tokens and
-   turn real chunks and one question into vectors without searching them.
-7. [Semantic retrieval](tutorials/70_semantic_retrieval.ipynb) — build an
-   embedding index and rank chunks by meaning with cosine similarity.
-8. [Lexical retrieval](tutorials/80_lexical_retrieval.ipynb) — build a
-   TF-IDF index and rank exact words, phrases, and software identifiers.
+Open [Project chat](tutorials/130_project_chat.ipynb). In its configuration
+cell:
 
-9. [Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb) — reuse
-   natural source units and follow Python or MATLAB code relationships.
-10. [Persistent indexes](tutorials/100_persistent_indexes.ipynb) — save,
-    reload, and check semantic and lexical indexes.
-11. [Hybrid ranking](tutorials/110_hybrid_ranking.ipynb) — combine semantic,
-    lexical, and code-aware rankings with Reciprocal Rank Fusion.
+- Set `PROJECT_KIND` to `"code"` or `"literature"`.
+- Set `PROJECT_DIRECTORY` to your project folder.
+- Leave `PROJECT_DIRECTORY = None` to try the included sandbox project.
 
-Hugging Face owns the model cache. If another Hugging Face program already
-downloaded a model, QAChat can see it. Loading a model ID reuses cached files;
-when allowed, missing files are downloaded to that same cache. Model weights
-are not committed to QAChat. MLX and PyTorch may require different weights.
+The first open creates the project settings, indexes, and conversation log.
+Opening the same project later resumes it. Generated data and model weights
+are not committed to Git; models use the normal Hugging Face cache.
 
-## Verify the repository
+## 3. Understand how QAChat works
 
-These steps are optional when only using the tutorials. Run them when
-developing QAChat and before committing changes.
+These standalone tutorials explain QAChat one layer at a time. Use them when
+you want to understand the concepts and code clearly.
 
-### Run the tests
+1. [Setup check](tutorials/10_setup.ipynb) — verify MLX or PyTorch.
+2. [Hugging Face models](tutorials/20_huggingface_models.ipynb) — find or
+   download models.
+3. [Model chat](tutorials/30_model_chat.ipynb) — load a model and chat.
+4. [Repository files](tutorials/40_repository_files.ipynb) — choose files.
+5. [Source chunks](tutorials/50_source_structure.ipynb) — read and split
+   source.
+6. [Embeddings](tutorials/60_embeddings.ipynb) — turn text into vectors.
+7. [Semantic retrieval](tutorials/70_semantic_retrieval.ipynb) — search by
+   meaning.
+8. [Lexical retrieval](tutorials/80_lexical_retrieval.ipynb) — search by
+   exact words and identifiers.
+9. [Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb) — follow
+   Python and MATLAB relationships.
+10. [Persistent indexes](tutorials/100_persistent_indexes.ipynb) — save and
+    reuse indexes.
+11. [Hybrid ranking](tutorials/110_hybrid_ranking.ipynb) — combine retrieval
+    rankings.
+12. [Retrieval routing](tutorials/120_retrieval_routing.ipynb) — include
+    explicitly requested code.
+13. [Project chat](tutorials/130_project_chat.ipynb) — use the complete RAG
+    workflow.
 
-Run all automated tests:
+## 4. Development checks
+
+Run all tests:
 
 ```sh
 .venv/bin/python -m tests
 ```
 
-This short command uses `tests/__main__.py` to discover every test under the
-nested `tests/` folders. The equivalent standard-library command is:
-
-```sh
-.venv/bin/python -m unittest discover -s tests -t . -v
-```
-
-The `-t .` keeps the repository root as the import root, so `tests/qachat/`
-does not hide the real `qachat/` package.
-
-### Clean and check before committing
-Format the Python code with Black, check and fix common code issues with
-Ruff, and remove saved outputs from the tutorial notebooks:
+Format and check the code, then clear notebook output:
 
 ```sh
 .venv/bin/black qachat setup tests
@@ -99,15 +85,4 @@ Ruff, and remove saved outputs from the tutorial notebooks:
 .venv/bin/jupyter nbconvert --clear-output --inplace tutorials/*.ipynb
 ```
 
- [Black](https://black.readthedocs.io/) automatically reformats files when needed.
- [Ruff](https://docs.astral.sh/ruff/) automatically fixes
-issues that can be safely corrected and reports any remaining problems.
-Clearing notebook outputs keeps committed notebooks clean.
-The 79-character line limit is defined in three places:
-
-- pyproject.toml under [tool.black]
-- pyproject.toml under [tool.ruff]
-- tests/tutorials/test_tutorials.py, which checks tutorial code lines
-
 On Windows, replace `.venv/bin/` with `.venv\Scripts\`.
-
