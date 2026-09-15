@@ -46,3 +46,4 @@ weights/
 **/logs/*
 !**/logs/.gitkeep
 *.log
+*.ini
