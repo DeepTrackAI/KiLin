@@ -21,7 +21,6 @@ from qachat.runtime import (
     torch_device as _torch_device,
 )
 
-
 __all__ = [
     "ChatSession",
 ]
@@ -409,16 +408,22 @@ class ChatSession:
 
         checked: list[dict[str, str]] = []
         for index, message in enumerate(messages):
+
             if not isinstance(message, dict):
                 raise ValueError("Every saved chat message must be a mapping.")
+
             role = message.get("role")
-            content = message.get("content")
+
             if role not in {"system", "user", "assistant"}:
                 raise ValueError("A saved chat message has an invalid role.")
             if role == "system" and index != 0:
                 raise ValueError("A system message can only appear first.")
+
+            content = message.get("content")
+
             if not isinstance(content, str) or not content.strip():
                 raise ValueError("A saved chat message has empty content.")
+
             checked.append(
                 {
                     "role": role,
