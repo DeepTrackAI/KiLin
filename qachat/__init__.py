@@ -18,9 +18,14 @@ from .project import (
     QAProject,
     initialize_project,
     open_project,
+    prepare_project_workspace,
 )
 from .rag import ConversationTurn, Evidence, RAGSession
-from .repository import scan_repository
+from .repository import (
+    build_repository_manifest,
+    compare_repository_manifests,
+    scan_repository,
+)
 from .retrievals import (
     CodeEntity,
     CodeGraph,
@@ -86,11 +91,13 @@ __all__ = [
     "SourceUnit",
     "available_models",
     "build_code_graph",
+    "build_repository_manifest",
     "build_lexical_index",
     "build_semantic_index",
     "choose_backend",
     "chunk_source_units",
     "code_search",
+    "compare_repository_manifests",
     "download_model",
     "expand_retrieval_context",
     "extract_source_units",
@@ -105,6 +112,7 @@ __all__ = [
     "open_project",
     "plan_retrieval",
     "prepare_persistent_indexes",
+    "prepare_project_workspace",
     "read_repository_files",
     "resolve_code_entities",
     "save_indexes",

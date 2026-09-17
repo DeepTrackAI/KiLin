@@ -20,9 +20,18 @@ from __future__ import annotations
 
 from configparser import ConfigParser
 from dataclasses import dataclass
+from hashlib import sha256
+import json
 from pathlib import Path
+import re
+import shutil
 from typing import Literal, TypeAlias, cast
 
+from qachat.repository import (
+    build_repository_manifest,
+    compare_repository_manifests,
+    scan_repository,
+)
 from qachat.runtime import Backend, SelectedBackend
 
 
@@ -31,6 +40,7 @@ __all__ = [
     "QAProject",
     "initialize_project",
     "open_project",
+    "prepare_project_workspace",
 ]
 
 ProjectKind: TypeAlias = Literal["code", "literature"]
@@ -221,6 +231,173 @@ def initialize_project(
     return project
 
 
+def prepare_project_workspace(
+    source_directory: str | Path,
+    kind: ProjectKind,
+    workspace_root: str | Path,
+) -> QAProject:
+    """Mirror one source folder into a managed QAChat workspace.
+
+    The original source is never modified.  A normal workspace is named
+    ``project_<source-name>`` and contains the copied source folder beside
+    ``indexes/``, ``logs/``, ``profile.ini``, and ``source_snapshot.json``.
+    Only files selected by the project's repository rules are mirrored.
+
+    Reopening the same source compares a saved SHA-256 manifest and copies
+    only files that were added or modified while deleting files that were
+    removed.  If another source folder with the same basename already owns
+    the preferred workspace name, a short path hash is appended to avoid a
+    collision.
+
+    Parameters
+    ----------
+    source_directory: str | pathlib.Path
+        Existing source code or literature folder.
+    kind: "code" | "literature"
+        Type of source material in the project.
+    workspace_root: str | pathlib.Path
+        QAChat sandbox folder that contains managed project workspaces.
+
+    Returns
+    -------
+    QAProject
+        Project whose source points to the synchronized sandbox snapshot.
+
+    """
+
+    if kind not in {"code", "literature"}:
+        raise ValueError("kind must be code or literature.")
+
+    source = Path(source_directory).expanduser().resolve(strict=True)
+    if not source.is_dir():
+        raise NotADirectoryError(f"Choose a source folder: {source}")
+
+    sandbox = Path(workspace_root).expanduser()
+    sandbox.mkdir(parents=True, exist_ok=True)
+    sandbox = sandbox.resolve(strict=True)
+    if sandbox == source:
+        raise ValueError("The workspace folder must differ from the source.")
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip("-._")
+    if not safe_name:
+        safe_name = "project"
+
+    preferred_root = sandbox / f"project_{safe_name}"
+    root = _select_workspace_root(preferred_root, source)
+    root.mkdir(parents=True, exist_ok=True)
+
+    # Keep the source snapshot as a sibling of indexes/ and logs/.  Preserve
+    # the original folder name so the sandbox structure is easy to inspect.
+    source_name = source.name
+    snapshot = root / source_name
+    snapshot.mkdir(parents=True, exist_ok=True)
+
+    profile_path = root / "profile.ini"
+    if not profile_path.exists():
+        extensions = (
+            ".py, .m, .md"
+            if kind == "code"
+            else ".pdf, .md, .txt"
+        )
+        profile_path.write_text(
+            _DEFAULT_PROFILE.format(
+                kind=kind,
+                source=source_name,
+                extensions=extensions,
+            ),
+            encoding="utf-8",
+        )
+
+    project = open_project(root)
+    if project.profile.kind != kind:
+        raise ValueError(
+            "PROJECT_KIND conflicts with the existing workspace profile.ini."
+        )
+    if project.source != snapshot.resolve():
+        raise ValueError(
+            "Managed workspace profile.ini must keep project.source set to "
+            f"{source_name}."
+        )
+
+    excludes: tuple[str, ...] = ()
+    if sandbox.is_relative_to(source):
+        excludes = (sandbox.relative_to(source).as_posix(),)
+
+    report = scan_repository(
+        source,
+        extensions=project.profile.extensions,
+        exclude_paths=excludes,
+        max_file_bytes=project.profile.max_file_bytes,
+    )
+    current_manifest = build_repository_manifest(report)
+    snapshot_manifest_path = root / "source_snapshot.json"
+    saved_manifest = _read_json_if_possible(snapshot_manifest_path)
+    try:
+        changes = compare_repository_manifests(
+            saved_manifest,
+            current_manifest,
+        )
+    except ValueError:
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
+
+    if not bool(changes["matches"]):
+        if saved_manifest is None:
+            shutil.rmtree(snapshot)
+            snapshot.mkdir(parents=True, exist_ok=True)
+
+        for relative in changes["removed"]:
+            target = snapshot / str(relative)
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+
+        for relative in [*changes["added"], *changes["modified"]]:
+            source_path = source / str(relative)
+            target = snapshot / str(relative)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target)
+
+        _remove_empty_directories(snapshot)
+
+    # Always record ownership, including the zero-file case.  This lets the
+    # next open distinguish two different source folders with the same name.
+    manifest_payload = {
+        **current_manifest,
+        "source_directory": str(source),
+    }
+    _write_json(snapshot_manifest_path, manifest_payload)
+
+    return open_project(root)
+
+
+def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
+    """Choose a readable workspace name without colliding with another source."""
+
+    if not preferred_root.exists():
+        return preferred_root
+
+    metadata = _read_json_if_possible(preferred_root / "source_snapshot.json")
+    if metadata is not None and metadata.get("source_directory") == str(source):
+        return preferred_root
+
+    identity = sha256(str(source).encode("utf-8")).hexdigest()[:8]
+    collision_root = preferred_root.with_name(
+        f"{preferred_root.name}-{identity}"
+    )
+    collision_metadata = _read_json_if_possible(
+        collision_root / "source_snapshot.json"
+    )
+    if (
+        collision_root.exists()
+        and collision_metadata is not None
+        and collision_metadata.get("source_directory") != str(source)
+    ):
+        raise ValueError(
+            "Could not choose a unique QAChat workspace for this source."
+        )
+    return collision_root
+
+
 def open_project(directory: str | Path) -> QAProject:
     """Open a configured project and prepare its output folders.
 
@@ -274,6 +451,45 @@ def open_project(directory: str | Path) -> QAProject:
         logs=logs,
         profile=profile,
     )
+
+
+def _read_json_if_possible(path: Path) -> dict[str, object] | None:
+    """Return one JSON object, or ``None`` when it is missing or invalid."""
+
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _write_json(path: Path, value: dict[str, object]) -> None:
+    """Atomically write one readable JSON object."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _remove_empty_directories(root: Path) -> None:
+    """Remove empty snapshot directories left after deleted source files."""
+
+    directories = sorted(
+        (path for path in root.rglob("*") if path.is_dir()),
+        key=lambda path: len(path.parts),
+        reverse=True,
+    )
+    for directory in directories:
+        try:
+            directory.rmdir()
+        except OSError:
+            pass
 
 
 def _read_profile(parser: ConfigParser) -> ProjectProfile:

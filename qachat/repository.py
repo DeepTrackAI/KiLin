@@ -10,14 +10,19 @@ scan_repository
 from __future__ import annotations
 
 import os
+from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
 
 __all__ = [
+    "build_repository_manifest",
+    "compare_repository_manifests",
     "scan_repository",
 ]
+
+_MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSIONS = (
@@ -470,3 +475,120 @@ def scan_repository(
         "selected_bytes": selected_bytes,
         "entries": rows,
     }
+
+
+def build_repository_manifest(
+    report: dict[str, object],
+) -> dict[str, object]:
+    """Hash the files selected by :func:`scan_repository`.
+
+    The manifest intentionally contains only relative paths, file sizes, and
+    SHA-256 content hashes.  It therefore remains stable when the same source
+    tree is copied to a different directory.
+
+    Parameters
+    ----------
+    report: dict[str, object]
+        Result returned by :func:`scan_repository`.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe manifest describing the selected repository content.
+
+    """
+
+    repository_value = report.get("repository")
+    selected_value = report.get("selected_files")
+    if not isinstance(repository_value, str):
+        raise ValueError("Repository report is missing its source folder.")
+    if not isinstance(selected_value, list):
+        raise ValueError("Repository report is missing selected files.")
+
+    root = Path(repository_value).expanduser().resolve(strict=True)
+    files: dict[str, dict[str, object]] = {}
+    for relative_value in selected_value:
+        if not isinstance(relative_value, str):
+            raise ValueError("Repository report contains an invalid path.")
+        relative = PurePosixPath(relative_value).as_posix()
+        path = root / Path(relative)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Selected source file disappeared during scanning: {path}"
+            )
+        digest = sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        files[relative] = {
+            "size_bytes": path.stat().st_size,
+            "sha256": digest.hexdigest(),
+        }
+
+    return {
+        "format_version": _MANIFEST_VERSION,
+        "files": files,
+    }
+
+
+def compare_repository_manifests(
+    saved: dict[str, object] | None,
+    current: dict[str, object],
+) -> dict[str, object]:
+    """Describe whether two repository manifests contain the same files.
+
+    Returns added, removed, and modified relative paths so callers can decide
+    whether to synchronize a sandbox copy or rebuild a retrieval index.
+    """
+
+    current_files = _manifest_files(current)
+    if saved is None:
+        return {
+            "matches": False,
+            "added": sorted(current_files),
+            "removed": [],
+            "modified": [],
+        }
+
+    saved_files = _manifest_files(saved)
+    saved_paths = set(saved_files)
+    current_paths = set(current_files)
+    added = sorted(current_paths - saved_paths)
+    removed = sorted(saved_paths - current_paths)
+    modified = sorted(
+        path
+        for path in saved_paths & current_paths
+        if saved_files[path] != current_files[path]
+    )
+    return {
+        "matches": not added and not removed and not modified,
+        "added": added,
+        "removed": removed,
+        "modified": modified,
+    }
+
+
+def _manifest_files(
+    manifest: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Return checked file records from one repository manifest."""
+
+    if manifest.get("format_version") != _MANIFEST_VERSION:
+        raise ValueError("Unsupported repository manifest version.")
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise ValueError("Repository manifest is missing its file records.")
+
+    checked: dict[str, dict[str, object]] = {}
+    for path, record in files.items():
+        if not isinstance(path, str) or not isinstance(record, dict):
+            raise ValueError("Repository manifest contains invalid records.")
+        size = record.get("size_bytes")
+        digest = record.get("sha256")
+        if type(size) is not int or not isinstance(digest, str):
+            raise ValueError("Repository manifest contains invalid hashes.")
+        checked[path] = {
+            "size_bytes": size,
+            "sha256": digest,
+        }
+    return checked

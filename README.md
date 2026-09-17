@@ -34,12 +34,31 @@ Open [Project chat](tutorials/130_project_chat.ipynb). In its configuration
 cell:
 
 - Set `PROJECT_KIND` to `"code"` or `"literature"`.
-- Set `PROJECT_DIRECTORY` to your project folder.
-- Leave `PROJECT_DIRECTORY = None` to try the included sandbox project.
+- Set `PROJECT_DIRECTORY` to your original source folder.
+- Leave `PROJECT_DIRECTORY = None` to use `example_repos/code_repo` or
+  `example_repos/literature_repo`.
 
-The first open creates the project settings, indexes, and conversation log.
-Opening the same project later resumes it. Generated data and model weights
-are not committed to Git; models use the normal Hugging Face cache.
+Every source, including the bundled examples, is mirrored into a managed
+workspace under `sandbox/`; the original folder is never modified. For example,
+`example_repos/code_repo` becomes:
+
+```text
+sandbox/
+└── project_code_repo/
+    ├── code_repo/
+    ├── indexes/
+    ├── logs/
+    ├── profile.ini
+    └── source_snapshot.json
+```
+
+On each open, QAChat compares SHA-256 manifests and synchronizes only added,
+removed, or modified selected source files. The retrieval index is reused only
+when both `indexes/source_manifest.json` and the saved indexing settings still
+match. Otherwise QAChat rebuilds the index automatically.
+
+The whole `sandbox/` directory is generated local state and should be ignored by
+Git. Models continue to use the normal Hugging Face cache.
 
 ## 3. Understand how QAChat works
 
