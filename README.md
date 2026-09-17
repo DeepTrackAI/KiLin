@@ -60,6 +60,29 @@ match. Otherwise QAChat rebuilds the index automatically.
 The whole `sandbox/` directory is generated local state and should be ignored by
 Git. Models continue to use the normal Hugging Face cache.
 
+You can also check source changes directly from Python at any time:
+
+```python
+from qachat import detect_repository_changes, repository_has_changed
+
+changes = detect_repository_changes(
+    "path/to/project",
+    "sandbox/project_name/indexes/source_manifest.json",
+)
+
+print(changes)
+# {"matches": False, "added": [...], "removed": [...], "modified": [...]}
+
+if repository_has_changed(
+    "path/to/project",
+    "sandbox/project_name/indexes/source_manifest.json",
+):
+    print("Project changed")
+```
+
+Pass the same extensions/include/exclude settings used by the project profile
+when you have customized repository selection.
+
 ## 3. Understand how QAChat works
 
 These standalone tutorials explain QAChat one layer at a time. Use them when

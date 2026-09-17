@@ -24,6 +24,8 @@ from .rag import ConversationTurn, Evidence, RAGSession
 from .repository import (
     build_repository_manifest,
     compare_repository_manifests,
+    detect_repository_changes,
+    repository_has_changed,
     scan_repository,
 )
 from .retrievals import (
@@ -98,6 +100,7 @@ __all__ = [
     "chunk_source_units",
     "code_search",
     "compare_repository_manifests",
+    "detect_repository_changes",
     "download_model",
     "expand_retrieval_context",
     "extract_source_units",
@@ -114,6 +117,7 @@ __all__ = [
     "prepare_persistent_indexes",
     "prepare_project_workspace",
     "read_repository_files",
+    "repository_has_changed",
     "resolve_code_entities",
     "save_indexes",
     "scan_repository",
