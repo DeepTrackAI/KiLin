@@ -9,15 +9,23 @@ scan_repository
 
 from __future__ import annotations
 
+import json
 import os
+from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
 
 __all__ = [
+    "build_repository_manifest",
+    "compare_repository_manifests",
+    "detect_repository_changes",
+    "repository_has_changed",
     "scan_repository",
 ]
+
+_MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_EXTENSIONS = (
@@ -470,3 +478,239 @@ def scan_repository(
         "selected_bytes": selected_bytes,
         "entries": rows,
     }
+
+
+def build_repository_manifest(
+    report: dict[str, object],
+) -> dict[str, object]:
+    """Hash the files selected by :func:`scan_repository`.
+
+    The manifest intentionally contains only relative paths, file sizes, and
+    SHA-256 content hashes.  It therefore remains stable when the same source
+    tree is copied to a different directory.
+
+    Parameters
+    ----------
+    report: dict[str, object]
+        Result returned by :func:`scan_repository`.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-safe manifest describing the selected repository content.
+
+    """
+
+    repository_value = report.get("repository")
+    selected_value = report.get("selected_files")
+    if not isinstance(repository_value, str):
+        raise ValueError("Repository report is missing its source folder.")
+    if not isinstance(selected_value, list):
+        raise ValueError("Repository report is missing selected files.")
+
+    root = Path(repository_value).expanduser().resolve(strict=True)
+    files: dict[str, dict[str, object]] = {}
+    for relative_value in selected_value:
+        if not isinstance(relative_value, str):
+            raise ValueError("Repository report contains an invalid path.")
+        relative = PurePosixPath(relative_value).as_posix()
+        path = root / Path(relative)
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Selected source file disappeared during scanning: {path}"
+            )
+        digest = sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        files[relative] = {
+            "size_bytes": path.stat().st_size,
+            "sha256": digest.hexdigest(),
+        }
+
+    return {
+        "format_version": _MANIFEST_VERSION,
+        "files": files,
+    }
+
+
+def compare_repository_manifests(
+    saved: dict[str, object] | None,
+    current: dict[str, object],
+) -> dict[str, object]:
+    """Describe whether two repository manifests contain the same files.
+
+    Returns added, removed, and modified relative paths so callers can decide
+    whether to synchronize a sandbox copy or rebuild a retrieval index.
+    """
+
+    current_files = _manifest_files(current)
+    if saved is None:
+        return {
+            "matches": False,
+            "added": sorted(current_files),
+            "removed": [],
+            "modified": [],
+        }
+
+    saved_files = _manifest_files(saved)
+    saved_paths = set(saved_files)
+    current_paths = set(current_files)
+    added = sorted(current_paths - saved_paths)
+    removed = sorted(saved_paths - current_paths)
+    modified = sorted(
+        path
+        for path in saved_paths & current_paths
+        if saved_files[path] != current_files[path]
+    )
+    return {
+        "matches": not added and not removed and not modified,
+        "added": added,
+        "removed": removed,
+        "modified": modified,
+    }
+
+
+
+def _load_repository_manifest(
+    manifest: str | Path | dict[str, object] | None,
+) -> dict[str, object] | None:
+    """Load a repository manifest supplied as a path or mapping.
+
+    Parameters
+    ----------
+    manifest: str | pathlib.Path | dict[str, object] | None
+        Saved manifest mapping or JSON file. A missing path is treated as no
+        saved manifest, which means every currently selected file is new.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Loaded manifest, or ``None`` when no saved manifest exists.
+
+    """
+
+    if manifest is None:
+        return None
+    if isinstance(manifest, dict):
+        return manifest
+    if not isinstance(manifest, (str, Path)) or not str(manifest).strip():
+        raise ValueError("manifest must be a manifest mapping or JSON path.")
+
+    path = Path(manifest).expanduser()
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise ValueError(f"Manifest path is not a file: {path}")
+
+    with path.open("r", encoding="utf-8") as stream:
+        loaded = json.load(stream)
+    if not isinstance(loaded, dict):
+        raise ValueError("Repository manifest JSON must contain an object.")
+    return loaded
+
+
+def detect_repository_changes(
+    repository: str | Path,
+    saved_manifest: str | Path | dict[str, object] | None,
+    *,
+    extensions: list[str] | tuple[str, ...] = DEFAULT_EXTENSIONS,
+    include_paths: list[str] | tuple[str, ...] = (),
+    exclude_paths: list[str] | tuple[str, ...] = (),
+    max_file_bytes: int = 1_048_576,
+    max_entries: int = 10_000,
+) -> dict[str, object]:
+    """Detect added, removed, or modified selected repository files.
+
+    This is the standalone convenience function for checking whether a
+    repository still matches a previously saved source manifest. It does not
+    modify the repository or the saved manifest.
+
+    Parameters
+    ----------
+    repository: str | pathlib.Path
+        Repository folder to inspect.
+    saved_manifest: str | pathlib.Path | dict[str, object] | None
+        Saved manifest mapping or path to ``source_manifest.json``. A missing
+        file is treated as an empty previous state.
+    extensions, include_paths, exclude_paths, max_file_bytes, max_entries
+        Selection settings passed directly to :func:`scan_repository`.
+
+    Returns
+    -------
+    dict[str, object]
+        ``matches`` plus ``added``, ``removed``, and ``modified`` paths.
+
+    Examples
+    --------
+    >>> changes = detect_repository_changes(
+    ...     "my_project", "workspace/indexes/source_manifest.json"
+    ... )
+    >>> changes["matches"]
+    True
+
+    """
+
+    report = scan_repository(
+        repository,
+        extensions=extensions,
+        include_paths=include_paths,
+        exclude_paths=exclude_paths,
+        max_file_bytes=max_file_bytes,
+        max_entries=max_entries,
+    )
+    current = build_repository_manifest(report)
+    saved = _load_repository_manifest(saved_manifest)
+    return compare_repository_manifests(saved, current)
+
+
+def repository_has_changed(
+    repository: str | Path,
+    saved_manifest: str | Path | dict[str, object] | None,
+    *,
+    extensions: list[str] | tuple[str, ...] = DEFAULT_EXTENSIONS,
+    include_paths: list[str] | tuple[str, ...] = (),
+    exclude_paths: list[str] | tuple[str, ...] = (),
+    max_file_bytes: int = 1_048_576,
+    max_entries: int = 10_000,
+) -> bool:
+    """Return ``True`` when selected repository content has changed.
+
+    This is a Boolean wrapper around :func:`detect_repository_changes`.
+    """
+
+    changes = detect_repository_changes(
+        repository,
+        saved_manifest,
+        extensions=extensions,
+        include_paths=include_paths,
+        exclude_paths=exclude_paths,
+        max_file_bytes=max_file_bytes,
+        max_entries=max_entries,
+    )
+    return not bool(changes["matches"])
+
+def _manifest_files(
+    manifest: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Return checked file records from one repository manifest."""
+
+    if manifest.get("format_version") != _MANIFEST_VERSION:
+        raise ValueError("Unsupported repository manifest version.")
+    files = manifest.get("files")
+    if not isinstance(files, dict):
+        raise ValueError("Repository manifest is missing its file records.")
+
+    checked: dict[str, dict[str, object]] = {}
+    for path, record in files.items():
+        if not isinstance(path, str) or not isinstance(record, dict):
+            raise ValueError("Repository manifest contains invalid records.")
+        size = record.get("size_bytes")
+        digest = record.get("sha256")
+        if type(size) is not int or not isinstance(digest, str):
+            raise ValueError("Repository manifest contains invalid hashes.")
+        checked[path] = {
+            "size_bytes": size,
+            "sha256": digest,
+        }
+    return checked

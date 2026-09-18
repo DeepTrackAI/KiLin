@@ -25,7 +25,6 @@ from qachat.chunking import Chunk
 from qachat.retrievals.code_graph import CodeEntity, CodeGraph
 from qachat.retrievals.strategies.retrieval_hybrid import HybridResult
 
-
 __all__ = [
     "RetrievalPlan",
     "expand_retrieval_context",
@@ -126,9 +125,7 @@ def plan_retrieval(
     functions = _explicit_functions(query_text, graph, paths)
     relationship = bool(functions) and _has_relationship(query_text)
     related_functions = (
-        _direct_function_neighbors(functions, graph)
-        if relationship
-        else ()
+        _direct_function_neighbors(functions, graph) if relationship else ()
     )
 
     signals: list[str] = []
@@ -190,9 +187,7 @@ def expand_retrieval_context(
     )
 
     file_chunks = (
-        chunk
-        for chunk in _source_order(chunks)
-        if chunk.path in plan.paths
+        chunk for chunk in _source_order(chunks) if chunk.path in plan.paths
     )
     _append_unique(expanded, seen, file_chunks)
 
@@ -224,23 +219,17 @@ def _explicit_paths(
     paths = {entity.path for entity in graph.entities}
 
     full_matches = {
-        path
-        for path in paths
-        if path.as_posix().casefold() in normalized
+        path for path in paths if path.as_posix().casefold() in normalized
     }
     if full_matches:
-        return tuple(
-            sorted(full_matches, key=lambda path: path.as_posix())
-        )
+        return tuple(sorted(full_matches, key=lambda path: path.as_posix()))
 
     name_matches = {
         path
         for path in paths
         if _contains_identifier(normalized, path.name.casefold())
     }
-    return tuple(
-        sorted(name_matches, key=lambda path: path.as_posix())
-    )
+    return tuple(sorted(name_matches, key=lambda path: path.as_posix()))
 
 
 def _explicit_functions(
@@ -339,11 +328,7 @@ def _chunk_matches_function(
     name = entity.name.casefold()
     leaf = name.rsplit(".", 1)[-1]
 
-    return (
-        symbol == name
-        or name.endswith(f".{symbol}")
-        or symbol == leaf
-    )
+    return symbol == name or name.endswith(f".{symbol}") or symbol == leaf
 
 
 def _remove_path_mentions(
@@ -367,9 +352,8 @@ def _function_is_named(query_text: str, function: str) -> bool:
     """Return whether a qualified or leaf function name is written."""
 
     leaf = function.rsplit(".", 1)[-1]
-    return (
-        _contains_identifier(query_text, function)
-        or _contains_identifier(query_text, leaf)
+    return _contains_identifier(query_text, function) or _contains_identifier(
+        query_text, leaf
     )
 
 
@@ -382,10 +366,7 @@ def _contains_identifier(text: str, value: str) -> bool:
 def _identifier_pattern(value: str) -> str:
     """Return a regex pattern for one exact code identifier."""
 
-    return (
-        rf"(?<![A-Za-z0-9_]){re.escape(value)}"
-        r"(?![A-Za-z0-9_])"
-    )
+    return rf"(?<![A-Za-z0-9_]){re.escape(value)}" r"(?![A-Za-z0-9_])"
 
 
 def _source_order(chunks: Sequence[Chunk]) -> list[Chunk]:

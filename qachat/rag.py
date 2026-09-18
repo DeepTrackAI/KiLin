@@ -26,7 +26,11 @@ from qachat.query_formats import (
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
-from qachat.repository import scan_repository
+from qachat.repository import (
+    build_repository_manifest,
+    compare_repository_manifests,
+    scan_repository,
+)
 from qachat.retrievals import (
     CodeGraph,
     PersistentIndexes,
@@ -36,7 +40,6 @@ from qachat.retrievals import (
     code_search,
     expand_retrieval_context,
     hybrid_search,
-    indexes_are_current,
     lexical_search,
     load_indexes,
     plan_retrieval,
@@ -160,10 +163,7 @@ class RAGSession:
         )
         chat_session: ChatSession | None = None
         try:
-            chunks, code_graph = self._prepare_source(embedding_session)
-            indexes, status = self._prepare_indexes(
-                chunks,
-                code_graph,
+            chunks, indexes, status, source_changes = self._prepare_retrieval(
                 embedding_session,
             )
             chat_session = ChatSession(
@@ -189,6 +189,7 @@ class RAGSession:
         self.chunks = chunks
         self.indexes = indexes
         self.index_status = status
+        self.source_changes = source_changes
         self.turns = turns
         self._closed = False
 
@@ -262,15 +263,17 @@ class RAGSession:
     def _prepare_source(
         self: RAGSession,
         embedding_session: EmbeddingSession,
+        report: dict[str, object] | None = None,
     ) -> tuple[list[Chunk], CodeGraph]:
         """Read configured source and produce chunks and its code graph."""
 
         profile = self.project.profile
-        report = scan_repository(
-            self.project.source,
-            extensions=profile.extensions,
-            max_file_bytes=profile.max_file_bytes,
-        )
+        if report is None:
+            report = scan_repository(
+                self.project.source,
+                extensions=profile.extensions,
+                max_file_bytes=profile.max_file_bytes,
+            )
         source_files = read_repository_files(report)
         units = extract_source_units(source_files)
         chunks = chunk_source_units(
@@ -283,30 +286,81 @@ class RAGSession:
         code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
 
-    def _prepare_indexes(
+    def _prepare_retrieval(
         self: RAGSession,
-        chunks: list[Chunk],
-        code_graph: CodeGraph,
         embedding_session: EmbeddingSession,
-    ) -> tuple[PersistentIndexes, str]:
-        """Reuse current indexes or build and save replacements."""
+    ) -> tuple[
+        list[Chunk],
+        PersistentIndexes,
+        str,
+        dict[str, object],
+    ]:
+        """Reuse indexes when source hashes and index settings still match."""
 
+        profile = self.project.profile
+        report = scan_repository(
+            self.project.source,
+            extensions=profile.extensions,
+            max_file_bytes=profile.max_file_bytes,
+        )
+        current_manifest = build_repository_manifest(report)
         index_path = self.project.indexes / "retrieval.json"
         metadata_path = self.project.indexes / "settings.json"
+        manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
-        if index_path.is_file() and metadata_path.is_file():
+
+        saved_manifest: dict[str, object] | None = None
+        saved_metadata: dict[str, object] | None = None
+        if manifest_path.is_file():
             try:
-                metadata = json.loads(
-                    metadata_path.read_text(encoding="utf-8")
-                )
+                value = json.loads(manifest_path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    saved_manifest = value
+            except (OSError, json.JSONDecodeError):
+                saved_manifest = None
+
+        try:
+            changes = compare_repository_manifests(
+                saved_manifest,
+                current_manifest,
+            )
+        except ValueError:
+            saved_manifest = None
+            changes = compare_repository_manifests(None, current_manifest)
+
+        if metadata_path.is_file():
+            try:
+                value = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    saved_metadata = value
+            except (OSError, json.JSONDecodeError):
+                saved_metadata = None
+
+        configuration_changed = saved_metadata != expected_metadata
+        changes["configuration_changed"] = configuration_changed
+
+        if (
+            index_path.is_file()
+            and saved_metadata is not None
+            and saved_manifest is not None
+            and not configuration_changed
+            and bool(changes["matches"])
+        ):
+            try:
                 indexes = load_indexes(index_path)
-                if metadata == expected_metadata and indexes_are_current(
-                    indexes, chunks, code_graph
-                ):
-                    return indexes, "reused"
+                return (
+                    list(indexes.semantic.chunks),
+                    indexes,
+                    "reused",
+                    changes,
+                )
             except (OSError, TypeError, ValueError, json.JSONDecodeError):
                 pass
 
+        chunks, code_graph = self._prepare_source(
+            embedding_session,
+            report=report,
+        )
         semantic = build_semantic_index(chunks, embedding_session)
         lexical = build_lexical_index(chunks)
         indexes = prepare_persistent_indexes(
@@ -316,7 +370,8 @@ class RAGSession:
         )
         save_indexes(indexes, index_path)
         _write_json(metadata_path, expected_metadata)
-        return indexes, "rebuilt"
+        _write_json(manifest_path, current_manifest)
+        return chunks, indexes, "rebuilt", changes
 
     def _retrieve(self: RAGSession, question: str) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion."""
@@ -384,6 +439,7 @@ class RAGSession:
         profile = self.project.profile
         return {
             "format_version": _INDEX_METADATA_VERSION,
+            "project_kind": profile.kind,
             "backend": self.backend,
             "embedding_model": profile.embedding_model(self.backend),
             "query_format": profile.query_format,

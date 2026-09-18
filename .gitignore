@@ -40,6 +40,9 @@ weights/
 *.ckpt
 *.incomplete
 
+# QAChat generated project workspaces
+/sandbox/
+
 # Runtime output
 **/indexes/*
 !**/indexes/.gitkeep
