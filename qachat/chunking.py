@@ -61,6 +61,7 @@ def chunk_source_units(
     target_tokens: int = 500,
     max_tokens: int = 700,
     overlap_tokens: int = 80,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[Chunk]:
     """Create token-bounded chunks while preserving natural units.
 
@@ -76,6 +77,8 @@ def chunk_source_units(
         Largest allowed chunk.
     overlap_tokens: int, optional
         Maximum repeated text between adjacent split chunks.
+    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+        Called after each top-level source unit with ``current`` and ``total``.
 
     Returns
     -------
@@ -102,8 +105,12 @@ def chunk_source_units(
             counts[text] = value
         return counts[text]
 
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
     chunks: list[Chunk] = []
-    for unit in units:
+    total = len(units)
+    for current, unit in enumerate(units, start=1):
         chunks.extend(
             _chunk_source_unit(
                 unit,
@@ -113,6 +120,8 @@ def chunk_source_units(
                 overlap_tokens=overlap_tokens,
             )
         )
+        if progress_callback is not None:
+            progress_callback(current, total)
 
     return chunks
 

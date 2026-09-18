@@ -83,6 +83,25 @@ if repository_has_changed(
 Pass the same extensions/include/exclude settings used by the project profile
 when you have customized repository selection.
 
+`RAGSession` also accepts an optional UI-agnostic progress callback. The same
+callback API can drive notebook output now and a GUI progress bar later:
+
+```python
+from qachat import RAGSession
+
+def on_progress(event):
+    print(f"{event.percent:5.1f}%  {event.message}")
+
+session = RAGSession(project.root, progress_callback=on_progress)
+```
+
+Each event includes `stage`, `percent`, `message`, and optional `current`,
+`total`, `remaining`, `elapsed_seconds`, and `eta_seconds` values. Long stages
+such as reading, source extraction, chunking, and embedding emit repeated
+updates so notebook or GUI clients can show live counts and an ETA. Embedding
+uses small batches during index construction so progress can be reported
+between batches.
+
 ## 3. Understand how QAChat works
 
 These standalone tutorials explain QAChat one layer at a time. Use them when
