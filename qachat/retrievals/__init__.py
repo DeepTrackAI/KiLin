@@ -21,7 +21,7 @@ build_code_graph, code_search, resolve_code_entities
     Build and search deterministic source-code relationships.
 build_lexical_index, lexical_search, lexical_terms
     Build and search a lexical TF-IDF index.
-build_semantic_index, semantic_search
+build_semantic_index, semantic_search, semantic_matrix
     Build and search an embedding index.
 hybrid_search
     Combine independent rankings with Reciprocal Rank Fusion.
@@ -65,6 +65,7 @@ from qachat.retrievals.strategies.retrieval_semantic import (
     SemanticIndex,
     SemanticResult,
     build_semantic_index,
+    semantic_matrix,
     semantic_search,
 )
 from qachat.retrievals.routing import (
@@ -99,5 +100,6 @@ __all__ = [
     "plan_retrieval",
     "resolve_code_entities",
     "save_indexes",
+    "semantic_matrix",
     "semantic_search",
 ]

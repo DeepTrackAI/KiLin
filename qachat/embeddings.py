@@ -205,6 +205,19 @@ class EmbeddingSession:
         self._model = None
         self._tokenizer = None
         gc.collect()
+        self._clear_backend_cache()
+
+    def _clear_backend_cache(self: EmbeddingSession) -> None:
+        """Release the backend's cached allocator memory.
+
+        ``close()`` calls this once, when the session ends. A caller
+        embedding many batches in one un-closed session (for example
+        ``build_semantic_index`` batching over a large chunk list) can
+        call it after each batch too -- MLX in particular keeps every
+        batch's freed buffers cached for reuse rather than returning
+        them to the OS, so the cache otherwise grows across batches even
+        when no single batch is large.
+        """
 
         if self.backend == "mlx":
             mx = import_module("mlx.core")
