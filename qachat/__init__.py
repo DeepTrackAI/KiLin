@@ -20,7 +20,13 @@ from .project import (
     open_project,
     prepare_project_workspace,
 )
-from .rag import ConversationTurn, Evidence, RAGSession
+from .rag import (
+    ConversationTurn,
+    Evidence,
+    ProgressCallback,
+    ProgressEvent,
+    RAGSession,
+)
 from .repository import (
     build_repository_manifest,
     compare_repository_manifests,
@@ -82,6 +88,8 @@ __all__ = [
     "LexicalResult",
     "PersistentIndexes",
     "ProjectProfile",
+    "ProgressCallback",
+    "ProgressEvent",
     "QAProject",
     "RAGSession",
     "RetrievalPlan",

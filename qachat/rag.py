@@ -13,10 +13,12 @@ RAGSession
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from time import perf_counter
 from qachat.chat import ChatSession
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
@@ -54,11 +56,15 @@ from qachat.sources import extract_source_units, read_repository_files
 __all__ = [
     "ConversationTurn",
     "Evidence",
+    "ProgressCallback",
+    "ProgressEvent",
     "RAGSession",
 ]
 
 _CONVERSATION_VERSION = 1
 _INDEX_METADATA_VERSION = 1
+_EMBEDDING_PROGRESS_BATCH_SIZE = 64
+_PROGRESS_MIN_INTERVAL_SECONDS = 0.15
 _SYSTEM_PROMPT = (
     "Answer only from the supplied project evidence. Cite evidence with "
     "[1], [2], and so on. Say when the evidence is insufficient."
@@ -90,6 +96,43 @@ class Evidence:
     end_line: int
     symbol: str | None
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProgressEvent:
+    """One structured progress update emitted while opening a RAG session.
+
+    Attributes
+    ----------
+    stage: str
+        Stable machine-readable stage name for notebook or GUI clients.
+    percent: float
+        Approximate overall session-preparation progress from 0 to 100.
+    message: str
+        Short human-readable description of the current work.
+    current, total: int | None
+        Optional item counts when a stage has a meaningful count.
+    remaining: int | None
+        Number of items still remaining in the current counted stage.
+    elapsed_seconds: float | None
+        Elapsed time for the current counted stage.
+    eta_seconds: float | None
+        Estimated seconds remaining for the current counted stage. This is an
+        estimate based on the average throughput observed so far.
+
+    """
+
+    stage: str
+    percent: float
+    message: str
+    current: int | None = None
+    total: int | None = None
+    remaining: int | None = None
+    elapsed_seconds: float | None = None
+    eta_seconds: float | None = None
+
+
+ProgressCallback = Callable[[ProgressEvent], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,6 +168,9 @@ class RAGSession:
     ----------
     project_directory: str | pathlib.Path
         QAChat project folder containing profile.ini.
+    progress_callback: collections.abc.Callable[[ProgressEvent], None] | None
+        Optional UI-agnostic callback that receives structured progress events
+        while the session checks or builds indexes and loads models.
 
     Attributes
     ----------
@@ -147,15 +193,32 @@ class RAGSession:
     def __init__(
         self: RAGSession,
         project_directory: str | Path,
+        *,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         """Open a project, its models, indexes, and saved conversation."""
 
+        if progress_callback is not None and not callable(progress_callback):
+            raise ValueError("progress_callback must be callable or None.")
+
+        self.progress_callback = progress_callback
+        self._progress_last_emit: dict[str, float] = {}
+        self._emit_progress(
+            "opening_project",
+            0.0,
+            "Opening QAChat project...",
+        )
         self.project = open_project(project_directory)
         profile = self.project.profile
         self.backend = choose_backend(profile.backend)
         embedding_model = profile.embedding_model(self.backend)
         chat_model = profile.chat_model(self.backend)
 
+        self._emit_progress(
+            "loading_embedding_model",
+            5.0,
+            f"Loading embedding model: {embedding_model}",
+        )
         embedding_session = EmbeddingSession(
             embedding_model,
             backend=self.backend,
@@ -166,6 +229,11 @@ class RAGSession:
             chunks, indexes, status, source_changes = self._prepare_retrieval(
                 embedding_session,
             )
+            self._emit_progress(
+                "loading_chat_model",
+                90.0,
+                f"Loading chat model: {chat_model}",
+            )
             chat_session = ChatSession(
                 chat_model,
                 backend=self.backend,
@@ -174,6 +242,11 @@ class RAGSession:
                 max_new_tokens=profile.max_new_tokens,
                 system_prompt=_SYSTEM_PROMPT,
                 allow_download=profile.allow_download,
+            )
+            self._emit_progress(
+                "loading_conversation",
+                97.0,
+                "Loading saved conversation...",
             )
             messages, turns = self._load_conversation()
             if messages:
@@ -192,6 +265,84 @@ class RAGSession:
         self.source_changes = source_changes
         self.turns = turns
         self._closed = False
+        self._emit_progress(
+            "ready",
+            100.0,
+            f"QAChat ready. Index {self.index_status}.",
+        )
+
+    def _emit_progress(
+        self: RAGSession,
+        stage: str,
+        percent: float,
+        message: str,
+        *,
+        current: int | None = None,
+        total: int | None = None,
+        remaining: int | None = None,
+        elapsed_seconds: float | None = None,
+        eta_seconds: float | None = None,
+    ) -> None:
+        """Send one structured progress event when a callback is configured."""
+
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        callback(
+            ProgressEvent(
+                stage=stage,
+                percent=float(percent),
+                message=message,
+                current=current,
+                total=total,
+                remaining=remaining,
+                elapsed_seconds=elapsed_seconds,
+                eta_seconds=eta_seconds,
+            )
+        )
+
+    def _emit_count_progress(
+        self: RAGSession,
+        stage: str,
+        start_percent: float,
+        end_percent: float,
+        label: str,
+        current: int,
+        total: int,
+        started_at: float,
+    ) -> None:
+        """Emit throttled counted progress with elapsed time and ETA."""
+
+        if total < 0 or current < 0 or current > total:
+            raise ValueError("Progress counts must satisfy 0 <= current <= total.")
+
+        now = perf_counter()
+        last = self._progress_last_emit.get(stage, 0.0)
+        if (
+            current not in {0, total}
+            and now - last < _PROGRESS_MIN_INTERVAL_SECONDS
+        ):
+            return
+        self._progress_last_emit[stage] = now
+
+        fraction = 1.0 if total == 0 else current / total
+        percent = start_percent + (end_percent - start_percent) * fraction
+        remaining = max(0, total - current)
+        elapsed = max(0.0, now - started_at)
+        eta: float | None = None
+        if current > 0 and elapsed > 0.0:
+            eta = 0.0 if remaining == 0 else elapsed * remaining / current
+
+        self._emit_progress(
+            stage,
+            percent,
+            label,
+            current=current,
+            total=total,
+            remaining=remaining,
+            elapsed_seconds=elapsed,
+            eta_seconds=eta,
+        )
 
     def ask(self: RAGSession, question: str) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
@@ -274,14 +425,73 @@ class RAGSession:
                 extensions=profile.extensions,
                 max_file_bytes=profile.max_file_bytes,
             )
-        source_files = read_repository_files(report)
-        units = extract_source_units(source_files)
+        selected_count = len(report.get("selected_files", []))
+
+        reading_started = perf_counter()
+        self._emit_count_progress(
+            "reading_source", 35.0, 42.0, "Reading source files",
+            0, selected_count, reading_started,
+        )
+        source_files = read_repository_files(
+            report,
+            progress_callback=lambda current, total: self._emit_count_progress(
+                "reading_source",
+                35.0,
+                42.0,
+                "Reading source files",
+                current,
+                total,
+                reading_started,
+            ),
+        )
+
+        extracting_started = perf_counter()
+        source_file_count = len(source_files)
+        self._emit_count_progress(
+            "extracting_source", 43.0, 49.0, "Extracting source structure",
+            0, source_file_count, extracting_started,
+        )
+        units = extract_source_units(
+            source_files,
+            progress_callback=lambda current, total: self._emit_count_progress(
+                "extracting_source",
+                43.0,
+                49.0,
+                "Extracting source structure",
+                current,
+                total,
+                extracting_started,
+            ),
+        )
+
+        chunking_started = perf_counter()
+        unit_count = len(units)
+        self._emit_count_progress(
+            "chunking_source", 50.0, 55.0, "Chunking source units",
+            0, unit_count, chunking_started,
+        )
         chunks = chunk_source_units(
             units,
             count_tokens=embedding_session.count_tokens,
             target_tokens=profile.target_tokens,
             max_tokens=profile.max_tokens,
             overlap_tokens=profile.overlap_tokens,
+            progress_callback=lambda current, total: self._emit_count_progress(
+                "chunking_source",
+                50.0,
+                55.0,
+                "Chunking source units",
+                current,
+                total,
+                chunking_started,
+            ),
+        )
+        self._emit_progress(
+            "building_code_graph",
+            56.0,
+            f"Building code graph from {len(chunks)} chunks...",
+            current=len(chunks),
+            total=len(chunks),
         )
         code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
@@ -298,10 +508,23 @@ class RAGSession:
         """Reuse indexes when source hashes and index settings still match."""
 
         profile = self.project.profile
+        self._emit_progress(
+            "scanning_source",
+            15.0,
+            "Scanning selected project files...",
+        )
         report = scan_repository(
             self.project.source,
             extensions=profile.extensions,
             max_file_bytes=profile.max_file_bytes,
+        )
+        selected_count = len(report.get("selected_files", []))
+        self._emit_progress(
+            "checking_index",
+            22.0,
+            f"Checking {selected_count} files against the saved index...",
+            current=selected_count,
+            total=selected_count,
         )
         current_manifest = build_repository_manifest(report)
         index_path = self.project.indexes / "retrieval.json"
@@ -338,6 +561,11 @@ class RAGSession:
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
+        self._emit_progress(
+            "validating_index",
+            28.0,
+            "Validating saved index metadata and source manifest...",
+        )
 
         if (
             index_path.is_file()
@@ -347,7 +575,17 @@ class RAGSession:
             and bool(changes["matches"])
         ):
             try:
+                self._emit_progress(
+                    "loading_index",
+                    32.0,
+                    "Source is unchanged; loading the saved retrieval index...",
+                )
                 indexes = load_indexes(index_path)
+                self._emit_progress(
+                    "index_ready",
+                    85.0,
+                    "Saved retrieval index loaded.",
+                )
                 return (
                     list(indexes.semantic.chunks),
                     indexes,
@@ -361,16 +599,60 @@ class RAGSession:
             embedding_session,
             report=report,
         )
-        semantic = build_semantic_index(chunks, embedding_session)
+        embedding_started = perf_counter()
+        chunk_count = len(chunks)
+        self._emit_count_progress(
+            "building_semantic_index",
+            58.0,
+            74.0,
+            "Embedding chunks",
+            0,
+            chunk_count,
+            embedding_started,
+        )
+        semantic = build_semantic_index(
+            chunks,
+            embedding_session,
+            batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
+            progress_callback=lambda current, total: self._emit_count_progress(
+                "building_semantic_index",
+                58.0,
+                74.0,
+                "Embedding chunks",
+                current,
+                total,
+                embedding_started,
+            ),
+        )
+        self._emit_progress(
+            "building_lexical_index",
+            75.0,
+            (
+                "Semantic index complete; building lexical index for "
+                f"{len(chunks)} chunks..."
+            ),
+            current=len(chunks),
+            total=len(chunks),
+        )
         lexical = build_lexical_index(chunks)
         indexes = prepare_persistent_indexes(
             semantic,
             lexical,
             code_graph,
         )
+        self._emit_progress(
+            "saving_index",
+            82.0,
+            "Saving retrieval index and manifests...",
+        )
         save_indexes(indexes, index_path)
         _write_json(metadata_path, expected_metadata)
         _write_json(manifest_path, current_manifest)
+        self._emit_progress(
+            "index_ready",
+            85.0,
+            "Retrieval index saved.",
+        )
         return chunks, indexes, "rebuilt", changes
 
     def _retrieve(self: RAGSession, question: str) -> tuple[Evidence, ...]:

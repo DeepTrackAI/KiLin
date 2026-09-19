@@ -20,6 +20,7 @@ Extension modules use the sources_<extension>.py naming convention.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path, PurePosixPath
@@ -91,7 +92,11 @@ class SourceUnit:
     children: tuple[SourceUnit, ...] = ()
 
 
-def read_repository_files(report: dict[str, object]) -> list[SourceFile]:
+def read_repository_files(
+    report: dict[str, object],
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[SourceFile]:
     """Read files selected by qachat.repository.scan_repository.
 
     Paths are checked again immediately before reading. Known binary formats
@@ -101,6 +106,8 @@ def read_repository_files(report: dict[str, object]) -> list[SourceFile]:
     ----------
     report: dict[str, object]
         Repository scan report.
+    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+        Called after each selected file is read with ``current`` and ``total``.
 
     Returns
     -------
@@ -128,9 +135,13 @@ def read_repository_files(report: dict[str, object]) -> list[SourceFile]:
     if not isinstance(selected_value, list):
         raise ValueError("The scan report has an invalid selected file list.")
 
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
     root = Path(repository_value).resolve(strict=True)
     files: list[SourceFile] = []
-    for relative_value in selected_value:
+    total = len(selected_value)
+    for current, relative_value in enumerate(selected_value, start=1):
         if not isinstance(relative_value, str):
             raise ValueError("The scan report contains an invalid file path.")
 
@@ -162,17 +173,25 @@ def read_repository_files(report: dict[str, object]) -> list[SourceFile]:
                 f"Invalid source reader for {relative_path.suffix or 'file'}."
             )
         files.append(source_file)
+        if progress_callback is not None:
+            progress_callback(current, total)
 
     return files
 
 
-def extract_source_units(files: list[SourceFile]) -> list[SourceUnit]:
+def extract_source_units(
+    files: list[SourceFile],
+    *,
+    progress_callback: Callable[[int, int], None] | None = None,
+) -> list[SourceUnit]:
     """Identify natural source units without executing source code.
 
     Parameters
     ----------
     files: list[SourceFile]
         Repository files converted to text.
+    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+        Called after each file is structurally extracted with ``current`` and ``total``.
 
     Returns
     -------
@@ -181,8 +200,12 @@ def extract_source_units(files: list[SourceFile]) -> list[SourceUnit]:
 
     """
 
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
     units: list[SourceUnit] = []
-    for source_file in files:
+    total = len(files)
+    for current, source_file in enumerate(files, start=1):
         extension = _extension_module(source_file.path)
         extractor = getattr(extension, "extract_source_units", None)
         if extractor is not None:
@@ -195,6 +218,8 @@ def extract_source_units(files: list[SourceFile]) -> list[SourceUnit]:
                     f"{source_file.path.suffix}."
                 )
             units.extend(extracted)
+            if progress_callback is not None:
+                progress_callback(current, total)
             continue
 
         lines = source_file.text.splitlines(keepends=True)
@@ -207,6 +232,8 @@ def extract_source_units(files: list[SourceFile]) -> list[SourceUnit]:
         )
         if unit is not None:
             units.append(unit)
+        if progress_callback is not None:
+            progress_callback(current, total)
 
     return units
 

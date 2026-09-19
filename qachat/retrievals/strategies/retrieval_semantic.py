@@ -18,6 +18,7 @@ semantic_search
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import math
 
@@ -70,6 +71,9 @@ class SemanticResult:
 def build_semantic_index(
     chunks: list[Chunk],
     embedding_session: EmbeddingSession,
+    *,
+    batch_size: int | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> SemanticIndex:
     """Embed chunks once and return their searchable semantic index.
 
@@ -79,6 +83,11 @@ def build_semantic_index(
         Repository chunks to index.
     embedding_session: EmbeddingSession
         Loaded embedding model used to make document vectors.
+    batch_size: int | None, optional
+        Number of chunks embedded per model call. ``None`` preserves the
+        previous all-at-once behavior.
+    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+        Called after each embedding batch with ``current`` and ``total``.
 
     Returns
     -------
@@ -95,8 +104,20 @@ def build_semantic_index(
     if not chunks:
         raise ValueError("At least one chunk is required for an index.")
 
+    if batch_size is not None and (type(batch_size) is not int or batch_size < 1):
+        raise ValueError("batch_size must be a positive whole number or None.")
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
     texts = [chunk.text for chunk in chunks]
-    vectors = embedding_session.embed_documents(texts)
+    total = len(texts)
+    effective_batch_size = total if batch_size is None else batch_size
+    vectors: list[list[float]] = []
+    for start in range(0, total, effective_batch_size):
+        batch = texts[start : start + effective_batch_size]
+        vectors.extend(embedding_session.embed_documents(batch))
+        if progress_callback is not None:
+            progress_callback(min(start + len(batch), total), total)
 
     if len(vectors) != len(chunks):
         raise ValueError("Embedding count does not match the chunk count.")
