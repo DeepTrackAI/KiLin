@@ -19,6 +19,9 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from time import perf_counter
+
+import numpy as np
+
 from qachat.chat import ChatSession
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
@@ -47,11 +50,11 @@ from qachat.retrievals import (
     plan_retrieval,
     prepare_persistent_indexes,
     save_indexes,
+    semantic_matrix,
     semantic_search,
 )
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
-
 
 __all__ = [
     "ConversationTurn",
@@ -189,6 +192,7 @@ class RAGSession:
     backend: SelectedBackend
     index_status: str
     turns: list[ConversationTurn]
+    _semantic_matrix_cache: np.ndarray | None
 
     def __init__(
         self: RAGSession,
@@ -264,6 +268,7 @@ class RAGSession:
         self.index_status = status
         self.source_changes = source_changes
         self.turns = turns
+        self._semantic_matrix_cache = None
         self._closed = False
         self._emit_progress(
             "ready",
@@ -314,7 +319,9 @@ class RAGSession:
         """Emit throttled counted progress with elapsed time and ETA."""
 
         if total < 0 or current < 0 or current > total:
-            raise ValueError("Progress counts must satisfy 0 <= current <= total.")
+            raise ValueError(
+                "Progress counts must satisfy 0 <= current <= total."
+            )
 
         now = perf_counter()
         last = self._progress_last_emit.get(stage, 0.0)
@@ -344,13 +351,20 @@ class RAGSession:
             eta_seconds=eta,
         )
 
-    def ask(self: RAGSession, question: str) -> str:
+    def ask(
+        self: RAGSession,
+        question: str,
+        *,
+        semantic_method: str = "loop",
+    ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
         Parameters
         ----------
         question: str
             User question about the opened project.
+        semantic_method: str, optional
+            Semantic comparison method: ``"loop"`` or ``"numpy"``.
 
         Returns
         -------
@@ -372,14 +386,17 @@ class RAGSession:
             raise ValueError("Enter a non-empty question.")
         question = question.strip()
 
-        evidence = self._retrieve(question)
+        evidence = self._retrieve(
+            question,
+            semantic_method=semantic_method,
+        )
         answer = self.chat_session.reply(_answer_prompt(question, evidence))
         turn = ConversationTurn(
             timestamp=datetime.now(timezone.utc).isoformat(),
             question=question,
             answer=answer,
             evidence=evidence,
-            parameters=self._parameters(),
+            parameters=self._parameters(semantic_method),
         )
         self.turns.append(turn)
         self._save_conversation()
@@ -407,6 +424,7 @@ class RAGSession:
 
         if self._closed:
             return
+        self._semantic_matrix_cache = None
         self.chat_session.close()
         self.embedding_session.close()
         self._closed = True
@@ -429,8 +447,13 @@ class RAGSession:
 
         reading_started = perf_counter()
         self._emit_count_progress(
-            "reading_source", 35.0, 42.0, "Reading source files",
-            0, selected_count, reading_started,
+            "reading_source",
+            35.0,
+            42.0,
+            "Reading source files",
+            0,
+            selected_count,
+            reading_started,
         )
         source_files = read_repository_files(
             report,
@@ -448,8 +471,13 @@ class RAGSession:
         extracting_started = perf_counter()
         source_file_count = len(source_files)
         self._emit_count_progress(
-            "extracting_source", 43.0, 49.0, "Extracting source structure",
-            0, source_file_count, extracting_started,
+            "extracting_source",
+            43.0,
+            49.0,
+            "Extracting source structure",
+            0,
+            source_file_count,
+            extracting_started,
         )
         units = extract_source_units(
             source_files,
@@ -467,8 +495,13 @@ class RAGSession:
         chunking_started = perf_counter()
         unit_count = len(units)
         self._emit_count_progress(
-            "chunking_source", 50.0, 55.0, "Chunking source units",
-            0, unit_count, chunking_started,
+            "chunking_source",
+            50.0,
+            55.0,
+            "Chunking source units",
+            0,
+            unit_count,
+            chunking_started,
         )
         chunks = chunk_source_units(
             units,
@@ -578,7 +611,10 @@ class RAGSession:
                 self._emit_progress(
                     "loading_index",
                     32.0,
-                    "Source is unchanged; loading the saved retrieval index...",
+                    (
+                        "Source is unchanged; loading the saved retrieval "
+                        "index..."
+                    ),
                 )
                 indexes = load_indexes(index_path)
                 self._emit_progress(
@@ -655,16 +691,26 @@ class RAGSession:
         )
         return chunks, indexes, "rebuilt", changes
 
-    def _retrieve(self: RAGSession, question: str) -> tuple[Evidence, ...]:
+    def _retrieve(
+        self: RAGSession,
+        question: str,
+        *,
+        semantic_method: str = "loop",
+    ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion."""
 
         count = self.project.profile.retrieval_count
         query_text = self._format_query(question)
+        matrix = (
+            self._get_semantic_matrix() if semantic_method == "numpy" else None
+        )
         semantic = semantic_search(
             self.indexes.semantic,
             query_text,
             self.embedding_session,
             count=count,
+            backend=semantic_method,
+            matrix=matrix,
         )
         lexical = lexical_search(
             self.indexes.lexical,
@@ -702,6 +748,15 @@ class RAGSession:
             for index, chunk in enumerate(expanded, start=1)
         )
 
+    def _get_semantic_matrix(self: RAGSession) -> np.ndarray:
+        """Build the NumPy semantic matrix once for this session."""
+
+        if self._semantic_matrix_cache is None:
+            self._semantic_matrix_cache = semantic_matrix(
+                self.indexes.semantic,
+            )
+        return self._semantic_matrix_cache
+
     def _format_query(self: RAGSession, question: str) -> str:
         """Apply the embedding model's configured query format."""
 
@@ -732,7 +787,10 @@ class RAGSession:
             "overlap_tokens": profile.overlap_tokens,
         }
 
-    def _parameters(self: RAGSession) -> dict[str, object]:
+    def _parameters(
+        self: RAGSession,
+        semantic_method: str,
+    ) -> dict[str, object]:
         """Return the complete settings snapshot recorded for one turn."""
 
         profile = self.project.profile
@@ -744,6 +802,7 @@ class RAGSession:
             "allow_download": profile.allow_download,
             "chat_model": profile.chat_model(self.backend),
             "retrieval_count": profile.retrieval_count,
+            "semantic_method": semantic_method,
             "thinking": profile.thinking,
             "temperature": profile.temperature,
             "max_new_tokens": profile.max_new_tokens,
@@ -796,9 +855,7 @@ class RAGSession:
         timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H-%M-%S-%fZ"
         )
-        archived_path = path.with_name(
-            f"conversation_{timestamp}.json"
-        )
+        archived_path = path.with_name(f"conversation_{timestamp}.json")
         path.replace(archived_path)
         return archived_path
 
