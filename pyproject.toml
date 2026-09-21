@@ -20,6 +20,9 @@ torch = [
     "torch==2.14.0",
     "transformers==5.16.1",
 ]
+gui = [
+    "PySide6>=6.8,<7",
+]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.
 [dependency-groups]
