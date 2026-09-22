@@ -40,9 +40,13 @@ weights/
 *.ckpt
 *.incomplete
 
-# QAChat generated project workspaces
+# QAChat generated project workspaces -- "code" kind defaults to
+# repository/, "literature" kind defaults to documents/ (source = ...
+# in each project's profile.ini decides which one a given sandbox uses)
 sandbox/*/repository/*
 !sandbox/*/repository/.gitkeep
+sandbox/*/documents/*
+!sandbox/*/documents/.gitkeep
 
 # Runtime output
 **/indexes/*
