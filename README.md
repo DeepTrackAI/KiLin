@@ -28,6 +28,26 @@ Setup complete. The project environment is in .venv
 
 Select the QAChat `.venv` kernel when opening a notebook.
 
+To try the optional desktop GUI, install its Qt dependency once and launch it
+from this repository:
+
+```sh
+uv sync --extra gui --extra mlx
+uv run --no-sync python -m gui
+```
+
+Use `--extra torch` instead of `--extra mlx` for the PyTorch backend. In the
+GUI, select or drag several files and folders, then check what to include.
+Leave sources blank for a bundled example. QAChat copies checked files to one
+workspace, leaving the originals unchanged. By default it uses `sandbox/`,
+or you can choose an empty folder elsewhere. The latest sandbox project can
+be resumed from the landing screen; **New project** starts another. The
+**Models** panel shows cached models and a few suggested models you may
+explicitly download. Installing the GUI does not download model weights.
+Conversation settings
+can be changed beside chat. **Stop** ends the active operation. The GUI code
+lives in `gui/`; RAG logic remains in `qachat/`.
+
 ## 2. Chat with your project
 
 Open [Project chat](tutorials/130_project_chat.ipynb). In its configuration

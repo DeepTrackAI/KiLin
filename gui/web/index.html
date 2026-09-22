@@ -9,29 +9,68 @@
     <script src="app.js" defer></script>
   </head>
   <body>
-    <main class="workspace">
+    <div class="app-shell"><main class="workspace">
       <header class="topbar">
-        <span class="brand">QAChat</span>
+        <button id="open-models" class="sidebar-toggle" type="button">Models</button>
         <span id="connection" class="top-status">Connecting…</span>
+        <button id="toggle-workspace" class="sidebar-toggle hidden" type="button">Hide panels</button>
       </header>
 
       <section id="setup" class="setup">
-        <p class="eyebrow">QAChat, your research assistant</p>
-        <h1>Ask your project.</h1>
-        <p class="intro">Runs locally. You control the models and settings; answers cite your files and flag missing evidence.</p>
+        <h1>QAChat</h1>
+        <p class="intro">Runs locally. Cites your files.</p>
+        <p id="recent-project" class="recent-project hidden"><button id="resume-recent" type="button">Resume last project</button></p>
+        <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
           <label for="kind">Project type</label>
           <select id="kind">
             <option value="code">Code repository</option>
             <option value="literature">Literature collection</option>
           </select>
-          <label for="source">Source folder</label>
-          <div class="folder-row">
-            <input id="source" type="text" placeholder="Leave blank to try the example project">
-            <button id="browse" type="button" class="secondary">Browse</button>
-          </div>
-          <p class="hint">Your original files stay unchanged. QAChat works from a local sandbox copy.</p>
-          <button id="open" class="primary" type="submit">Open project</button>
+          <label>Sources</label>
+          <button id="drop-zone" class="drop-zone" type="button">Drop files or folders here, or click here to browse…</button>
+          <p class="hint">Leave sources empty to try the example. Originals stay unchanged.</p>
+          <section id="scope" class="scope hidden" aria-label="Choose files">
+            <div class="scope-heading"><strong>Choose files</strong><span id="scope-count"></span></div>
+            <div id="file-tree" class="file-tree"></div>
+          </section>
+          <details id="advanced" class="advanced">
+            <summary>Advanced settings</summary>
+            <div class="advanced-fields">
+              <label for="workspace-path">Workspace folder</label>
+              <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: QAChat sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
+              <label for="backend">Computation backend</label>
+              <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
+              <label for="chat-model">Language model</label>
+              <div class="model-picker">
+                <input id="chat-model" type="text" autocomplete="off">
+                <button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button>
+                <div id="chat-model-menu" class="model-menu hidden" role="listbox"></div>
+              </div>
+              <small id="chat-model-status" class="hint"></small>
+              <label for="embedding-model">Embedding model</label>
+              <div class="model-picker">
+                <input id="embedding-model" type="text" autocomplete="off">
+                <button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button>
+                <div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div>
+              </div>
+              <small id="embedding-model-status" class="hint"></small>
+              <label for="query-format">Embedding query format</label>
+              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+              <small class="hint">Chat and embedding models have separate roles. The menus show suggested models for the selected backend and query format.</small>
+              <label for="extensions">Additional UTF-8 file types (optional)</label><input id="extensions" type="text" placeholder=".html, .css">
+              <small class="hint">QAChat offers supported file types automatically. Larger files start unchecked; checking one raises the saved size limit.</small>
+              <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
+              <small id="file-size-hint" class="hint"></small>
+              <div class="settings-grid">
+                <label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label>
+                <label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label>
+                <label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label>
+              </div>
+              <label class="check-row"><input id="allow-download" type="checkbox"> Allow missing models to download during preparation</label>
+            </div>
+          </details>
+          <button id="open" class="primary" type="submit">Prepare project</button>
         </form>
       </section>
 
@@ -44,10 +83,19 @@
           </div>
           <div class="heading-actions">
             <button id="new-chat" type="button" class="secondary">New chat</button>
-            <button id="change-project" type="button" class="secondary">Change project</button>
+            <button id="change-project" type="button" class="secondary">New project</button>
           </div>
         </div>
         <div id="conversation" class="conversation" aria-live="polite"></div>
+        <details class="conversation-settings">
+          <summary>Conversation settings</summary>
+          <div class="conversation-fields">
+            <label class="chat-setting" for="retrieval-count">Evidence results per search <input id="retrieval-count" type="number" min="1" value="5"></label>
+            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="No limit"></label>
+            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
+          </div>
+        </details>
         <form id="question-form" class="composer">
           <textarea id="question" rows="2" placeholder="Ask about this project…"></textarea>
           <button id="send" class="primary" type="submit">Ask</button>
@@ -59,11 +107,44 @@
           <strong id="activity-percent">Starting…</strong>
           <button id="stop" type="button" class="secondary">Stop</button>
         </div>
-        <div class="activity-track"><div id="activity-fill"></div></div>
         <div id="activity-text"></div>
         <div id="activity-detail" class="activity-detail"></div>
       </div>
       <p id="error" class="error hidden" role="alert"></p>
-    </main>
+    </main><div class="side-panels">
+      <aside class="workspace-panel">
+        <details open>
+          <summary>Workspace</summary>
+          <p id="workspace-location" class="hint">No project open</p>
+          <div id="workspace-tree" class="file-tree"></div>
+        </details>
+      </aside>
+      <aside class="references-panel" aria-label="References for the selected answer">
+        <details id="references-section" open>
+          <summary>References</summary>
+          <p id="references-for" class="hint">Select an answer to see its sources.</p>
+          <section id="source-preview" class="source-preview hidden" aria-label="Cited source preview">
+            <header class="source-preview-heading">
+              <strong id="source-preview-title"></strong>
+              <button id="close-source-preview" type="button" class="sidebar-toggle">Close</button>
+            </header>
+            <p id="source-preview-note" class="hint"></p>
+            <pre id="source-preview-lines" class="source-preview-lines"></pre>
+          </section>
+          <div id="references-list"></div>
+        </details>
+      </aside>
+    </div></div>
+    <section id="models-panel" class="models-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="models-title">
+      <div class="models-card">
+        <div class="models-heading"><h2 id="models-title">Models</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
+        <p class="hint">Choose a local model for answers and another for search. Downloads start only when you click Download.</p>
+        <p id="models-backend" class="hint"></p>
+        <div id="model-list"></div>
+        <details class="other-models"><summary>Other cached models</summary><div id="other-model-list"></div><p class="hint">These models are not classified by QAChat. You can enter a custom model ID in Advanced settings; compatibility is checked when loading it.</p></details>
+        <p id="model-download-status" class="hint" role="status"></p>
+        <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
+      </div>
+    </section>
   </body>
 </html>

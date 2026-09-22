@@ -69,7 +69,7 @@ from .sources import (
     extract_source_units,
     read_repository_files,
 )
-
+from .workspace import prepare_sources_workspace
 
 __all__ = [
     "Backend",
@@ -124,6 +124,7 @@ __all__ = [
     "plan_retrieval",
     "prepare_persistent_indexes",
     "prepare_project_workspace",
+    "prepare_sources_workspace",
     "read_repository_files",
     "repository_has_changed",
     "resolve_code_entities",

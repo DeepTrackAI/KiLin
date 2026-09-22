@@ -13,11 +13,16 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import shutil
-from typing import Sequence
+from typing import Mapping, Sequence
 
-from qachat.project import ProjectKind, QAProject, initialize_project, open_project
+from qachat.project import (
+    ProjectKind,
+    QAProject,
+    configure_project,
+    initialize_project,
+    open_project,
+)
 from qachat.repository import scan_repository
-
 
 __all__ = ["prepare_sources_workspace"]
 
@@ -26,11 +31,16 @@ def prepare_sources_workspace(
     source_paths: Sequence[str | Path],
     kind: ProjectKind,
     workspace_directory: str | Path,
+    *,
+    selected_files: Mapping[str, Sequence[str]] | None = None,
+    settings: dict[str, object] | None = None,
 ) -> QAProject:
     """Add sources to one project without changing their original files.
 
-    Adding sources is cumulative. Re-adding a source refreshes its selected
-    files. Pass an empty list to reopen an existing workspace unchanged.
+    Adding sources is cumulative. Re-adding a source updates its selected
+    files without deleting older snapshots. Pass an empty list to reopen an
+    existing workspace unchanged. ``selected_files`` limits each folder to
+    checked relative file paths. ``settings`` is validated before copying.
 
     """
 
@@ -43,7 +53,9 @@ def prepare_sources_workspace(
 
     workspace = Path(workspace_directory).expanduser().resolve()
     if workspace in {Path.home().resolve(), Path(workspace.anchor)}:
-        raise ValueError("Choose a project workspace, not a home or drive root.")
+        raise ValueError(
+            "Choose a project workspace, not a home or drive root."
+        )
     if workspace.exists() and not workspace.is_dir():
         raise NotADirectoryError(f"Choose a workspace folder: {workspace}")
     if workspace.is_dir() and not (workspace / "profile.ini").is_file():
@@ -67,10 +79,20 @@ def prepare_sources_workspace(
         raise ValueError("Add a source before creating a workspace.")
     workspace.mkdir(parents=True, exist_ok=True)
     source_root = workspace / "sources"
+    if source_root.is_symlink():
+        raise ValueError("The workspace sources folder must not be a link.")
     source_root.mkdir(exist_ok=True)
     project = initialize_project(workspace, kind)
+    if project.profile.kind != kind:
+        raise ValueError(
+            "Workspace project type does not match the selection."
+        )
     if project.source != source_root.resolve():
-        raise ValueError("This project does not use a managed sources/ folder.")
+        raise ValueError(
+            "This project does not use a managed sources/ folder."
+        )
+    if settings:
+        project = configure_project(workspace, settings)
 
     manifest_path = workspace / "sources.json"
     records = _read_records(manifest_path)
@@ -85,7 +107,15 @@ def prepare_sources_workspace(
             name = _unique_name(source, used, source_root)
             record = {"original": original, "name": name}
         destination = source_root / record["name"]
-        _copy_source(source, destination, project, workspace)
+        selection = (
+            selected_files.get(original)
+            if selected_files is not None
+            else None
+        )
+        copied = _copy_source(
+            source, destination, project, workspace, selection
+        )
+        record["files"] = copied
         if record not in records:
             records.append(record)
             used.add(record["name"])
@@ -110,19 +140,28 @@ def _copy_source(
     destination: Path,
     project: QAProject,
     workspace: Path,
-) -> None:
+    selected_files: Sequence[str] | None,
+) -> list[str]:
     """Copy only files selected by the workspace profile."""
 
     profile = project.profile
     if source.is_file():
+        if selected_files is not None and list(selected_files) != [
+            source.name
+        ]:
+            raise ValueError(f"Invalid file selection: {source}")
         name = source.name.lower()
         size = source.stat().st_size
         if not any(name.endswith(ext) for ext in profile.extensions):
-            raise ValueError(f"File type not selected in profile.ini: {source}")
+            raise ValueError(
+                f"File type not selected in profile.ini: {source}"
+            )
         if not 0 < size <= profile.max_file_bytes:
-            raise ValueError(f"File is empty or exceeds the size limit: {source}")
+            raise ValueError(
+                f"File is empty or exceeds the size limit: {source}"
+            )
         _copy_file(source, destination)
-        return
+        return [source.name]
 
     excludes: tuple[str, ...] = ()
     if workspace.is_relative_to(source):
@@ -136,16 +175,27 @@ def _copy_source(
     if not report["complete"]:
         raise ValueError(f"Could not completely scan source folder: {source}")
     selected = report["selected_files"]
+    if selected_files is not None:
+        requested = set(selected_files)
+        if not requested or not requested.issubset(set(selected)):
+            raise ValueError(f"Invalid file selection: {source}")
+        selected = [path for path in selected if path in requested]
     if not selected:
         raise ValueError(f"No selected files in source folder: {source}")
     destination.mkdir(parents=True, exist_ok=True)
     for relative in selected:
         _copy_file(source / str(relative), destination / str(relative))
+    return [str(path) for path in selected]
 
 
 def _copy_file(source: Path, destination: Path) -> None:
     """Replace one snapshot only after its new bytes are complete."""
 
+    if destination.is_symlink():
+        raise ValueError(f"Do not copy through a symbolic link: {destination}")
+    for parent in destination.parents:
+        if parent.is_symlink():
+            raise ValueError(f"Do not copy through a symbolic link: {parent}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_name(destination.name + ".tmp")
     shutil.copy2(source, temporary)

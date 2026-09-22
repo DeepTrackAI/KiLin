@@ -13,8 +13,42 @@ operation without terminating the window.
 
 The current UI opens code or literature projects, shows progress, restores
 conversation, asks questions, displays evidence, and archives a conversation
-with **New chat**. Model selection and GenRAG's advanced panels can be added
-later without moving RAG logic into this folder.
+with **New chat**. The landing screen stays on source selection; when a saved
+sandbox project exists, a small Resume action opens it. **New project** returns
+to source selection. The workspace panel is hidden when no project is open
+and can be toggled in chat.
+
+Click the source area or drag in several files and folders. Review the scanned
+file tree and uncheck anything you do not want copied. Known importable file
+types are offered automatically; Advanced settings can add UTF-8 text types.
+Checked files determine what is copied and add their types to the project
+profile. Larger files start unchecked; checking one raises the saved size
+limit to fit it. Protected-file exclusions still apply. QAChat
+copies checked files under one workspace's `sources/` folder, preserving folder
+layout.
+Adding more sources to the same workspace is cumulative. Choose an empty
+workspace folder anywhere, or leave it blank to use QAChat's `sandbox/`.
+Selecting an existing QAChat workspace with no new sources resumes it. Source
+files stay untouched; `profile.ini`, `indexes/`, and `logs/` live in the
+workspace. Re-adding a source updates matching copied files; previously copied
+files remain until removed from the workspace explicitly.
+
+Advanced settings edit `profile.ini` before model loading and indexing. The
+**Models** button opens a hideable panel with QAChat's suggested chat and
+embedding models for the selected backend. It marks which are cached and lets
+you explicitly download a missing suggestion. Other cached models are visible
+but not assumed to have the right role. The Advanced settings menus show only
+cached suggestions for their role and query format; a custom model ID can still
+be typed and is checked when loaded. New GUI projects do not silently download
+models during preparation. New literature projects allow PDFs
+up to 20 MiB by default. Existing projects keep their saved file-size limit,
+which you can change in Advanced settings. The workspace sidebar shows saved
+files.
+
+Conversation settings beside chat control evidence count, temperature,
+thinking, and answer length without rebuilding the index or reloading models.
+The values used for each answer are saved with that turn. Reopening a project
+restores the last answer's conversation settings.
 
 Stop terminates the active backend process. Already saved indexes and
 conversations remain on disk; reopen the project to continue.

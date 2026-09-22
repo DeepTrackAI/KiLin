@@ -1,4 +1,11 @@
-"""Create the optional Qt window without adding GUI dependencies to QAChat."""
+"""Start the optional desktop interface without changing QAChat imports.
+
+Functions
+---------
+main
+    Create the Qt application or explain which optional dependency is absent.
+
+"""
 
 from __future__ import annotations
 
@@ -6,7 +13,14 @@ import sys
 
 
 def main() -> int:
-    """Start the desktop window, or explain how to install Qt."""
+    """Start the desktop window, or explain how to install Qt.
+
+    Returns
+    -------
+    int
+        Qt's exit code, or one when the GUI dependency is missing.
+
+    """
 
     try:
         from PySide6.QtWidgets import QApplication

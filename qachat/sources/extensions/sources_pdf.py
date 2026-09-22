@@ -68,7 +68,10 @@ def read_source_file(target: Path, relative_path: Path) -> SourceFile:
         )
 
     try:
-        pages = [page.extract_text() or "" for page in reader.pages]
+        pages = [
+            _clean_extracted_text(page.extract_text() or "")
+            for page in reader.pages
+        ]
     except (KeyError, PdfReadError) as error:
         raise ValueError(
             f"Cannot extract PDF text: {relative_path.as_posix()}"
@@ -81,6 +84,17 @@ def read_source_file(target: Path, relative_path: Path) -> SourceFile:
         )
 
     return SourceFile(relative_path, PAGE_BREAK.join(pages))
+
+
+def _clean_extracted_text(text: str) -> str:
+    """Replace malformed PDF Unicode while preserving valid characters.
+
+    PDF font maps can produce isolated UTF-16 surrogate characters. They are
+    not valid Unicode text and cannot be passed to a model tokenizer. This
+    round trip combines valid surrogate pairs and replaces only isolated ones.
+    """
+
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
 
 
 def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:

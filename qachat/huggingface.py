@@ -11,11 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
+from huggingface_hub.errors import IncompleteSnapshotError
 
 
 __all__ = [
     "available_models",
     "model_is_available",
+    "cached_model_snapshot",
     "download_model",
 ]
 
@@ -96,6 +98,32 @@ def model_is_available(
         model["model_id"] == model_id
         for model in available_models(cache_directory)
     )
+
+
+def cached_model_snapshot(
+    model_id: str,
+    *,
+    revision: str | None = None,
+) -> Path:
+    """Find locally cached model files without downloading anything.
+
+    A snapshot can be marked incomplete when only repository documentation
+    is missing. Its local model files may still be usable. The model loader
+    checks the files it actually needs after receiving this directory.
+    """
+
+    _check_model_id(model_id)
+    try:
+        path = snapshot_download(
+            repo_id=model_id,
+            revision=revision,
+            local_files_only=True,
+        )
+    except IncompleteSnapshotError as error:
+        path = error.snapshot_path
+        if not (Path(path) / "config.json").is_file():
+            raise
+    return Path(path)
 
 
 def download_model(

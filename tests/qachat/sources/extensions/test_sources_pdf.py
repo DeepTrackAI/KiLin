@@ -62,6 +62,23 @@ class TestPdfSource(unittest.TestCase):
             ["First page.\n", "Third page.\n"],
         )
 
+    def test_malformed_pdf_unicode_is_cleaned_before_chunking(self) -> None:
+        reader = SimpleNamespace(
+            is_encrypted=False,
+            pages=[_page("Valid \ud835\udcbf and broken \ud835 text.")],
+        )
+        with patch.object(sources_pdf, "PdfReader", return_value=reader):
+            source_file = sources_pdf.read_source_file(
+                Path("paper.pdf"),
+                Path("paper.pdf"),
+            )
+
+        self.assertEqual(source_file.text, "Valid 𝒿 and broken � text.")
+        self.assertEqual(
+            sources_pdf.extract_source_units(source_file)[0].text,
+            source_file.text,
+        )
+
     def test_encrypted_pdf_is_rejected(self) -> None:
         reader = SimpleNamespace(is_encrypted=True, pages=[])
         with patch.object(
