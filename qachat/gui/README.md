@@ -1,5 +1,15 @@
 # QAChat desktop foundation
 
+Launch the desktop interface from the repository with:
+
+~~~sh
+uv run qachat --gui
+~~~
+
+The launcher prepares the missing GUI layer and native model backend
+automatically. If .venv is active, qachat --gui is enough; --backend mlx and
+--backend torch override Automatic.
+
 The optional desktop UI follows GenRAG's separation of a Qt shell, a
 JavaScript layout, and a Python RAG backend. Qt's WebChannel connects the
 page to its shell; a child process owns the backend so Stop can end a long
@@ -37,9 +47,11 @@ Advanced settings edit `profile.ini` before model loading and indexing. The
 **Models** button opens a hideable panel with QAChat's suggested chat and
 embedding models for the selected backend. It marks which are cached and lets
 you explicitly download a missing suggestion. Other cached models are visible
-but not assumed to have the right role. The Advanced settings menus show only
-cached suggestions for their role and query format; a custom model ID can still
-be typed and is checked when loaded. New GUI projects do not silently download
+but not assumed to have the right role. The language-model menu shows every
+model in the local Hugging Face cache.
+The embedding menu stays limited to cached embedding choices for the selected
+backend and query format; a custom model ID can still be typed and is checked
+when loaded. New GUI projects do not silently download
 models during preparation. New literature projects allow PDFs
 up to 20 MiB by default. Existing projects keep their saved file-size limit,
 which you can change in Advanced settings. The workspace sidebar shows saved

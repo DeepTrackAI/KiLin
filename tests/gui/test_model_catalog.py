@@ -5,14 +5,18 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from gui.model_catalog import MODEL_CHOICES, installed_backends, model_choices
+from qachat.gui.model_catalog import (
+    MODEL_CHOICES,
+    installed_backends,
+    model_choices,
+)
 from qachat.project import default_project_profile
 
 
 class TestModelCatalog(unittest.TestCase):
     """Suggested choices must agree with QAChat's project defaults."""
 
-    @patch("gui.model_catalog.version")
+    @patch("qachat.gui.model_catalog.version")
     def test_backend_packages_are_checked_separately(
         self, get_version
     ) -> None:

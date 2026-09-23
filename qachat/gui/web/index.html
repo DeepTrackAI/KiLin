@@ -47,21 +47,16 @@
                 <button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button>
                 <div id="chat-model-menu" class="model-menu hidden" role="listbox"></div>
               </div>
-              <small id="chat-model-status" class="hint"></small>
               <label for="embedding-model">Embedding model</label>
               <div class="model-picker">
                 <input id="embedding-model" type="text" autocomplete="off">
                 <button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button>
                 <div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div>
               </div>
-              <small id="embedding-model-status" class="hint"></small>
               <label for="query-format">Embedding query format</label>
               <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
-              <small class="hint">Chat and embedding models have separate roles. The menus show suggested models for the selected backend and query format.</small>
               <label for="extensions">Additional UTF-8 file types (optional)</label><input id="extensions" type="text" placeholder=".html, .css">
-              <small class="hint">QAChat offers supported file types automatically. Larger files start unchecked; checking one raises the saved size limit.</small>
               <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
-              <small id="file-size-hint" class="hint"></small>
               <div class="settings-grid">
                 <label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label>
                 <label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label>

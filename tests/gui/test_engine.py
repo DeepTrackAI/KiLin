@@ -11,8 +11,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from gui.engine import ChatEngine, _reference_context
-from gui.model_catalog import MODEL_CHOICES
+from qachat.gui.engine import ChatEngine, _reference_context
+from qachat.gui.model_catalog import MODEL_CHOICES
 from qachat.project import open_project
 from qachat.rag import Evidence
 
@@ -30,7 +30,7 @@ class SavedTurn:
 class TestChatEngine(unittest.TestCase):
     """The child process delegates each operation to QAChat."""
 
-    @patch("gui.engine.download_model")
+    @patch("qachat.gui.engine.download_model")
     def test_download_requires_an_explicit_suggested_model(
         self, download
     ) -> None:
@@ -43,13 +43,13 @@ class TestChatEngine(unittest.TestCase):
         self.assertEqual(events[0]["event"], "model_download_started")
         self.assertEqual(events[1]["event"], "model_downloaded")
 
-        with patch("gui.engine.traceback.print_exc"):
+        with patch("qachat.gui.engine.traceback.print_exc"):
             engine.download("someone/unknown-model")
         download.assert_called_once()
         self.assertEqual(events[-1]["event"], "error")
 
-    @patch("gui.engine.RAGSession")
-    @patch("gui.engine.prepare_sources_workspace")
+    @patch("qachat.gui.engine.RAGSession")
+    @patch("qachat.gui.engine.prepare_sources_workspace")
     def test_open_ask_and_reset(self, prepare, rag_session) -> None:
         prepare.return_value.root = Path("/sandbox/example")
         prepare.return_value.source = Path("/sandbox/example/repository")
@@ -77,8 +77,8 @@ class TestChatEngine(unittest.TestCase):
         self.assertEqual(events[3]["turn"]["answer"], "New answer")
         self.assertEqual(events[-1]["event"], "reset")
 
-    @patch("gui.engine.RAGSession")
-    @patch("gui.engine.prepare_sources_workspace")
+    @patch("qachat.gui.engine.RAGSession")
+    @patch("qachat.gui.engine.prepare_sources_workspace")
     def test_blank_source_uses_bundled_example(
         self, prepare, rag_session
     ) -> None:
@@ -123,7 +123,7 @@ class TestChatEngine(unittest.TestCase):
                 "skip.png",
             )
 
-    @patch("gui.engine.RAGSession")
+    @patch("qachat.gui.engine.RAGSession")
     def test_checked_types_override_profile_extensions(
         self, rag_session
     ) -> None:
@@ -335,8 +335,8 @@ class TestChatEngine(unittest.TestCase):
 
         self.assertEqual(events[-1], {"event": "startup", "project": None})
 
-    @patch("gui.engine.RAGSession")
-    @patch("gui.engine.open_project")
+    @patch("qachat.gui.engine.RAGSession")
+    @patch("qachat.gui.engine.open_project")
     def test_resume_does_not_copy_sources(
         self, open_saved, rag_session
     ) -> None:

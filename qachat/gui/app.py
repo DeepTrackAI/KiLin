@@ -9,11 +9,17 @@ main
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import sys
 
 
-def main() -> int:
+def main(arguments: Sequence[str] | None = None) -> int:
     """Start the desktop window, or explain how to install Qt.
+
+    Parameters
+    ----------
+    arguments: collections.abc.Sequence[str] | None, optional
+        Arguments passed to Qt. None uses the process command line.
 
     Returns
     -------
@@ -25,7 +31,7 @@ def main() -> int:
     try:
         from PySide6.QtWidgets import QApplication
 
-        from gui.window import ChatWindow
+        from qachat.gui.window import ChatWindow
     except ImportError as error:
         print(
             f"GUI dependency missing: {error}. Install with "
@@ -34,7 +40,7 @@ def main() -> int:
         )
         return 1
 
-    app = QApplication(sys.argv)
+    app = QApplication(list(arguments) if arguments is not None else sys.argv)
     app.setApplicationName("QAChat")
     window = ChatWindow()
     window.show()

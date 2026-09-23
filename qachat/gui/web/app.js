@@ -183,7 +183,6 @@ function renderPreview() {
   byId("scope-count").textContent = `${selected} of ${total} files selected`
     + (unavailable ? ` · ${unavailable} unavailable` : "");
   byId("scope").classList.toggle("hidden", selectedSources.length === 0);
-  updateFileSizeHint();
 }
 
 function saveModelFields() {
@@ -200,24 +199,7 @@ function compatibleChoices(role) {
     && (!choice.query_format || choice.query_format === byId("query-format").value));
 }
 
-function modelStatus(id, role) {
-  const choice = modelChoices.find((item) => item.model_id === id);
-  if (choice && !compatibleChoices(role).includes(choice)) {
-    return "Not offered for this role, backend, or query format";
-  }
-  if (choice && cachedModels.has(id)) return "Cached locally · suggested for this role";
-  if (choice) return "Not cached · open Models to download it";
-  if (cachedModels.has(id)) return "Cached locally · compatibility not verified";
-  if (id.startsWith("/") || id.startsWith(".") || /^[A-Za-z]:[\\/]/.test(id)) {
-    return "Local path · checked when preparing";
-  }
-  return "Custom model · checked when preparing";
-}
-
 function refreshModelStatus() {
-  for (const [field, role] of [["chat-model", "chat"], ["embedding-model", "embedding"]]) {
-    byId(`${field}-status`).textContent = modelStatus(byId(field).value.trim(), role);
-  }
   const hasBoth = ["chat", "embedding"].every((role) =>
     compatibleChoices(role).some((choice) => cachedModels.has(choice.model_id)));
   byId("models-hint").classList.toggle("hidden", hasBoth);
@@ -311,14 +293,19 @@ function toggleModelMenu(id) {
   if (!shouldOpen) return;
 
   const role = id === "chat-model" ? "chat" : "embedding";
-  const options = compatibleChoices(role).filter((choice) =>
-    cachedModels.has(choice.model_id)).map((choice) => {
+  const modelIds = role === "chat"
+    ? [...cachedModels].sort((left, right) => left.localeCompare(right))
+    : compatibleChoices(role)
+      .filter((choice) => cachedModels.has(choice.model_id))
+      .map((choice) => choice.model_id)
+      .sort((left, right) => left.localeCompare(right));
+  const options = modelIds.map((modelId) => {
     const option = document.createElement("button");
     option.type = "button";
     option.setAttribute("role", "option");
-    option.textContent = choice.model_id;
+    option.textContent = modelId;
     option.addEventListener("click", () => {
-      byId(id).value = choice.model_id;
+      byId(id).value = modelId;
       byId(id).dispatchEvent(new Event("input"));
       closeModelMenus();
     });
@@ -333,20 +320,6 @@ function toggleModelMenu(id) {
   menu.replaceChildren(...options);
   menu.classList.remove("hidden");
   byId(`${id}-options`).setAttribute("aria-expanded", "true");
-}
-
-function updateFileSizeHint() {
-  const bytes = Number(byId("max-file-bytes").value);
-  if (!Number.isFinite(bytes) || bytes < 1) {
-    byId("file-size-hint").textContent = "Enter a positive file-size limit.";
-    return;
-  }
-  const mib = (bytes / (1024 * 1024)).toLocaleString(undefined, { maximumFractionDigits: 1 });
-  const selectedBytes = selectedFileSizeLimit();
-  const raised = selectedBytes > bytes
-    ? ` Checked larger files will raise the saved limit to ${(selectedBytes / (1024 * 1024)).toFixed(1)} MiB.`
-    : " Check a larger file to include it, or change this limit.";
-  byId("file-size-hint").textContent = `Current limit: ${mib} MiB per file.${raised}`;
 }
 
 function selectedFileSizeLimit() {
@@ -388,7 +361,6 @@ function showSettings(data) {
   // A new GUI project does not silently download model weights.
   byId("allow-download").checked = Boolean(data.workspace && profile.allow_download);
   byId("thinking").checked = profile.thinking;
-  updateFileSizeHint();
   showModelFields();
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
@@ -898,7 +870,6 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeModelMenus();
 });
-byId("max-file-bytes").addEventListener("input", updateFileSizeHint);
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
 
 new QWebChannel(qt.webChannelTransport, (channel) => {

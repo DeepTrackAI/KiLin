@@ -30,7 +30,7 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class ChatBridge(QObject):
@@ -331,14 +331,14 @@ class ChatWindow(QMainWindow):
         self.channel.registerObject("qachat", self.bridge)
         self.view.page().setWebChannel(self.channel)
         self.setCentralWidget(self.view)
-        page = ROOT / "gui" / "web" / "index.html"
+        page = Path(__file__).resolve().parent / "web" / "index.html"
         self.view.load(QUrl.fromLocalFile(str(page)))
 
     def _start_engine(self) -> None:
         """Start the child that owns models, indexes, and chat history."""
 
         self._stdout.clear()
-        self.process.start(sys.executable, ["-m", "gui.engine"])
+        self.process.start(sys.executable, ["-m", "qachat.gui.engine"])
 
     def _send_command(self, command: dict[str, object]) -> None:
         """Queue a command until the child process is ready to receive it."""

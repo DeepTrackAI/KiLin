@@ -19,7 +19,7 @@ import sys
 import traceback
 from typing import Callable
 
-from gui.model_catalog import (
+from qachat.gui.model_catalog import (
     MODEL_CHOICES,
     installed_backends,
     model_choices,
@@ -36,7 +36,7 @@ from qachat.repository import (
 from qachat.runtime import choose_backend
 from qachat.sources import read_repository_files
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 EventSink = Callable[[dict[str, object]], None]
 
 
