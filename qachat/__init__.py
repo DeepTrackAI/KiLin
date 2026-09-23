@@ -60,6 +60,7 @@ from .retrievals import (
     prepare_persistent_indexes,
     resolve_code_entities,
     save_indexes,
+    semantic_matrix,
     semantic_search,
 )
 from .runtime import Backend, SelectedBackend, choose_backend, torch_device
@@ -130,6 +131,7 @@ __all__ = [
     "resolve_code_entities",
     "save_indexes",
     "scan_repository",
+    "semantic_matrix",
     "semantic_search",
     "torch_device",
 ]

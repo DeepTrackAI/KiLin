@@ -1641,6 +1641,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "huggingface-hub" },
+    { name = "numpy" },
     { name = "pypdf" },
 ]
 
@@ -1670,6 +1671,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = "==1.29.0" },
     { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.0.5" },
     { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.31.3" },
+    { name = "numpy", specifier = "==2.5.2" },
     { name = "pypdf", specifier = "==6.16.2" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8,<7" },
     { name = "torch", marker = "extra == 'torch'", specifier = "==2.14.0" },
