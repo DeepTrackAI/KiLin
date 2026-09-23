@@ -121,10 +121,11 @@ class TestSetupScript(unittest.TestCase):
                 self.environment["QACHAT_TEST_ARCH"] = machine
                 result = self._run()
                 self.assertEqual(result.returncode, 0, result.stderr)
+                backend = "mlx" if system == "Darwin" else "torch"
                 self.assertEqual(
                     self.log.read_text(encoding="utf-8").splitlines(),
                     [
-                        "uv:" f"{self.project}:sync --extra mlx --extra torch",
+                        "uv:" f"{self.project}:sync --extra {backend}",
                         "python:setup/check_setup.py",
                     ],
                 )

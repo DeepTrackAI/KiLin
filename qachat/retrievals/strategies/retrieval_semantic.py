@@ -13,6 +13,8 @@ build_semantic_index
     Embed repository chunks once and store the vectors beside them.
 semantic_search
     Embed one query, compare it with indexed vectors, and rank the matches.
+semantic_matrix
+    Stack an index's embeddings into one array for repeated numpy search.
 
 """
 
@@ -21,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import math
+
+import numpy as np
 
 from qachat.chunking import Chunk
 from qachat.embeddings import EmbeddingSession
@@ -31,6 +35,7 @@ __all__ = [
     "SemanticResult",
     "build_semantic_index",
     "semantic_search",
+    "semantic_matrix",
 ]
 
 
@@ -116,6 +121,7 @@ def build_semantic_index(
     for start in range(0, total, effective_batch_size):
         batch = texts[start : start + effective_batch_size]
         vectors.extend(embedding_session.embed_documents(batch))
+        embedding_session._clear_backend_cache()
         if progress_callback is not None:
             progress_callback(min(start + len(batch), total), total)
 
@@ -132,12 +138,28 @@ def build_semantic_index(
     )
 
 
+def semantic_matrix(index: SemanticIndex) -> np.ndarray:
+    """Stack one index's embeddings into a single numpy array.
+
+    Pass the result to ``semantic_search(..., backend="numpy")`` as
+    ``matrix`` to search the same index many times without rebuilding
+    this array on every call -- building it is itself an O(n) pass over
+    every embedding, so a caller running many queries against one index
+    (a benchmark corpus, a "literature"-kind project with a large
+    document collection) should build it once, not once per query.
+    """
+
+    return np.asarray(index.embeddings, dtype=np.float32)
+
+
 def semantic_search(
     index: SemanticIndex,
     query_text: str,
     embedding_session: EmbeddingSession,
     *,
     count: int = 5,
+    backend: str = "loop",
+    matrix: np.ndarray | None = None,
 ) -> list[SemanticResult]:
     """Rank indexed chunks by cosine similarity to one query.
 
@@ -151,6 +173,21 @@ def semantic_search(
         Loaded embedding model used to make the query vector.
     count: int, optional
         Maximum number of ranked results to return.
+    backend: str, optional
+        ``"loop"`` (the default) ranks with a plain Python loop over
+        every chunk -- fine at repository scale, a few thousand chunks.
+        ``"numpy"`` computes the identical cosine similarity with numpy
+        instead, worthwhile once an index holds tens of thousands of
+        chunks (a large "literature"-kind project, say). The two
+        backends agree on which chunks rank where in practice, but are
+        not guaranteed bit-for-bit identical: ``"numpy"`` computes in
+        float32 versus the loop's float64, and its top-k selection is
+        not guaranteed stable on exact score ties (the loop's is).
+    matrix: numpy.ndarray | None, optional
+        Only used when ``backend="numpy"``. Pass the result of
+        ``semantic_matrix(index)`` to reuse it across many queries
+        against the same index; left as ``None``, it is rebuilt for
+        this one call.
 
     Returns
     -------
@@ -160,7 +197,8 @@ def semantic_search(
     Raises
     ------
     ValueError
-        If the index is empty, count is invalid, or dimensions disagree.
+        If the index is empty, count is invalid, backend is unknown, or
+        dimensions disagree.
 
     """
 
@@ -173,10 +211,18 @@ def semantic_search(
     if type(count) is not int or count < 1:
         raise ValueError("count must be a positive whole number.")
 
+    if backend not in ("loop", "numpy"):
+        raise ValueError('backend must be "loop" or "numpy".')
+
     query_vector = embedding_session.embed_query(query_text)
     expected_dimension = len(index.embeddings[0])
     if len(query_vector) != expected_dimension:
         raise ValueError("Query and index vector dimensions do not match.")
+
+    if backend == "numpy":
+        return _semantic_search_numpy(
+            index, query_vector, count=count, matrix=matrix
+        )
 
     ranked = [
         SemanticResult(
@@ -191,6 +237,36 @@ def semantic_search(
     ]
     ranked.sort(key=lambda result: result.score, reverse=True)
     return ranked[: min(count, len(ranked))]
+
+
+def _semantic_search_numpy(
+    index: SemanticIndex,
+    query_vector: list[float],
+    *,
+    count: int,
+    matrix: np.ndarray | None,
+) -> list[SemanticResult]:
+    """Rank one index's chunks against a query vector with numpy."""
+
+    if matrix is None:
+        matrix = semantic_matrix(index)
+
+    query_array = np.asarray(query_vector, dtype=np.float32)
+    query_norm = np.linalg.norm(query_array)
+    doc_norms = np.linalg.norm(matrix, axis=1)
+    denominator = query_norm * doc_norms
+    if query_norm == 0.0 or np.any(doc_norms == 0.0):
+        raise ValueError("Cosine similarity cannot use a zero vector.")
+    scores = (matrix @ query_array) / denominator
+
+    top_count = min(count, len(index.chunks))
+    top_indices = np.argpartition(-scores, top_count - 1)[:top_count]
+    top_indices = top_indices[np.argsort(-scores[top_indices])]
+
+    return [
+        SemanticResult(score=float(scores[i]), chunk=index.chunks[i])
+        for i in top_indices
+    ]
 
 
 def _cosine_similarity(

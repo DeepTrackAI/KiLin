@@ -60,6 +60,7 @@ from .retrievals import (
     prepare_persistent_indexes,
     resolve_code_entities,
     save_indexes,
+    semantic_matrix,
     semantic_search,
 )
 from .runtime import Backend, SelectedBackend, choose_backend, torch_device
@@ -69,7 +70,7 @@ from .sources import (
     extract_source_units,
     read_repository_files,
 )
-
+from .workspace import prepare_sources_workspace
 
 __all__ = [
     "Backend",
@@ -124,11 +125,13 @@ __all__ = [
     "plan_retrieval",
     "prepare_persistent_indexes",
     "prepare_project_workspace",
+    "prepare_sources_workspace",
     "read_repository_files",
     "repository_has_changed",
     "resolve_code_entities",
     "save_indexes",
     "scan_repository",
+    "semantic_matrix",
     "semantic_search",
     "torch_device",
 ]

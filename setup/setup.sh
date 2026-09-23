@@ -7,7 +7,8 @@ cd "$project_dir"
 
 # Reject unsupported machines before downloading anything.
 case "$(uname -s):$(uname -m)" in
-    Darwin:arm64|Linux:x86_64|Linux:aarch64) ;;
+    Darwin:arm64) backend_extra=mlx ;;
+    Linux:x86_64|Linux:aarch64) backend_extra=torch ;;
     Darwin:*) echo "Use native Apple Silicon. Intel Macs/Rosetta are not supported by these package versions."; exit 1 ;;
     *) echo "Use an Apple Silicon Mac, 64-bit Linux, or setup/setup.ps1 on Windows."; exit 1 ;;
 esac
@@ -33,9 +34,8 @@ if [ ! -x "$uv_command" ]; then
     exit 1
 fi
 
-# .python-version selects Python 3.12. pyproject.toml supplies the package versions.
-# The mlx dependency's platform condition skips it on Linux.
-"$uv_command" sync --extra mlx --extra torch
+# Install the shared core plus only the native computation backend.
+"$uv_command" sync --extra "$backend_extra"
 
 # Use the new environment directly, without needing terminal activation.
 .venv/bin/python setup/check_setup.py

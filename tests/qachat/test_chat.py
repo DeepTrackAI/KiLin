@@ -245,5 +245,36 @@ class TestChat(unittest.TestCase):
         self.assertEqual(chat._check_max_new_tokens(1_000_000), 1_000_000)
 
 
+class TestGenerationSettings(unittest.TestCase):
+    """Change answer settings without loading another model."""
+
+    @patch.object(chat.ChatSession, "_load")
+    def test_update_and_validate_all_settings(self, _load) -> None:
+        session = chat.ChatSession("group/model", backend="torch")
+
+        session.configure_generation(
+            {"temperature": 0.5, "thinking": True, "max_new_tokens": 64}
+        )
+        self.assertEqual(session.temperature, 0.5)
+        self.assertTrue(session.thinking)
+        self.assertEqual(session.max_new_tokens, 64)
+
+        session.configure_generation({"max_new_tokens": None})
+        self.assertIsNone(session.max_new_tokens)
+
+        for invalid in (
+            {"temperature": -1},
+            {"thinking": "yes"},
+            {"max_new_tokens": 0},
+            {"backend": "mlx"},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    session.configure_generation(invalid)
+                self.assertEqual(session.temperature, 0.5)
+                self.assertTrue(session.thinking)
+                self.assertIsNone(session.max_new_tokens)
+
+
 if __name__ == "__main__":
     unittest.main()

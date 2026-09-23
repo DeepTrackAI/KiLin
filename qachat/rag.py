@@ -66,8 +66,10 @@ _INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
 _PROGRESS_MIN_INTERVAL_SECONDS = 0.15
 _SYSTEM_PROMPT = (
-    "Answer only from the supplied project evidence. Cite evidence with "
-    "[1], [2], and so on. Say when the evidence is insufficient."
+    "Answer only from the supplied project evidence. Put source numbers such "
+    "as [1] and [2] directly after supported claims. Do not write a separate "
+    "reference list or copy bibliographic text. Say when evidence "
+    "is insufficient."
 )
 
 
@@ -251,6 +253,17 @@ class RAGSession:
             messages, turns = self._load_conversation()
             if messages:
                 chat_session.restore_history(messages)
+            if turns:
+                previous = turns[-1].parameters
+                chat_session.configure_generation(
+                    {
+                        key: previous[key]
+                        for key in (
+                            "temperature", "thinking", "max_new_tokens"
+                        )
+                        if key in previous
+                    }
+                )
         except Exception:
             if chat_session is not None:
                 chat_session.close()
@@ -314,7 +327,9 @@ class RAGSession:
         """Emit throttled counted progress with elapsed time and ETA."""
 
         if total < 0 or current < 0 or current > total:
-            raise ValueError("Progress counts must satisfy 0 <= current <= total.")
+            raise ValueError(
+                "Progress counts must satisfy 0 <= current <= total."
+            )
 
         now = perf_counter()
         last = self._progress_last_emit.get(stage, 0.0)
@@ -344,13 +359,24 @@ class RAGSession:
             eta_seconds=eta,
         )
 
-    def ask(self: RAGSession, question: str) -> str:
+    def ask(
+        self: RAGSession,
+        question: str,
+        *,
+        retrieval_count: int | None = None,
+        generation_settings: dict[str, object] | None = None,
+    ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
         Parameters
         ----------
         question: str
             User question about the opened project.
+        retrieval_count: int | None
+            Optional evidence count for this question only.
+        generation_settings: dict[str, object] | None
+            Optional temperature, thinking, and answer length for this and
+            later questions, until changed again.
 
         Returns
         -------
@@ -370,16 +396,25 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Enter a non-empty question.")
+        if retrieval_count is not None and (
+            type(retrieval_count) is not int or retrieval_count < 1
+        ):
+            raise ValueError(
+                "retrieval_count must be a positive whole number."
+            )
         question = question.strip()
 
-        evidence = self._retrieve(question)
+        if generation_settings is not None:
+            self.chat_session.configure_generation(generation_settings)
+
+        evidence = self._retrieve(question, retrieval_count)
         answer = self.chat_session.reply(_answer_prompt(question, evidence))
         turn = ConversationTurn(
             timestamp=datetime.now(timezone.utc).isoformat(),
             question=question,
             answer=answer,
             evidence=evidence,
-            parameters=self._parameters(),
+            parameters=self._parameters(retrieval_count),
         )
         self.turns.append(turn)
         self._save_conversation()
@@ -578,7 +613,7 @@ class RAGSession:
                 self._emit_progress(
                     "loading_index",
                     32.0,
-                    "Source is unchanged; loading the saved retrieval index...",
+                    "Source unchanged; loading the saved retrieval index...",
                 )
                 indexes = load_indexes(index_path)
                 self._emit_progress(
@@ -655,10 +690,14 @@ class RAGSession:
         )
         return chunks, indexes, "rebuilt", changes
 
-    def _retrieve(self: RAGSession, question: str) -> tuple[Evidence, ...]:
+    def _retrieve(
+        self: RAGSession,
+        question: str,
+        retrieval_count: int | None = None,
+    ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion."""
 
-        count = self.project.profile.retrieval_count
+        count = retrieval_count or self.project.profile.retrieval_count
         query_text = self._format_query(question)
         semantic = semantic_search(
             self.indexes.semantic,
@@ -732,7 +771,9 @@ class RAGSession:
             "overlap_tokens": profile.overlap_tokens,
         }
 
-    def _parameters(self: RAGSession) -> dict[str, object]:
+    def _parameters(
+        self: RAGSession, retrieval_count: int | None = None
+    ) -> dict[str, object]:
         """Return the complete settings snapshot recorded for one turn."""
 
         profile = self.project.profile
@@ -743,10 +784,10 @@ class RAGSession:
             "backend_preference": profile.backend,
             "allow_download": profile.allow_download,
             "chat_model": profile.chat_model(self.backend),
-            "retrieval_count": profile.retrieval_count,
-            "thinking": profile.thinking,
-            "temperature": profile.temperature,
-            "max_new_tokens": profile.max_new_tokens,
+            "retrieval_count": retrieval_count or profile.retrieval_count,
+            "thinking": self.chat_session.thinking,
+            "temperature": self.chat_session.temperature,
+            "max_new_tokens": self.chat_session.max_new_tokens,
             "system_prompt": _SYSTEM_PROMPT,
         }
 
@@ -815,7 +856,9 @@ def _answer_prompt(
         symbol = f" ({item.symbol})" if item.symbol else ""
         sections.append(f"[{item.citation}] {location}{symbol}\n{item.text}")
     sections.append(
-        "Answer using the evidence above and cite it with bracketed numbers."
+        "Answer using the evidence above. Put [1], [2], and so on immediately "
+        "after the claims they support. Do not repeat the source text or "
+        "write a bibliography."
     )
     return "\n\n".join(sections)
 
