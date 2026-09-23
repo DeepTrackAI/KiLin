@@ -8,6 +8,7 @@ main
 """
 
 from __future__ import annotations
+
 from argparse import ArgumentParser
 from collections.abc import Sequence
 import importlib
