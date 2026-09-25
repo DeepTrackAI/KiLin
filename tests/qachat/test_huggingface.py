@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from huggingface_hub.errors import IncompleteSnapshotError
+
 from qachat import huggingface
 
 
@@ -55,6 +57,37 @@ class TestHuggingFace(unittest.TestCase):
             self.assertFalse(huggingface.model_is_available("missing/model"))
         with self.assertRaises(ValueError):
             huggingface.model_is_available("")
+
+    def test_cached_model_snapshot_uses_available_model_files(self) -> None:
+        """Missing repository documents do not block an offline model."""
+
+        with TemporaryDirectory() as directory:
+            snapshot = Path(directory)
+            (snapshot / "config.json").write_text("{}")
+            incomplete = IncompleteSnapshotError(
+                "Repository documents are missing.", str(snapshot)
+            )
+            with patch(
+                "qachat.huggingface.snapshot_download",
+                side_effect=incomplete,
+            ) as lookup:
+                result = huggingface.cached_model_snapshot(
+                    "group/model", revision="main"
+                )
+            self.assertEqual(result, snapshot)
+            lookup.assert_called_once_with(
+                repo_id="group/model",
+                revision="main",
+                local_files_only=True,
+            )
+
+            (snapshot / "config.json").unlink()
+            with patch(
+                "qachat.huggingface.snapshot_download",
+                side_effect=incomplete,
+            ):
+                with self.assertRaises(IncompleteSnapshotError):
+                    huggingface.cached_model_snapshot("group/model")
 
     def test_download_model(self) -> None:
         expected = Path("/cache/snapshot")

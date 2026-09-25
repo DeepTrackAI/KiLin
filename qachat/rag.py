@@ -19,9 +19,6 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from time import perf_counter
-
-import numpy as np
-
 from qachat.chat import ChatSession
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
@@ -50,11 +47,11 @@ from qachat.retrievals import (
     plan_retrieval,
     prepare_persistent_indexes,
     save_indexes,
-    semantic_matrix,
     semantic_search,
 )
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
+
 
 __all__ = [
     "ConversationTurn",
@@ -69,8 +66,10 @@ _INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
 _PROGRESS_MIN_INTERVAL_SECONDS = 0.15
 _SYSTEM_PROMPT = (
-    "Answer only from the supplied project evidence. Cite evidence with "
-    "[1], [2], and so on. Say when the evidence is insufficient."
+    "Answer only from the supplied project evidence. Put source numbers such "
+    "as [1] and [2] directly after supported claims. Do not write a separate "
+    "reference list or copy bibliographic text. Say when evidence "
+    "is insufficient."
 )
 
 
@@ -192,7 +191,6 @@ class RAGSession:
     backend: SelectedBackend
     index_status: str
     turns: list[ConversationTurn]
-    _semantic_matrix_cache: np.ndarray | None
 
     def __init__(
         self: RAGSession,
@@ -255,6 +253,17 @@ class RAGSession:
             messages, turns = self._load_conversation()
             if messages:
                 chat_session.restore_history(messages)
+            if turns:
+                previous = turns[-1].parameters
+                chat_session.configure_generation(
+                    {
+                        key: previous[key]
+                        for key in (
+                            "temperature", "thinking", "max_new_tokens"
+                        )
+                        if key in previous
+                    }
+                )
         except Exception:
             if chat_session is not None:
                 chat_session.close()
@@ -268,7 +277,6 @@ class RAGSession:
         self.index_status = status
         self.source_changes = source_changes
         self.turns = turns
-        self._semantic_matrix_cache = None
         self._closed = False
         self._emit_progress(
             "ready",
@@ -355,7 +363,8 @@ class RAGSession:
         self: RAGSession,
         question: str,
         *,
-        semantic_method: str = "loop",
+        retrieval_count: int | None = None,
+        generation_settings: dict[str, object] | None = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -363,8 +372,11 @@ class RAGSession:
         ----------
         question: str
             User question about the opened project.
-        semantic_method: str, optional
-            Semantic comparison method: ``"loop"`` or ``"numpy"``.
+        retrieval_count: int | None
+            Optional evidence count for this question only.
+        generation_settings: dict[str, object] | None
+            Optional temperature, thinking, and answer length for this and
+            later questions, until changed again.
 
         Returns
         -------
@@ -384,19 +396,25 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Enter a non-empty question.")
+        if retrieval_count is not None and (
+            type(retrieval_count) is not int or retrieval_count < 1
+        ):
+            raise ValueError(
+                "retrieval_count must be a positive whole number."
+            )
         question = question.strip()
 
-        evidence = self._retrieve(
-            question,
-            semantic_method=semantic_method,
-        )
+        if generation_settings is not None:
+            self.chat_session.configure_generation(generation_settings)
+
+        evidence = self._retrieve(question, retrieval_count)
         answer = self.chat_session.reply(_answer_prompt(question, evidence))
         turn = ConversationTurn(
             timestamp=datetime.now(timezone.utc).isoformat(),
             question=question,
             answer=answer,
             evidence=evidence,
-            parameters=self._parameters(semantic_method),
+            parameters=self._parameters(retrieval_count),
         )
         self.turns.append(turn)
         self._save_conversation()
@@ -424,7 +442,6 @@ class RAGSession:
 
         if self._closed:
             return
-        self._semantic_matrix_cache = None
         self.chat_session.close()
         self.embedding_session.close()
         self._closed = True
@@ -447,13 +464,8 @@ class RAGSession:
 
         reading_started = perf_counter()
         self._emit_count_progress(
-            "reading_source",
-            35.0,
-            42.0,
-            "Reading source files",
-            0,
-            selected_count,
-            reading_started,
+            "reading_source", 35.0, 42.0, "Reading source files",
+            0, selected_count, reading_started,
         )
         source_files = read_repository_files(
             report,
@@ -471,13 +483,8 @@ class RAGSession:
         extracting_started = perf_counter()
         source_file_count = len(source_files)
         self._emit_count_progress(
-            "extracting_source",
-            43.0,
-            49.0,
-            "Extracting source structure",
-            0,
-            source_file_count,
-            extracting_started,
+            "extracting_source", 43.0, 49.0, "Extracting source structure",
+            0, source_file_count, extracting_started,
         )
         units = extract_source_units(
             source_files,
@@ -495,13 +502,8 @@ class RAGSession:
         chunking_started = perf_counter()
         unit_count = len(units)
         self._emit_count_progress(
-            "chunking_source",
-            50.0,
-            55.0,
-            "Chunking source units",
-            0,
-            unit_count,
-            chunking_started,
+            "chunking_source", 50.0, 55.0, "Chunking source units",
+            0, unit_count, chunking_started,
         )
         chunks = chunk_source_units(
             units,
@@ -611,10 +613,7 @@ class RAGSession:
                 self._emit_progress(
                     "loading_index",
                     32.0,
-                    (
-                        "Source is unchanged; loading the saved retrieval "
-                        "index..."
-                    ),
+                    "Source unchanged; loading the saved retrieval index...",
                 )
                 indexes = load_indexes(index_path)
                 self._emit_progress(
@@ -694,23 +693,17 @@ class RAGSession:
     def _retrieve(
         self: RAGSession,
         question: str,
-        *,
-        semantic_method: str = "loop",
+        retrieval_count: int | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion."""
 
-        count = self.project.profile.retrieval_count
+        count = retrieval_count or self.project.profile.retrieval_count
         query_text = self._format_query(question)
-        matrix = (
-            self._get_semantic_matrix() if semantic_method == "numpy" else None
-        )
         semantic = semantic_search(
             self.indexes.semantic,
             query_text,
             self.embedding_session,
             count=count,
-            backend=semantic_method,
-            matrix=matrix,
         )
         lexical = lexical_search(
             self.indexes.lexical,
@@ -748,15 +741,6 @@ class RAGSession:
             for index, chunk in enumerate(expanded, start=1)
         )
 
-    def _get_semantic_matrix(self: RAGSession) -> np.ndarray:
-        """Build the NumPy semantic matrix once for this session."""
-
-        if self._semantic_matrix_cache is None:
-            self._semantic_matrix_cache = semantic_matrix(
-                self.indexes.semantic,
-            )
-        return self._semantic_matrix_cache
-
     def _format_query(self: RAGSession, question: str) -> str:
         """Apply the embedding model's configured query format."""
 
@@ -788,8 +772,7 @@ class RAGSession:
         }
 
     def _parameters(
-        self: RAGSession,
-        semantic_method: str,
+        self: RAGSession, retrieval_count: int | None = None
     ) -> dict[str, object]:
         """Return the complete settings snapshot recorded for one turn."""
 
@@ -801,11 +784,10 @@ class RAGSession:
             "backend_preference": profile.backend,
             "allow_download": profile.allow_download,
             "chat_model": profile.chat_model(self.backend),
-            "retrieval_count": profile.retrieval_count,
-            "semantic_method": semantic_method,
-            "thinking": profile.thinking,
-            "temperature": profile.temperature,
-            "max_new_tokens": profile.max_new_tokens,
+            "retrieval_count": retrieval_count or profile.retrieval_count,
+            "thinking": self.chat_session.thinking,
+            "temperature": self.chat_session.temperature,
+            "max_new_tokens": self.chat_session.max_new_tokens,
             "system_prompt": _SYSTEM_PROMPT,
         }
 
@@ -855,7 +837,9 @@ class RAGSession:
         timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H-%M-%S-%fZ"
         )
-        archived_path = path.with_name(f"conversation_{timestamp}.json")
+        archived_path = path.with_name(
+            f"conversation_{timestamp}.json"
+        )
         path.replace(archived_path)
         return archived_path
 
@@ -872,7 +856,9 @@ def _answer_prompt(
         symbol = f" ({item.symbol})" if item.symbol else ""
         sections.append(f"[{item.citation}] {location}{symbol}\n{item.text}")
     sections.append(
-        "Answer using the evidence above and cite it with bracketed numbers."
+        "Answer using the evidence above. Put [1], [2], and so on immediately "
+        "after the claims they support. Do not repeat the source text or "
+        "write a bibliography."
     )
     return "\n\n".join(sections)
 

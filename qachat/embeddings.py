@@ -21,6 +21,7 @@ from typing import Any
 
 from huggingface_hub import snapshot_download
 
+from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
     Backend,
     SelectedBackend,
@@ -402,10 +403,13 @@ def _model_source(
     if local.is_dir():
         return str(local)
 
+    if not allow_download:
+        return str(cached_model_snapshot(model_id, revision=revision))
+
     return snapshot_download(
         repo_id=model_id,
         revision=revision,
-        local_files_only=not allow_download,
+        local_files_only=False,
     )
 
 

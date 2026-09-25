@@ -3,7 +3,6 @@ name = "qachat"
 version = "0.1.0"
 description = "Local, provider-independent question-answering application"
 requires-python = ">=3.12,<3.13"
-
 # Packages required regardless of the selected LLM backend.
 dependencies = [
     "huggingface-hub==1.29.0",
@@ -11,7 +10,7 @@ dependencies = [
     "pypdf==6.16.2",
 ]
 
-# Install one or both backend groups without changing application code.
+# Install one computation backend for model work; GUI adds only Qt.
 [project.optional-dependencies]
 mlx = [
     "mlx-embeddings==0.0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
@@ -21,6 +20,23 @@ torch = [
     "torch==2.14.0",
     "transformers==5.16.1",
 ]
+gui = [
+    "PySide6>=6.8,<7",
+]
+
+
+[project.scripts]
+qachat = "qachat.cli:main"
+
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["qachat*"]
+
+[tool.setuptools.package-data]
+"qachat.gui" = ["web/*.html", "web/*.css", "web/*.js"]
 
 # Extra dependencies for the CodeRAG-Bench evaluation notebooks only.
 bench = [

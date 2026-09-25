@@ -13,6 +13,10 @@ initialize_project
     Create a missing profile.ini, then open the project.
 open_project
     Read profile.ini and prepare the project output folders.
+default_project_profile
+    Return validated settings for a new project.
+configure_project
+    Validate and save editable profile settings.
 
 """
 
@@ -41,15 +45,19 @@ __all__ = [
     "initialize_project",
     "open_project",
     "prepare_project_workspace",
+    "default_project_profile",
+    "configure_project",
 ]
 
 ProjectKind: TypeAlias = Literal["code", "literature"]
 QueryFormat: TypeAlias = Literal["plain", "qwen3"]
+# Literature PDFs need more space than typical code files.
+_DEFAULT_FILE_LIMITS = {"code": 1_048_576, "literature": 20 * 1024 * 1024}
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}
 extensions = {extensions}
-max_file_bytes = 1048576
+max_file_bytes = {max_file_bytes}
 
 [models]
 backend = auto
@@ -73,6 +81,70 @@ thinking = false
 temperature = 0.0
 max_new_tokens = 256
 """
+
+_EDITABLE_SETTINGS = {
+    "extensions": "project",
+    "max_file_bytes": "project",
+    "backend": "models",
+    "allow_download": "models",
+    "chat_mlx": "models",
+    "chat_torch": "models",
+    "embedding_mlx": "models",
+    "embedding_torch": "models",
+    "query_format": "models",
+    "target_tokens": "chunking",
+    "max_tokens": "chunking",
+    "overlap_tokens": "chunking",
+    "retrieval_count": "retrieval",
+    "thinking": "generation",
+    "temperature": "generation",
+    "max_new_tokens": "generation",
+}
+
+
+def default_project_profile(kind: ProjectKind) -> ProjectProfile:
+    """Return the settings a new project of this kind would receive."""
+
+    if kind not in {"code", "literature"}:
+        raise ValueError("kind must be code or literature.")
+    extensions = (
+        ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
+    )
+    parser = ConfigParser()
+    parser.read_string(
+        _DEFAULT_PROFILE.format(
+            kind=kind,
+            source="sources",
+            extensions=extensions,
+            max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
+        )
+    )
+    return _read_profile(parser)
+
+
+def configure_project(
+    directory: str | Path, settings: dict[str, object]
+) -> QAProject:
+    """Validate and save settings without changing source ownership."""
+
+    project = open_project(directory)
+    parser = ConfigParser()
+    parser.read(project.root / "profile.ini", encoding="utf-8")
+    for key, value in settings.items():
+        section = _EDITABLE_SETTINGS.get(key)
+        if section is None:
+            raise ValueError(f"Unknown project setting: {key}")
+        option = "count" if key == "retrieval_count" else key
+        if key == "extensions" and isinstance(value, (list, tuple)):
+            value = ", ".join(value)
+        parser.set(section, option, str(value))
+    _read_profile(parser)
+    path = project.root / "profile.ini"
+    temporary = path.with_suffix(".ini.tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        parser.write(stream)
+    temporary.replace(path)
+    return open_project(project.root)
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,7 +280,10 @@ def initialize_project(
         source_name = (
             "repository" if kind == "code" else "documents"
         )
-        source = source_name if (root / source_name).is_dir() else "."
+        if (root / "sources").is_dir():
+            source = "sources"
+        else:
+            source = source_name if (root / source_name).is_dir() else "."
         extensions = (
             ".py, .m, .md"
             if kind == "code"
@@ -219,6 +294,7 @@ def initialize_project(
                 kind=kind,
                 source=source,
                 extensions=extensions,
+                max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
             ),
             encoding="utf-8",
         )
@@ -304,6 +380,7 @@ def prepare_project_workspace(
                 kind=kind,
                 source=source_name,
                 extensions=extensions,
+                max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
             ),
             encoding="utf-8",
         )
@@ -371,13 +448,15 @@ def prepare_project_workspace(
 
 
 def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
-    """Choose a readable workspace name without colliding with another source."""
+    """Choose a readable workspace name without a source collision."""
 
     if not preferred_root.exists():
         return preferred_root
 
     metadata = _read_json_if_possible(preferred_root / "source_snapshot.json")
-    if metadata is not None and metadata.get("source_directory") == str(source):
+    if metadata is not None and metadata.get("source_directory") == str(
+        source
+    ):
         return preferred_root
 
     identity = sha256(str(source).encode("utf-8")).hexdigest()[:8]

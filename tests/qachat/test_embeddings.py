@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -152,19 +153,32 @@ class TestEmbeddings(unittest.TestCase):
 
         with patch.object(
             embeddings,
-            "snapshot_download",
-            return_value="/cache/snapshot",
-        ) as download:
+            "cached_model_snapshot",
+            return_value=Path("/cache/snapshot"),
+        ) as cached:
             source = embeddings._model_source(
                 "group/model",
                 allow_download=False,
                 revision="abc",
             )
         self.assertEqual(source, "/cache/snapshot")
+        cached.assert_called_once_with("group/model", revision="abc")
+
+        with patch.object(
+            embeddings,
+            "snapshot_download",
+            return_value="/cache/downloaded",
+        ) as download:
+            source = embeddings._model_source(
+                "group/model",
+                allow_download=True,
+                revision="abc",
+            )
+        self.assertEqual(source, "/cache/downloaded")
         download.assert_called_once_with(
             repo_id="group/model",
             revision="abc",
-            local_files_only=True,
+            local_files_only=False,
         )
 
     def test_check_vectors(self) -> None:

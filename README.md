@@ -28,6 +28,30 @@ Setup complete. The project environment is in .venv
 
 Select the QAChat `.venv` kernel when opening a notebook.
 
+To launch the optional desktop GUI from the repository, run:
+
+~~~sh
+uv run qachat --gui
+~~~
+
+That single command creates or refreshes the uv environment when needed.
+The launcher adds the Qt GUI layer and native computation backend
+automatically: MLX on Apple silicon, or PyTorch elsewhere. If the .venv is
+already active, use qachat --gui directly. Use --backend mlx or --backend
+torch to override Automatic.
+
+The install remains layered: the shared QAChat core is always installed, one
+computation backend is selected for model work, and PySide6 is added only for
+the desktop interface. Model weights are never downloaded automatically.
+
+In the GUI, select or drag several files and folders, then check what to
+include. Leave sources blank for a bundled example. QAChat copies checked files
+to one workspace, leaving the originals unchanged. The latest sandbox project
+can be resumed from the landing screen; New project starts another.
+Conversation settings can be changed beside chat, and Stop ends the active
+operation. The GUI code lives in qachat/gui/; retrieval and model logic
+remain in the rest of qachat/.
+
 ## 2. Chat with your project
 
 Open [Project chat](tutorials/130_project_chat.ipynb). In its configuration

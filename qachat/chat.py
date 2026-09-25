@@ -12,7 +12,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any, cast, TYPE_CHECKING, TypeAlias
 
-from huggingface_hub import snapshot_download
+from qachat.huggingface import cached_model_snapshot
 
 from qachat.runtime import (
     Backend,
@@ -147,13 +147,7 @@ class ChatSession:
         source_path = Path(self.model_id).expanduser()
         source = str(source_path) if source_path.is_dir() else self.model_id
         if not allow_download and not source_path.is_dir():
-            source = str(
-                snapshot_download(
-                    repo_id=source,
-                    revision=revision,
-                    local_files_only=True,
-                )
-            )
+            source = str(cached_model_snapshot(source, revision=revision))
             revision = None
 
         if self.backend == "mlx":
@@ -195,6 +189,39 @@ class ChatSession:
         loaded_model.eval()
         self._model = loaded_model
         self._tokenizer = loaded_tokenizer
+
+    def configure_generation(
+        self: ChatSession, settings: dict[str, object]
+    ) -> None:
+        """Update generation-only settings without reloading the model.
+
+        Only temperature, thinking, and answer length may change here. All
+        values are checked before any setting is applied.
+        """
+
+        if not isinstance(settings, dict):
+            raise ValueError("Generation settings must be a dictionary.")
+        unknown = settings.keys() - {
+            "temperature",
+            "thinking",
+            "max_new_tokens",
+        }
+        if unknown:
+            raise ValueError(
+                f"Unknown generation setting: {sorted(unknown)[0]}"
+            )
+        temperature = _check_temperature(
+            settings.get("temperature", self.temperature)
+        )
+        thinking = _check_bool(
+            settings.get("thinking", self.thinking), "thinking"
+        )
+        max_new_tokens = _check_max_new_tokens(
+            settings.get("max_new_tokens", self.max_new_tokens)
+        )
+        self.temperature = temperature
+        self.thinking = thinking
+        self.max_new_tokens = max_new_tokens
 
     def reply(
         self: ChatSession,
