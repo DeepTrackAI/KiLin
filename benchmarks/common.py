@@ -19,12 +19,20 @@ format_query
     Format one benchmark query for the Qwen3 embedding model.
 evaluate_retrieval
     Score ranked results the same way CodeRAG-Bench and BEIR do.
+corpus_already_written
+    Check whether a project's corpus folder already holds files, so a
+    notebook can skip rewriting a corpus already on disk.
+local_run_timestamp
+    Current time in Europe/Rome, for a result record and its filename.
 
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytrec_eval
 
@@ -35,7 +43,11 @@ __all__ = [
     "BenchmarkTask",
     "format_query",
     "evaluate_retrieval",
+    "corpus_already_written",
+    "local_run_timestamp",
 ]
+
+LOCAL_TIMEZONE = ZoneInfo("Europe/Rome")
 
 
 CODE_RETRIEVAL_INSTRUCTION = (
@@ -143,3 +155,42 @@ def evaluate_retrieval(
         "precision": precision,
         "mrr": mrr,
     }
+
+
+def corpus_already_written(directory: Path) -> bool:
+    """Return whether a project's corpus folder is already populated.
+
+    Parameters
+    ----------
+    directory: pathlib.Path
+        A project's ``repository/`` or ``documents/`` folder.
+
+    Returns
+    -------
+    bool
+        Whether the folder exists and already holds at least one file --
+        lets a benchmark notebook skip rewriting a corpus that's already
+        on disk from a previous run, instead of unconditionally
+        overwriting every document again.
+
+    """
+
+    return directory.exists() and any(directory.iterdir())
+
+
+def local_run_timestamp() -> tuple[str, str]:
+    """Return the current time in Europe/Rome, for a saved result.
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(timestamp, stamp)`` -- an ISO-8601 timestamp with the local
+        UTC offset, for a result record's ``"timestamp"`` field, and a
+        compact filename-safe stamp (``%Y%m%dT%H%M%S%z``) for naming
+        the saved file. Uses ``Europe/Rome`` (CET/CEST), not UTC, so
+        saved-result timestamps read naturally at a glance.
+
+    """
+
+    now = datetime.now(LOCAL_TIMEZONE)
+    return now.isoformat(), now.strftime("%Y%m%dT%H%M%S%z")
