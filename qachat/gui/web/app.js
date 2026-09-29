@@ -26,6 +26,11 @@ let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
 let resumeRefreshTimer = null;
+let activeTracePath = "";
+let activeConversationId = "";
+let pendingTurn = null;
+let phaseTimer = null;
+let answerTimer = null;
 
 function hideResume() {
   byId("recent-project").classList.add("hidden");
@@ -405,8 +410,14 @@ function renderWorkspace(paths) {
   }
 }
 
-function showError(message, logPath = "") {
-  error.textContent = logPath ? `${message} Details: ${logPath}` : message;
+function showError(message, tracePath = "") {
+  stopPhaseAnimation();
+  if (pendingTurn) {
+    pendingTurn.answer.textContent = "Could not complete this answer.";
+    pendingTurn.item.classList.add("failed");
+    pendingTurn = null;
+  }
+  error.textContent = tracePath ? `${message} Trace: ${tracePath}` : message;
   error.classList.remove("hidden");
   if (downloadingModel) {
     byId("model-download-status").textContent = error.textContent;
@@ -422,6 +433,9 @@ function setBusy(value, message = "") {
   byId("open").disabled = value || !bridge;
   byId("send").disabled = value || !ready;
   byId("new-chat").disabled = value || !ready;
+  byId("branch-chat").disabled = value || !ready;
+  byId("rename-chat").disabled = value || !ready;
+  byId("conversation-picker").disabled = value || !ready;
   byId("change-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
@@ -465,9 +479,9 @@ function showProgress(data) {
 }
 
 function clearSourcePreview() {
+  activeReference?.button?.classList.remove("active");
+  activeReference?.preview?.remove();
   activeReference = null;
-  byId("source-preview").classList.add("hidden");
-  byId("source-preview-lines").replaceChildren();
 }
 
 function clearReferences() {
@@ -478,17 +492,44 @@ function clearReferences() {
   clearSourcePreview();
 }
 
-function openReference(item, source) {
+function makeSourcePreview() {
+  const preview = document.createElement("section");
+  preview.className = "source-preview";
+  preview.setAttribute("aria-label", "Cited source preview");
+  const heading = document.createElement("header");
+  heading.className = "source-preview-heading";
+  const title = document.createElement("strong");
+  const close = document.createElement("button");
+  close.type = "button";
+  close.className = "sidebar-toggle";
+  close.textContent = "Close";
+  const note = document.createElement("p");
+  note.className = "hint";
+  const lines = document.createElement("pre");
+  lines.className = "source-preview-lines";
+  heading.append(title, close);
+  preview.append(heading, note, lines);
+  return { preview, title, close, note, lines };
+}
+
+function openReference(item, source, button, holder) {
   byId("references-section").open = true;
   const turnIndex = Number(item.dataset.turnIndex);
-  activeReference = { turnIndex, citation: Number(source.citation) };
-  const preview = byId("source-preview");
-  preview.classList.remove("hidden");
-  byId("source-preview-title").textContent = source.path;
-  byId("source-preview-note").textContent = "Loading nearby lines…";
-  byId("source-preview-lines").replaceChildren();
+  const citation = Number(source.citation);
+  if (activeReference?.turnIndex === turnIndex && activeReference?.citation === citation) {
+    clearSourcePreview();
+    return;
+  }
+  clearSourcePreview();
+  const nodes = makeSourcePreview();
+  nodes.title.textContent = source.path;
+  nodes.note.textContent = "Loading nearby lines…";
+  nodes.close.addEventListener("click", clearSourcePreview);
+  holder.append(nodes.preview);
+  button.classList.add("active");
+  activeReference = { turnIndex, citation, button, ...nodes };
   bridge?.previewReference(turnIndex, activeReference.citation);
-  preview.scrollIntoView({ block: "nearest" });
+  nodes.preview.scrollIntoView({ block: "nearest" });
 }
 
 function selectTurn(item, turn, citation = null) {
@@ -502,6 +543,8 @@ function selectTurn(item, turn, citation = null) {
   const list = byId("references-list");
   list.replaceChildren();
   for (const source of turn.evidence || []) {
+    const holder = document.createElement("div");
+    holder.className = "reference-entry";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "reference-item";
@@ -513,24 +556,26 @@ function selectTurn(item, turn, citation = null) {
     path.className = "reference-path";
     path.textContent = `${source.path}:${source.start_line}-${source.end_line}`;
     button.append(number, path);
-    button.addEventListener("click", () => openReference(item, source));
-    list.append(button);
+    button.addEventListener("click", () => openReference(item, source, button, holder));
+    holder.append(button);
+    list.append(holder);
   }
   if (citation !== null) {
     const source = (turn.evidence || []).find((entry) => Number(entry.citation) === citation);
-    if (source) openReference(item, source);
+    const button = list.querySelector(`[data-citation="${citation}"]`);
+    if (source && button) openReference(item, source, button, button.parentElement);
   }
 }
 function renderSourcePreview(data) {
   if (!activeReference || data.turn_index !== activeReference.turnIndex
       || data.citation !== activeReference.citation) return;
-  byId("source-preview-title").textContent = data.path;
+  activeReference.title.textContent = data.path;
   const location = data.page
     ? `Page ${data.page} · lines ${data.start_line}–${data.end_line}`
     : `Lines ${data.start_line}–${data.end_line}`;
-  byId("source-preview-note").textContent = data.note
+  activeReference.note.textContent = data.note
     ? `${location} · ${data.note}` : location;
-  const host = byId("source-preview-lines");
+  const host = activeReference.lines;
   host.replaceChildren();
   for (const line of data.lines) {
     const row = document.createElement("span");
@@ -544,7 +589,7 @@ function renderSourcePreview(data) {
     row.append(number, content);
     host.append(row);
   }
-  byId("source-preview").scrollIntoView({ block: "nearest" });
+  activeReference.preview.scrollIntoView({ block: "nearest" });
 }
 
 
@@ -608,9 +653,108 @@ function addTurn(turn) {
   conversation.scrollTop = conversation.scrollHeight;
 }
 
+function renderConversations(data) {
+  activeConversationId = data.active_conversation_id || activeConversationId;
+  const picker = byId("conversation-picker");
+  picker.replaceChildren();
+  for (const item of data.conversations || []) {
+    const option = document.createElement("option");
+    option.value = item.conversation_id;
+    option.textContent = item.name;
+    option.selected = item.conversation_id === activeConversationId;
+    picker.append(option);
+  }
+}
+
+function stopPhaseAnimation() {
+  clearInterval(phaseTimer);
+  phaseTimer = null;
+}
+
+function showTurnPhase(label, detail = "") {
+  if (!pendingTurn) return;
+  stopPhaseAnimation();
+  let dots = 1;
+  const paint = () => {
+    const suffix = ".".repeat(dots);
+    pendingTurn.answer.textContent = `${label}${suffix}${detail ? ` · ${detail}` : ""}`;
+    byId("activity-text").textContent = `${label}${suffix}`;
+    byId("activity-detail").textContent = detail;
+    dots = dots === 3 ? 1 : dots + 1;
+  };
+  paint();
+  phaseTimer = setInterval(paint, 400);
+}
+
+function addPendingTurn(question) {
+  const item = document.createElement("article");
+  item.className = "turn pending";
+  item.dataset.turnIndex = String(conversation.children.length);
+  const questionNode = document.createElement("div");
+  questionNode.className = "user-message";
+  questionNode.textContent = question;
+  const answer = document.createElement("div");
+  answer.className = "answer-message answer-phase";
+  item.append(questionNode, answer);
+  conversation.append(item);
+  pendingTurn = { item, answer };
+  showTurnPhase("Retrieving");
+  conversation.scrollTop = conversation.scrollHeight;
+}
+
+function bindAnswerSelection(answer, item, turn) {
+  answer.tabIndex = 0;
+  answer.setAttribute("aria-label", "Select this answer to view its references");
+  const choose = () => {
+    showWorkspace(true);
+    selectTurn(item, turn);
+  };
+  answer.addEventListener("click", choose);
+  answer.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      choose();
+    }
+  });
+}
+
+function completePendingTurn(turn) {
+  stopPhaseAnimation();
+  const current = pendingTurn;
+  if (!current) {
+    addTurn(turn);
+    setBusy(false);
+    return;
+  }
+  pendingTurn = null;
+  current.item.classList.remove("pending");
+  current.answer.classList.remove("answer-phase");
+  current.answer.classList.add("typing");
+  current.answer.textContent = "";
+  const text = String(turn.answer || "");
+  let position = 0;
+  clearInterval(answerTimer);
+  answerTimer = setInterval(() => {
+    position += 1;
+    current.answer.textContent = text.slice(0, position);
+    conversation.scrollTop = conversation.scrollHeight;
+    if (position < text.length) return;
+    clearInterval(answerTimer);
+    answerTimer = null;
+    current.answer.classList.remove("typing");
+    current.answer.replaceChildren();
+    bindAnswerSelection(current.answer, current.item, turn);
+    renderAnswer(current.answer, turn, current.item);
+    selectTurn(current.item, turn);
+    setBusy(false);
+  }, 25);
+}
+
 function onEvent(raw) {
   const data = JSON.parse(raw);
-  if (data.event === "settings") {
+  if (data.event === "trace_ready") {
+    activeTracePath = data.trace_path || "";
+  } else if (data.event === "settings") {
     showSettings(data);
   } else if (data.event === "saved_project") {
     // Ignore a reply for a selection that the user has already changed.
@@ -646,6 +790,20 @@ function onEvent(raw) {
     setBusy(false);
   } else if (data.event === "status") {
     setBusy(true, data.message);
+  } else if (data.event === "answer_phase") {
+    const count = Number(data.count ?? data.evidence_count ?? 0);
+    if (data.phase === "retrieving") {
+      showTurnPhase("Retrieving");
+    } else if (data.phase === "evidence_ready") {
+      const detail = `${count} reference${count === 1 ? "" : "s"} found`;
+      showTurnPhase("Preparing evidence", detail);
+    } else if (data.phase === "generating") {
+      showTurnPhase("Generating", count ? `${count} references` : "");
+    } else if (data.phase === "saving") {
+      showTurnPhase("Saving answer");
+    } else if (data.phase === "completed") {
+      stopPhaseAnimation();
+    }
   } else if (data.event === "model_download_started") {
     byId("model-download-status").textContent = `Downloading ${data.model_id}…`;
   } else if (data.event === "model_downloaded") {
@@ -668,6 +826,7 @@ function onEvent(raw) {
     chat.classList.remove("hidden");
     conversation.replaceChildren();
     clearReferences();
+    renderConversations(data);
     data.turns.forEach(addTurn);
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
@@ -680,17 +839,32 @@ function onEvent(raw) {
     byId("project-name").textContent = data.project.split(/[\\/]/).pop();
     byId("project-detail").textContent = `${data.kind} · ${data.project} · index ${data.index_status} · ${data.turns.length} saved turns`;
     setBusy(false);
+  } else if (data.event === "conversation_opened") {
+    stopPhaseAnimation();
+    clearInterval(answerTimer);
+    answerTimer = null;
+    pendingTurn = null;
+    conversation.replaceChildren();
+    clearReferences();
+    renderConversations(data);
+    data.turns.forEach(addTurn);
+    byId("retrieval-count").value = data.retrieval_count;
+    byId("temperature").value = data.temperature;
+    byId("max-new-tokens").value = data.max_new_tokens ?? "";
+    byId("thinking").checked = data.thinking;
+    byId("project-detail").textContent = `${data.turns.length} saved turns · project indexes and models retained`;
+    setBusy(false);
+  } else if (data.event === "conversations") {
+    renderConversations(data);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
   } else if (data.event === "reference_error") {
     if (activeReference && data.turn_index === activeReference.turnIndex
         && data.citation === activeReference.citation) {
-      byId("source-preview-note").textContent = data.message;
+      activeReference.note.textContent = data.message;
     }
   } else if (data.event === "answered") {
-    addTurn(data.turn);
-    byId("question").value = "";
-    setBusy(false);
+    completePendingTurn(data.turn);
   } else if (data.event === "reset") {
     conversation.replaceChildren();
     clearReferences();
@@ -716,12 +890,11 @@ function onEvent(raw) {
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
-    showError(data.message, data.log_path);
+    showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "error") {
-    showError(data.message, data.log_path);
+    showError(data.message, data.trace_path || activeTracePath);
   }
 }
-byId("close-source-preview").addEventListener("click", clearSourcePreview);
 
 byId("browse-workspace").addEventListener("click", () => bridge?.chooseWorkspace());
 const dropZone = byId("drop-zone");
@@ -806,6 +979,8 @@ byId("question-form").addEventListener("submit", (event) => {
   if (answerTokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)) {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
+  byId("question").value = "";
+  addPendingTurn(question);
   setBusy(true, "Finding evidence and answering…");
   bridge.askQuestion(question, count, JSON.stringify({
     temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
@@ -818,9 +993,27 @@ byId("question").addEventListener("keydown", (event) => {
   }
 });
 byId("new-chat").addEventListener("click", () => {
-  if (busy || !confirm("Archive this conversation and start a new one?")) return;
+  if (busy) return;
   setBusy(true, "Starting a new conversation…");
-  bridge.resetConversation();
+  bridge.newConversation();
+});
+byId("branch-chat").addEventListener("click", () => {
+  if (busy) return;
+  setBusy(true, "Branching this conversation…");
+  bridge.branchConversation();
+});
+byId("rename-chat").addEventListener("click", () => {
+  if (busy || !activeConversationId) return;
+  const selected = byId("conversation-picker").selectedOptions[0];
+  const name = prompt("Conversation name", selected?.textContent || "");
+  if (name === null || !name.trim()) return;
+  bridge.renameConversation(activeConversationId, name.trim());
+});
+byId("conversation-picker").addEventListener("change", (event) => {
+  const conversationId = event.target.value;
+  if (busy || !conversationId || conversationId === activeConversationId) return;
+  setBusy(true, "Opening conversation…");
+  bridge.selectConversation(conversationId);
 });
 byId("change-project").addEventListener("click", () => {
   if (busy) return;

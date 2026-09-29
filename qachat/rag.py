@@ -16,8 +16,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
+import platform
+import sys
 from time import perf_counter
 from qachat.chat import ChatSession
 from qachat.chunking import Chunk, chunk_source_units
@@ -51,7 +54,13 @@ from qachat.retrievals import (
 )
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
-
+from qachat.trace_logging import (
+    NullTraceLogger,
+    TraceConfig,
+    TraceSink,
+    create_trace_logger,
+    trace_text_preview,
+)
 
 __all__ = [
     "ConversationTurn",
@@ -61,10 +70,10 @@ __all__ = [
     "RAGSession",
 ]
 
-_CONVERSATION_VERSION = 1
 _INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
 _PROGRESS_MIN_INTERVAL_SECONDS = 0.15
+_PROGRESS_TRACE_PERCENT_STEP = 5.0
 _SYSTEM_PROMPT = (
     "Answer only from the supplied project evidence. Put source numbers such "
     "as [1] and [2] directly after supported claims. Do not write a separate "
@@ -135,6 +144,7 @@ class ProgressEvent:
 
 
 ProgressCallback = Callable[[ProgressEvent], None]
+AnswerPhaseCallback = Callable[[str, dict[str, object]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +183,13 @@ class RAGSession:
     progress_callback: collections.abc.Callable[[ProgressEvent], None] | None
         Optional UI-agnostic callback that receives structured progress events
         while the session checks or builds indexes and loads models.
+    trace: TraceConfig | TraceSink | None, optional
+        Structured trace configuration or an existing shared trace. By
+        default, a forensic trace is stored in this project's logs/traces
+        folder. Pass ``TraceConfig(enabled=False)`` to disable it.
+    conversation_path: str | pathlib.Path | None, optional
+        Self-contained conversation and trace file below ``logs/traces``.
+        When omitted, a new timestamped conversation file is created.
 
     Attributes
     ----------
@@ -197,40 +214,85 @@ class RAGSession:
         project_directory: str | Path,
         *,
         progress_callback: ProgressCallback | None = None,
+        trace: TraceConfig | TraceSink | None = None,
+        conversation_path: str | Path | None = None,
     ) -> None:
         """Open a project, its models, indexes, and saved conversation."""
 
+        session_started_at = perf_counter()
         if progress_callback is not None and not callable(progress_callback):
             raise ValueError("progress_callback must be callable or None.")
 
         self.progress_callback = progress_callback
         self._progress_last_emit: dict[str, float] = {}
+        self._progress_last_trace_percent: dict[str, float] = {}
+        self.project = open_project(project_directory)
+        self.conversation_path = self._resolve_conversation_path(
+            conversation_path
+        )
+        if trace is None:
+            trace = TraceConfig(enabled=True, mode="forensic")
+        self.trace, self._owns_trace = create_trace_logger(
+            trace,
+            default_directory=self.conversation_path.parent,
+        )
+        self.trace.emit(
+            "session.started",
+            component="rag",
+            data={
+                "project_directory": str(self.project.root),
+                "source_directory": str(self.project.source),
+                "conversation_path": str(self.conversation_path),
+                "profile": asdict(self.project.profile),
+                "environment": {
+                    "python": sys.version,
+                    "platform": platform.platform(),
+                },
+            },
+            status="started",
+        )
         self._emit_progress(
             "opening_project",
             0.0,
             "Opening QAChat project...",
         )
-        self.project = open_project(project_directory)
         profile = self.project.profile
         self.backend = choose_backend(profile.backend)
         embedding_model = profile.embedding_model(self.backend)
         chat_model = profile.chat_model(self.backend)
+        self.trace.emit(
+            "backend.selected",
+            component="rag",
+            data={
+                "requested": profile.backend,
+                "resolved": self.backend,
+                "embedding_model": embedding_model,
+                "chat_model": chat_model,
+            },
+        )
 
-        self._emit_progress(
-            "loading_embedding_model",
-            5.0,
-            f"Loading embedding model: {embedding_model}",
-        )
-        embedding_session = EmbeddingSession(
-            embedding_model,
-            backend=self.backend,
-            allow_download=profile.allow_download,
-        )
+        embedding_session: EmbeddingSession | None = None
         chat_session: ChatSession | None = None
         try:
-            chunks, indexes, status, source_changes = self._prepare_retrieval(
-                embedding_session,
+            self._emit_progress(
+                "loading_embedding_model",
+                5.0,
+                f"Loading embedding model: {embedding_model}",
             )
+            embedding_session = EmbeddingSession(
+                embedding_model,
+                backend=self.backend,
+                allow_download=profile.allow_download,
+                trace=self.trace,
+            )
+            with self.trace.span(
+                "indexing",
+                component="rag",
+                data={"project_directory": str(self.project.root)},
+            ):
+                chunks, indexes, status, source_changes = (
+                    self._prepare_retrieval(embedding_session)
+                )
             self._emit_progress(
                 "loading_chat_model",
                 90.0,
@@ -244,13 +306,25 @@ class RAGSession:
                 max_new_tokens=profile.max_new_tokens,
                 system_prompt=_SYSTEM_PROMPT,
                 allow_download=profile.allow_download,
+                trace=self.trace,
             )
             self._emit_progress(
                 "loading_conversation",
                 97.0,
                 "Loading saved conversation...",
             )
-            messages, turns = self._load_conversation()
+            messages, turns, checkpoint_id = self._load_conversation()
+            self._checkpoint_id = checkpoint_id
+            self.trace.emit(
+                "conversation.restored",
+                component="rag",
+                data={
+                    "message_count": len(messages),
+                    "turn_count": len(turns),
+                    "path": str(self.conversation_path),
+                    "checkpoint_id": checkpoint_id,
+                },
+            )
             if messages:
                 chat_session.restore_history(messages)
             if turns:
@@ -259,15 +333,26 @@ class RAGSession:
                     {
                         key: previous[key]
                         for key in (
-                            "temperature", "thinking", "max_new_tokens"
+                            "temperature",
+                            "thinking",
+                            "max_new_tokens",
                         )
                         if key in previous
                     }
                 )
-        except Exception:
+        except Exception as error:
+            self.trace.exception(
+                "session.open.failed",
+                error,
+                component="rag",
+                duration_ms=(perf_counter() - session_started_at) * 1000,
+            )
             if chat_session is not None:
                 chat_session.close()
-            embedding_session.close()
+            if embedding_session is not None:
+                embedding_session.close()
+            if self._owns_trace:
+                self.trace.close()
             raise
 
         self.embedding_session = embedding_session
@@ -278,6 +363,16 @@ class RAGSession:
         self.source_changes = source_changes
         self.turns = turns
         self._closed = False
+        self.trace.emit(
+            "session.ready",
+            component="rag",
+            data={
+                "index_status": self.index_status,
+                "chunk_count": len(self.chunks),
+                "turn_count": len(self.turns),
+            },
+            duration_ms=(perf_counter() - session_started_at) * 1000,
+        )
         self._emit_progress(
             "ready",
             100.0,
@@ -298,21 +393,35 @@ class RAGSession:
     ) -> None:
         """Send one structured progress event when a callback is configured."""
 
-        callback = getattr(self, "progress_callback", None)
-        if callback is None:
-            return
-        callback(
-            ProgressEvent(
-                stage=stage,
-                percent=float(percent),
-                message=message,
-                current=current,
-                total=total,
-                remaining=remaining,
-                elapsed_seconds=elapsed_seconds,
-                eta_seconds=eta_seconds,
-            )
+        event = ProgressEvent(
+            stage=stage,
+            percent=float(percent),
+            message=message,
+            current=current,
+            total=total,
+            remaining=remaining,
+            elapsed_seconds=elapsed_seconds,
+            eta_seconds=eta_seconds,
         )
+        trace = getattr(self, "trace", NullTraceLogger())
+        last_trace_percent = self._progress_last_trace_percent.get(stage)
+        completed_count = (
+            current is not None and total is not None and current == total
+        )
+        if (
+            last_trace_percent is None
+            or percent - last_trace_percent >= _PROGRESS_TRACE_PERCENT_STEP
+            or completed_count
+        ):
+            trace.emit(
+                "progress.updated",
+                component="rag",
+                data=asdict(event),
+            )
+            self._progress_last_trace_percent[stage] = float(percent)
+        callback = getattr(self, "progress_callback", None)
+        if callback is not None:
+            callback(event)
 
     def _emit_count_progress(
         self: RAGSession,
@@ -365,6 +474,7 @@ class RAGSession:
         *,
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
+        phase_callback: AnswerPhaseCallback | None = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -377,6 +487,8 @@ class RAGSession:
         generation_settings: dict[str, object] | None
             Optional temperature, thinking, and answer length for this and
             later questions, until changed again.
+        phase_callback: collections.abc.Callable | None
+            Optional callback receiving the current answer phase and details.
 
         Returns
         -------
@@ -402,23 +514,185 @@ class RAGSession:
             raise ValueError(
                 "retrieval_count must be a positive whole number."
             )
+        if phase_callback is not None and not callable(phase_callback):
+            raise ValueError("phase_callback must be callable or None.")
+
+        def report_phase(phase: str, **details: object) -> None:
+            """Notify an interface without coupling retrieval to GUI code."""
+
+            if phase_callback is not None:
+                phase_callback(phase, details)
+
         question = question.strip()
+        trace = getattr(self, "trace", NullTraceLogger())
+        turn_id = trace.new_id(f"turn-{len(self.turns) + 1:04d}")
+        history_roles = [
+            str(message.get("role", ""))
+            for message in self.chat_session.messages
+        ]
+        conversation_state = {
+            "is_new_chat": len(self.turns) == 0,
+            "previous_turn_count": len(self.turns),
+            "history_message_count": len(self.chat_session.messages),
+            "history_roles": history_roles,
+            "prior_conversation_included": any(
+                role in {"user", "assistant"} for role in history_roles
+            ),
+        }
+        question_data: dict[str, object] = {
+            "question_sha256": sha256(question.encode("utf-8")).hexdigest(),
+            "question_characters": len(question),
+            "retrieval_count_override": retrieval_count,
+            "generation_settings_override": generation_settings,
+            "conversation_state": conversation_state,
+        }
+        if trace.include_content:
+            question_data["question"] = question
+        with trace.span(
+            "turn",
+            component="rag",
+            data=question_data,
+            turn_id=turn_id,
+        ):
+            if generation_settings is not None:
+                before = {
+                    "temperature": self.chat_session.temperature,
+                    "thinking": self.chat_session.thinking,
+                    "max_new_tokens": self.chat_session.max_new_tokens,
+                }
+                self.chat_session.configure_generation(
+                    generation_settings,
+                    trace_turn_id=turn_id,
+                )
+                trace.emit(
+                    "turn.generation_settings.resolved",
+                    component="rag",
+                    data={
+                        "before": before,
+                        "effective": {
+                            "temperature": self.chat_session.temperature,
+                            "thinking": self.chat_session.thinking,
+                            "max_new_tokens": (
+                                self.chat_session.max_new_tokens
+                            ),
+                        },
+                    },
+                    turn_id=turn_id,
+                )
 
-        if generation_settings is not None:
-            self.chat_session.configure_generation(generation_settings)
+            effective = self._parameters(retrieval_count)
+            previous_retrieval_count = (
+                self.turns[-1].parameters.get(
+                    "retrieval_count",
+                    self.project.profile.retrieval_count,
+                )
+                if self.turns
+                else self.project.profile.retrieval_count
+            )
+            trace.settings_changed(
+                "retrieval.settings.changed",
+                component="rag",
+                before={"retrieval_count": previous_retrieval_count},
+                after={"retrieval_count": effective["retrieval_count"]},
+                data={"scope": "conversation_turn"},
+                turn_id=turn_id,
+            )
+            trace.emit(
+                "turn.settings.snapshot",
+                component="rag",
+                data=effective,
+                turn_id=turn_id,
+            )
+            report_phase("retrieving", message="Retrieving evidence")
+            evidence = self._retrieve(
+                question,
+                retrieval_count,
+                trace_turn_id=turn_id,
+            )
+            report_phase(
+                "evidence_ready",
+                message=f"{len(evidence)} references found",
+                evidence_count=len(evidence),
+            )
+            prompt = _answer_prompt(question, evidence)
+            report_phase(
+                "generating",
+                message="Generating answer",
+                evidence_count=len(evidence),
+            )
+            answer = self.chat_session.reply(
+                prompt,
+                trace_turn_id=turn_id,
+            )
+            turn = ConversationTurn(
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                question=question,
+                answer=answer,
+                evidence=evidence,
+                parameters=effective,
+            )
+            self.turns.append(turn)
+            report_phase("saving", message="Saving conversation")
+            self._save_conversation(trace_turn_id=turn_id)
+            report_phase(
+                "completed",
+                message="Answer ready",
+                evidence_count=len(evidence),
+            )
+            return answer
 
-        evidence = self._retrieve(question, retrieval_count)
-        answer = self.chat_session.reply(_answer_prompt(question, evidence))
-        turn = ConversationTurn(
-            timestamp=datetime.now(timezone.utc).isoformat(),
-            question=question,
-            answer=answer,
-            evidence=evidence,
-            parameters=self._parameters(retrieval_count),
+    def switch_conversation(
+        self,
+        conversation_path: str | Path,
+        *,
+        trace: TraceSink,
+    ) -> list[ConversationTurn]:
+        """Load a conversation without reloading models or indexes."""
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if self._owns_trace:
+            self.trace.close()
+        self.trace = trace
+        self._owns_trace = False
+        self.chat_session.trace = trace
+        self.embedding_session.trace = trace
+        self.conversation_path = self._resolve_conversation_path(
+            conversation_path
         )
-        self.turns.append(turn)
-        self._save_conversation()
-        return answer
+        messages, turns, checkpoint_id = self._load_conversation()
+        self.chat_session.reset()
+        if messages:
+            self.chat_session.restore_history(messages)
+        defaults = {
+            "temperature": self.project.profile.temperature,
+            "thinking": self.project.profile.thinking,
+            "max_new_tokens": self.project.profile.max_new_tokens,
+        }
+        if turns:
+            defaults.update(
+                {
+                    key: turns[-1].parameters[key]
+                    for key in defaults
+                    if key in turns[-1].parameters
+                }
+            )
+        self.chat_session.configure_generation(defaults)
+        self.turns = turns
+        self._checkpoint_id = checkpoint_id
+        self.trace.emit(
+            "conversation.restored",
+            component="rag",
+            data={
+                "message_count": len(messages),
+                "turn_count": len(turns),
+                "path": str(self.conversation_path),
+                "checkpoint_id": checkpoint_id,
+                "models_reused": True,
+                "indexes_reused": True,
+            },
+        )
+        return list(self.turns)
 
     def reset(self: RAGSession) -> Path | None:
         """Archive the active conversation and clear it from memory.
@@ -432,9 +706,21 @@ class RAGSession:
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        archived_checkpoint_id = getattr(self, "_checkpoint_id", None)
         archived_path = self._archive_conversation()
         self.chat_session.reset()
         self.turns = []
+        self._checkpoint_id = None
+        getattr(self, "trace", NullTraceLogger()).emit(
+            "conversation.reset",
+            component="rag",
+            data={
+                "archived_path": (
+                    str(archived_path) if archived_path is not None else None
+                ),
+                "archived_checkpoint_id": archived_checkpoint_id,
+            },
+        )
         return archived_path
 
     def close(self: RAGSession) -> None:
@@ -442,9 +728,15 @@ class RAGSession:
 
         if self._closed:
             return
-        self.chat_session.close()
-        self.embedding_session.close()
-        self._closed = True
+        trace = getattr(self, "trace", NullTraceLogger())
+        try:
+            self.chat_session.close()
+            self.embedding_session.close()
+            trace.emit("session.closed", component="rag")
+        finally:
+            self._closed = True
+            if getattr(self, "_owns_trace", False):
+                trace.close()
 
     def _prepare_source(
         self: RAGSession,
@@ -464,62 +756,128 @@ class RAGSession:
 
         reading_started = perf_counter()
         self._emit_count_progress(
-            "reading_source", 35.0, 42.0, "Reading source files",
-            0, selected_count, reading_started,
+            "reading_source",
+            35.0,
+            42.0,
+            "Reading source files",
+            0,
+            selected_count,
+            reading_started,
         )
-        source_files = read_repository_files(
-            report,
-            progress_callback=lambda current, total: self._emit_count_progress(
-                "reading_source",
-                35.0,
-                42.0,
-                "Reading source files",
-                current,
-                total,
-                reading_started,
-            ),
+        with self.trace.span(
+            "source.read",
+            component="rag",
+            data={"selected_file_count": selected_count},
+        ):
+            source_files = read_repository_files(
+                report,
+                progress_callback=(
+                    lambda current, total: self._emit_count_progress(
+                        "reading_source",
+                        35.0,
+                        42.0,
+                        "Reading source files",
+                        current,
+                        total,
+                        reading_started,
+                    )
+                ),
+            )
+        self.trace.emit(
+            "source.read.summary",
+            component="rag",
+            data={
+                "file_count": len(source_files),
+                "files": [
+                    {
+                        "path": file.path,
+                        "characters": len(file.text),
+                        "sha256": sha256(
+                            file.text.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                    for file in source_files
+                ],
+            },
         )
 
         extracting_started = perf_counter()
         source_file_count = len(source_files)
         self._emit_count_progress(
-            "extracting_source", 43.0, 49.0, "Extracting source structure",
-            0, source_file_count, extracting_started,
+            "extracting_source",
+            43.0,
+            49.0,
+            "Extracting source structure",
+            0,
+            source_file_count,
+            extracting_started,
         )
-        units = extract_source_units(
-            source_files,
-            progress_callback=lambda current, total: self._emit_count_progress(
-                "extracting_source",
-                43.0,
-                49.0,
-                "Extracting source structure",
-                current,
-                total,
-                extracting_started,
-            ),
-        )
+        with self.trace.span(
+            "source.extract",
+            component="rag",
+            data={"file_count": source_file_count},
+        ):
+            units = extract_source_units(
+                source_files,
+                progress_callback=(
+                    lambda current, total: self._emit_count_progress(
+                        "extracting_source",
+                        43.0,
+                        49.0,
+                        "Extracting source structure",
+                        current,
+                        total,
+                        extracting_started,
+                    )
+                ),
+            )
 
         chunking_started = perf_counter()
         unit_count = len(units)
         self._emit_count_progress(
-            "chunking_source", 50.0, 55.0, "Chunking source units",
-            0, unit_count, chunking_started,
+            "chunking_source",
+            50.0,
+            55.0,
+            "Chunking source units",
+            0,
+            unit_count,
+            chunking_started,
         )
-        chunks = chunk_source_units(
-            units,
-            count_tokens=embedding_session.count_tokens,
-            target_tokens=profile.target_tokens,
-            max_tokens=profile.max_tokens,
-            overlap_tokens=profile.overlap_tokens,
-            progress_callback=lambda current, total: self._emit_count_progress(
-                "chunking_source",
-                50.0,
-                55.0,
-                "Chunking source units",
-                current,
-                total,
-                chunking_started,
-            ),
+        chunk_settings = {
+            "target_tokens": profile.target_tokens,
+            "max_tokens": profile.max_tokens,
+            "overlap_tokens": profile.overlap_tokens,
+        }
+        with self.trace.span(
+            "source.chunk",
+            component="rag",
+            data={"unit_count": unit_count, **chunk_settings},
+        ):
+            chunks = chunk_source_units(
+                units,
+                count_tokens=embedding_session.count_tokens,
+                target_tokens=profile.target_tokens,
+                max_tokens=profile.max_tokens,
+                overlap_tokens=profile.overlap_tokens,
+                progress_callback=(
+                    lambda current, total: self._emit_count_progress(
+                        "chunking_source",
+                        50.0,
+                        55.0,
+                        "Chunking source units",
+                        current,
+                        total,
+                        chunking_started,
+                    )
+                ),
+            )
+        self.trace.emit(
+            "source.chunk.summary",
+            component="rag",
+            data={
+                "chunk_count": len(chunks),
+                "settings": chunk_settings,
+            },
         )
         self._emit_progress(
             "building_code_graph",
@@ -528,7 +886,12 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        code_graph = build_code_graph(source_files, units)
+        with self.trace.span(
+            "index.code_graph.build",
+            component="rag",
+            data={"chunk_count": len(chunks)},
+        ):
+            code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
 
     def _prepare_retrieval(
@@ -552,6 +915,18 @@ class RAGSession:
             self.project.source,
             extensions=profile.extensions,
             max_file_bytes=profile.max_file_bytes,
+        )
+        report_data: dict[str, object] = {
+            "repository": report.get("repository"),
+            "complete": report.get("complete"),
+            "selected_file_count": len(report.get("selected_files", [])),
+            "selected_files": report.get("selected_files", []),
+            "entries": report.get("entries", []),
+        }
+        self.trace.emit(
+            "source.scan.completed",
+            component="rag",
+            data=report_data,
         )
         selected_count = len(report.get("selected_files", []))
         self._emit_progress(
@@ -596,6 +971,25 @@ class RAGSession:
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
+        self.trace.emit(
+            "index.check.completed",
+            component="rag",
+            data={
+                "index_path": str(index_path),
+                "metadata_path": str(metadata_path),
+                "manifest_path": str(manifest_path),
+                "expected_metadata": expected_metadata,
+                "saved_metadata": saved_metadata,
+                "changes": changes,
+                "reusable": (
+                    index_path.is_file()
+                    and saved_metadata is not None
+                    and saved_manifest is not None
+                    and not configuration_changed
+                    and bool(changes["matches"])
+                ),
+            },
+        )
         self._emit_progress(
             "validating_index",
             28.0,
@@ -615,7 +1009,21 @@ class RAGSession:
                     32.0,
                     "Source unchanged; loading the saved retrieval index...",
                 )
-                indexes = load_indexes(index_path)
+                with self.trace.span(
+                    "index.load",
+                    component="rag",
+                    data={"index_path": str(index_path)},
+                ):
+                    indexes = load_indexes(index_path)
+                self.trace.emit(
+                    "index.reused",
+                    component="rag",
+                    data={
+                        "index_path": str(index_path),
+                        "chunk_count": len(indexes.semantic.chunks),
+                        "fingerprint": indexes.fingerprint,
+                    },
+                )
                 self._emit_progress(
                     "index_ready",
                     85.0,
@@ -627,8 +1035,18 @@ class RAGSession:
                     "reused",
                     changes,
                 )
-            except (OSError, TypeError, ValueError, json.JSONDecodeError):
-                pass
+            except (
+                OSError,
+                TypeError,
+                ValueError,
+                json.JSONDecodeError,
+            ) as error:
+                self.trace.exception(
+                    "index.load.failed",
+                    error,
+                    component="rag",
+                    data={"index_path": str(index_path)},
+                )
 
         chunks, code_graph = self._prepare_source(
             embedding_session,
@@ -645,20 +1063,30 @@ class RAGSession:
             chunk_count,
             embedding_started,
         )
-        semantic = build_semantic_index(
-            chunks,
-            embedding_session,
-            batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
-            progress_callback=lambda current, total: self._emit_count_progress(
-                "building_semantic_index",
-                58.0,
-                74.0,
-                "Embedding chunks",
-                current,
-                total,
-                embedding_started,
-            ),
-        )
+        with self.trace.span(
+            "index.semantic.build",
+            component="rag",
+            data={
+                "chunk_count": chunk_count,
+                "batch_size": _EMBEDDING_PROGRESS_BATCH_SIZE,
+            },
+        ):
+            semantic = build_semantic_index(
+                chunks,
+                embedding_session,
+                batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
+                progress_callback=(
+                    lambda current, total: self._emit_count_progress(
+                        "building_semantic_index",
+                        58.0,
+                        74.0,
+                        "Embedding chunks",
+                        current,
+                        total,
+                        embedding_started,
+                    )
+                ),
+            )
         self._emit_progress(
             "building_lexical_index",
             75.0,
@@ -669,7 +1097,12 @@ class RAGSession:
             current=len(chunks),
             total=len(chunks),
         )
-        lexical = build_lexical_index(chunks)
+        with self.trace.span(
+            "index.lexical.build",
+            component="rag",
+            data={"chunk_count": len(chunks)},
+        ):
+            lexical = build_lexical_index(chunks)
         indexes = prepare_persistent_indexes(
             semantic,
             lexical,
@@ -680,9 +1113,30 @@ class RAGSession:
             82.0,
             "Saving retrieval index and manifests...",
         )
-        save_indexes(indexes, index_path)
-        _write_json(metadata_path, expected_metadata)
-        _write_json(manifest_path, current_manifest)
+        with self.trace.span(
+            "index.save",
+            component="rag",
+            data={
+                "index_path": str(index_path),
+                "metadata_path": str(metadata_path),
+                "manifest_path": str(manifest_path),
+            },
+        ):
+            save_indexes(indexes, index_path)
+            _write_json(metadata_path, expected_metadata)
+            _write_json(manifest_path, current_manifest)
+        self.trace.emit(
+            "index.rebuilt",
+            component="rag",
+            data={
+                "index_path": str(index_path),
+                "metadata_path": str(metadata_path),
+                "manifest_path": str(manifest_path),
+                "fingerprint": indexes.fingerprint,
+                "chunk_count": len(chunks),
+                "changes": changes,
+            },
+        )
         self._emit_progress(
             "index_ready",
             85.0,
@@ -694,27 +1148,87 @@ class RAGSession:
         self: RAGSession,
         question: str,
         retrieval_count: int | None = None,
+        *,
+        trace_turn_id: str | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion."""
 
         count = retrieval_count or self.project.profile.retrieval_count
         query_text = self._format_query(question)
-        semantic = semantic_search(
-            self.indexes.semantic,
-            query_text,
-            self.embedding_session,
-            count=count,
+        trace = getattr(self, "trace", NullTraceLogger())
+        query_data: dict[str, object] = {
+            "query_format": self.project.profile.query_format,
+            "retrieval_count": count,
+            "query_sha256": sha256(query_text.encode("utf-8")).hexdigest(),
+        }
+        if trace.include_content:
+            query_data["question"] = question
+            query_data["formatted_query"] = query_text
+        trace.emit(
+            "retrieval.query.formatted",
+            component="retrieval",
+            data=query_data,
+            turn_id=trace_turn_id,
         )
-        lexical = lexical_search(
-            self.indexes.lexical,
-            question,
-            count=count,
+        with trace.span(
+            "retrieval.semantic",
+            component="retrieval",
+            turn_id=trace_turn_id,
+        ):
+            semantic = semantic_search(
+                self.indexes.semantic,
+                query_text,
+                self.embedding_session,
+                count=count,
+                trace_turn_id=trace_turn_id,
+            )
+        trace.emit(
+            "retrieval.semantic.ranked",
+            component="retrieval",
+            data=_ranked_trace_data(
+                semantic,
+                include_text=trace.include_content,
+            ),
+            turn_id=trace_turn_id,
         )
-        code = code_search(
-            self.indexes.code_graph,
-            self.chunks,
-            question,
-            count=count,
+        with trace.span(
+            "retrieval.lexical",
+            component="retrieval",
+            turn_id=trace_turn_id,
+        ):
+            lexical = lexical_search(
+                self.indexes.lexical,
+                question,
+                count=count,
+            )
+        trace.emit(
+            "retrieval.lexical.ranked",
+            component="retrieval",
+            data=_ranked_trace_data(
+                lexical,
+                include_text=trace.include_content,
+            ),
+            turn_id=trace_turn_id,
+        )
+        with trace.span(
+            "retrieval.code",
+            component="retrieval",
+            turn_id=trace_turn_id,
+        ):
+            code = code_search(
+                self.indexes.code_graph,
+                self.chunks,
+                question,
+                count=count,
+            )
+        trace.emit(
+            "retrieval.code.ranked",
+            component="retrieval",
+            data=_ranked_trace_data(
+                code,
+                include_text=trace.include_content,
+            ),
+            turn_id=trace_turn_id,
         )
         combined = hybrid_search(
             semantic=semantic,
@@ -722,14 +1236,75 @@ class RAGSession:
             code=code,
             count=count,
         )
+        trace.emit(
+            "retrieval.hybrid.ranked",
+            component="retrieval",
+            data=_ranked_trace_data(
+                combined,
+                include_text=trace.include_content,
+            ),
+            turn_id=trace_turn_id,
+        )
         plan = plan_retrieval(question, self.indexes.code_graph)
+        plan_data = asdict(plan)
+        expansion_requested = any(
+            bool(plan_data.get(name))
+            for name in (
+                "paths",
+                "functions",
+                "relationship",
+                "related_functions",
+            )
+        )
+        trace.emit(
+            "retrieval.context_expansion.planned",
+            component="retrieval",
+            data={
+                "input": {
+                    "question_sha256": sha256(
+                        question.encode("utf-8")
+                    ).hexdigest(),
+                    "hybrid_result_count": len(combined),
+                },
+                "decision": (
+                    "expand_related_context"
+                    if expansion_requested
+                    else "keep_ranked_context"
+                ),
+                "reason": {"signals": plan_data.get("signals", [])},
+                "output": plan_data,
+            },
+            turn_id=trace_turn_id,
+        )
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
             self.indexes.code_graph,
             plan,
         )
-        return tuple(
+        expansion_data: dict[str, object] = {
+            "rrf_count": len(combined),
+            "expanded_count": len(expanded),
+            "chunks": [
+                _chunk_trace_data(
+                    chunk,
+                    include_text=trace.include_content,
+                )
+                for chunk in expanded
+            ],
+        }
+        if trace.include_content:
+            expansion_data["chunks_artifact"] = trace.artifact(
+                f"{trace_turn_id or 'turn'}-evidence",
+                expansion_data.pop("chunks"),
+            )
+        trace.emit(
+            "retrieval.context.expanded",
+            component="retrieval",
+            data=expansion_data,
+            turn_id=trace_turn_id,
+        )
+        evidence = tuple(
             Evidence(
                 citation=index,
                 path=chunk.path,
@@ -740,6 +1315,28 @@ class RAGSession:
             )
             for index, chunk in enumerate(expanded, start=1)
         )
+        trace.emit(
+            "evidence.finalized",
+            component="retrieval",
+            data={
+                "count": len(evidence),
+                "citations": [
+                    {
+                        "citation": item.citation,
+                        "path": item.path,
+                        "start_line": item.start_line,
+                        "end_line": item.end_line,
+                        "symbol": item.symbol,
+                        "text_sha256": sha256(
+                            item.text.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                    for item in evidence
+                ],
+            },
+            turn_id=trace_turn_id,
+        )
+        return evidence
 
     def _format_query(self: RAGSession, question: str) -> str:
         """Apply the embedding model's configured query format."""
@@ -793,55 +1390,229 @@ class RAGSession:
 
     def _load_conversation(
         self: RAGSession,
-    ) -> tuple[list[dict[str, str]], list[ConversationTurn]]:
+    ) -> tuple[list[dict[str, str]], list[ConversationTurn], str | None]:
         """Load saved chat messages and human-readable turns."""
 
-        path = self.project.logs / "conversation.json"
+        path = self.conversation_path
         if not path.is_file():
-            return [], []
+            return [], [], None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            if payload["format_version"] != _CONVERSATION_VERSION:
-                raise ValueError("Unsupported conversation format version.")
-            messages = [
-                {
-                    "role": str(message["role"]),
-                    "content": str(message["content"]),
-                }
-                for message in payload["chat_messages"]
+            conversation = _conversation_state(payload)
+            turns = [
+                _turn_from_data(item) for item in conversation.get("turns", [])
             ]
-            turns = [_turn_from_data(item) for item in payload["turns"]]
+            legacy_messages = conversation.get("chat_messages")
+            if isinstance(legacy_messages, list):
+                messages = [
+                    {
+                        "role": str(message["role"]),
+                        "content": str(message["content"]),
+                    }
+                    for message in legacy_messages
+                ]
+            else:
+                system_prompt = str(
+                    conversation.get("system_prompt", _SYSTEM_PROMPT)
+                )
+                messages = [{"role": "system", "content": system_prompt}]
+                for turn in turns:
+                    messages.extend(
+                        (
+                            {
+                                "role": "user",
+                                "content": _answer_prompt(
+                                    turn.question,
+                                    turn.evidence,
+                                ),
+                            },
+                            {"role": "assistant", "content": turn.answer},
+                        )
+                    )
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("The saved conversation is invalid.") from error
-        return messages, turns
+        checkpoint_id = conversation.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id:
+            checkpoint_id = None
+        return messages, turns, checkpoint_id
 
-    def _save_conversation(self: RAGSession) -> None:
+    def _save_conversation(
+        self,
+        *,
+        trace_turn_id: str | None = None,
+    ) -> None:
         """Save exact chat state and inspectable interaction records."""
 
-        payload = {
-            "format_version": _CONVERSATION_VERSION,
-            "chat_messages": self.chat_session.messages,
+        conversation = {
+            "system_prompt": _SYSTEM_PROMPT,
             "turns": [_turn_to_data(turn) for turn in self.turns],
         }
-        _write_json(
-            self.project.logs / "conversation.json",
-            payload,
+        parent_checkpoint_id = getattr(self, "_checkpoint_id", None)
+        checkpoint_snapshot = {
+            "project": {
+                "root": str(self.project.root),
+                "source": str(self.project.source),
+                "index_fingerprint": self.indexes.fingerprint,
+                "index_status": self.index_status,
+            },
+            "effective_settings": self._parameters(),
+            "models": {
+                "backend": self.backend,
+                "chat_model_id": self.chat_session.model_id,
+                "chat_model_source": getattr(
+                    self.chat_session,
+                    "model_source",
+                    None,
+                ),
+                "embedding_model_id": self.embedding_session.model_id,
+                "embedding_model_source": getattr(
+                    self.embedding_session,
+                    "model_source",
+                    None,
+                ),
+            },
+            "conversation_sha256": sha256(
+                json.dumps(
+                    conversation,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest(),
+            "turn_count": len(self.turns),
+        }
+        checkpoint_id = _resume_checkpoint_id(checkpoint_snapshot)
+        checkpoint_state = {
+            "checkpoint_id": checkpoint_id,
+            "parent_checkpoint_id": parent_checkpoint_id,
+            "conversation_sha256": checkpoint_snapshot["conversation_sha256"],
+            "index_fingerprint": self.indexes.fingerprint,
+            "turn_count": len(self.turns),
+        }
+
+        path = self.conversation_path
+        saved_state = {
+            **conversation,
+            "checkpoint_id": checkpoint_id,
+            "checkpoint": checkpoint_state,
+        }
+        if self.trace.enabled:
+            self.trace.update_conversation(saved_state)
+        else:
+            payload: dict[str, object] = {"sessions": {}}
+            if path.is_file():
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    payload = loaded
+            stored = _conversation_state(payload, create=True)
+            stored.update(saved_state)
+            _write_json(path, payload)
+        self.trace.emit(
+            "state.checkpoint.committed",
+            component="rag",
+            data={
+                "checkpoint_id": checkpoint_id,
+                "parent_checkpoint_id": parent_checkpoint_id,
+                "immutable_state_saved": True,
+                "conversation_path": str(path),
+                "turn_count": len(self.turns),
+                "index_fingerprint": self.indexes.fingerprint,
+            },
+            turn_id=trace_turn_id,
         )
+        self._checkpoint_id = checkpoint_id
 
     def _archive_conversation(self: RAGSession) -> Path | None:
         """Rename the active conversation log with a readable UTC time."""
 
-        path = self.project.logs / "conversation.json"
+        path = self.conversation_path
         if not path.is_file():
             return None
         timestamp = datetime.now(timezone.utc).strftime(
             "%Y-%m-%dT%H-%M-%S-%fZ"
         )
-        archived_path = path.with_name(
-            f"conversation_{timestamp}.json"
-        )
+        archived_path = path.with_name(f"conversation_{timestamp}.json")
         path.replace(archived_path)
         return archived_path
+
+    def _resolve_conversation_path(
+        self,
+        conversation_path: str | Path | None,
+    ) -> Path:
+        """Keep saved conversation state inside this project's logs folder."""
+
+        if conversation_path is None:
+            directory = self.project.logs / "traces"
+            timestamp = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H-%M-%S"
+            )
+            candidate = directory / f"conversation_{timestamp}.json"
+            number = 2
+            while candidate.exists():
+                candidate = directory / (
+                    f"conversation_{timestamp}_{number}.json"
+                )
+                number += 1
+        else:
+            candidate = Path(conversation_path).expanduser()
+            if not candidate.is_absolute():
+                candidate = self.project.root / candidate
+        candidate = candidate.resolve()
+        logs = self.project.logs.resolve()
+        if not candidate.is_relative_to(logs):
+            raise ValueError(
+                "Conversation state must stay inside project logs."
+            )
+        if (
+            candidate.suffix.lower() != ".json"
+            or not candidate.name.startswith("conversation_")
+        ):
+            raise ValueError(
+                "Conversation state must use conversation_<timestamp>.json."
+            )
+        if candidate.parent.is_symlink():
+            raise ValueError("Conversation folder must not be a link.")
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+
+def _conversation_state(
+    payload: dict[str, object], *, create: bool = False
+) -> dict[str, object]:
+    """Locate resumable state in the chronologically later chat session."""
+
+    legacy = payload.get("conversation")
+    if isinstance(legacy, dict):
+        return legacy
+    sessions = (
+        payload.setdefault("sessions", {})
+        if create
+        else payload.get("sessions")
+    )
+    if not isinstance(sessions, dict):
+        raise ValueError("The saved conversation is invalid.")
+    for session in sessions.values():
+        if (
+            isinstance(session, dict)
+            and session.get("category") == "conversations"
+        ):
+            state = (
+                session.setdefault("resume_state", {})
+                if create
+                else session.get("resume_state", session.get("conversation"))
+            )
+            if isinstance(state, dict):
+                return state
+    if create:
+        session = {
+            "title": "Conversation turns",
+            "category": "conversations",
+            "turns": {},
+            "operations": {},
+            "resume_state": {},
+        }
+        sessions["05_conversations"] = session
+        return session["resume_state"]
+    raise ValueError("The saved conversation is invalid.")
 
 
 def _answer_prompt(
@@ -912,6 +1683,18 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
     )
 
 
+def _resume_checkpoint_id(snapshot: dict[str, object]) -> str:
+    """Return a stable identity for one complete restorable session state."""
+
+    encoded = json.dumps(
+        snapshot,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return f"checkpoint_{sha256(encoded).hexdigest()}"
+
+
 def _write_json(path: Path, data: dict[str, object]) -> None:
     """Write readable JSON atomically."""
 
@@ -921,3 +1704,51 @@ def _write_json(path: Path, data: dict[str, object]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
+
+def _chunk_trace_data(
+    chunk: Chunk,
+    *,
+    include_text: bool,
+) -> dict[str, object]:
+    """Return chunk identity and an optional compact text preview."""
+
+    data: dict[str, object] = {
+        "identifier": chunk.identifier,
+        "path": chunk.path,
+        "start_line": chunk.start_line,
+        "end_line": chunk.end_line,
+        "kind": chunk.kind,
+        "symbol": chunk.symbol,
+        "section": chunk.section,
+        "cell": chunk.cell,
+        "text_sha256": sha256(chunk.text.encode("utf-8")).hexdigest(),
+        "text_characters": len(chunk.text),
+    }
+    if include_text:
+        data["text_preview"] = trace_text_preview(chunk.text)
+    return data
+
+
+def _ranked_trace_data(
+    results: object,
+    *,
+    include_text: bool = False,
+) -> dict[str, object]:
+    """Return ranked chunks, adding exact text only in forensic traces."""
+
+    rows: list[dict[str, object]] = []
+    for rank, result in enumerate(results, start=1):
+        row: dict[str, object] = {
+            "rank": rank,
+            "score": getattr(result, "score", None),
+            "chunk": _chunk_trace_data(
+                result.chunk,
+                include_text=include_text,
+            ),
+        }
+        for name in ("entity", "distance", "channels"):
+            if hasattr(result, name):
+                row[name] = getattr(result, name)
+        rows.append(row)
+    return {"count": len(rows), "results": rows}
