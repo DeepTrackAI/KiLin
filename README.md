@@ -126,6 +126,62 @@ updates so notebook or GUI clients can show live counts and an ETA. Embedding
 uses small batches during index construction so progress can be reported
 between batches.
 
+### Inspect one complete execution trace
+
+QAChat writes an ordered JSON trace for project setup, model and
+backend selection, file scanning, chunking, indexing, retrieval ranks and
+context-expansion decisions, effective per-turn settings, exact model input
+and output,
+input/output token counts, per-call timings, and failures. Every event has a
+UTC timestamp and sequence number. Exact prompts, evidence, outputs, and
+checkpoints remain inline so the file is portable and self-contained.
+
+```python
+from qachat import RAGSession, TraceConfig
+
+session = RAGSession(project.root)
+print(session.trace.readable_path)
+```
+
+Each conversation owns one file below the project's `logs/traces` folder:
+`conversation_<timestamp>.json`. It contains identity, name, branch lineage,
+resumable messages and turns, checkpoints, and the named hierarchical trace.
+There is no separate catalog, JSONL stream, conversation-state file, or
+artifact directory. Discovery, switching, renaming, branching, and resuming
+scan these files directly. Preparation progress remains compact and sampled.
+Effective setting snapshots are accompanied by change events that show each
+changed field's `before` and `after` values. Use `mode="standard"` for
+major operations, decisions, hashes, ranks, token totals, and timings without
+duplicate token-detail events or exact retrieved source and rendered model
+prompt payloads. Standard mode still stores the conversation state required
+by resume checkpoints. The default is `mode="forensic"`, which also keeps
+exact retrieved text, rendered prompts, token inputs, and low-level token
+events.
+
+Nested work is connected through `span_id` and `parent_span_id`, for example
+one turn containing retrieval, query embedding, context expansion, and model
+generation spans. In the readable trace, `operation_duration_ms` is the
+duration of its named operation, not time since the previous event.
+
+After each saved turn or effective-setting change, QAChat emits
+`state.checkpoint.committed` and records a resumable checkpoint inline. Its
+content-addressed `checkpoint_id` covers the conversation, effective settings,
+model identities, project paths, and index fingerprint. The next checkpoint
+records `parent_checkpoint_id`, so lineage continues after reopening or
+branching a conversation.
+
+To customize or disable tracing, pass a configuration explicitly:
+
+```python
+session = RAGSession(
+    project.root,
+    trace=TraceConfig(enabled=False),
+)
+```
+
+The desktop GUI creates the conversation before preparation, so project setup,
+indexing, and subsequent turns are recorded in the same file.
+
 ## 3. Understand how QAChat works
 
 These standalone tutorials explain QAChat one layer at a time. Use them when
@@ -153,6 +209,9 @@ you want to understand the concepts and code clearly.
     explicitly requested code.
 13. [Project chat](tutorials/130_project_chat.ipynb) — use the complete RAG
     workflow.
+14. [Execution trace](tutorials/140_logging_trace.ipynb) — follow project
+    preparation, indexing, retrieval, exact model input, and generation one
+    logged operation at a time.
 
 ## 4. Development checks
 

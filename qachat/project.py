@@ -23,7 +23,7 @@ configure_project
 from __future__ import annotations
 
 from configparser import ConfigParser
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -37,7 +37,7 @@ from qachat.repository import (
     scan_repository,
 )
 from qachat.runtime import Backend, SelectedBackend
-
+from qachat.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "ProjectProfile",
@@ -107,9 +107,7 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
 
     if kind not in {"code", "literature"}:
         raise ValueError("kind must be code or literature.")
-    extensions = (
-        ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
-    )
+    extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
     parser = ConfigParser()
     parser.read_string(
         _DEFAULT_PROFILE.format(
@@ -123,11 +121,25 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
 
 
 def configure_project(
-    directory: str | Path, settings: dict[str, object]
+    directory: str | Path,
+    settings: dict[str, object],
+    *,
+    trace: TraceSink | None = None,
 ) -> QAProject:
     """Validate and save settings without changing source ownership."""
 
+    active_trace = trace if trace is not None else NullTraceLogger()
     project = open_project(directory)
+    before = asdict(project.profile)
+    active_trace.emit(
+        "project.configuration.requested",
+        component="project",
+        data={
+            "project_directory": str(project.root),
+            "requested_settings": settings,
+            "before": before,
+        },
+    )
     parser = ConfigParser()
     parser.read(project.root / "profile.ini", encoding="utf-8")
     for key, value in settings.items():
@@ -144,7 +156,25 @@ def configure_project(
     with temporary.open("w", encoding="utf-8") as stream:
         parser.write(stream)
     temporary.replace(path)
-    return open_project(project.root)
+    configured = open_project(project.root)
+    effective = asdict(configured.profile)
+    active_trace.emit(
+        "project.configuration.saved",
+        component="project",
+        data={
+            "profile_path": str(path),
+            "before": before,
+            "effective": effective,
+        },
+    )
+    active_trace.settings_changed(
+        "project.settings.changed",
+        component="project",
+        before=before,
+        after=effective,
+        data={"profile_path": str(path)},
+    )
+    return configured
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,18 +307,12 @@ def initialize_project(
 
     profile_path = root / "profile.ini"
     if not profile_path.exists():
-        source_name = (
-            "repository" if kind == "code" else "documents"
-        )
+        source_name = "repository" if kind == "code" else "documents"
         if (root / "sources").is_dir():
             source = "sources"
         else:
             source = source_name if (root / source_name).is_dir() else "."
-        extensions = (
-            ".py, .m, .md"
-            if kind == "code"
-            else ".pdf, .md, .txt"
-        )
+        extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,
@@ -370,11 +394,7 @@ def prepare_project_workspace(
 
     profile_path = root / "profile.ini"
     if not profile_path.exists():
-        extensions = (
-            ".py, .m, .md"
-            if kind == "code"
-            else ".pdf, .md, .txt"
-        )
+        extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,

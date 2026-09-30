@@ -10,13 +10,12 @@ ChatEngine
 from __future__ import annotations
 
 from configparser import ConfigParser, Error as ConfigError
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
 import sys
-import traceback
 from typing import Callable
 
 from qachat.gui.model_catalog import (
@@ -25,6 +24,7 @@ from qachat.gui.model_catalog import (
     model_choices,
 )
 from qachat import RAGSession, prepare_sources_workspace
+from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
 from qachat.project import QAProject, default_project_profile, open_project
 from qachat.repository import (
@@ -35,6 +35,13 @@ from qachat.repository import (
 )
 from qachat.runtime import choose_backend
 from qachat.sources import read_repository_files
+from qachat.trace_logging import (
+    NullTraceLogger,
+    TraceConfig,
+    TraceLogger,
+    TraceSink,
+    TraceTextStream,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 EventSink = Callable[[dict[str, object]], None]
@@ -43,7 +50,13 @@ EventSink = Callable[[dict[str, object]], None]
 class ChatEngine:
     """Translate GUI actions into public QAChat project operations."""
 
-    def __init__(self, sandbox: Path, emit: EventSink) -> None:
+    def __init__(
+        self,
+        sandbox: Path,
+        emit: EventSink,
+        *,
+        trace_enabled: bool = False,
+    ) -> None:
         """Keep one session and send structured updates to the window.
 
         Parameters
@@ -52,15 +65,106 @@ class ChatEngine:
             Default parent folder for local project workspaces.
         emit: EventSink
             Callback that forwards an event to the web page.
+        trace_enabled: bool, optional
+            Whether each opened project receives its own forensic trace.
 
         """
 
         self.sandbox = sandbox
         self.emit = emit
+        if type(trace_enabled) is not bool:
+            raise ValueError("trace_enabled must be True or False.")
+        self.trace_enabled = trace_enabled
+        self.project_trace: TraceSink = NullTraceLogger()
         self.session: RAGSession | None = None
+        self.conversation_store: ConversationStore | None = None
+        self.active_conversation: ConversationInfo | None = None
+
+    @property
+    def active_trace(self) -> TraceSink:
+        """Return the active project trace or a harmless no-op trace."""
+
+        return self.project_trace
+
+    def _start_project_trace(
+        self,
+        project_directory: Path,
+        conversation: ConversationInfo | None = None,
+    ) -> None:
+        """Open the single trace file owned by one conversation."""
+
+        if not self.trace_enabled:
+            self.project_trace = NullTraceLogger()
+            return
+        if conversation is None or self.conversation_store is None:
+            raise RuntimeError("Conversation store is not open.")
+        trace_path = self.conversation_store.state_path(conversation)
+        scope = "conversation"
+        self.project_trace = TraceLogger(
+            TraceConfig(
+                enabled=True,
+                output_path=trace_path,
+                mode="forensic",
+                failure_policy="warn",
+            ),
+            default_directory=trace_path.parent,
+        )
+        self.project_trace.emit(
+            f"{scope}.trace.started",
+            component="gui_engine",
+            data={
+                "scope": scope,
+                "entrypoint": "gui",
+                "project_directory": str(project_directory),
+                "conversation": (
+                    asdict(conversation) if conversation is not None else None
+                ),
+            },
+        )
+        self._send(
+            "trace_ready",
+            trace_path=str(self.project_trace.readable_path),
+            scope=scope,
+            conversation_id=(
+                conversation.conversation_id
+                if conversation is not None
+                else None
+            ),
+        )
+
+    def _close_project_trace(self) -> None:
+        """Finish the current project trace without closing the GUI trace."""
+
+        if self.project_trace.enabled:
+            self.project_trace.close()
+        self.project_trace = NullTraceLogger()
 
     def _send(self, event: str, **data: object) -> None:
         self.emit({"event": event, **data})
+
+    def _report_error(
+        self,
+        event_type: str,
+        error: BaseException,
+        message: str,
+    ) -> None:
+        """Trace one backend failure and show a short GUI message."""
+
+        trace = self.active_trace
+        trace.exception(
+            event_type,
+            error,
+            component="gui_engine",
+        )
+        self._send(
+            "error",
+            message=message,
+            trace_path=(
+                str(trace.readable_path)
+                if trace.readable_path is not None
+                else None
+            ),
+        )
 
     def startup(self) -> None:
         """Suggest the most recently used valid sandbox project."""
@@ -125,11 +229,16 @@ class ChatEngine:
                 )
                 if not source_path.is_dir():
                     continue
-                conversation = folder / "logs" / "conversation.json"
-                last_chat = (
-                    conversation.stat().st_mtime
-                    if conversation.is_file()
-                    else 0
+                chat_records = tuple(
+                    (folder / "logs" / "traces").glob("conversation_*.json")
+                )
+                last_chat = max(
+                    (
+                        record.stat().st_mtime
+                        for record in chat_records
+                        if record.is_file() and not record.is_symlink()
+                    ),
+                    default=0,
                 )
                 recent = max(profile_path.stat().st_mtime, last_chat)
                 projects.append((recent, folder, saved_kind))
@@ -155,14 +264,17 @@ class ChatEngine:
         try:
             project = open_project(directory)
             self.close()
-            self._activate_project(project)
+            conversation = self._open_conversation_store(project)
+            self._start_project_trace(project.root, conversation)
+            self._activate_project(project, conversation)
         except Exception as error:
-            traceback.print_exc(file=sys.stderr)
-            self._send(
-                "error",
-                message=f"Could not resume the project: {error}",
-                log_path=str(self.sandbox / "gui-engine.log"),
+            self._report_error(
+                "gui.project.resume.failed",
+                error,
+                f"Could not resume the project: {error}",
             )
+            if self.session is None:
+                self._close_project_trace()
 
     def settings(self, kind: str, workspace: str) -> None:
         """Return saved or default settings and cached model IDs.
@@ -204,7 +316,11 @@ class ChatEngine:
                 ),
             )
         except Exception as error:
-            self._send("error", message=str(error))
+            self._report_error(
+                "gui.settings.failed",
+                error,
+                str(error),
+            )
 
     def download(self, model_id: str) -> None:
         """Download only a model explicitly chosen from the GUI catalog.
@@ -226,11 +342,10 @@ class ChatEngine:
             download_model(model_id)
             self._send("model_downloaded", model_id=model_id)
         except Exception as error:
-            traceback.print_exc(file=sys.stderr)
-            self._send(
-                "error",
-                message=f"Could not download {model_id}: {error}",
-                log_path=str(self.sandbox / "gui-engine.log"),
+            self._report_error(
+                "gui.model_download.failed",
+                error,
+                f"Could not download {model_id}: {error}",
             )
 
     def preview(
@@ -328,11 +443,10 @@ class ChatEngine:
                 )
             self._send("preview", roots=roots)
         except Exception as error:
-            traceback.print_exc(file=sys.stderr)
-            self._send(
-                "error",
-                message=f"Could not inspect the selected files: {error}",
-                log_path=str(self.sandbox / "gui-engine.log"),
+            self._report_error(
+                "gui.source_preview.failed",
+                error,
+                f"Could not inspect the selected files: {error}",
             )
 
     def open_project(
@@ -387,6 +501,14 @@ class ChatEngine:
                 if missing:
                     raise ValueError("Choose files for every added source.")
             self.close()
+            project_directory = Path(workspace).expanduser().resolve()
+            conversation: ConversationInfo | None = None
+            if self.trace_enabled:
+                store = ConversationStore(project_directory)
+                conversation = store.ensure()
+                self.conversation_store = store
+                self.active_conversation = conversation
+                self._start_project_trace(project_directory, conversation)
             self._send("status", message="Preparing the project…")
             options: dict[str, object] = {}
             if selected_files is not None:
@@ -410,27 +532,57 @@ class ChatEngine:
                         dict.fromkeys((*configured, *selected_types))
                     )
                 options["settings"] = settings
+            if self.project_trace.enabled:
+                options["trace"] = self.project_trace
             project = prepare_sources_workspace(
-                sources, kind, workspace, **options
+                sources,
+                kind,
+                workspace,
+                **options,
             )
-            self._activate_project(project)
+            if conversation is None:
+                conversation = self._open_conversation_store(project)
+            self._activate_project(project, conversation)
         except Exception as error:
-            traceback.print_exc(file=sys.stderr)
-            self._send(
-                "error",
-                message=f"Could not prepare the project: {error}",
-                log_path=str(self.sandbox / "gui-engine.log"),
+            self._report_error(
+                "gui.project.prepare.failed",
+                error,
+                f"Could not prepare the project: {error}",
             )
+            if self.session is None:
+                self._close_project_trace()
 
-    def _activate_project(self, project: QAProject) -> None:
+    def _open_conversation_store(
+        self,
+        project: QAProject,
+    ) -> ConversationInfo:
+        """Scan project conversation files and select the latest one."""
+
+        store = ConversationStore(project.root)
+        conversation = store.ensure()
+        self.conversation_store = store
+        self.active_conversation = conversation
+        return conversation
+
+    def _activate_project(
+        self,
+        project: QAProject,
+        conversation: ConversationInfo,
+    ) -> None:
         """Load models and indexes, then report the active workspace."""
 
-        session = RAGSession(
-            project.root,
-            progress_callback=lambda progress: self._send(
+        options: dict[str, object] = {
+            "progress_callback": lambda progress: self._send(
                 "progress", **asdict(progress)
-            ),
+            )
+        }
+        options["trace"] = self.project_trace
+        if self.conversation_store is None:
+            raise RuntimeError("Conversation store is not open.")
+        options["conversation_path"] = self.conversation_store.state_path(
+            conversation
         )
+        session = RAGSession(project.root, **options)
         self.session = session
         self._send(
             "opened",
@@ -450,6 +602,11 @@ class ChatEngine:
             temperature=session.chat_session.temperature,
             thinking=session.chat_session.thinking,
             max_new_tokens=session.chat_session.max_new_tokens,
+            active_conversation_id=conversation.conversation_id,
+            conversations=[
+                asdict(item)
+                for item in self.conversation_store.conversations()
+            ],
         )
 
     def ask(
@@ -483,10 +640,29 @@ class ChatEngine:
                 options["retrieval_count"] = retrieval_count
             if generation_settings is not None:
                 options["generation_settings"] = generation_settings
+            options["phase_callback"] = lambda phase, details: self._send(
+                "answer_phase",
+                phase=phase,
+                **details,
+            )
             self.session.ask(question, **options)
+            if (
+                self.conversation_store is not None
+                and self.active_conversation is not None
+            ):
+                self.active_conversation = self.conversation_store.touch(
+                    self.active_conversation.conversation_id
+                )
+                self.active_trace.update_conversation(
+                    asdict(self.active_conversation)
+                )
             self._send("answered", turn=asdict(self.session.turns[-1]))
         except Exception as error:
-            self._send("error", message=str(error))
+            self._report_error(
+                "gui.question.failed",
+                error,
+                str(error),
+            )
 
     def preview_reference(self, turn_index: int, citation: int) -> None:
         """Show nearby source lines for one saved answer citation.
@@ -558,16 +734,141 @@ class ChatEngine:
             **preview,
         )
 
-    def reset(self) -> None:
-        """Archive conversation while keeping the index and models."""
+    def create_conversation(self, *, branch: bool = False) -> None:
+        """Create an empty conversation or branch the selected conversation."""
 
         try:
-            if self.session is None:
+            if (
+                self.session is None
+                or self.conversation_store is None
+                or self.active_conversation is None
+            ):
                 raise RuntimeError("Open a project first.")
-            archived = self.session.reset()
-            self._send("reset", archived=str(archived) if archived else None)
+            parent_id = (
+                self.active_conversation.conversation_id if branch else None
+            )
+            conversation = self.conversation_store.create(
+                branch_from=parent_id
+            )
+            self._switch_conversation(conversation)
         except Exception as error:
-            self._send("error", message=str(error))
+            self._report_error(
+                "gui.conversation_create.failed",
+                error,
+                str(error),
+            )
+
+    def select_conversation(self, conversation_id: str) -> None:
+        """Switch conversations while retaining loaded project resources."""
+
+        try:
+            if self.conversation_store is None:
+                raise RuntimeError("Open a project first.")
+            conversation = self.conversation_store.select(conversation_id)
+            if (
+                self.active_conversation is not None
+                and conversation.conversation_id
+                == self.active_conversation.conversation_id
+            ):
+                return
+            self._switch_conversation(conversation)
+        except Exception as error:
+            self._report_error(
+                "gui.conversation_select.failed",
+                error,
+                str(error),
+            )
+
+    def rename_conversation(self, conversation_id: str, name: str) -> None:
+        """Rename one conversation without changing its saved state."""
+
+        try:
+            if self.conversation_store is None:
+                raise RuntimeError("Open a project first.")
+            renamed = self.conversation_store.rename(conversation_id, name)
+            if (
+                self.active_conversation is not None
+                and renamed.conversation_id
+                == self.active_conversation.conversation_id
+            ):
+                self.active_conversation = renamed
+                self.active_trace.update_conversation(asdict(renamed))
+            self.active_trace.emit(
+                "conversation.renamed",
+                component="gui_engine",
+                data=asdict(renamed),
+            )
+            self._send_conversations("conversations")
+        except Exception as error:
+            self._report_error(
+                "gui.conversation_rename.failed",
+                error,
+                str(error),
+            )
+
+    def _switch_conversation(self, conversation: ConversationInfo) -> None:
+        """Move the live session and trace to one conversation file."""
+
+        if self.session is None or self.conversation_store is None:
+            raise RuntimeError("Open a project first.")
+        self._close_project_trace()
+        self._start_project_trace(self.session.project.root, conversation)
+        turns = self.session.switch_conversation(
+            self.conversation_store.state_path(conversation),
+            trace=self.project_trace,
+        )
+        self.active_conversation = conversation
+        self.active_trace.emit(
+            "conversation.selected",
+            component="gui_engine",
+            data=asdict(conversation),
+        )
+        self._send_conversations(
+            "conversation_opened",
+            turns=[asdict(turn) for turn in turns],
+            retrieval_count=(
+                turns[-1].parameters.get(
+                    "retrieval_count",
+                    self.session.project.profile.retrieval_count,
+                )
+                if turns
+                else self.session.project.profile.retrieval_count
+            ),
+            temperature=self.session.chat_session.temperature,
+            thinking=self.session.chat_session.thinking,
+            max_new_tokens=self.session.chat_session.max_new_tokens,
+        )
+
+    def _send_conversations(self, event: str, **data: object) -> None:
+        """Send the catalog and active identity in one consistent shape."""
+
+        if self.conversation_store is None or self.active_conversation is None:
+            raise RuntimeError("Conversation store is not open.")
+        self._send(
+            event,
+            active_conversation_id=(self.active_conversation.conversation_id),
+            conversations=[
+                asdict(item)
+                for item in self.conversation_store.conversations()
+            ],
+            **data,
+        )
+
+    def reset(self) -> None:
+        """Start a new conversation while keeping indexes and models."""
+
+        try:
+            if self.session is None or self.conversation_store is None:
+                raise RuntimeError("Open a project first.")
+            conversation = self.conversation_store.create()
+            self._switch_conversation(conversation)
+            self._send("reset", archived=None)
+        except Exception as error:
+            self._report_error(
+                "gui.conversation_reset.failed",
+                error,
+                str(error),
+            )
 
     def close(self) -> None:
         """Release the loaded backend session."""
@@ -575,6 +876,9 @@ class ChatEngine:
         if self.session is not None:
             self.session.close()
             self.session = None
+        self._close_project_trace()
+        self.conversation_store = None
+        self.active_conversation = None
 
 
 def _reference_context(
@@ -708,14 +1012,26 @@ def main() -> None:
         protocol_output.write(json.dumps(data, default=str) + "\n")
         protocol_output.flush()
 
-    engine = ChatEngine(ROOT / "sandbox", emit)
+    sandbox = ROOT / "sandbox"
+    engine = ChatEngine(sandbox, emit, trace_enabled=True)
+    standard_output = TraceTextStream(
+        lambda: engine.active_trace,
+        stream_name="backend.stdout",
+    )
+    standard_error = TraceTextStream(
+        lambda: engine.active_trace,
+        stream_name="backend.stderr",
+    )
     try:
         for line in sys.stdin:
             try:
                 command = json.loads(line)
                 if not isinstance(command, dict):
                     raise ValueError("A GUI command must be an object.")
-                with redirect_stdout(sys.stderr):
+                with (
+                    redirect_stdout(standard_output),
+                    redirect_stderr(standard_error),
+                ):
                     action = command.get("action")
                     if action == "open":
                         engine.open_project(
@@ -757,13 +1073,33 @@ def main() -> None:
                             command.get("retrieval_count"),
                             command.get("generation_settings"),
                         )
+                    elif action == "new_conversation":
+                        engine.create_conversation()
+                    elif action == "branch_conversation":
+                        engine.create_conversation(branch=True)
+                    elif action == "select_conversation":
+                        engine.select_conversation(command["conversation_id"])
+                    elif action == "rename_conversation":
+                        engine.rename_conversation(
+                            command["conversation_id"],
+                            command["name"],
+                        )
                     elif action == "reset":
                         engine.reset()
                     else:
                         emit({"event": "error", "message": "Unknown command."})
+                standard_output.flush()
+                standard_error.flush()
             except (KeyError, TypeError, ValueError) as error:
+                engine.active_trace.exception(
+                    "gui.command.invalid",
+                    error,
+                    component="gui_engine",
+                )
                 emit({"event": "error", "message": str(error)})
     finally:
+        standard_output.flush()
+        standard_error.flush()
         engine.close()
 
 

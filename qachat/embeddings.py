@@ -14,9 +14,12 @@ any supported chat model with any supported embedding model.
 from __future__ import annotations
 
 import gc
+from hashlib import sha256
 from importlib import import_module
+import json
 import math
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 from huggingface_hub import snapshot_download
@@ -28,7 +31,7 @@ from qachat.runtime import (
     choose_backend,
     torch_device,
 )
-
+from qachat.trace_logging import NullTraceLogger, TraceSink, trace_text_preview
 
 __all__ = [
     "EmbeddingSession",
@@ -48,6 +51,8 @@ class EmbeddingSession:
         Whether Hugging Face may download missing files to its normal cache.
     revision: str | None, optional
         Optional Hugging Face branch, tag, or commit.
+    trace: TraceSink | None, optional
+        Structured execution trace shared with the calling session.
 
     Attributes
     ----------
@@ -73,6 +78,7 @@ class EmbeddingSession:
         backend: Backend = "auto",
         allow_download: bool = True,
         revision: str | None = None,
+        trace: TraceSink | None = None,
     ) -> None:
         """Check settings, find the snapshot, and load one backend."""
 
@@ -84,21 +90,44 @@ class EmbeddingSession:
         if not isinstance(allow_download, bool):
             raise ValueError("`allow_download` must be True or False.")
 
+        self.trace = trace if trace is not None else NullTraceLogger()
         self.model_id = model_id.strip()
         self.backend = choose_backend(backend)
         self.device = ""
         self._model = None
         self._tokenizer = None
 
-        source = _model_source(
-            self.model_id,
-            allow_download=allow_download,
-            revision=revision,
-        )
-        if self.backend == "mlx":
-            self._load_mlx(source)
-        else:
-            self._load_torch(source)
+        with self.trace.span(
+            "model.embedding.load",
+            component="embeddings",
+            data={
+                "model_id": self.model_id,
+                "backend": self.backend,
+                "allow_download": allow_download,
+                "requested_revision": revision,
+            },
+        ):
+            source = _model_source(
+                self.model_id,
+                allow_download=allow_download,
+                revision=revision,
+            )
+            self.model_source = source
+            if self.backend == "mlx":
+                self._load_mlx(source)
+            else:
+                self._load_torch(source)
+            self.trace.emit(
+                "model.embedding.resolved",
+                component="embeddings",
+                data={
+                    "model_id": self.model_id,
+                    "model_source": source,
+                    "requested_revision": revision,
+                    "backend": self.backend,
+                    "device": self.device,
+                },
+            )
 
     def count_tokens(self: EmbeddingSession, text: str) -> int:
         """Count tokens with the selected embedding tokenizer.
@@ -138,6 +167,9 @@ class EmbeddingSession:
     def embed_documents(
         self: EmbeddingSession,
         texts: list[str],
+        *,
+        trace_turn_id: str | None = None,
+        purpose: str = "documents",
     ) -> list[list[float]]:
         """Embed repository text without changing it.
 
@@ -167,16 +199,129 @@ class EmbeddingSession:
         if self._model is None or self._tokenizer is None:
             raise RuntimeError("This embedding session is closed.")
 
-        if self.backend == "mlx":
-            vectors = self._embed_mlx(checked)
-        else:
-            vectors = self._embed_torch(checked)
+        # Index construction already has one enclosing index.semantic.build
+        # span. Recording every document batch, token ID, mask, and vector
+        # digest makes that trace enormous without adding another decision.
+        record_details = purpose != "documents"
+        operation_id = self.trace.new_id("embedding")
+        if record_details:
+            input_data: dict[str, object] = {
+                "operation_id": operation_id,
+                "purpose": purpose,
+                "model_id": self.model_id,
+                "backend": self.backend,
+                "device": self.device,
+                "text_count": len(checked),
+                "text_sha256": [
+                    sha256(text.encode("utf-8")).hexdigest()
+                    for text in checked
+                ],
+            }
+            if self.trace.include_content:
+                input_data["text_previews"] = [
+                    trace_text_preview(text) for text in checked
+                ]
+            self.trace.emit(
+                "embedding.input.prepared",
+                component="embeddings",
+                data=input_data,
+                turn_id=trace_turn_id,
+            )
 
-        return _check_vectors(vectors, len(checked))
+        self._last_embedding_input_token_counts = None
+        calculation_started_at = perf_counter()
+
+        def calculate() -> list[list[float]]:
+            """Run one backend call and validate its vectors."""
+
+            if self.backend == "mlx":
+                if not self.trace.enabled:
+                    vectors = self._embed_mlx(checked)
+                else:
+                    vectors = self._embed_mlx(
+                        checked,
+                        operation_id=(
+                            operation_id if record_details else None
+                        ),
+                        trace_turn_id=trace_turn_id,
+                        record_trace=record_details,
+                    )
+            else:
+                if not self.trace.enabled:
+                    vectors = self._embed_torch(checked)
+                else:
+                    vectors = self._embed_torch(
+                        checked,
+                        operation_id=(
+                            operation_id if record_details else None
+                        ),
+                        trace_turn_id=trace_turn_id,
+                        record_trace=record_details,
+                    )
+            return _check_vectors(vectors, len(checked))
+
+        if record_details:
+            with self.trace.span(
+                "embedding.calculate",
+                component="embeddings",
+                data={
+                    "operation_id": operation_id,
+                    "purpose": purpose,
+                    "text_count": len(checked),
+                },
+                turn_id=trace_turn_id,
+            ):
+                checked_vectors = calculate()
+        else:
+            checked_vectors = calculate()
+        calculation_duration_ms = (
+            perf_counter() - calculation_started_at
+        ) * 1000
+
+        if not record_details:
+            return checked_vectors
+
+        result_data: dict[str, object] = {
+            "operation_id": operation_id,
+            "purpose": purpose,
+            "vector_count": len(checked_vectors),
+            "dimensions": (len(checked_vectors[0]) if checked_vectors else 0),
+            "input_token_counts": self._last_embedding_input_token_counts,
+            "input_token_count": (
+                sum(self._last_embedding_input_token_counts)
+                if self._last_embedding_input_token_counts is not None
+                else None
+            ),
+            "calculation_duration_ms": round(
+                calculation_duration_ms,
+                3,
+            ),
+        }
+        if self.trace.include_embedding_vectors:
+            result_data["vectors_artifact"] = self.trace.artifact(
+                f"{operation_id}-vectors",
+                checked_vectors,
+            )
+        else:
+            encoded = json.dumps(
+                checked_vectors,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            result_data["vectors_sha256"] = sha256(encoded).hexdigest()
+        self.trace.emit(
+            "embedding.output.completed",
+            component="embeddings",
+            data=result_data,
+            turn_id=trace_turn_id,
+            duration_ms=calculation_duration_ms,
+        )
+        return checked_vectors
 
     def embed_query(
         self: EmbeddingSession,
         query_text: str,
+        *,
+        trace_turn_id: str | None = None,
     ) -> list[float]:
         """Embed one query exactly as provided.
 
@@ -198,7 +343,11 @@ class EmbeddingSession:
         """
 
         checked = _check_texts([query_text])[0]
-        return self.embed_documents([checked])[0]
+        return self.embed_documents(
+            [checked],
+            trace_turn_id=trace_turn_id,
+            purpose="query",
+        )[0]
 
     def close(self: EmbeddingSession) -> None:
         """Release model references and backend caches."""
@@ -294,6 +443,10 @@ class EmbeddingSession:
     def _embed_mlx(
         self: EmbeddingSession,
         texts: list[str],
+        *,
+        operation_id: str | None = None,
+        trace_turn_id: str | None = None,
+        record_trace: bool = True,
     ) -> list[list[float]]:
         """Calculate normalized MLX vectors.
 
@@ -316,6 +469,33 @@ class EmbeddingSession:
             truncation=False,
             return_tensors="np",
         )
+        if self.trace.enabled and record_trace:
+            token_counts = inputs["attention_mask"].sum(axis=1).tolist()
+            self._last_embedding_input_token_counts = token_counts
+            token_data: dict[str, object] = {
+                "operation_id": operation_id,
+                "input_token_counts": token_counts,
+                "input_token_count": sum(token_counts),
+            }
+            if self.trace.include_token_ids:
+                token_data.update(
+                    {
+                        "input_ids_artifact": self.trace.artifact(
+                            f"{operation_id}-input-token-ids",
+                            inputs["input_ids"].tolist(),
+                        ),
+                        "attention_mask_artifact": self.trace.artifact(
+                            f"{operation_id}-attention-mask",
+                            inputs["attention_mask"].tolist(),
+                        ),
+                    }
+                )
+            self.trace.emit(
+                "embedding.tokens.prepared",
+                component="embeddings",
+                data=token_data,
+                turn_id=trace_turn_id,
+            )
         outputs = self._model(
             mx.array(inputs["input_ids"]),
             attention_mask=mx.array(inputs["attention_mask"]),
@@ -329,6 +509,10 @@ class EmbeddingSession:
     def _embed_torch(
         self: EmbeddingSession,
         texts: list[str],
+        *,
+        operation_id: str | None = None,
+        trace_turn_id: str | None = None,
+        record_trace: bool = True,
     ) -> list[list[float]]:
         """Calculate normalized PyTorch vectors.
 
@@ -351,6 +535,35 @@ class EmbeddingSession:
             truncation=False,
             return_tensors="pt",
         ).to(self.device)
+        if self.trace.enabled and record_trace:
+            token_counts = (
+                inputs["attention_mask"].detach().cpu().sum(dim=1).tolist()
+            )
+            self._last_embedding_input_token_counts = token_counts
+            token_data: dict[str, object] = {
+                "operation_id": operation_id,
+                "input_token_counts": token_counts,
+                "input_token_count": sum(token_counts),
+            }
+            if self.trace.include_token_ids:
+                token_data.update(
+                    {
+                        "input_ids_artifact": self.trace.artifact(
+                            f"{operation_id}-input-token-ids",
+                            inputs["input_ids"].detach().cpu().tolist(),
+                        ),
+                        "attention_mask_artifact": self.trace.artifact(
+                            f"{operation_id}-attention-mask",
+                            inputs["attention_mask"].detach().cpu().tolist(),
+                        ),
+                    }
+                )
+            self.trace.emit(
+                "embedding.tokens.prepared",
+                component="embeddings",
+                data=token_data,
+                turn_id=trace_turn_id,
+            )
         with torch.inference_mode():
             hidden = self._model(**inputs).last_hidden_state
             mask = inputs["attention_mask"]

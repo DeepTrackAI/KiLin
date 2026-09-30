@@ -10,16 +10,17 @@ from __future__ import annotations
 import gc
 from importlib import import_module
 from pathlib import Path
+from time import perf_counter
 from typing import Any, cast, TYPE_CHECKING, TypeAlias
 
 from qachat.huggingface import cached_model_snapshot
-
 from qachat.runtime import (
     Backend,
     SelectedBackend,
     choose_backend as _choose_backend,
     torch_device as _torch_device,
 )
+from qachat.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "ChatSession",
@@ -63,6 +64,8 @@ class ChatSession:
         If ``False``, loading only uses local files.
     revision: str | None, optional
         Optional Hugging Face branch, tag, or commit.
+    trace: TraceSink | None, optional
+        Structured execution trace shared with the calling session.
 
     Attributes
     ----------
@@ -105,9 +108,11 @@ class ChatSession:
         system_prompt: str | None = None,
         allow_download: bool = True,
         revision: str | None = None,
+        trace: TraceSink | None = None,
     ) -> None:
         """Initialize settings, history, tokenizer, and model."""
 
+        self.trace = trace if trace is not None else NullTraceLogger()
         self.backend = _choose_backend(backend)
         self.model_id = model_id
         if not isinstance(self.model_id, str) or not self.model_id.strip():
@@ -144,54 +149,85 @@ class ChatSession:
 
         """
 
-        source_path = Path(self.model_id).expanduser()
-        source = str(source_path) if source_path.is_dir() else self.model_id
-        if not allow_download and not source_path.is_dir():
-            source = str(cached_model_snapshot(source, revision=revision))
-            revision = None
-
-        if self.backend == "mlx":
-            mx = import_module("mlx.core")
-            if not mx.metal.is_available():
-                raise RuntimeError("MLX Metal is not available.")
-            mlx_lm = import_module("mlx_lm")
-            loaded_model, loaded_tokenizer = mlx_lm.load(
-                source,
-                tokenizer_config={"trust_remote_code": False},
-                revision=revision,
+        requested_revision = revision
+        with self.trace.span(
+            "model.chat.load",
+            component="chat",
+            data={
+                "model_id": self.model_id,
+                "backend": self.backend,
+                "allow_download": allow_download,
+                "requested_revision": requested_revision,
+            },
+        ):
+            source_path = Path(self.model_id).expanduser()
+            source = (
+                str(source_path) if source_path.is_dir() else self.model_id
             )
-            self._model = loaded_model
-            self._tokenizer = loaded_tokenizer
-            self.device = "metal"
-            return
+            if not allow_download and not source_path.is_dir():
+                source = str(cached_model_snapshot(source, revision=revision))
+                revision = None
+            self.model_source = source
 
-        torch = import_module("torch")
-        transformers = import_module("transformers")
-        local_only = not allow_download
-        loaded_tokenizer = transformers.AutoTokenizer.from_pretrained(
-            source,
-            local_files_only=local_only,
-            revision=revision,
-            trust_remote_code=False,
-        )
-        loaded_model = transformers.AutoModelForCausalLM.from_pretrained(
-            source,
-            local_files_only=local_only,
-            revision=revision,
-            trust_remote_code=False,
-            dtype="auto",
-        )
-        self.device = _torch_device(
-            torch.cuda.is_available(),
-            torch.backends.mps.is_available(),
-        )
-        loaded_model.to(self.device)
-        loaded_model.eval()
-        self._model = loaded_model
-        self._tokenizer = loaded_tokenizer
+            if self.backend == "mlx":
+                mx = import_module("mlx.core")
+                if not mx.metal.is_available():
+                    raise RuntimeError("MLX Metal is not available.")
+                mlx_lm = import_module("mlx_lm")
+                loaded_model, loaded_tokenizer = mlx_lm.load(
+                    source,
+                    tokenizer_config={"trust_remote_code": False},
+                    revision=revision,
+                )
+                self._model = loaded_model
+                self._tokenizer = loaded_tokenizer
+                self.device = "metal"
+            else:
+                torch = import_module("torch")
+                transformers = import_module("transformers")
+                local_only = not allow_download
+                loaded_tokenizer = transformers.AutoTokenizer.from_pretrained(
+                    source,
+                    local_files_only=local_only,
+                    revision=revision,
+                    trust_remote_code=False,
+                )
+                loaded_model = (
+                    transformers.AutoModelForCausalLM.from_pretrained(
+                        source,
+                        local_files_only=local_only,
+                        revision=revision,
+                        trust_remote_code=False,
+                        dtype="auto",
+                    )
+                )
+                self.device = _torch_device(
+                    torch.cuda.is_available(),
+                    torch.backends.mps.is_available(),
+                )
+                loaded_model.to(self.device)
+                loaded_model.eval()
+                self._model = loaded_model
+                self._tokenizer = loaded_tokenizer
+
+            self.trace.emit(
+                "model.chat.resolved",
+                component="chat",
+                data={
+                    "model_id": self.model_id,
+                    "model_source": source,
+                    "requested_revision": requested_revision,
+                    "loaded_revision": revision,
+                    "backend": self.backend,
+                    "device": self.device,
+                },
+            )
 
     def configure_generation(
-        self: ChatSession, settings: dict[str, object]
+        self: ChatSession,
+        settings: dict[str, object],
+        *,
+        trace_turn_id: str | None = None,
     ) -> None:
         """Update generation-only settings without reloading the model.
 
@@ -210,6 +246,11 @@ class ChatSession:
             raise ValueError(
                 f"Unknown generation setting: {sorted(unknown)[0]}"
             )
+        before = {
+            "temperature": self.temperature,
+            "thinking": self.thinking,
+            "max_new_tokens": self.max_new_tokens,
+        }
         temperature = _check_temperature(
             settings.get("temperature", self.temperature)
         )
@@ -222,12 +263,25 @@ class ChatSession:
         self.temperature = temperature
         self.thinking = thinking
         self.max_new_tokens = max_new_tokens
+        after = {
+            "temperature": self.temperature,
+            "thinking": self.thinking,
+            "max_new_tokens": self.max_new_tokens,
+        }
+        self.trace.settings_changed(
+            "generation.settings.changed",
+            component="chat",
+            before=before,
+            after=after,
+            turn_id=trace_turn_id,
+        )
 
     def reply(
         self: ChatSession,
         message: str,
         *,
         max_new_tokens: int | None = None,
+        trace_turn_id: str | None = None,
     ) -> str:
         """Generate and remember one reply.
 
@@ -259,11 +313,24 @@ class ChatSession:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
 
+        reply_started_at = perf_counter()
         token_override = _check_max_new_tokens(max_new_tokens)
         messages = [
             *self.messages,
             {"role": "user", "content": message.strip()},
         ]
+        rendered_prompt: object | None = None
+        if self.trace.include_content:
+            try:
+                rendered_prompt = self._tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=self.thinking,
+                )
+            except (TypeError, ValueError):
+                rendered_prompt = None
+
         tokens = self._tokenizer.apply_chat_template(
             messages,
             tokenize=True,
@@ -275,19 +342,141 @@ class ChatSession:
         if token_budget is None:
             token_budget = self._remaining_context(len(tokens))
 
-        if self.backend == "mlx":
-            answer = self._mlx_reply(tokens, token_budget)
-        else:
-            answer = self._torch_reply(tokens, token_budget)
+        input_data: dict[str, object] = {
+            "call_id": self.trace.new_id("llm-call"),
+            "call_count_for_question": 1,
+            "model_id": self.model_id,
+            "model_source": getattr(self, "model_source", self.model_id),
+            "backend": self.backend,
+            "device": self.device,
+            "history_message_count": len(self.messages),
+            "current_user_message_count": 1,
+            "message_count": len(messages),
+            "roles": [item["role"] for item in messages],
+            "input_token_count": len(tokens),
+            "prompt_token_count": len(tokens),
+            "thinking": self.thinking,
+            "generation": {
+                "temperature": self.temperature,
+                "max_new_tokens": token_budget,
+                "sampling": self.temperature > 0,
+            },
+            "chat_template": {
+                "add_generation_prompt": True,
+                "enable_thinking": self.thinking,
+            },
+        }
+        artifact_stem = trace_turn_id or self.trace.new_id("chat-input")
+        if self.trace.include_content:
+            input_data["messages_artifact"] = self.trace.artifact(
+                f"{artifact_stem}-messages",
+                messages,
+            )
+            if rendered_prompt is not None:
+                input_data["rendered_prompt_artifact"] = self.trace.artifact(
+                    f"{artifact_stem}-rendered-prompt",
+                    rendered_prompt,
+                    text=True,
+                )
+        if self.trace.include_token_ids:
+            input_data["input_token_ids_artifact"] = self.trace.artifact(
+                f"{artifact_stem}-input-token-ids",
+                list(tokens),
+            )
+        self.trace.emit(
+            "llm.call.input",
+            component="chat",
+            data=input_data,
+            turn_id=trace_turn_id,
+        )
+
+        self._last_generation_output_token_count = None
+        self._last_generation_token_count_source = None
+        generation_started_at = perf_counter()
+        with self.trace.span(
+            "llm.call",
+            component="chat",
+            data={
+                "backend": self.backend,
+                "model_id": self.model_id,
+                "prompt_token_count": len(tokens),
+                "max_new_tokens": token_budget,
+                "temperature": self.temperature,
+                "call_id": input_data["call_id"],
+            },
+            turn_id=trace_turn_id,
+        ):
+            if self.backend == "mlx":
+                if self.trace.enabled:
+                    answer = self._mlx_reply(
+                        tokens,
+                        token_budget,
+                        trace_turn_id=trace_turn_id,
+                    )
+                else:
+                    answer = self._mlx_reply(tokens, token_budget)
+            elif self.trace.enabled:
+                answer = self._torch_reply(
+                    tokens,
+                    token_budget,
+                    trace_turn_id=trace_turn_id,
+                )
+            else:
+                answer = self._torch_reply(tokens, token_budget)
+        generation_duration_ms = (
+            perf_counter() - generation_started_at
+        ) * 1000
 
         if not isinstance(answer, str) or not answer.strip():
             raise RuntimeError("The model returned no text.")
 
+        if (
+            self.trace.enabled
+            and self._last_generation_output_token_count is None
+        ):
+            self._last_generation_output_token_count = _text_token_count(
+                self._tokenizer,
+                answer,
+            )
+            self._last_generation_token_count_source = (
+                "retokenized_decoded_text"
+                if self._last_generation_output_token_count is not None
+                else "unavailable"
+            )
         answer = answer.strip()
         self.messages = [
             *messages,
             {"role": "assistant", "content": answer},
         ]
+        output_data: dict[str, object] = {
+            "call_id": input_data["call_id"],
+            "call_count_for_question": 1,
+            "model_id": self.model_id,
+            "input_token_count": len(tokens),
+            "output_token_count": (self._last_generation_output_token_count),
+            "output_token_count_source": (
+                self._last_generation_token_count_source
+            ),
+            "character_count": len(answer),
+            "generation_duration_ms": round(generation_duration_ms, 3),
+            "reply_duration_ms": round(
+                (perf_counter() - reply_started_at) * 1000,
+                3,
+            ),
+        }
+        if self.trace.include_content:
+            output_data["answer_artifact"] = self.trace.artifact(
+                f"{artifact_stem}-answer",
+                answer,
+                text=True,
+            )
+        self.trace.emit(
+            "llm.call.output",
+            component="chat",
+            data=output_data,
+            turn_id=trace_turn_id,
+            duration_ms=generation_duration_ms,
+        )
         return answer
 
     def _remaining_context(
@@ -332,6 +521,8 @@ class ChatSession:
         self: ChatSession,
         tokens: list[int],
         token_budget: int,
+        *,
+        trace_turn_id: str | None = None,
     ) -> str:
         """Generate through MLX.
 
@@ -365,6 +556,8 @@ class ChatSession:
         self: ChatSession,
         tokens: list[int],
         token_budget: int,
+        *,
+        trace_turn_id: str | None = None,
     ) -> str:
         """Generate through PyTorch.
 
@@ -402,6 +595,25 @@ class ChatSession:
         with torch.inference_mode():
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
+        self._last_generation_output_token_count = len(generated)
+        self._last_generation_token_count_source = "generated_token_ids"
+        data: dict[str, object] = {
+            "input_token_count": len(tokens),
+            "output_token_count": len(generated),
+            "generated_token_count": len(generated),
+        }
+        if self.trace.include_token_ids:
+            stem = trace_turn_id or self.trace.new_id("chat-output")
+            data["output_token_ids_artifact"] = self.trace.artifact(
+                f"{stem}-output-token-ids",
+                generated,
+            )
+        self.trace.emit(
+            "llm.call.output.tokens",
+            component="chat",
+            data=data,
+            turn_id=trace_turn_id,
+        )
         return tokenizer.decode(
             generated,
             skip_special_tokens=True,
@@ -543,6 +755,25 @@ def _check_temperature(value: float) -> float:
         raise ValueError("temperature must be zero or a positive number.")
 
     return float(value)
+
+
+def _text_token_count(tokenizer: object, text: str) -> int | None:
+    """Count decoded output with the active tokenizer when necessary."""
+
+    encode = getattr(tokenizer, "encode", None)
+    if not callable(encode):
+        return None
+    try:
+        try:
+            tokens = encode(text, add_special_tokens=False)
+        except TypeError:
+            tokens = encode(text)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    try:
+        return len(tokens)
+    except TypeError:
+        return None
 
 
 def _check_max_new_tokens(value: int | None) -> int | None:

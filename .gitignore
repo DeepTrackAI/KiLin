@@ -4,6 +4,10 @@
 # Local Python environment
 .venv/
 
+# Local sandbox contents
+/sandbox/*
+!sandbox/.gitkeep
+
 # Python-generated files
 __pycache__/
 *.py[cod]
