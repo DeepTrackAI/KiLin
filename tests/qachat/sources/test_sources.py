@@ -53,22 +53,27 @@ class TestSources(unittest.TestCase):
                 read_repository_files(report)
 
     def test_unknown_text_type_stays_whole(self) -> None:
+        # .rst is in DEFAULT_EXTENSIONS but has no extensions/sources_rst.py
+        # module -- .txt used to be this test's example of an unregistered
+        # extension, but sources_txt.py now gives it real paragraph-aware
+        # extraction (see test_sources_txt.py), so it no longer exercises
+        # the generic whole-file fallback this test is actually about.
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "notes.txt").write_text(
+            (root / "notes.rst").write_text(
                 "Keep this whole.\n",
                 encoding="utf-8",
             )
             report = scan_repository(
                 root,
-                extensions=[".txt"],
+                extensions=[".rst"],
             )
             files = read_repository_files(report)
             units = extract_source_units(files)
 
         self.assertEqual(len(units), 1)
         self.assertEqual(units[0].kind, "file")
-        self.assertEqual(units[0].path, Path("notes.txt"))
+        self.assertEqual(units[0].path, Path("notes.rst"))
         self.assertEqual(units[0].text, "Keep this whole.\n")
 
 
