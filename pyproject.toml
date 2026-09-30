@@ -23,6 +23,11 @@ torch = [
 gui = [
     "PySide6>=6.8,<7",
 ]
+# Extra dependencies for the CodeRAG-Bench evaluation notebooks only.
+bench = [
+    "datasets==5.0.1",
+    "pytrec_eval==0.5",
+]
 
 
 [project.scripts]
@@ -37,12 +42,6 @@ include = ["qachat*"]
 
 [tool.setuptools.package-data]
 "qachat.gui" = ["web/*.html", "web/*.css", "web/*.js"]
-
-# Extra dependencies for the CodeRAG-Bench evaluation notebooks only.
-bench = [
-    "datasets==5.0.1",
-    "pytrec_eval==0.5",
-]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.
 [dependency-groups]

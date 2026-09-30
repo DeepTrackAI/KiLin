@@ -144,6 +144,7 @@ def _sync_environment(root: Path) -> None:
         if platform.system() != "Windows":
             command.extend(("--extra", "mlx"))
         command.extend(("--extra", "torch"))
+        command.extend(("--extra", "bench"))
     elif platform.system() == "Windows":
         command = [
             "powershell",
