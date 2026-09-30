@@ -45,7 +45,7 @@ htmlcov/
 *.incomplete
 
 # Benchmark sanbox and run outputs
-benchmark/sandbox/*
-!benchmark/sandbox/.gitkeep
+benchmarks/sandbox/*
+!benchmarks/sandbox/.gitkeep
 benchmarks/results/*
 !benchmarks/results/.gitkeep
