@@ -1,12 +1,13 @@
 # QAChat
 
-QAChat answers questions about local code and literature using a local LLM
-that ensures no data are shared outsde the local enviroment.
+QAChat answers questions about code and literature contained in a local
+repository using a local LLM that ensures no data are shared outsde the local
+enviroment.
 
 ## 1. Install once
 
-**Do this once on each computer.** Open a terminal inside the QAChat
-repository, then run the command for your system.
+**Do this once on each computer.** To install QAChat, open a terminal in the
+QAChat repository and run the appropriate command for your operative system.
 
 Mac or Linux:
 
@@ -20,7 +21,7 @@ Windows x64 PowerShell:
 powershell -NoProfile -ExecutionPolicy Bypass -File setup/setup.ps1
 ```
 
-When it finishes, you will see:
+When the installation finishes, you will see:
 
 ```text
 Setup complete. The project environment is in .venv
@@ -30,40 +31,30 @@ Select the QAChat `.venv` kernel when opening a notebook.
 
 To launch the optional desktop GUI from the repository, run:
 
-~~~sh
+```
 uv run qachat --gui
-~~~
+```
 
-That single command creates or refreshes the uv environment when needed.
-The launcher adds the Qt GUI layer and native computation backend
+That command creates or refreshes the uv environment when needed.
+The launcher adds the PySide6 Qt GUI layer and native computation backend
 automatically: MLX on Apple silicon, or PyTorch elsewhere. If the .venv is
-already active, use qachat --gui directly. Use --backend mlx or --backend
-torch to override Automatic.
+already active, use `qachat --gui` directly. Use `--backend mlx` or `--backend
+torch` to override the automatic settings.
 
-The install remains layered: the shared QAChat core is always installed, one
-computation backend is selected for model work, and PySide6 is added only for
-the desktop interface. Model weights are never downloaded automatically.
+Models are downloaded and stored in the Hugging Face cache.
 
-In the GUI, select or drag several files and folders, then check what to
-include. Leave sources blank for a bundled example. QAChat copies checked files
-to one workspace, leaving the originals unchanged. The latest sandbox project
-can be resumed from the landing screen; New project starts another.
-Conversation settings can be changed beside chat, and Stop ends the active
-operation. The GUI code lives in qachat/gui/; retrieval and model logic
-remain in the rest of qachat/.
+## 2. Chat with your repository
 
-## 2. Chat with your project
-
-Open [Project chat](tutorials/130_project_chat.ipynb). In its configuration
-cell:
+Open the [Repository Q&A Chat](tutorials/130_project_chat.ipynb).
+In its configuration cell:
 
 - Set `PROJECT_KIND` to `"code"` or `"literature"`.
 - Set `PROJECT_DIRECTORY` to your original source folder.
 - Leave `PROJECT_DIRECTORY = None` to use `example_repos/code_repo` or
   `example_repos/literature_repo`.
 
-Every source, including the bundled examples, is mirrored into a managed
-workspace under `sandbox/`; the original folder is never modified. For example,
+Every source, including the bundled examples, is copied into a workspace in
+`sandbox/`; the original folder is never modified. For example,
 `example_repos/code_repo` becomes:
 
 ```text
@@ -80,9 +71,6 @@ On each open, QAChat compares SHA-256 manifests and synchronizes only added,
 removed, or modified selected source files. The retrieval index is reused only
 when both `indexes/source_manifest.json` and the saved indexing settings still
 match. Otherwise QAChat rebuilds the index automatically.
-
-The whole `sandbox/` directory is generated local state and should be ignored by
-Git. Models continue to use the normal Hugging Face cache.
 
 You can also check source changes directly from Python at any time:
 
@@ -108,7 +96,7 @@ Pass the same extensions/include/exclude settings used by the project profile
 when you have customized repository selection.
 
 `RAGSession` also accepts an optional UI-agnostic progress callback. The same
-callback API can drive notebook output now and a GUI progress bar later:
+callback API can drive notebook output and a GUI progress bar:
 
 ```python
 from qachat import RAGSession
@@ -128,13 +116,13 @@ between batches.
 
 ### Inspect one complete execution trace
 
-QAChat writes an ordered JSON trace for project setup, model and
-backend selection, file scanning, chunking, indexing, retrieval ranks and
+QAChat writes an ordered JSON trace for project setup, model and backend
+selection, file scanning, chunking, indexing, retrieval ranks and
 context-expansion decisions, effective per-turn settings, exact model input
-and output,
-input/output token counts, per-call timings, and failures. Every event has a
-UTC timestamp and sequence number. Exact prompts, evidence, outputs, and
-checkpoints remain inline so the file is portable and self-contained.
+and output, input/output token counts, per-call timings, and failures. Every
+event has a UTC timestamp and sequence number. Exact prompts, evidence,
+outputs, and checkpoints remain inline so the file is portable and
+self-contained.
 
 ```python
 from qachat import RAGSession, TraceConfig
