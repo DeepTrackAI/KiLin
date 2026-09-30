@@ -37,7 +37,7 @@
       "task_id": "A3",
       "question": "What is QAChat's RAG system prompt, word for word?",
       "gold_citations": [
-        "qachat/rag.py:68"
+        "qachat/rag.py:77-82"
       ],
       "fact_checklist": [
         "\"Answer only from the supplied project evidence.\"",
@@ -53,8 +53,8 @@
       "task_id": "A4",
       "question": "How does RAGSession build the evidence block it hands to the model -- what does each numbered citation actually look like?",
       "gold_citations": [
-        "qachat/rag.py:847-857",
-        "qachat/rag.py:362-407"
+        "qachat/rag.py:1628-1643",
+        "qachat/rag.py:620-630"
       ],
       "fact_checklist": [
         "Format is '[n] path:start_line-end_line (symbol)' then the chunk text on the next line.",
@@ -165,7 +165,7 @@
       "task_id": "A12",
       "question": "Does QAChat have a plugin or extension system for adding new retrieval channels beyond semantic/lexical/code?",
       "gold_citations": [
-        "qachat/rag.py:702-752"
+        "qachat/rag.py:1156-1349"
       ],
       "fact_checklist": [
         "No -- QAChat does not have a plugin or registry system for adding a new, fourth retrieval channel.",
@@ -272,7 +272,7 @@
       "task_id": "A20",
       "question": "Is model_catalog.py's MODEL_CHOICES list enforced anywhere in QAChat, or is it purely informational?",
       "gold_citations": [
-        "qachat/gui/engine.py:209-224"
+        "qachat/gui/engine.py:325-349"
       ],
       "fact_checklist": [
         "It is enforced in one narrow place: the GUI's ChatBridge/engine download() method refuses to download a model_id that isn't in MODEL_CHOICES, raising ValueError ('Choose a suggested model to download.').",
