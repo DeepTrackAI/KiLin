@@ -201,6 +201,41 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "reset"})
 
+    @Slot()
+    def newConversation(self) -> None:
+        """Create and open a separate empty conversation."""
+
+        self.commandRequested.emit({"action": "new_conversation"})
+
+    @Slot()
+    def branchConversation(self) -> None:
+        """Branch the active conversation at its current saved checkpoint."""
+
+        self.commandRequested.emit({"action": "branch_conversation"})
+
+    @Slot(str)
+    def selectConversation(self, conversation_id: str) -> None:
+        """Open a saved conversation without reloading project resources."""
+
+        self.commandRequested.emit(
+            {
+                "action": "select_conversation",
+                "conversation_id": conversation_id,
+            }
+        )
+
+    @Slot(str, str)
+    def renameConversation(self, conversation_id: str, name: str) -> None:
+        """Rename a saved conversation in the project catalog."""
+
+        self.commandRequested.emit(
+            {
+                "action": "rename_conversation",
+                "conversation_id": conversation_id,
+                "name": name,
+            }
+        )
+
     @Slot(str, str)
     def findSavedProject(self, kind: str, workspace: str) -> None:
         """Refresh Resume for the selected project type and workspace."""
@@ -308,12 +343,9 @@ class ChatWindow(QMainWindow):
         self.bridge.commandRequested.connect(self._send_command)
         self.bridge.stopRequested.connect(self._stop_operation)
 
-        sandbox = ROOT / "sandbox"
-        sandbox.mkdir(exist_ok=True)
         # Model work belongs in a child process so Stop can interrupt it.
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(ROOT))
-        self.process.setStandardErrorFile(str(sandbox / "gui-engine.log"))
         self.process.started.connect(self._send_pending)
         self.process.readyReadStandardOutput.connect(self._read_events)
         self.process.finished.connect(self._process_finished)

@@ -29,7 +29,6 @@ import numpy as np
 from qachat.chunking import Chunk
 from qachat.embeddings import EmbeddingSession
 
-
 __all__ = [
     "SemanticIndex",
     "SemanticResult",
@@ -91,7 +90,8 @@ def build_semantic_index(
     batch_size: int | None, optional
         Number of chunks embedded per model call. ``None`` preserves the
         previous all-at-once behavior.
-    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+    progress_callback: collections.abc.Callable[[int, int], None] | None,
+        optional
         Called after each embedding batch with ``current`` and ``total``.
 
     Returns
@@ -109,7 +109,9 @@ def build_semantic_index(
     if not chunks:
         raise ValueError("At least one chunk is required for an index.")
 
-    if batch_size is not None and (type(batch_size) is not int or batch_size < 1):
+    if batch_size is not None and (
+        type(batch_size) is not int or batch_size < 1
+    ):
         raise ValueError("batch_size must be a positive whole number or None.")
     if progress_callback is not None and not callable(progress_callback):
         raise ValueError("progress_callback must be callable or None.")
@@ -160,6 +162,7 @@ def semantic_search(
     count: int = 5,
     backend: str = "loop",
     matrix: np.ndarray | None = None,
+    trace_turn_id: str | None = None,
 ) -> list[SemanticResult]:
     """Rank indexed chunks by cosine similarity to one query.
 
@@ -214,7 +217,13 @@ def semantic_search(
     if backend not in ("loop", "numpy"):
         raise ValueError('backend must be "loop" or "numpy".')
 
-    query_vector = embedding_session.embed_query(query_text)
+    if trace_turn_id is None:
+        query_vector = embedding_session.embed_query(query_text)
+    else:
+        query_vector = embedding_session.embed_query(
+            query_text,
+            trace_turn_id=trace_turn_id,
+        )
     expected_dimension = len(index.embeddings[0])
     if len(query_vector) != expected_dimension:
         raise ValueError("Query and index vector dimensions do not match.")

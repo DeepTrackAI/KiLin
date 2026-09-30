@@ -77,6 +77,12 @@
             <p id="project-detail" class="hint"></p>
           </div>
           <div class="heading-actions">
+            <label class="conversation-picker" for="conversation-picker">
+              <span>Conversation</span>
+              <select id="conversation-picker" aria-label="Open conversation"></select>
+            </label>
+            <button id="rename-chat" type="button" class="secondary">Rename</button>
+            <button id="branch-chat" type="button" class="secondary">Branch</button>
             <button id="new-chat" type="button" class="secondary">New chat</button>
             <button id="change-project" type="button" class="secondary">New project</button>
           </div>
@@ -118,14 +124,6 @@
         <details id="references-section" open>
           <summary>References</summary>
           <p id="references-for" class="hint">Select an answer to see its sources.</p>
-          <section id="source-preview" class="source-preview hidden" aria-label="Cited source preview">
-            <header class="source-preview-heading">
-              <strong id="source-preview-title"></strong>
-              <button id="close-source-preview" type="button" class="sidebar-toggle">Close</button>
-            </header>
-            <p id="source-preview-note" class="hint"></p>
-            <pre id="source-preview-lines" class="source-preview-lines"></pre>
-          </section>
           <div id="references-list"></div>
         </details>
       </aside>

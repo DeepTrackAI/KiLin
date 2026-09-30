@@ -13,6 +13,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import shutil
+from time import perf_counter
 from typing import Mapping, Sequence
 
 from qachat.project import (
@@ -23,6 +24,7 @@ from qachat.project import (
     open_project,
 )
 from qachat.repository import scan_repository
+from qachat.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = ["prepare_sources_workspace"]
 
@@ -34,6 +36,7 @@ def prepare_sources_workspace(
     *,
     selected_files: Mapping[str, Sequence[str]] | None = None,
     settings: dict[str, object] | None = None,
+    trace: TraceSink | None = None,
 ) -> QAProject:
     """Add sources to one project without changing their original files.
 
@@ -44,6 +47,20 @@ def prepare_sources_workspace(
 
     """
 
+    started_at = perf_counter()
+    active_trace = trace if trace is not None else NullTraceLogger()
+    active_trace.emit(
+        "workspace.prepare.started",
+        component="workspace",
+        data={
+            "source_paths": [str(path) for path in source_paths],
+            "kind": kind,
+            "workspace_directory": str(workspace_directory),
+            "selected_files": selected_files,
+            "settings": settings,
+        },
+        status="started",
+    )
     if kind not in {"code", "literature"}:
         raise ValueError("kind must be code or literature.")
     if not isinstance(source_paths, (list, tuple)):
@@ -59,7 +76,9 @@ def prepare_sources_workspace(
     if workspace.exists() and not workspace.is_dir():
         raise NotADirectoryError(f"Choose a workspace folder: {workspace}")
     if workspace.is_dir() and not (workspace / "profile.ini").is_file():
-        if any(workspace.iterdir()):
+        if any(workspace.iterdir()) and not _contains_only_trace_output(
+            workspace
+        ):
             raise ValueError("Choose an empty folder or a QAChat workspace.")
 
     chosen: list[Path] = []
@@ -92,7 +111,11 @@ def prepare_sources_workspace(
             "This project does not use a managed sources/ folder."
         )
     if settings:
-        project = configure_project(workspace, settings)
+        project = configure_project(
+            workspace,
+            settings,
+            trace=active_trace,
+        )
 
     manifest_path = workspace / "sources.json"
     records = _read_records(manifest_path)
@@ -115,12 +138,52 @@ def prepare_sources_workspace(
         copied = _copy_source(
             source, destination, project, workspace, selection
         )
+        active_trace.emit(
+            "workspace.source.copied",
+            component="workspace",
+            data={
+                "source": str(source),
+                "destination": str(destination),
+                "requested_files": selection,
+                "copied_files": copied,
+            },
+        )
         record["files"] = copied
         if record not in records:
             records.append(record)
             used.add(record["name"])
         _write_records(manifest_path, records)
-    return open_project(workspace)
+    prepared = open_project(workspace)
+    active_trace.emit(
+        "workspace.prepare.completed",
+        component="workspace",
+        data={
+            "project_directory": str(prepared.root),
+            "source_directory": str(prepared.source),
+            "sources_manifest": str(manifest_path),
+            "source_count": len(records),
+        },
+        duration_ms=(perf_counter() - started_at) * 1000,
+    )
+    return prepared
+
+
+def _contains_only_trace_output(workspace: Path) -> bool:
+    """Allow a new project trace to exist before workspace preparation."""
+
+    entries = list(workspace.iterdir())
+    if len(entries) != 1 or entries[0].name != "logs":
+        return False
+    logs = entries[0]
+    if logs.is_symlink() or not logs.is_dir():
+        return False
+    log_entries = list(logs.iterdir())
+    return (
+        len(log_entries) == 1
+        and log_entries[0].name == "traces"
+        and log_entries[0].is_dir()
+        and not log_entries[0].is_symlink()
+    )
 
 
 def _unique_name(source: Path, used: set[str], root: Path) -> str:

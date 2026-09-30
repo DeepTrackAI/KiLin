@@ -70,6 +70,13 @@ from .sources import (
     extract_source_units,
     read_repository_files,
 )
+from .trace_logging import (
+    NullTraceLogger,
+    TraceConfig,
+    TraceLogger,
+    TraceMode,
+    TraceSink,
+)
 from .workspace import prepare_sources_workspace
 
 __all__ = [
@@ -100,6 +107,11 @@ __all__ = [
     "SemanticResult",
     "SourceFile",
     "SourceUnit",
+    "TraceConfig",
+    "TraceLogger",
+    "TraceMode",
+    "TraceSink",
+    "NullTraceLogger",
     "available_models",
     "build_code_graph",
     "build_repository_manifest",
