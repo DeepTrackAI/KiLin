@@ -133,6 +133,7 @@ def build_code_graph(
             known,
         )
 
+    extensions: dict[Path, object] = {}
     for source_file in files:
         suffix = source_file.path.suffix.lower().lstrip(".")
         if not suffix:
@@ -144,6 +145,18 @@ def build_code_graph(
             if error.name == module_name:
                 continue
             raise
+        extensions[source_file.path] = extension
+
+        extract_constants = getattr(extension, "extract_module_constants", None)
+        if extract_constants is not None:
+            for short_name, module in extract_constants(source_file).items():
+                known.setdefault(short_name, set()).add(module)
+
+    for source_file in files:
+        extension = extensions.get(source_file.path)
+        if extension is None:
+            continue
+        suffix = source_file.path.suffix.lower().lstrip(".")
 
         extracted = extension.extract_code_relations(source_file, known)
         if not isinstance(extracted, set) or any(

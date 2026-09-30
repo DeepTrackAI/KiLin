@@ -31,6 +31,51 @@ __all__ = [
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
+# Python operator symbols mapped to the dunder method(s) they invoke. A query
+# like "what does & do" names no identifier at all -- _name_words() strips
+# punctuation entirely, so the ordinary whole-word matching below never sees
+# it. Some dunder names normalize to common English words once underscores
+# become spaces (__and__ -> "and"), which would false-match any unrelated
+# query merely containing that word -- so this table is matched against the
+# raw query text directly, on the literal symbol, never through the
+# word-normalization path used for identifier names.
+_OPERATOR_DUNDERS: dict[str, tuple[str, ...]] = {
+    ">>": ("__rshift__", "__rrshift__"),
+    "<<": ("__lshift__", "__rlshift__"),
+    "**": ("__pow__", "__rpow__"),
+    "//": ("__floordiv__", "__rfloordiv__"),
+    "==": ("__eq__",),
+    "!=": ("__ne__",),
+    "<=": ("__le__", "__rle__"),
+    ">=": ("__ge__", "__rge__"),
+    "&": ("__and__", "__rand__"),
+    "|": ("__or__", "__ror__"),
+    "^": ("__xor__", "__rxor__"),
+    "+": ("__add__", "__radd__"),
+    "-": ("__sub__", "__rsub__"),
+    "*": ("__mul__", "__rmul__"),
+    "/": ("__truediv__", "__rtruediv__"),
+    "%": ("__mod__", "__rmod__"),
+    "<": ("__lt__", "__rlt__"),
+    ">": ("__gt__", "__rgt__"),
+    "~": ("__invert__",),
+}
+# Reflected dunders (the second name for any operator with two): only
+# invoked as Python's fallback when the left operand does not define the
+# forward method, so a query naming the symbol almost always means the
+# forward method. Used to break ties between same-depth siblings below.
+_REFLECTED_DUNDERS: frozenset[str] = frozenset(
+    names[1] for names in _OPERATOR_DUNDERS.values() if len(names) > 1
+)
+
+# Longest symbols first, so ">>" matches before the ">" it contains.
+_OPERATOR_PATTERN = re.compile(
+    "|".join(
+        rf"(?<![A-Za-z0-9]){re.escape(symbol)}(?![A-Za-z0-9])"
+        for symbol in sorted(_OPERATOR_DUNDERS, key=len, reverse=True)
+    )
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CodeResult:
@@ -65,22 +110,37 @@ def resolve_code_entities(
         raise ValueError("query_text must be non-empty text.")
 
     query_words = _name_words(query_text)
-    matches = [
+    word_matches = [
         entity
         for entity in graph.entities
-        if _name_words(entity.name.split(".")[-1]) in query_words
+        if _contains_whole_words(
+            query_words,
+            _name_words(entity.name.split(".")[-1]),
+        )
     ]
-    if not matches:
+    if word_matches:
+        longest = max(
+            len(_name_words(entity.name.split(".")[-1]))
+            for entity in word_matches
+        )
+        word_matches = [
+            entity
+            for entity in word_matches
+            if len(_name_words(entity.name.split(".")[-1])) == longest
+        ]
+
+    operator_matches = _operator_seed_entities(graph, query_text)
+    if not word_matches and not operator_matches:
         return []
 
-    longest = max(
-        len(_name_words(entity.name.split(".")[-1])) for entity in matches
-    )
-    return [
-        entity
-        for entity in matches
-        if len(_name_words(entity.name.split(".")[-1])) == longest
-    ]
+    seen: set[str] = set()
+    matches: list[CodeEntity] = []
+    for entity in [*word_matches, *operator_matches]:
+        if entity.name in seen:
+            continue
+        seen.add(entity.name)
+        matches.append(entity)
+    return matches
 
 
 def code_search(
@@ -127,9 +187,26 @@ def code_search(
             )
         )
 
+    # Tie-break: prefer the more specific matched entity before falling
+    # back to the chunk identifier. Without this, a broad seed (a class
+    # named in the query) and a narrow seed (a specific method within it,
+    # e.g. from an operator symbol) tie at the same distance, and a large
+    # class chunked into many pieces can crowd out the one chunk for the
+    # narrow match on nothing more than hash order.
+    #
+    # A second tie-break handles same-depth siblings: an operator symbol
+    # resolves to both its forward dunder (__and__) and its reflected
+    # counterpart (__rand__, only invoked when the left operand does not
+    # define the forward method), and both sit at the same distance and
+    # depth. The forward method is what runs for the plain "a & b" case
+    # a query about the symbol is almost always asking about, so it wins
+    # the tie; only when the forward chunk is unavailable does the
+    # reflected one surface instead.
     results.sort(
         key=lambda result: (
             result.distance,
+            -result.entity.count("."),
+            result.entity.split(".")[-1] in _REFLECTED_DUNDERS,
             result.chunk.identifier,
         )
     )
@@ -141,6 +218,70 @@ def _name_words(text: str) -> str:
 
     expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     return " ".join(_WORD.findall(expanded.replace("_", " ").lower()))
+
+
+def _operator_seed_entities(
+    graph: CodeGraph,
+    query_text: str,
+) -> list[CodeEntity]:
+    """Return entities for an operator symbol written literally in the query.
+
+    A symbol only counts when it is not adjacent to a letter or digit on
+    either side. This keeps ordinary punctuation and numbers from triggering
+    a match -- a hyphen inside "well-known" or a slash inside "9/30" never
+    reaches this far -- while still recognizing a symbol set off by
+    whitespace, quotes, backticks, or parentheses, the way "the & operator",
+    "using `>>`", and "(a & b)" all are.
+    """
+
+    dunder_names: set[str] = set()
+    for match in _OPERATOR_PATTERN.finditer(query_text):
+        dunder_names.update(_OPERATOR_DUNDERS[match.group(0)])
+    if not dunder_names:
+        return []
+    return [
+        entity
+        for entity in graph.entities
+        if entity.name.split(".")[-1] in dunder_names
+    ]
+
+
+def _contains_whole_words(query_words: str, name_words: str) -> bool:
+    """Return whether name_words appears in query_words as whole words.
+
+    Both arguments are already space-joined, lowercase word sequences from
+    :func:`_name_words`. A plain substring check would let a short entity
+    name match inside an unrelated longer word that merely starts the same
+    way -- for example the module entity ``project`` would match the query
+    word ``projects`` (an ordinary English plural, not a reference to
+    ``qachat/project.py``), or ``act`` would match inside ``react``. This
+    instead requires name_words to appear at a word boundary on both sides,
+    so only an actual whole-word (or whole-phrase, for multi-word names)
+    occurrence counts as an explicit reference.
+
+    Parameters
+    ----------
+    query_words: str
+        Normalized words from the query text.
+    name_words: str
+        Normalized words from one code entity's short name.
+
+    Returns
+    -------
+    bool
+        Whether name_words occurs in query_words as whole words.
+
+    """
+
+    if not name_words:
+        return False
+    return (
+        re.search(
+            rf"(?<!\w){re.escape(name_words)}(?!\w)",
+            query_words,
+        )
+        is not None
+    )
 
 
 def _graph_distances(

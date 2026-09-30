@@ -93,11 +93,19 @@ class Evidence:
     path: pathlib.Path
         Source path relative to the configured source folder.
     start_line, end_line: int
-        One-based source line range.
+        One-based source line range. For a notebook cell (``cell`` is not
+        None), these are local to that cell -- every cell starts at line 1 --
+        not a position in the underlying ``.ipynb`` file, which has no
+        meaningful line numbering a Jupyter reader would recognize.
     symbol: str | None
         Function, class, or section name when available.
     text: str
         Exact retrieved source text.
+    cell: int | None
+        One-based notebook cell number, when this evidence came from a
+        ``.ipynb`` source. None for every other source type. Required to
+        tell two notebook cells apart when they happen to share the same
+        local start_line/end_line range.
 
     """
 
@@ -107,6 +115,7 @@ class Evidence:
     end_line: int
     symbol: str | None
     text: str
+    cell: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1312,6 +1321,7 @@ class RAGSession:
                 end_line=chunk.end_line,
                 symbol=chunk.symbol,
                 text=chunk.text,
+                cell=chunk.cell,
             )
             for index, chunk in enumerate(expanded, start=1)
         )
@@ -1668,6 +1678,11 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
                 str(item["symbol"]) if item["symbol"] is not None else None
             ),
             text=str(item["text"]),
+            cell=(
+                int(item["cell"])
+                if item.get("cell") is not None
+                else None
+            ),
         )
         for item in evidence_data
     )

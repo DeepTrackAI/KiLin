@@ -1,0 +1,280 @@
+{
+  "corpus": "DeepTrackAI/DeepTrack2 (deeptrack/ package + tutorials/ notebooks)",
+  "corpus_description": "Modular Python library for generating, manipulating, and analyzing image data pipelines for machine learning and experimental imaging (https://github.com/DeepTrackAI/DeepTrack2). Indexed via a local checkout, repo root -- both the deeptrack/ package and the tutorials/ notebook tree (getting-started, examples, advanced topics, developer guides). See notebook 90's Section 2/4.",
+  "tasks": [
+    {
+      "task_id": "D1",
+      "question": "What does the & operator do between two Feature pipelines in DeepTrack2?",
+      "gold_citations": [
+        "deeptrack/features.py:3965-4023"
+      ],
+      "fact_checklist": [
+        "& is Feature.__and__, shorthand for feature >> dt.Stack(value=other) -- it chains into Stack.",
+        "Stack concatenates/stacks the two features' outputs (documented example: [1,2,3] & [4,5,6] -> [1,2,3,4,5,6]).",
+        "A correct answer shouldn't confuse this with Combine, a separate structural feature class."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "& is Feature.__and__, shorthand for chaining into Stack: `feature & other` is exactly `feature >> dt.Stack(value=other)`. It concatenates the two features' outputs (e.g. [1,2,3] & [4,5,6] -> [1,2,3,4,5,6]) -- it's not the same as Combine, a separate structural feature class defined elsewhere in the module."
+    },
+    {
+      "task_id": "D2",
+      "question": "What does calling .update() on a feature do?",
+      "gold_citations": [
+        "deeptrack/features.py:1543-1589"
+      ],
+      "fact_checklist": [
+        "update() does not itself recompute or return a new value -- it forces the feature to recompute the next time it is evaluated (the next call).",
+        "By default a feature returns the same cached value on repeated calls; calling .update() is what makes the next evaluation produce a fresh result.",
+        "Calling .new() is equivalent to calling .update() plus evaluation -- it resets and immediately re-evaluates in one step, unlike .update() alone."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "By default, calling a feature multiple times returns the same cached value. Calling .update() forces the feature to recompute and return a new value the next time it is evaluated -- it doesn't recompute anything itself, it just makes the next call produce a fresh result. Calling .new() is equivalent to calling .update() plus evaluation: it resets and immediately re-evaluates in one step, so you get the new value right away instead of needing a separate call afterward."
+    },
+    {
+      "task_id": "D3",
+      "question": "What does the Microscope class do?",
+      "gold_citations": [
+        "deeptrack/optical/optics.py:153-187"
+      ],
+      "fact_checklist": [
+        "Microscope combines a sample feature (resolving scatterers) with an Optics objective to simulate imaging -- it is a StructuralFeature composing the two, not doing the physics itself.",
+        "It validates compatibility between scatterers and optics, and interprets volume-based scatterers into scalar fields when needed.",
+        "Numerical propagation is delegated to the objective (Optics); Microscope evaluates in an upscaled coordinate system and downscales to detector resolution using the optics' own detector model."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Microscope combines a sample (a feature resolving one or more scatterers to be imaged) with an optical system (an Optics objective) to simulate the imaging process -- it is a StructuralFeature that composes the two rather than doing the physics itself. It validates that the scatterers and the optics are semantically compatible, and interprets volume-based scatterers into scalar fields when needed. The actual numerical propagation is delegated to the objective (Optics); Microscope evaluates the sample in an internally upscaled coordinate system (set by objective.upscale) and then downscales the resulting image to detector resolution using the optics-specific detector model."
+    },
+    {
+      "task_id": "D4",
+      "question": "What does the Sequence class do?",
+      "gold_citations": [
+        "deeptrack/sequences.py:117-152"
+      ],
+      "fact_checklist": [
+        "Sequence evaluates a wrapped feature multiple times in succession (sequence_length times) to produce a sequence of outputs.",
+        "Before each evaluation, it propagates the sequential context (sequence_index and sequence_length) to all dependent SequentialProperty attributes in the feature graph.",
+        "This enables temporal simulations and animations where feature properties evolve over discrete time steps according to user-defined sampling rules -- the wrapped feature can be a single feature or a whole composed feature graph."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Sequence evaluates a wrapped feature repeatedly -- sequence_length times in succession -- to produce a sequence of outputs. Before each evaluation it propagates the sequential context (sequence_index and sequence_length) to every dependent SequentialProperty attribute in the feature graph, so those properties can evolve over discrete time steps according to user-defined sampling rules. This is what enables temporal simulations and animations, and the wrapped feature can be a single feature or an entire composed feature graph."
+    },
+    {
+      "task_id": "D5",
+      "question": "What is the Arguments feature used for?",
+      "gold_citations": [
+        "deeptrack/features.py:5634-5675"
+      ],
+      "fact_checklist": [
+        "Arguments is a Feature that acts as a container for kwargs exposed as pipeline arguments -- these can be modified or overridden at runtime.",
+        "It is useful for parametrized pipelines, e.g. toggling behavior based on a condition like whether an array is a label or a raw input.",
+        "get() just passes inputs through unchanged while allowing the exposed properties to be overridden; a pipeline is linked to an Arguments container via bind_arguments()."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Arguments is a convenience Feature that acts as a container for pipeline arguments -- kwargs you expose that can be modified or overridden at runtime. It's particularly useful for parametrized pipelines, such as toggling behavior based on a condition like whether an array is a label or a raw input. Its get() method just passes inputs through unchanged while allowing the exposed properties to be overridden; you attach it to a pipeline with bind_arguments()."
+    },
+    {
+      "task_id": "D6",
+      "question": "What does calling .torch() on a feature do?",
+      "gold_citations": [
+        "deeptrack/features.py:1037-1081"
+      ],
+      "fact_checklist": [
+        "torch() switches the feature's backend to PyTorch, so it can be called on torch tensors instead of NumPy arrays.",
+        "An optional device argument (e.g. CPU, CUDA, or MPS) moves the feature to that device via .to(device); if not given, the device is left as-is.",
+        "recursive=True, the default, also converts all dependent features in the pipeline to torch; recursive=False affects only this feature."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Calling .torch() switches a feature's backend to PyTorch so it can be called on torch tensors instead of NumPy arrays. An optional device argument (CPU, CUDA, or MPS) moves the feature to that device via .to(device); if you don't pass one, the device is left as-is. By default (recursive=True) it also converts all of the feature's dependent features to torch; passing recursive=False limits the change to just this feature."
+    },
+    {
+      "task_id": "D7",
+      "question": "What does the PointParticle scatterer represent, and how does its get() method compute the returned voxel?",
+      "gold_citations": [
+        "deeptrack/optical/scatterers.py:633-659",
+        "deeptrack/optical/scatterers.py:669-698"
+      ],
+      "fact_checklist": [
+        "PointParticle represents a diffraction-limited point particle as a single voxel; subpixel positioning is handled at the optics level, not by PointParticle itself.",
+        "For fluorescence imaging it is treated as a zero-dimensional emitter on a discrete voxel grid.",
+        "get() returns a (1,1,1) array/tensor scaled by the voxel volume (the product of the active scale), so the discrete source preserves the correct emitted measure regardless of grid resolution."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "PointParticle represents a diffraction-limited point particle as a single voxel -- subpixel positioning is handled at the optics level, not by PointParticle itself. For fluorescence imaging it's treated as a zero-dimensional emitter on a discrete voxel grid. Its get() method returns a (1,1,1) array or tensor scaled by the voxel volume (the product of the active scale), so the discrete source preserves the correct emitted measure regardless of grid resolution."
+    },
+    {
+      "task_id": "D8",
+      "question": "What does the Poisson feature do, and how does it use the snr parameter when adding noise to an image?",
+      "gold_citations": [
+        "deeptrack/optical/noises.py:471-515",
+        "deeptrack/optical/noises.py:549-593"
+      ],
+      "fact_checklist": [
+        "Poisson adds Poisson-distributed noise to an image, generated from the image's pixel intensity and scaled to achieve a target signal-to-noise ratio (snr, default 100).",
+        "On the NumPy backend it computes a rescale factor as (snr / peak) ** 2, where peak comes from the image's max value relative to background, then clips that rescale factor to avoid overflow (bounded using max_val).",
+        "The image is multiplied by the rescale factor, sampled with np.random.poisson, and then divided back by the rescale factor to return to the original intensity range."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Poisson adds Poisson-distributed noise to an image, generated from the image's pixel intensity and scaled to achieve a target signal-to-noise ratio (the snr parameter, default 100). On the NumPy backend it computes a rescale factor as (snr / peak) ** 2, where peak comes from the image's max value relative to background, and clips that rescale factor to avoid overflow (bounded using max_val). It then multiplies the image by the rescale factor, samples with np.random.poisson, and divides back by the rescale factor to return to the original intensity range."
+    },
+    {
+      "task_id": "D9",
+      "question": "What license is DeepTrack2 released under, and can it be used commercially?",
+      "gold_citations": [
+        "tutorials/2-examples/readme_to_incorporate into MAGIK examples.md:64-66"
+      ],
+      "fact_checklist": [
+        "DeepTrack2 is released under the MIT License -- stated directly in a tutorials/2-examples README (not the top-level README.md/README-pypi.md, which only link to /LICENSE via a badge without stating the license name as readable text).",
+        "MIT is a permissive license, so commercial use is allowed -- but this specific permission is not spelled out in the retrieved text itself, only the license name is; stating that MIT permits commercial use draws on general knowledge of what that named license entails, not on something the evidence says verbatim.",
+        "A correct answer should not overstate confidence beyond what a single tutorial sub-README establishes for the whole project, though in this case it is corroborated by the well-known, unambiguous meaning of a named open-source license."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "DeepTrack2 is released under the MIT License, as stated in a tutorials/2-examples README (the top-level README.md and README-pypi.md only link to /LICENSE via a badge image, without stating the license name as readable text). MIT is a permissive license, so commercial use is allowed -- though that specific permission is not spelled out in the retrieved text itself, only the license name is, so stating it draws on general knowledge of what MIT entails rather than something the evidence says verbatim."
+    },
+    {
+      "task_id": "D10",
+      "question": "How do I export a trained DeepTrack2 pipeline to ONNX format?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "Correct behavior is to say the evidence is insufficient, not to guess an export procedure.",
+        "Verified directly: no mention of ONNX anywhere in deeptrack/ (grepped case-insensitively across the whole package).",
+        "DeepTrack2 pipelines are Feature graphs, not necessarily torch.nn.Module models in the ONNX-exportable sense, so a confident step-by-step answer here would very likely be fabricated."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "Insufficient evidence -- a direct search of deeptrack/ for any mention of ONNX turned up nothing. DeepTrack2 pipelines are Feature graphs, not necessarily torch.nn.Module models in the sense ONNX export normally expects, so a specific step-by-step export procedure isn't something the codebase documents, and a confident answer here would most likely be fabricated."
+    },
+    {
+      "task_id": "D11",
+      "question": "Does DeepTrack2 support multi-GPU training via PyTorch's DistributedDataParallel?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "Correct behavior is to say the evidence is insufficient, not to guess yes or no.",
+        "Verified directly: no mention of DistributedDataParallel, multi-GPU, or NCCL anywhere in deeptrack/ (grepped case-insensitively across the whole package).",
+        "Please verify: this rules out the term appearing in source, but doesn't rule out a DeepTrack2 pipeline being usable inside a user's own DDP-wrapped training loop externally -- the question is about built-in support, not general compatibility."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "Insufficient evidence for a confident yes/no. A direct search of deeptrack/ found no mention of DistributedDataParallel, multi-GPU, or NCCL anywhere in the package, so there's no built-in support documented in the code. That doesn't rule out a DeepTrack2 pipeline being usable inside a user's own DDP-wrapped training loop externally -- this only speaks to built-in support, not general compatibility, which is a distinction a good answer should preserve rather than collapsing into a flat 'no'."
+    },
+    {
+      "task_id": "D12",
+      "question": "What does SampleToMasks do, and what merge_method options control how multiple masks combine?",
+      "gold_citations": [
+        "deeptrack/optical/optics.py:3323-3350"
+      ],
+      "fact_checklist": [
+        "SampleToMasks applies a transformation function to each input image and merges the resulting masks into a single multi-layer output image; each input image must have a position property for placement within the final mask, and voxel_size is needed when used with scatterers.",
+        "merge_method controls how individual masks are combined: \"add\" (default) sums the masks, \"overwrite\" lets later masks overwrite earlier ones, \"or\" combines via logical OR, \"mul\" multiplies masks, or a custom function taking two images and merging them can be supplied.",
+        "number_of_masks controls how many mask layers the transformation_function produces (default 1), and output_region sets the size/position of the output mask, typically aligned with the optics' output_region."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "SampleToMasks applies a transformation function to each input image and merges the resulting masks into a single multi-layer output image; each input image needs a position property for placement, and voxel_size must be set when used with scatterers. How multiple masks combine is controlled by merge_method: \"add\" (the default) sums them, \"overwrite\" lets later masks overwrite earlier ones, \"or\" combines via logical OR, \"mul\" multiplies them, or you can pass a custom function taking two images and merging them yourself. number_of_masks sets how many mask layers the transformation_function produces (default 1), and output_region sets the size/position of the output mask, typically aligned with the optics' output_region."
+    },
+    {
+      "task_id": "D13",
+      "question": "What does the Value feature do, and what happens if you call it with an input?",
+      "gold_citations": [
+        "deeptrack/features.py:4474-4521"
+      ],
+      "fact_checklist": [
+        "Value holds a constant value (e.g. a scalar or array) and supplies it on demand to other parts of the pipeline.",
+        "If called with an input, it ignores that input and still returns the stored value.",
+        "The stored value can be overridden at call time by passing value=... as a keyword argument (e.g. value(value=100)), and it defaults to 0 if not given at construction."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Value holds a constant value -- a scalar or array -- and supplies it on demand to other parts of the pipeline. If you call it with an input, it ignores that input entirely and still returns the stored value. You can override the stored value at call time by passing value=... as a keyword argument (e.g. value(value=100)); if nothing is set at construction, it defaults to 0."
+    },
+    {
+      "task_id": "D14",
+      "question": "What does the Brightfield class simulate, and how does it propagate light through the sample?",
+      "gold_citations": [
+        "deeptrack/optical/optics.py:1786-1817"
+      ],
+      "fact_checklist": [
+        "Brightfield models a brightfield microscopy setup, simulating coherently illuminated samples by imaging them.",
+        "It works by iteratively propagating light through a discretized volume, where each voxel represents the effective refractive index of the sample at that point.",
+        "Light is propagated iteratively through Fourier space and corrected in real space."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Brightfield models a brightfield microscopy setup, simulating imaging of coherently illuminated samples. It works by iteratively propagating light through a discretized volume, where each voxel represents the effective refractive index of the sample at that point. The propagation itself alternates between Fourier space and real space: light is propagated iteratively through Fourier space and then corrected in real space."
+    },
+    {
+      "task_id": "D15",
+      "question": "What does to_sequential() do, and what happens if a keyword argument's property already exists on the feature?",
+      "gold_citations": [
+        "deeptrack/features.py:865-910"
+      ],
+      "fact_checklist": [
+        "to_sequential() converts a feature to be resolved as a sequence; it should be called on individual features, not combinations of features.",
+        "All keyword arguments passed to to_sequential() are treated as sequential properties and passed to the parent feature.",
+        "If a property from the keyword arguments already exists on the feature, the existing property is used to initialize the passed (sequential) property -- that is, it's used for the first timestep."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "to_sequential() converts a feature so it resolves as a sequence -- it should be called on individual features, not on combinations of features. Every keyword argument you pass is treated as a sequential property and passed to the parent feature. If a property from those keyword arguments already exists on the feature, the existing property isn't discarded -- it's used to initialize the passed sequential property, meaning it supplies the value for the first timestep."
+    },
+    {
+      "task_id": "D16",
+      "question": "How does a Property decide how to sample its value, based on the type of its sampling rule?",
+      "gold_citations": [
+        "deeptrack/properties.py:115-144"
+      ],
+      "fact_checklist": [
+        "Constant values -- including tuples, NumPy arrays, and PyTorch tensors -- always return the same value.",
+        "Functions are evaluated dynamically, potentially using other properties as arguments; lists, dictionaries, or tuples evaluate and sample each member individually.",
+        "Iterators return the next value in the sequence, repeating the final value indefinitely; slices sample their start, stop, and step values individually; and a DeepTrackNode (e.g. another property or feature) uses the value already computed by that node."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "A Property's behavior depends on the type of its sampling rule. Constant values -- including tuples, NumPy arrays, and PyTorch tensors -- always return the same value. Functions are evaluated dynamically, potentially using other properties as arguments. Lists, dictionaries, or tuples evaluate and sample each member individually. Iterators return the next value in the sequence and repeat the final value indefinitely once exhausted. Slices sample their start, stop, and step values individually. And a DeepTrackNode -- such as another property or feature -- uses the value already computed by that node."
+    },
+    {
+      "task_id": "D17",
+      "question": "What does IlluminationGradient add to the illumination, and how are the vmin/vmax parameters used?",
+      "gold_citations": [
+        "deeptrack/optical/optics.py:2454-2500"
+      ],
+      "fact_checklist": [
+        "IlluminationGradient modifies the amplitude of the field by adding a planar gradient (default (0, 0), specified in pixels) plus a constant offset (default 0).",
+        "The resulting amplitude is clipped within [vmin, vmax] -- values below vmin are clipped up, values above vmax are clipped down.",
+        "vmin defaults to 0 and vmax defaults to infinity, so by default only the lower bound is actively enforced."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "IlluminationGradient modifies the amplitude of the illumination field by adding a planar gradient -- specified in pixels, default (0, 0) -- plus a constant offset, default 0. The resulting amplitude is then clipped to stay within [vmin, vmax]: values below vmin are clipped up, values above vmax are clipped down. vmin defaults to 0 and vmax defaults to infinity, so out of the box only the lower bound actually does anything."
+    },
+    {
+      "task_id": "D18",
+      "question": "What does ElementwiseFeature do, and what happens when no input feature is provided?",
+      "gold_citations": [
+        "deeptrack/elementwise.py:250-288"
+      ],
+      "fact_checklist": [
+        "ElementwiseFeature is a base class that wraps a backend function (e.g. np.sin, torch.exp) and applies it elementwise to the output of another Feature.",
+        "If no input feature is provided (feature=None), the function is applied directly to the input passed during resolution/evaluation instead.",
+        "It overrides __distributed__ to disable distributed resolution when a feature is chained, so the transformation is computed locally."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "ElementwiseFeature is a base class that wraps a backend function -- like np.sin or torch.exp -- and applies it elementwise to the output of another Feature. If no input feature is provided (feature=None), there's nothing to chain from, so the function is instead applied directly to the input passed during resolution. It also overrides __distributed__ to disable distributed resolution when a feature is chained, ensuring the transformation is computed locally."
+    },
+    {
+      "task_id": "D19",
+      "question": "Does DeepTrack2 provide a graphical user interface (GUI) or dashboard for building and monitoring pipelines?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "Correct behavior is to say the evidence is insufficient / no such feature is documented, not to guess or invent a GUI feature.",
+        "Verified directly: an exhaustive case-insensitive grep for GUI/dashboard-related terms across deeptrack/, tutorials/, and both top-level READMEs found no real text describing such a feature -- only false-positive substring matches inside embedded base64 image data.",
+        "DeepTrack2's documented interface is programmatic (Python Feature graphs, notebooks/tutorials), not a GUI application."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "Insufficient evidence -- an exhaustive search of deeptrack/, tutorials/, and both top-level READMEs found no real documentation of a GUI or dashboard feature (only coincidental substring matches inside embedded base64 image data, not actual text). DeepTrack2's documented interface is programmatic: you build and run pipelines as Python Feature graphs, typically from notebooks, not through a graphical application."
+    },
+    {
+      "task_id": "D20",
+      "question": "What throughput (e.g. images per second) can I expect from DeepTrack2 simulations, according to its documentation?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "Correct behavior is to say the evidence is insufficient, not to invent or estimate a throughput figure.",
+        "Verified directly: an exhaustive case-insensitive grep for throughput-related terms (\"images per second\", \"throughput\", \"img/s\") across the whole indexed corpus found zero matches.",
+        "Actual throughput would depend heavily on the pipeline, backend (NumPy vs PyTorch/GPU), and hardware, none of which the documentation quantifies."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "Insufficient evidence -- a direct search of the indexed corpus for throughput-related terms like \"images per second,\" \"throughput,\" or \"img/s\" turned up nothing. DeepTrack2's documentation doesn't quantify simulation speed; actual throughput would depend heavily on the specific pipeline, the backend (NumPy vs. PyTorch/GPU), and the hardware used, none of which is documented as a benchmark figure."
+    }
+  ]
+}

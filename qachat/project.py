@@ -101,13 +101,14 @@ _EDITABLE_SETTINGS = {
     "max_new_tokens": "generation",
 }
 
-
 def default_project_profile(kind: ProjectKind) -> ProjectProfile:
     """Return the settings a new project of this kind would receive."""
 
     if kind not in {"code", "literature"}:
         raise ValueError("kind must be code or literature.")
-    extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
+    extensions = (
+        ".py, .ipynb, .m, .md" if kind == "code" else ".pdf, .md, .txt"
+    )
     parser = ConfigParser()
     parser.read_string(
         _DEFAULT_PROFILE.format(
@@ -312,7 +313,12 @@ def initialize_project(
             source = "sources"
         else:
             source = source_name if (root / source_name).is_dir() else "."
-        extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
+
+        extensions = (
+            ".py, .ipynb, .m, .md"
+            if kind == "code"
+            else ".pdf, .md, .txt"
+        )
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,
@@ -394,7 +400,12 @@ def prepare_project_workspace(
 
     profile_path = root / "profile.ini"
     if not profile_path.exists():
-        extensions = ".py, .m, .md" if kind == "code" else ".pdf, .md, .txt"
+
+        extensions = (
+            ".py, .ipynb, .m, .md"
+            if kind == "code"
+            else ".pdf, .md, .txt"
+        )
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,

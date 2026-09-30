@@ -719,6 +719,7 @@ class ChatEngine:
                 evidence.start_line,
                 evidence.end_line,
                 evidence.path.suffix.lower() == ".pdf",
+                evidence.cell,
             )
         except (OSError, ValueError, IndexError):
             preview = _saved_reference_context(
@@ -887,13 +888,29 @@ def _reference_context(
     start_line: int,
     end_line: int,
     pdf: bool,
+    cell: int | None = None,
 ) -> dict[str, object]:
     """Find the retrieved text and return a small, numbered line window.
 
     PDF line numbers restart on each extracted page. Matching the saved
     excerpt also tells us which page to show without changing QAChat's
     stored evidence format.
+
+    A notebook cell (``cell`` is not None) is never searched for in the raw
+    ``.ipynb`` file: its JSON encoding has no line numbering a person would
+    recognize, and ``start_line``/``end_line`` are local to that cell (every
+    cell starts at line 1), so slicing the raw file's lines would show
+    unrelated JSON structure or the wrong cell entirely. The saved excerpt is
+    shown directly instead.
     """
+
+    if cell is not None:
+        return _saved_reference_context(
+            excerpt,
+            start_line,
+            f"Notebook cell {cell}; line numbers are local to this cell, "
+            "not the file.",
+        )
 
     needle = excerpt.strip("\r\n")
     pages = text.split("\f") if pdf else [text]
