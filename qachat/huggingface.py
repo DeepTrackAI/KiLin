@@ -1,8 +1,73 @@
 """Use Hugging Face's shared cache without owning model storage.
 
-This module is a thin connection to ``huggingface_hub``. It lists cached
-models and requests downloads. Hugging Face chooses and manages the cache
-location.
+This module provides a thin interface to ``huggingface_hub`` for discovering
+and downloading model snapshots. Model files remain in Hugging Face's shared
+cache, so QAChat can use locally available models without maintaining a
+separate model store or duplicating cached files.
+
+The module delegates cache layout, revision handling, and download reuse to
+Hugging Face. Its responsibility is limited to exposing a small, QAChat-facing
+API for inspecting cached models, locating usable local snapshots, and
+requesting downloads when needed.
+
+Key Features
+------------
+- **Shared-cache discovery**
+
+    List model repositories already present in a Hugging Face cache together
+    with their local paths, sizes, and cached revisions.
+
+- **Availability checks**
+
+    Determine whether a model ID has at least one revision in the inspected
+    cache without loading the model.
+
+- **Local snapshot lookup**
+
+    Resolve a cached model snapshot without downloading files. Incomplete
+    snapshots are accepted when the model configuration is locally available,
+    leaving model-specific file validation to the downstream loader.
+
+- **Hugging Face-managed downloads**
+
+    Request a model snapshot through ``huggingface_hub`` while allowing the
+    library to reuse existing files and manage the cache location.
+
+Module Structure
+----------------
+Functions:
+
+- `available_models(cache_directory=None) -> list[dict[str, object]]`
+
+    List model repositories present in a Hugging Face cache.
+
+- `model_is_available(model_id, cache_directory=None) -> bool`
+
+    Check whether a model ID is present in a Hugging Face cache.
+
+- `cached_model_snapshot(model_id, revision=None) -> pathlib.Path`
+
+    Return the path to a locally cached model snapshot without downloading.
+
+- `download_model(model_id, revision=None) -> pathlib.Path`
+
+    Download or reuse a model snapshot through Hugging Face.
+
+Examples
+--------
+List the model repositories currently available in the shared cache:
+
+>>> models = available_models()
+>>> [model["model_id"] for model in models]
+[...]
+
+Locate a cached snapshot without allowing network downloads:
+
+>>> path = cached_model_snapshot("Qwen/Qwen3-4B")
+
+Request a model download. Existing cached files are reused by Hugging Face:
+
+>>> path = download_model("Qwen/Qwen3-4B")
 
 """
 
@@ -12,7 +77,6 @@ from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
 from huggingface_hub.errors import IncompleteSnapshotError
-
 
 __all__ = [
     "available_models",
@@ -110,6 +174,7 @@ def cached_model_snapshot(
     A snapshot can be marked incomplete when only repository documentation
     is missing. Its local model files may still be usable. The model loader
     checks the files it actually needs after receiving this directory.
+
     """
 
     _check_model_id(model_id)
