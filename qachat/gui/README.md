@@ -1,66 +1,140 @@
-# QAChat desktop foundation
+# QAChat desktop interface
 
-Launch the desktop interface from the repository with:
+The desktop interface is a local Qt shell around QAChat's project, retrieval,
+and model APIs. The web page owns presentation state; a separate Python
+process owns filesystem access, indexing, model sessions, and conversation
+storage. Closing or stopping that process is not the same as pausing a model.
 
-~~~sh
+## Launch and dependencies
+
+With the optional GUI dependencies installed, the module entry point is:
+
+```sh
+python -m qachat.gui
+```
+
+The existing development instructions also use the console entry point:
+
+```sh
 uv run qachat --gui
-~~~
+```
 
-The launcher prepares the missing GUI layer and native model backend
-automatically. If .venv is active, qachat --gui is enough; --backend mlx and
---backend torch override Automatic.
+The attached source snapshot does not contain the packaging configuration
+that declares that console command or its dependency extras. Those commands
+therefore assume the surrounding checkout and environment provide them.
 
-The optional desktop UI follows GenRAG's separation of a Qt shell, a
-JavaScript layout, and a Python RAG backend. Qt's WebChannel connects the
-page to its shell; a child process owns the backend so Stop can end a long
-operation without terminating the window.
+`qachat.cli.main` checks dependency module discoverability and may invoke
+`uv sync` in a development checkout before launching the GUI. This can modify
+the environment and contact package repositories. Its `--backend` argument
+controls dependency preparation; it does not override the project's backend
+selection in the GUI. `python -m qachat.gui` delegates directly to the GUI
+application and does not perform that synchronization step.
 
-- `app.py` starts Qt; `window.py` hosts the web page and bridge.
-- `engine.py` runs project loading and questions in the child process. It
-  calls public `qachat` functions; retrieval and model logic stay in `qachat/`.
-- `web/` contains the HTML, CSS, and JavaScript interface. It renders backend
-  text as text, including answers and evidence.
+## Components and communication
 
-The current UI opens code or literature projects, shows progress, restores
-conversation, asks questions, displays evidence, and archives a conversation
-with **New chat**. The landing screen stays on source selection; when a saved
-sandbox project exists, a small Resume action opens it. **New project** returns
-to source selection. The workspace panel is hidden when no project is open
-and can be toggled in chat.
+`app.py` creates the Qt application and window. `window.py` hosts the local
+page, exposes `ChatBridge` through QWebChannel, starts the engine subprocess,
+and converts bridge calls into JSON-line commands. Engine responses are
+relayed to JavaScript as JSON events. Unexpected diagnostic output is kept
+separate from protocol messages where the bridge implements that handling.
 
-Click the source area or drag in several files and folders. Review the scanned
-file tree and uncheck anything you do not want copied. Known importable file
-types are offered automatically; Advanced settings can add UTF-8 text types.
-Checked files determine what is copied and add their types to the project
-profile. Larger files start unchecked; checking one raises the saved size
-limit to fit it. Protected-file exclusions still apply. QAChat
-copies checked files under one workspace's `sources/` folder, preserving folder
-layout.
-Adding more sources to the same workspace is cumulative. Choose an empty
-workspace folder anywhere, or leave it blank to use QAChat's `sandbox/`.
-Selecting an existing QAChat workspace with no new sources resumes it. Source
-files stay untouched; `profile.ini`, `indexes/`, and `logs/` live in the
-workspace. Re-adding a source updates matching copied files; previously copied
-files remain until removed from the workspace explicitly.
+`engine.py` handles commands synchronously, invokes QAChat's APIs, and emits
+project, progress, answer, reference, and failure events. `model_catalog.py`
+contains suggested model records and distribution-presence checks. A cache
+entry or an installed distribution is not proof that a model can load or run.
 
-Advanced settings edit `profile.ini` before model loading and indexing. The
-**Models** button opens a hideable panel with QAChat's suggested chat and
-embedding models for the selected backend. It marks which are cached and lets
-you explicitly download a missing suggestion. Other cached models are visible
-but not assumed to have the right role. The language-model menu shows every
-model in the local Hugging Face cache.
-The embedding menu stays limited to cached embedding choices for the selected
-backend and query format; a custom model ID can still be typed and is checked
-when loaded. New GUI projects do not silently download
-models during preparation. New literature projects allow PDFs
-up to 20 MiB by default. Existing projects keep their saved file-size limit,
-which you can change in Advanced settings. The workspace sidebar shows saved
-files.
+`web/index.html` defines the setup form, conversation controls, workspace and
+reference panels, activity display, and model dialog. Its identifiers are the
+contract used by `web/app.js`. `web/styles.css` defines layout, interaction
+states, and responsive breakpoints. JavaScript function comments describe
+state changes and bridge calls. HTML and CSS were retained byte for byte.
 
-Conversation settings beside chat control evidence count, temperature,
-thinking, and answer length without rebuilding the index or reloading models.
-The values used for each answer are saved with that turn. Reopening a project
-restores the last answer's conversation settings.
+The page's local-content access to remote URLs is disabled in the Qt view.
+That setting does not prevent the Python engine from downloading models.
+Answers and source excerpts are inserted as text rather than executed as
+HTML. Numeric citations are made clickable only when they refer to evidence
+records supplied with that answer.
 
-Stop terminates the active backend process. Already saved indexes and
-conversations remain on disk; reopen the project to continue.
+## Source selection and workspace preparation
+
+Select code or literature, then choose local files or directories through the
+native dialog or drag-and-drop. The engine previews directory selections
+using repository scanning. The tree shows selected and skipped entries;
+protected entries remain unavailable. Oversized eligible files can be checked
+explicitly, which increases the submitted size limit to accommodate them.
+Additional UTF-8 suffixes can be entered in Advanced settings.
+
+The selected sources are copied into the workspace's `sources/` directory.
+This multi-source route is cumulative: re-adding a source updates matching
+files, but deletion or deselection at the origin does not automatically remove
+old workspace copies. It differs from the single-source synchronization API
+in `qachat.project`. The original source is not intentionally modified.
+
+A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
+selected explicitly or chosen through the engine's default workspace route.
+A saved workspace can be reopened without adding sources. The default
+example-source route requires an example repository that is not included in
+this attached archive. A workspace is a directory organization convention,
+not an execution sandbox or a protection boundary for hostile inputs.
+
+Advanced settings configure the profile before indexing and model loading.
+New GUI projects leave preparation downloads disabled unless explicitly
+allowed. Literature defaults permit larger files than code defaults; the
+profile and the current GUI fields remain the effective configuration.
+
+## Models and generation settings
+
+The Models panel shows suggested chat and embedding models compatible with
+the selected backend and any required embedding-query format. Explicit
+Download actions request missing suggested models. Other cached model IDs
+are listed separately. The chat dropdown offers cached IDs without proving
+their role; the embedding dropdown filters known compatible embedding presets.
+A custom model ID or local path can still be entered and is checked when used.
+
+Selecting a cached model is not a completeness check. Offline loading,
+backend compatibility, model architecture, tokenizer behavior, and pooling
+assumptions are enforced or encountered later in the model-loading path.
+
+Answer-time controls set retrieval count, temperature, thinking, and maximum
+new tokens without rebuilding the index or reloading models. A blank answer
+limit requests the session's automatic budget; it does not remove the model's
+finite context limit. The values used for a completed answer are recorded with
+that turn. Reopening a saved conversation restores its saved settings when
+available.
+
+## Conversations, references, and progress
+
+New chat creates a separate conversation record while retaining earlier
+conversations in the picker. It does not archive and delete the previous GUI
+conversation. Branch copies resumable parent state and records parent and
+checkpoint identifiers; it does not copy the entire parent event history.
+Rename updates display metadata. Changing conversation retains already loaded
+models and indexes where the engine implements that reuse.
+
+Select an answer to inspect its evidence. A citation requests a preview of
+that evidence's source location through the bridge. Reference responses are
+matched to the currently selected turn and citation before being displayed,
+so a late response does not overwrite a newer selection.
+
+The interface displays backend phases and progress while work is running.
+Once a complete answer arrives, JavaScript reveals it one character at a time.
+This is a presentation animation, not streamed model generation. It can keep
+the interface busy after generation has already completed.
+
+Stop terminates the engine and starts a fresh backend process. Loaded models
+and unsaved work are lost; previously completed writes remain on disk. Reopen
+the project to continue. This is not transactional cancellation of a copy,
+index write, download, or conversation update that was in progress.
+
+## Trace privacy and current limits
+
+The engine entry point enables forensic tracing. Traces and conversation
+checkpoints can contain complete questions, answers, source excerpts, paths,
+settings, token identifiers, and diagnostic output. Standard trace mode is
+not a content-redaction policy: resumable conversation state may still contain
+full text. Treat the entire workspace, especially `logs/`, as sensitive data.
+
+The separate documentation review records existing persistence, path-trust,
+and context-budget issues. They were not fixed as part of documentation.
+The interface was reviewed from source, but not launched in the documentation
+runtime because its Qt dependencies were unavailable.

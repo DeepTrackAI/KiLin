@@ -1,9 +1,68 @@
-"""Keep one QAChat session in a stoppable desktop child process.
+"""Run repository and model operations behind the desktop interface.
 
-Classes
--------
-ChatEngine
-    Discover saved projects and translate GUI requests into QAChat calls.
+``ChatEngine`` converts frontend requests into synchronous QAChat operations
+and emits structured status, progress, result, and error events. The module's
+entry point reads newline-delimited JSON commands from standard input and
+writes newline-delimited JSON events to standard output. Backend diagnostic
+output is redirected into trace events so it does not corrupt that protocol.
+
+A workspace is a managed directory containing copied sources, configuration,
+indexes, and conversations. It is not an operating-system execution sandbox.
+The engine can download a catalog model when explicitly requested and can
+load models according to project settings. The process entry point enables
+forensic tracing, which can retain conversation and source content.
+
+Commands are processed sequentially. Cancellation in the desktop window
+terminates the engine process rather than interrupting a model call in place.
+
+Key Features
+------------
+
+- **Workspace preparation**
+
+    Preview sources, copy selected files, and create or resume configured
+    projects.
+
+- **Conversation management**
+
+    Reuse loaded sessions when switching or branching stored conversations.
+
+- **Reference previews**
+
+    Locate evidence in current source text where possible, otherwise display
+    saved excerpts.
+
+- **Event protocol**
+
+    Report operations through an injected event sink or the JSON-line process
+    protocol.
+
+Module Structure
+----------------
+
+- ``ChatEngine``
+
+    Coordinate synchronous backend operations for the desktop frontend.
+
+- ``main``
+
+    Read one JSON command per line and emit one JSON event per line.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat.gui.engine
+>>> from pathlib import Path
+>>> events = []
+>>> engine = qachat.gui.engine.ChatEngine(
+...     Path("/path/to/workspaces"), events.append,
+... )
+>>> engine.close()
+
+This constructs the coordinator without loading a model. Use the desktop
+interface or the documented engine methods to open a project.
 
 """
 
@@ -48,7 +107,73 @@ EventSink = Callable[[dict[str, object]], None]
 
 
 class ChatEngine:
-    """Translate GUI actions into public QAChat project operations."""
+    """Coordinate synchronous backend operations for the desktop frontend.
+
+    Parameters
+    ----------
+    sandbox: pathlib.Path
+        Parent directory for default workspaces and saved-project discovery.
+        This name does not imply execution isolation.
+    emit: EventSink
+        Callable receiving one structured event dictionary at a time.
+    trace_enabled: bool, optional
+        Whether activated conversations use forensic tracing. The process entry
+        point passes True even though the constructor default is False.
+
+    Attributes
+    ----------
+    session: RAGSession | None
+        Currently loaded project/model coordinator, or None before
+        activation/after close.
+    conversation_store: ConversationStore | None
+        Registry of named conversations for the current project.
+    active_conversation: ConversationInfo | None
+        Metadata for the active conversation.
+    project_trace: TraceSink
+        Active forensic or null sink.
+    active_trace: TraceSink
+        Property exposing the current project trace to redirected backend
+        output.
+
+    Methods
+    -------
+    startup()
+        Suggest the most recently used valid sandbox project.
+    find_saved_project(kind, workspace)
+        Refresh Resume for the selected type and workspace folder.
+    resume_project(directory)
+        Reopen a saved project without copying source files.
+    settings(kind, workspace)
+        Return saved or default settings and cached model IDs.
+    download(model_id)
+        Download only a model explicitly chosen from the GUI catalog.
+    preview(sources, extensions, max_file_bytes, workspace='')
+        List eligible files before copying any source.
+    open_project(sources, kind, workspace, selected_files=None, settings=None)
+        Add selected sources and open one QAChat workspace.
+    ask(question, retrieval_count=None, generation_settings=None)
+        Ask the loaded project and return its saved answer and evidence.
+    preview_reference(turn_index, citation)
+        Show nearby source lines for one saved answer citation.
+    create_conversation(*, branch=False)
+        Create an empty conversation or branch the selected conversation.
+    select_conversation(conversation_id)
+        Switch conversations while retaining loaded project resources.
+    rename_conversation(conversation_id, name)
+        Rename one conversation without changing its saved state.
+    reset()
+        Create and activate a new empty conversation for the open project.
+    close()
+        Release the loaded backend session.
+
+    Notes
+    -----
+    Most public action methods catch operation failures and emit error events
+    rather than raising them to the frontend. Errors in the event sink or
+    error-reporting path can still propagate. Calls are sequential in the
+    child-process protocol, not independently scheduled jobs.
+
+    """
 
     def __init__(
         self,
@@ -67,6 +192,12 @@ class ChatEngine:
             Callback that forwards an event to the web page.
         trace_enabled: bool, optional
             Whether each opened project receives its own forensic trace.
+            Defaults to ``False``.
+
+        Raises
+        ------
+        ValueError
+            If trace_enabled is not an exact Boolean.
 
         """
 
@@ -82,7 +213,14 @@ class ChatEngine:
 
     @property
     def active_trace(self) -> TraceSink:
-        """Return the active project trace or a harmless no-op trace."""
+        """Return the active project trace or a harmless no-op trace.
+
+        Returns
+        -------
+        TraceSink
+            The active project trace or a harmless no-op trace.
+
+        """
 
         return self.project_trace
 
@@ -91,7 +229,32 @@ class ChatEngine:
         project_directory: Path,
         conversation: ConversationInfo | None = None,
     ) -> None:
-        """Open the single trace file owned by one conversation."""
+        """Open the single trace file owned by one conversation.
+
+        Parameters
+        ----------
+        project_directory: pathlib.Path
+            Resolved managed-project directory associated with the conversation
+            trace.
+        conversation: ConversationInfo | None, optional
+            Registered conversation metadata for the state to activate or
+            trace. Defaults to ``None``.
+
+        Raises
+        ------
+        RuntimeError
+            If tracing is enabled without a conversation and opened store.
+        ValueError
+            If the stored conversation trace is invalid.
+
+        Notes
+        -----
+        With tracing disabled, this selects a null sink. Otherwise it opens a
+        forensic logger at the conversation state path and emits trace_ready.
+        The path comes from the store, keeping GUI trace and resume state
+        aligned.
+
+        """
 
         if not self.trace_enabled:
             self.project_trace = NullTraceLogger()
@@ -133,13 +296,32 @@ class ChatEngine:
         )
 
     def _close_project_trace(self) -> None:
-        """Finish the current project trace without closing the GUI trace."""
+        """Finish the current project trace without closing the GUI trace.
+
+
+        """
 
         if self.project_trace.enabled:
             self.project_trace.close()
         self.project_trace = NullTraceLogger()
 
     def _send(self, event: str, **data: object) -> None:
+        """Pass one named event dictionary to the configured frontend sink.
+
+        Parameters
+        ----------
+        event: str
+            Frontend event name stored under the event key.
+        **data: object
+            Additional fields merged into the emitted frontend event.
+
+        Notes
+        -----
+        The event dictionary is constructed synchronously. Sink exceptions are
+        not suppressed.
+
+        """
+
         self.emit({"event": event, **data})
 
     def _report_error(
@@ -148,7 +330,25 @@ class ChatEngine:
         error: BaseException,
         message: str,
     ) -> None:
-        """Trace one backend failure and show a short GUI message."""
+        """Trace one backend failure and show a short GUI message.
+
+        Parameters
+        ----------
+        event_type: str
+            Structured trace event name describing the failed engine operation.
+        error: BaseException
+            Caught backend exception to record before reporting the frontend
+            error.
+        message: str
+            User-facing explanation included in the error event.
+
+        Notes
+        -----
+        Records the traceback through the active sink and sends an error event
+        containing the readable trace path when available. A failure while
+        tracing or emitting this error can propagate.
+
+        """
 
         trace = self.active_trace
         trace.exception(
@@ -167,7 +367,10 @@ class ChatEngine:
         )
 
     def startup(self) -> None:
-        """Suggest the most recently used valid sandbox project."""
+        """Suggest the most recently used valid sandbox project.
+
+
+        """
 
         project = self._find_saved_project(None, "")
         if project is not None:
@@ -181,6 +384,16 @@ class ChatEngine:
 
         A chosen workspace is checked directly. Without one, the most recent
         valid sandbox project of the selected type is suggested.
+
+        Parameters
+        ----------
+        kind: str
+            Requested project category: code or literature. Discovery helpers
+            also accept None to search either kind.
+        workspace: str
+            Explicit workspace path string. An empty string requests discovery
+            or default allocation under the engine workspace root.
+
         """
 
         project = self._find_saved_project(kind, workspace)
@@ -194,7 +407,30 @@ class ChatEngine:
     def _find_saved_project(
         self, kind: str | None, workspace: str
     ) -> tuple[Path, str] | None:
-        """Find a current project, ignoring deleted or incomplete folders."""
+        """Find a current project, ignoring deleted or incomplete folders.
+
+        Parameters
+        ----------
+        kind: str | None
+            Requested project category: code or literature. Discovery helpers
+            also accept None to search either kind.
+        workspace: str
+            Explicit workspace path string. An empty string requests discovery
+            or default allocation under the engine workspace root.
+
+        Returns
+        -------
+        tuple[pathlib.Path, str] | None
+            Pair (workspace_path, project_kind) for the most recently used
+            valid candidate, or None.
+
+        Notes
+        -----
+        Discovery inspects profile/source existence and profile/conversation
+        modification times without loading a model. Invalid candidate profiles
+        are skipped; the whole project schema is checked later when opening.
+
+        """
 
         if kind is not None and kind not in {"code", "literature"}:
             return None
@@ -333,6 +569,12 @@ class ChatEngine:
         model_id: str
             One of the model IDs offered in the GUI's model panel.
 
+        Notes
+        -----
+        Only model IDs in MODEL_CHOICES are accepted. This explicit action can
+        contact Hugging Face and write to its cache. Success emits refreshed
+        model status; download/validation failures become error events.
+
         """
 
         try:
@@ -357,8 +599,8 @@ class ChatEngine:
     ) -> None:
         """List eligible files before copying any source.
 
-        The preview gives the user a chance to exclude individual files.
-        No workspace files are changed by this operation.
+        The preview gives the user a chance to exclude individual files. No
+        workspace files are changed by this operation.
 
         Parameters
         ----------
@@ -369,7 +611,16 @@ class ChatEngine:
         max_file_bytes: int
             Largest file that may be copied.
         workspace: str, optional
-            Chosen workspace path, used to avoid scanning itself.
+            Chosen workspace path, used to avoid scanning itself. Defaults to
+            ``''``.
+
+        Notes
+        -----
+        Builds selectable and skipped source-entry lists without copying files
+        or loading models. Oversized files are reported separately for frontend
+        selection/limit adjustment. Directory selection uses scan_repository;
+        direct files have explicit protected-name checks. Failures become error
+        events.
 
         """
 
@@ -459,8 +710,8 @@ class ChatEngine:
     ) -> None:
         """Add selected sources and open one QAChat workspace.
 
-        The selected source snapshot is prepared before models are loaded.
-        An empty source list can reopen a managed workspace unchanged.
+        The selected source snapshot is prepared before models are loaded. An
+        empty source list can reopen a managed workspace unchanged.
 
         Parameters
         ----------
@@ -471,9 +722,17 @@ class ChatEngine:
         workspace: str
             Workspace folder, or blank to use the sandbox.
         selected_files: dict[str, list[str]] | None, optional
-            Checked file paths within each source folder.
+            Checked file paths within each source folder. Defaults to ``None``.
         settings: dict[str, object] | None, optional
-            Preparation settings saved in profile.ini.
+            Preparation settings saved in profile.ini. Defaults to ``None``.
+
+        Notes
+        -----
+        Closes any current session before preparation. Selected file suffixes
+        can extend the saved extension list; copying uses the cumulative
+        multi-source workspace API. With neither sources nor workspace, the
+        implementation uses a development example repository path that is not
+        included in this archive. Errors become frontend events.
 
         """
 
@@ -556,7 +815,21 @@ class ChatEngine:
         self,
         project: QAProject,
     ) -> ConversationInfo:
-        """Scan project conversation files and select the latest one."""
+        """Scan project conversation files and select the latest one.
+
+        Parameters
+        ----------
+        project: QAProject
+            Opened project whose profile, source, index, and log paths are
+            ready for activation.
+
+        Returns
+        -------
+        ConversationInfo
+            The store's selected initial ConversationInfo, also assigned as the
+            active conversation.
+
+        """
 
         store = ConversationStore(project.root)
         conversation = store.ensure()
@@ -569,7 +842,30 @@ class ChatEngine:
         project: QAProject,
         conversation: ConversationInfo,
     ) -> None:
-        """Load models and indexes, then report the active workspace."""
+        """Load models and indexes, then report the active workspace.
+
+        Parameters
+        ----------
+        project: QAProject
+            Opened project whose profile, source, index, and log paths are
+            ready for activation.
+        conversation: ConversationInfo
+            Registered conversation metadata for the state to activate or
+            trace.
+
+        Raises
+        ------
+        RuntimeError
+            If no conversation store is open.
+
+        Notes
+        -----
+        Constructs RAGSession with the active sink and exact conversation path,
+        then emits opened and conversation metadata. Model loading,
+        source/index preparation, and state validation can raise to the public
+        action wrapper.
+
+        """
 
         options: dict[str, object] = {
             "progress_callback": lambda progress: self._send(
@@ -625,9 +921,18 @@ class ChatEngine:
         question: str
             Question about the active project.
         retrieval_count: int | None, optional
-            Number of evidence results to use for this answer.
+            Number of evidence results to use for this answer. Defaults to
+            ``None``.
         generation_settings: dict[str, object] | None, optional
-            Temperature, thinking, and answer length for this answer.
+            Temperature, thinking, and answer length for this answer. Defaults
+            to ``None``.
+
+        Notes
+        -----
+        Requires an active session. Progress phases and the final serialized
+        turn are emitted as events; the method does not return the answer
+        string. Model/state failures become error events, potentially after
+        in-memory history has advanced.
 
         """
 
@@ -670,6 +975,21 @@ class ChatEngine:
         Only a citation already attached to the active conversation can be
         opened. The reader rechecks that the file stays inside the copied
         project source folder.
+
+        Parameters
+        ----------
+        turn_index: int
+            Zero-based position of a stored turn in the current RAG session.
+        citation: int
+            One-based evidence citation number within the selected turn.
+
+        Notes
+        -----
+        Attempts to read current source context, falling back to saved evidence
+        when unavailable. Notebook previews always retain saved cell-local
+        excerpts. A source file modified since retrieval may no longer match
+        the saved line range.
+
         """
 
         if self.session is None:
@@ -736,7 +1056,21 @@ class ChatEngine:
         )
 
     def create_conversation(self, *, branch: bool = False) -> None:
-        """Create an empty conversation or branch the selected conversation."""
+        """Create an empty conversation or branch the selected conversation.
+
+        Parameters
+        ----------
+        branch: bool, optional
+            Whether to copy resumable state from the active conversation
+            instead of creating an empty conversation. Defaults to ``False``.
+
+        Notes
+        -----
+        Creates a new or branched store record, then activates it while reusing
+        loaded models. The previous conversation remains available. Errors are
+        reported through the frontend error channel.
+
+        """
 
         try:
             if (
@@ -760,7 +1094,21 @@ class ChatEngine:
             )
 
     def select_conversation(self, conversation_id: str) -> None:
-        """Switch conversations while retaining loaded project resources."""
+        """Switch conversations while retaining loaded project resources.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation registered in the current project
+            store.
+
+        Notes
+        -----
+        Operation errors are caught and reported through an error event. The
+        method is synchronous; event-sink or error-reporting failures may still
+        propagate.
+
+        """
 
         try:
             if self.conversation_store is None:
@@ -781,7 +1129,24 @@ class ChatEngine:
             )
 
     def rename_conversation(self, conversation_id: str, name: str) -> None:
-        """Rename one conversation without changing its saved state."""
+        """Rename one conversation without changing its saved state.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation registered in the current project
+            store.
+        name: str
+            Requested display name, normalized and validated by
+            ConversationStore.
+
+        Notes
+        -----
+        Operation errors are caught and reported through an error event. The
+        method is synchronous; event-sink or error-reporting failures may still
+        propagate.
+
+        """
 
         try:
             if self.conversation_store is None:
@@ -808,7 +1173,26 @@ class ChatEngine:
             )
 
     def _switch_conversation(self, conversation: ConversationInfo) -> None:
-        """Move the live session and trace to one conversation file."""
+        """Move the live session and trace to one conversation file.
+
+        Parameters
+        ----------
+        conversation: ConversationInfo
+            Registered conversation metadata for the state to activate or
+            trace.
+
+        Raises
+        ------
+        RuntimeError
+            If a loaded session or conversation store is unavailable.
+
+        Notes
+        -----
+        Closes the previous trace, opens the target trace, and switches RAG
+        history/settings while reusing models and indexes. This sequence is not
+        rolled back as one transaction on failure.
+
+        """
 
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
@@ -841,7 +1225,21 @@ class ChatEngine:
         )
 
     def _send_conversations(self, event: str, **data: object) -> None:
-        """Send the catalog and active identity in one consistent shape."""
+        """Send the catalog and active identity in one consistent shape.
+
+        Parameters
+        ----------
+        event: str
+            Frontend event name stored under the event key.
+        **data: object
+            Additional fields merged into the emitted frontend event.
+
+        Raises
+        ------
+        RuntimeError
+            If no conversation store or active conversation is available.
+
+        """
 
         if self.conversation_store is None or self.active_conversation is None:
             raise RuntimeError("Conversation store is not open.")
@@ -856,7 +1254,15 @@ class ChatEngine:
         )
 
     def reset(self) -> None:
-        """Start a new conversation while keeping indexes and models."""
+        """Create and activate a new empty conversation for the open project.
+
+        Notes
+        -----
+        This GUI action does not call RAGSession.reset or archive/delete the
+        old conversation. It creates a new registered record and emits reset
+        with archived=None. The old conversation remains selectable.
+
+        """
 
         try:
             if self.session is None or self.conversation_store is None:
@@ -872,7 +1278,15 @@ class ChatEngine:
             )
 
     def close(self) -> None:
-        """Release the loaded backend session."""
+        """Release the loaded backend session.
+
+        Notes
+        -----
+        Closes the loaded RAG session and active trace, then clears
+        conversation references. Backend cleanup exceptions are not caught
+        here.
+
+        """
 
         if self.session is not None:
             self.session.close()
@@ -892,9 +1306,9 @@ def _reference_context(
 ) -> dict[str, object]:
     """Find the retrieved text and return a small, numbered line window.
 
-    PDF line numbers restart on each extracted page. Matching the saved
-    excerpt also tells us which page to show without changing QAChat's
-    stored evidence format.
+    PDF line numbers restart on each extracted page. Matching the saved excerpt
+    also tells us which page to show without changing QAChat's stored evidence
+    format.
 
     A notebook cell (``cell`` is not None) is never searched for in the raw
     ``.ipynb`` file: its JSON encoding has no line numbering a person would
@@ -902,6 +1316,38 @@ def _reference_context(
     cell starts at line 1), so slicing the raw file's lines would show
     unrelated JSON structure or the wrong cell entirely. The saved excerpt is
     shown directly instead.
+
+    Parameters
+    ----------
+    text: str
+        Current extracted source text, with form-feed-separated pages for a
+        PDF.
+    excerpt: str
+        Exact excerpt saved with the original evidence record.
+    start_line: int
+        Inclusive one-based first evidence line in its source coordinate
+        system.
+    end_line: int
+        Inclusive one-based last evidence line in its source coordinate system.
+    pdf: bool
+        Whether source text represents page-separated PDF extraction.
+    cell: int | None, optional
+        Optional one-based notebook cell number. Notebook previews use the
+        saved excerpt and cell-local line numbers. Defaults to ``None``.
+
+    Returns
+    -------
+    dict[str, object]
+        Dictionary describing numbered surrounding lines, highlighted evidence,
+        optional page, and an explanatory note.
+
+    Notes
+    -----
+    For PDFs, the first page containing the saved excerpt is used. Plain text
+    falls back to the saved line range when it remains within the current file,
+    even if the excerpt no longer matches. Notebook inputs use saved excerpts
+    to preserve cell-local coordinates.
+
     """
 
     if cell is not None:
@@ -952,7 +1398,35 @@ def _numbered_reference_lines(
     page: int | None,
     note: str,
 ) -> dict[str, object]:
-    """Keep a little context around the cited range."""
+    """Keep a little context around the cited range.
+
+    Parameters
+    ----------
+    lines: list[str]
+        Current source-file or PDF-page text split into lines.
+    start_line: int
+        Inclusive one-based first evidence line in its source coordinate
+        system.
+    end_line: int
+        Inclusive one-based last evidence line in its source coordinate system.
+    page: int | None
+        Optional one-based PDF page number displayed with the preview.
+    note: str
+        Explanation shown with the preview when original source context is
+        unavailable or uses special coordinates.
+
+    Returns
+    -------
+    dict[str, object]
+        Preview dictionary containing page, start_line, end_line, note, and
+        numbered lines with highlighted flags.
+
+    Notes
+    -----
+    Includes up to five surrounding lines on either side, clipped to the
+    current text bounds.
+
+    """
 
     first = max(1, start_line - 5)
     last = min(len(lines), end_line + 5)
@@ -977,7 +1451,26 @@ def _saved_reference_context(
     start_line: int,
     note: str,
 ) -> dict[str, object]:
-    """Preserve a usable preview when the copied source cannot be read."""
+    """Preserve a usable preview when the copied source cannot be read.
+
+    Parameters
+    ----------
+    excerpt: str
+        Exact excerpt saved with the original evidence record.
+    start_line: int
+        Inclusive one-based first evidence line in its source coordinate
+        system.
+    note: str
+        Explanation shown with the preview when original source context is
+        unavailable or uses special coordinates.
+
+    Returns
+    -------
+    dict[str, object]
+        Preview of the saved excerpt with line numbering beginning at
+        start_line and the supplied explanatory note.
+
+    """
 
     lines = excerpt.splitlines() or [excerpt]
     return {
@@ -997,7 +1490,24 @@ def _saved_reference_context(
 
 
 def _workspace_files(root: Path) -> list[str]:
-    """List saved workspace files for the sidebar."""
+    """List saved workspace files for the sidebar.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Managed project directory whose sources, indexes, and logs are listed.
+
+    Returns
+    -------
+    list[str]
+        Mapping of managed workspace areas to their relative file listings.
+
+    Notes
+    -----
+    The listing is capped by the implementation entry limit. It is a UI
+    inventory, not a selection-policy or content-integrity check.
+
+    """
 
     files = ["profile.ini"]
     for folder in (root / "sources", root / "indexes", root / "logs"):
@@ -1011,7 +1521,31 @@ def _workspace_files(root: Path) -> list[str]:
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
-    """Resolve the same workspace location for preview and preparation."""
+    """Resolve the same workspace location for preview and preparation.
+
+    Parameters
+    ----------
+    sources: list[str]
+        Original source-path strings supplied by the frontend.
+    sandbox: pathlib.Path
+        Parent directory for default managed workspaces; it is not an execution
+        sandbox.
+    chosen: str
+        Explicit workspace path string, or an empty string to derive one from
+        the first source.
+
+    Returns
+    -------
+    pathlib.Path
+        Resolved explicit destination, or a deterministic source-name/path-hash
+        destination beneath sandbox.
+
+    Notes
+    -----
+    Deriving a default uses the first supplied source. The returned name does
+    not establish isolation or ownership by itself.
+
+    """
 
     if chosen.strip():
         return Path(chosen).expanduser().resolve()
@@ -1021,11 +1555,36 @@ def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
 
 
 def main() -> None:
-    """Read one JSON command per line and emit one JSON event per line."""
+    """Read one JSON command per line and emit one JSON event per line.
+
+    Notes
+    -----
+    Reads one JSON object per input line and dispatches known actions
+    sequentially. Unknown actions and ordinary exceptions are emitted as error
+    events. Standard output is reserved for JSON; backend stdout/stderr are
+    redirected into trace events. The engine is closed when input ends or the
+    loop exits.
+
+    """
 
     protocol_output = sys.stdout
 
     def emit(data: dict[str, object]) -> None:
+        """Write one frontend event as a flushed JSON line.
+
+        Parameters
+        ----------
+        data: dict[str, object]
+            Event dictionary serialized to the original protocol output stream.
+
+        Notes
+        -----
+        This closure bypasses redirected diagnostic stdout so protocol framing
+        is preserved. JSON conversion uses string fallback for unsupported
+        objects.
+
+        """
+
         protocol_output.write(json.dumps(data, default=str) + "\n")
         protocol_output.flush()
 

@@ -1,8 +1,51 @@
-"""Describe the small set of model choices offered by the desktop GUI.
+"""Describe the model presets displayed by the desktop interface.
 
-The Hugging Face cache lists repositories, not whether their weights can
-answer questions or create embeddings. Unknown cached models remain visible
-in the model panel, but only these explicit choices enter the role menus.
+``MODEL_CHOICES`` stores application presets for model role, backend, and
+query format. These records are selection hints, not downloaded model files
+or runtime compatibility checks. ``installed_backends`` consults installed
+package metadata; a listed backend is not thereby proven usable on the
+current device.
+
+Key Features
+------------
+
+- **Catalog records**
+
+    Represent a model preset using immutable ``ModelChoice`` fields.
+
+- **Catalog availability**
+
+    Return all presets with cache flags; the web interface filters choices by
+    role and backend.
+
+- **Installation hints**
+
+    Expose distribution-presence checks without loading an inference model.
+
+Module Structure
+----------------
+
+- ``MODEL_CHOICES``
+
+    Tuple of GUI model presets, not a runtime availability check.
+
+- ``ModelChoice``
+
+    One QAChat starting model and the role it is offered for.
+
+- ``installed_backends``
+
+    Check whether the selected computation packages are installed.
+
+- ``model_choices``
+
+    Mark the suggested models that are present in the local cache.
+
+Examples
+--------
+>>> import qachat.gui.model_catalog
+>>> backends = qachat.gui.model_catalog.installed_backends()
+>>> presets = qachat.gui.model_catalog.MODEL_CHOICES
 
 """
 
@@ -25,7 +68,38 @@ ModelBackend = Literal["mlx", "torch"]
 
 @dataclass(frozen=True, slots=True)
 class ModelChoice:
-    """One QAChat starting model and the role it is offered for."""
+    """One QAChat starting model and the role it is offered for.
+
+    Parameters
+    ----------
+    model_id: str
+        Hugging Face repository identifier for this application preset.
+    role: ModelRole
+        Model role offered by the UI: chat or embedding.
+    backend: ModelBackend
+        Backend associated with this preset: mlx or torch.
+    query_format: str | None, optional
+        Embedding query format label when applicable, otherwise None. Defaults
+        to ``None``.
+
+    Attributes
+    ----------
+    model_id: str
+        Hugging Face repository identifier for this application preset.
+    role: ModelRole
+        Model role offered by the UI: chat or embedding.
+    backend: ModelBackend
+        Backend associated with this preset: mlx or torch.
+    query_format: str | None
+        Embedding query format label when applicable, otherwise None.
+
+    Notes
+    -----
+    A catalog record is an application preset, not a runtime load test. It does
+    not verify a Hub repository, local cache completeness, installed backend,
+    or available hardware.
+
+    """
 
     model_id: str
     role: ModelRole
@@ -77,8 +151,8 @@ def installed_backends() -> dict[str, bool]:
 def model_choices(cached_models: set[str]) -> list[dict[str, object]]:
     """Mark the suggested models that are present in the local cache.
 
-    Cache presence is not a load test. The actual model is checked when
-    QAChat opens the project.
+    Cache presence is not a load test. The actual model is checked when QAChat
+    opens the project.
 
     Parameters
     ----------
@@ -89,6 +163,12 @@ def model_choices(cached_models: set[str]) -> list[dict[str, object]]:
     -------
     list[dict[str, object]]
         Suggested choices with role, backend, and local-cache status.
+
+    Notes
+    -----
+    Returns every preset with a cached flag derived from the supplied
+    identifier set. Filtering by role/backend/query format is performed by the
+    frontend, not this function.
 
     """
 

@@ -1,5 +1,20 @@
+/**
+ * Present the local QAChat interface inside Qt WebEngine.
+ *
+ * The page owns transient UI state and delegates filesystem/model operations
+ * through QWebChannel. Engine events update project, conversation, evidence,
+ * and progress displays. Model answers and source text are inserted as text,
+ * not interpreted as HTML. Source selection is a preview, not a filesystem
+ * security boundary. Stop terminates the engine rather than pausing inference.
+ *
+ * Completed answers arrive as complete strings. The character-by-character
+ * reveal is a presentation timer, not streamed model output. Conversation
+ * persistence and tracing remain backend responsibilities.
+ */
+
 "use strict";
 
+// Resolve fixed DOM identifiers after the deferred script can see the page.
 const byId = (id) => document.getElementById(id);
 const setup = byId("setup");
 const chat = byId("chat");
@@ -32,22 +47,36 @@ let pendingTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
 
+/**
+ * Hide and clear the previously offered saved-project shortcut.
+ */
 function hideResume() {
   byId("recent-project").classList.add("hidden");
   byId("resume-recent").dataset.project = "";
 }
 
+/**
+ * Ask the engine for a saved project only on an idle setup screen.
+ */
 function refreshSavedProject() {
   if (!bridge || busy || ready) return;
   bridge.findSavedProject(byId("kind").value, byId("workspace-path").value.trim());
 }
 
+/**
+ * Invalidate the resume shortcut and debounce the next lookup.
+ */
 function queueSavedProjectRefresh() {
   hideResume();
   clearTimeout(resumeRefreshTimer);
   resumeRefreshTimer = setTimeout(refreshSavedProject, 250);
 }
 
+/**
+ * Toggle the workspace panels and their control label.
+ *
+ * @param visible Whether the sidebar layout should be shown.
+ */
 function showWorkspace(visible) {
   // Keep the workspace out of the layout until a project is actually open.
   shell.classList.toggle("sidebar-open", visible);
@@ -55,6 +84,11 @@ function showWorkspace(visible) {
   byId("toggle-workspace").textContent = visible ? "Hide panels" : "Show panels";
 }
 
+/**
+ * Normalize and deduplicate source paths, then request a preview.
+ *
+ * @param paths Local paths provided by a native dialog or drag-and-drop.
+ */
 function addSources(paths) {
   for (const path of paths) {
     const clean = String(path).trim();
@@ -63,10 +97,17 @@ function addSources(paths) {
   previewSources();
 }
 
+/**
+ * Return nonempty, lowercase custom suffixes from the settings field.
+ * @returns Nonempty custom suffix strings.
+ */
 function fileTypes() {
   return byId("extensions").value.split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
 }
 
+/**
+ * Request a backend metadata scan for the current source selection.
+ */
 function previewSources() {
   if (bridge && selectedSources.length) {
     setBusy(true, "Scanning selected sources…");
@@ -77,6 +118,18 @@ function previewSources() {
   }
 }
 
+/**
+ * Build a nested selection tree with tri-state folder checkboxes.
+ *
+ * @param name Displayed folder label.
+ * @param children Tree node with directory children and file paths.
+ * @param paths Descendant paths used to compute folder selection.
+ * @param selection Mutable Set of checked paths.
+ * @param depth Nesting depth; the top-level branch starts expanded.
+ * @param enabled Allowed paths, or null to enable every path.
+ * @param reasons Path-to-explanation mapping for skipped entries.
+ * @returns New details element containing the branch.
+ */
 function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}) {
   const details = document.createElement("details");
   details.className = "tree-folder";
@@ -129,10 +182,22 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   return details;
 }
 
+/**
+ * Flatten a tree node into its descendant file paths.
+ *
+ * @param node Node containing files and a Map of directories.
+ * @returns Flat array of descendant paths.
+ */
 function allFiles(node) {
   return [...node.files, ...[...node.directories.values()].flatMap(allFiles)];
 }
 
+/**
+ * Group forward-slash-separated file paths into directory nodes.
+ *
+ * @param files Relative file paths to group; the input is not modified.
+ * @returns Root tree node.
+ */
 function fileTree(files) {
   const root = { directories: new Map(), files: [] };
   for (const file of files) {
@@ -147,6 +212,9 @@ function fileTree(files) {
   return root;
 }
 
+/**
+ * Rebuild source trees, counts, and removal controls from preview state.
+ */
 function renderPreview() {
   const tree = byId("file-tree");
   tree.replaceChildren();
@@ -190,12 +258,21 @@ function renderPreview() {
   byId("scope").classList.toggle("hidden", selectedSources.length === 0);
 }
 
+/**
+ * Retain the current backend model fields in the local profile object.
+ */
 function saveModelFields() {
   if (!profile) return;
   profile[`chat_${activeBackend}`] = byId("chat-model").value.trim();
   profile[`embedding_${activeBackend}`] = byId("embedding-model").value.trim();
 }
 
+/**
+ * Filter presets by role, backend, and any required query format.
+ *
+ * @param role Model role to show: chat or embedding.
+ * @returns Matching model-preset records.
+ */
 function compatibleChoices(role) {
   // Chat and embedding models need not share a family. Each must support its
   // own role, the chosen backend, and (for embedding) the query format.
@@ -204,6 +281,9 @@ function compatibleChoices(role) {
     && (!choice.query_format || choice.query_format === byId("query-format").value));
 }
 
+/**
+ * Show whether a compatible cached chat-and-embedding pair is known.
+ */
 function refreshModelStatus() {
   const hasBoth = ["chat", "embedding"].every((role) =>
     compatibleChoices(role).some((choice) => cachedModels.has(choice.model_id)));
@@ -211,6 +291,9 @@ function refreshModelStatus() {
   byId("open-models").classList.toggle("models-needed", !hasBoth);
 }
 
+/**
+ * Build suggested-model controls and the unclassified cache listing.
+ */
 function renderModelsPanel() {
   const host = byId("model-list");
   host.replaceChildren();
@@ -278,12 +361,18 @@ function renderModelsPanel() {
   if (!other.length) byId("other-model-list").textContent = "No other cached models.";
 }
 
+/**
+ * Render and open the models panel, then focus its close control.
+ */
 function openModels() {
   renderModelsPanel();
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
 }
 
+/**
+ * Hide both model suggestion menus and reset their accessibility state.
+ */
 function closeModelMenus() {
   for (const id of ["chat-model", "embedding-model"]) {
     byId(`${id}-menu`).classList.add("hidden");
@@ -291,6 +380,11 @@ function closeModelMenus() {
   }
 }
 
+/**
+ * Toggle cached choices for a model field without loading a model.
+ *
+ * @param id Model input identifier: chat-model or embedding-model.
+ */
 function toggleModelMenu(id) {
   const menu = byId(`${id}-menu`);
   const shouldOpen = menu.classList.contains("hidden");
@@ -327,6 +421,10 @@ function toggleModelMenu(id) {
   byId(`${id}-options`).setAttribute("aria-expanded", "true");
 }
 
+/**
+ * Return a size limit large enough for explicitly selected oversized files.
+ * @returns Requested maximum file size in bytes.
+ */
 function selectedFileSizeLimit() {
   let limit = Number(byId("max-file-bytes").value);
   for (const rootPath of selectedSources) {
@@ -340,6 +438,9 @@ function selectedFileSizeLimit() {
   return limit;
 }
 
+/**
+ * Resolve the selected backend and restore its profile model fields.
+ */
 function showModelFields() {
   if (!profile) return;
   activeBackend = byId("backend").value === "auto" ? automaticBackend : byId("backend").value;
@@ -349,6 +450,12 @@ function showModelFields() {
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
 }
 
+/**
+ * Apply a settings response and refresh model and workspace controls.
+ *
+ * @param data Settings event with profile, catalog, cache, and backend
+ *   metadata.
+ */
 function showSettings(data) {
   profile = data.profile;
   automaticBackend = data.backend;
@@ -374,6 +481,10 @@ function showSettings(data) {
   if (selectedSources.length) previewSources();
 }
 
+/**
+ * Collect preparation settings and selected file-type/size adjustments.
+ * @returns Preparation settings object for the engine.
+ */
 function collectSettings() {
   // Preparation settings may require a model reload or index rebuild.
   // Answer-time controls are sent only with the question below.
@@ -392,6 +503,11 @@ function collectSettings() {
   };
 }
 
+/**
+ * Render the saved workspace file tree without selection checkboxes.
+ *
+ * @param paths Workspace-relative file paths reported by the backend.
+ */
 function renderWorkspace(paths) {
   const host = byId("workspace-tree");
   host.replaceChildren();
@@ -410,6 +526,12 @@ function renderWorkspace(paths) {
   }
 }
 
+/**
+ * Display a failure, clear pending presentation work, and unlock controls.
+ *
+ * @param message Human-readable failure message.
+ * @param tracePath Optional trace-file path displayed for diagnosis.
+ */
 function showError(message, tracePath = "") {
   stopPhaseAnimation();
   if (pendingTurn) {
@@ -428,6 +550,13 @@ function showError(message, tracePath = "") {
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
 }
 
+/**
+ * Gate operation controls and update the visible activity state.
+ *
+ * @param value Whether a backend operation is active.
+ * @param message Activity label; the default empty string clears the old
+ *   text.
+ */
 function setBusy(value, message = "") {
   busy = value;
   byId("open").disabled = value || !bridge;
@@ -451,6 +580,12 @@ function setBusy(value, message = "") {
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
 }
 
+/**
+ * Format a numeric duration for display in seconds or minutes.
+ *
+ * @param value Elapsed or estimated seconds.
+ * @returns Formatted duration text.
+ */
 function seconds(value) {
   const rounded = Math.max(0, Math.round(value));
   const minutes = Math.floor(rounded / 60);
@@ -458,6 +593,12 @@ function seconds(value) {
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
+/**
+ * Render backend progress, elapsed time, and optional remaining time.
+ *
+ * @param data Progress event; percentages are presentation values, not
+ *   guarantees.
+ */
 function showProgress(data) {
   setBusy(true, data.message);
   const percent = Math.min(100, Math.max(0, Number(data.percent)));
@@ -478,12 +619,18 @@ function showProgress(data) {
   byId("activity-detail").textContent = details.join(" · ");
 }
 
+/**
+ * Remove the active reference preview and reset its selection state.
+ */
 function clearSourcePreview() {
   activeReference?.button?.classList.remove("active");
   activeReference?.preview?.remove();
   activeReference = null;
 }
 
+/**
+ * Clear selected-turn and reference presentation state.
+ */
 function clearReferences() {
   selectedTurn?.classList.remove("selected");
   selectedTurn = null;
@@ -492,6 +639,10 @@ function clearReferences() {
   clearSourcePreview();
 }
 
+/**
+ * Create a source-preview container and return its DOM references.
+ * @returns Object containing the preview DOM references.
+ */
 function makeSourcePreview() {
   const preview = document.createElement("section");
   preview.className = "source-preview";
@@ -512,6 +663,14 @@ function makeSourcePreview() {
   return { preview, title, close, note, lines };
 }
 
+/**
+ * Toggle a citation preview or request its source lines from the engine.
+ *
+ * @param item Conversation article containing the answer.
+ * @param source Evidence record carrying a citation number and provenance.
+ * @param button Reference button whose active state is updated.
+ * @param holder Container in which to place the preview.
+ */
 function openReference(item, source, button, holder) {
   byId("references-section").open = true;
   const turnIndex = Number(item.dataset.turnIndex);
@@ -532,6 +691,14 @@ function openReference(item, source, button, holder) {
   nodes.preview.scrollIntoView({ block: "nearest" });
 }
 
+/**
+ * Select an answer and render its evidence list, optionally opening a
+ * citation.
+ *
+ * @param item Conversation article to mark as selected.
+ * @param turn Saved or newly completed question/answer/evidence record.
+ * @param citation Optional evidence number to open immediately.
+ */
 function selectTurn(item, turn, citation = null) {
   selectedTurn?.classList.remove("selected");
   selectedTurn = item;
@@ -566,6 +733,12 @@ function selectTurn(item, turn, citation = null) {
     if (source && button) openReference(item, source, button, button.parentElement);
   }
 }
+/**
+ * Render numbered source lines only for the currently active reference.
+ *
+ * @param data Reference response with matching turn/citation identifiers
+ *   and lines.
+ */
 function renderSourcePreview(data) {
   if (!activeReference || data.turn_index !== activeReference.turnIndex
       || data.citation !== activeReference.citation) return;
@@ -593,6 +766,13 @@ function renderSourcePreview(data) {
 }
 
 
+/**
+ * Render answer text with links only for recognized numeric citations.
+ *
+ * @param answer Destination DOM element.
+ * @param turn Answer text and its evidence records.
+ * @param item Conversation article used when selecting a linked citation.
+ */
 function renderAnswer(answer, turn, item) {
   // Keep the model's text as text nodes. Only evidence numbers become links.
   const citations = new Set((turn.evidence || []).map((source) => Number(source.citation)));
@@ -624,6 +804,12 @@ function renderAnswer(answer, turn, item) {
   answer.append(document.createTextNode(source.slice(start)));
 }
 
+/**
+ * Append a completed turn, enable answer selection, and show its
+ * references.
+ *
+ * @param turn Saved question, answer, and evidence data.
+ */
 function addTurn(turn) {
   const item = document.createElement("article");
   item.className = "turn";
@@ -653,6 +839,12 @@ function addTurn(turn) {
   conversation.scrollTop = conversation.scrollHeight;
 }
 
+/**
+ * Replace the conversation picker using the backend registry.
+ *
+ * @param data Event containing conversation records and the active
+ *   identifier.
+ */
 function renderConversations(data) {
   activeConversationId = data.active_conversation_id || activeConversationId;
   const picker = byId("conversation-picker");
@@ -666,11 +858,20 @@ function renderConversations(data) {
   }
 }
 
+/**
+ * Clear the interval used by the pending-operation label.
+ */
 function stopPhaseAnimation() {
   clearInterval(phaseTimer);
   phaseTimer = null;
 }
 
+/**
+ * Animate a pending answer phase while no completed answer is available.
+ *
+ * @param label Current backend phase label.
+ * @param detail Optional supporting status text.
+ */
 function showTurnPhase(label, detail = "") {
   if (!pendingTurn) return;
   stopPhaseAnimation();
@@ -686,6 +887,11 @@ function showTurnPhase(label, detail = "") {
   phaseTimer = setInterval(paint, 400);
 }
 
+/**
+ * Append a pending question and begin its retrieval-phase indicator.
+ *
+ * @param question Validated question text submitted by the user.
+ */
 function addPendingTurn(question) {
   const item = document.createElement("article");
   item.className = "turn pending";
@@ -702,6 +908,13 @@ function addPendingTurn(question) {
   conversation.scrollTop = conversation.scrollHeight;
 }
 
+/**
+ * Enable pointer and keyboard selection of a completed answer.
+ *
+ * @param answer Focusable answer element.
+ * @param item Parent conversation article.
+ * @param turn Completed turn whose references will be displayed.
+ */
 function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
@@ -718,6 +931,12 @@ function bindAnswerSelection(answer, item, turn) {
   });
 }
 
+/**
+ * Reveal an already-completed answer through a local typing animation.
+ *
+ * @param turn Completed backend response; the animation is not token
+ *   streaming.
+ */
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   const current = pendingTurn;
@@ -750,6 +969,12 @@ function completePendingTurn(turn) {
   }, 25);
 }
 
+/**
+ * Dispatch a JSON event from the Qt bridge into interface state changes.
+ *
+ * @param raw JSON string using the engine event protocol; parsing errors
+ *   propagate.
+ */
 function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
@@ -896,6 +1121,7 @@ function onEvent(raw) {
   }
 }
 
+// UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => bridge?.chooseWorkspace());
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
@@ -1065,6 +1291,7 @@ document.addEventListener("keydown", (event) => {
 });
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
 
+// Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge = channel.objects.qachat;
   bridge.event.connect(onEvent);
@@ -1081,6 +1308,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
   refreshSavedProject();
 });
 
+// Refresh the setup shortcut when external changes may invalidate a project.
 window.addEventListener("focus", refreshSavedProject);
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) refreshSavedProject();
