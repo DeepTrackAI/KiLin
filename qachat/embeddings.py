@@ -82,7 +82,12 @@ from qachat.runtime import (
     choose_backend,
     torch_device,
 )
-from qachat.trace_logging import NullTraceLogger, TraceSink, trace_text_preview
+from qachat.trace_logging import (
+    TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
+    NullTraceLogger,
+    TraceSink,
+    trace_text_preview,
+)
 
 __all__ = [
     "EmbeddingSession",

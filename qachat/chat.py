@@ -100,7 +100,13 @@ from qachat.runtime import (
     choose_backend as _choose_backend,
     torch_device as _torch_device,
 )
-from qachat.trace_logging import NullTraceLogger, TraceSink
+from qachat.trace_logging import (
+    TRACE_EVENT_LLM_CALL_INPUT,
+    TRACE_EVENT_LLM_CALL_OUTPUT,
+    TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
+    NullTraceLogger,
+    TraceSink,
+)
 
 __all__ = [
     "SYSTEM_ROLE",
