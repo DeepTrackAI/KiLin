@@ -101,6 +101,8 @@ from qachat.repository import (
 from qachat.runtime import BACKEND_AUTO, choose_backend
 from qachat.sources import read_repository_files
 from qachat.trace_logging import (
+    FAILURE_POLICY_WARN,
+    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
