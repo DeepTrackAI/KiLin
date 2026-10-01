@@ -1,78 +1,65 @@
-"""Use Hugging Face's shared cache for QAChat model snapshots.
+"""Inspect and reuse Hugging Face's model cache.
 
-This module provides a small interface to ``huggingface_hub`` for discovering,
-locating, and downloading model snapshots. Model files remain in Hugging
-Face's shared cache, allowing QAChat to use locally available models without
-maintaining a separate model store or duplicating cached files.
+This module exposes a small cache-facing API rather than a separate model
+store. Listing and availability checks inspect model repositories and cached
+revisions. Snapshot lookup resolves a local path, while download requests are
+delegated to ``huggingface_hub`` and may contact the Hub.
 
-Cache ownership remains entirely with Hugging Face. In particular, this module
-does not choose the cache layout, copy model files into QAChat, or implement
-revision management. It only exposes the operations QAChat needs to inspect
-the cache, resolve a local snapshot, and request a download.
+Repository presence does not prove that a particular revision is complete or
+loadable. Offline lookup tolerates ``IncompleteSnapshotError`` only when the
+reported snapshot contains ``config.json``; model-specific file validation
+remains the loader's responsibility. Custom cache directories are accepted
+by listing and availability checks, not by the snapshot/download wrappers.
 
 Key Features
 ------------
-- **Shared-cache discovery**
 
-    List cached model repositories together with their local repository paths,
-    sizes, and cached commit revisions.
+- **Cache discovery**
 
-- **Availability checks**
+    Return sorted model identifiers, repository paths, byte sizes, and revision
+    hashes.
 
-    Check whether a model repository has at least one revision in a Hugging
-    Face cache without loading the model.
+- **Offline resolution**
 
-- **Local snapshot lookup**
+    Request local files only and return a snapshot directory without loading a
+    model.
 
-    Resolve a model snapshot using local files only. A snapshot reported as
-    incomplete by Hugging Face can still be returned when ``config.json`` is
-    present, leaving model-specific validation to the downstream loader.
+- **Delegated downloads**
 
-- **Hugging Face-managed downloads**
-
-    Request a model snapshot through ``huggingface_hub`` while relying on
-    Hugging Face to reuse existing files and manage the cache location.
+    Let the Hub client manage cache layout, revisions, and reuse of existing
+    files.
 
 Module Structure
 ----------------
-Functions:
 
-- `available_models(cache_directory=None) -> list[dict[str, object]]`
+- ``available_models``
 
-    Return metadata for model repositories present in a Hugging Face cache.
+    Return metadata for models present in a Hugging Face cache.
 
-- `model_is_available(model_id, cache_directory=None) -> bool`
+- ``model_is_available``
 
     Return whether a model repository is present in a Hugging Face cache.
 
-- `cached_model_snapshot(model_id, revision=None) -> pathlib.Path`
+- ``cached_model_snapshot``
 
-    Resolve a locally cached model snapshot without downloading files.
+    Return a locally cached model snapshot without downloading files.
 
-- `download_model(model_id, revision=None) -> pathlib.Path`
+- ``download_model``
 
-    Download or reuse a model snapshot through Hugging Face.
+    Download or reuse a model snapshot in Hugging Face's shared cache.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
 
 Examples
 --------
-List model repositories available in the default Hugging Face cache:
-
+>>> import qachat
 >>> models = qachat.available_models()
->>> [model["model_id"] for model in models]
-[...]
+>>> cached = qachat.model_is_available("organization/model")
 
-Check whether a particular model repository is cached:
-
->>> qachat.model_is_available("Qwen/Qwen3-4B")
-True
-
-Resolve a cached snapshot without allowing a network download:
-
->>> path = qachat.cached_model_snapshot("Qwen/Qwen3-4B")
-
-Request a model snapshot. Hugging Face reuses files already in its cache:
-
->>> path = qachat.download_model("Qwen/Qwen3-4B")
+The identifier is illustrative. Request downloads explicitly with
+``qachat.download_model(model_id)``; use
+``qachat.cached_model_snapshot(model_id)`` for local-only lookup.
 
 """
 
@@ -115,9 +102,9 @@ def available_models(
 
     Examples
     --------
+    >>> import qachat
     >>> models = qachat.available_models()
-    >>> [model["model_id"] for model in models]
-    [...]
+    >>> identifiers = [item["model_id"] for item in models]
 
     """
 
@@ -175,10 +162,16 @@ def model_is_available(
     ValueError
         If ``model_id`` is not a non-empty string.
 
+    Notes
+    -----
+    This checks whether a repository identifier appears in the cache report. It
+    neither selects a requested revision nor checks model-file completeness or
+    loader compatibility.
+
     Examples
     --------
-    >>> qachat.model_is_available("Qwen/Qwen3-4B")
-    True
+    >>> import qachat
+    >>> present = qachat.model_is_available("organization/model")
 
     """
 
@@ -198,8 +191,8 @@ def cached_model_snapshot(
     """Return a locally cached model snapshot without downloading files.
 
     The lookup is delegated to ``huggingface_hub.snapshot_download`` with
-    ``local_files_only=True``. Hugging Face can mark a snapshot incomplete
-    even when only auxiliary repository files are absent. In that case, this
+    ``local_files_only=True``. Hugging Face can mark a snapshot incomplete even
+    when only auxiliary repository files are absent. In that case, this
     function accepts the snapshot when ``config.json`` is present and leaves
     model-specific file validation to the downstream model loader.
 
@@ -224,13 +217,20 @@ def cached_model_snapshot(
         If Hugging Face reports an incomplete snapshot and ``config.json`` is
         not available in that snapshot.
 
+    Notes
+    -----
+    No custom cache-directory argument is exposed here. On
+    IncompleteSnapshotError only config.json is checked; a returned directory
+    may still lack weights or tokenizer files. Other Hub and filesystem errors
+    propagate.
+
     Examples
     --------
-    >>> path = qachat.cached_model_snapshot("Qwen/Qwen3-4B")
+    For an actual model identifier already present in the configured shared
+    cache:
 
-    Resolve a specific revision already present in the local cache:
-
-    >>> path = qachat.cached_model_snapshot("Qwen/Qwen3-4B", revision="main")
+    >>> import qachat
+    >>> path = qachat.cached_model_snapshot("organization/model")
 
     """
 
@@ -255,10 +255,9 @@ def download_model(
 ) -> Path:
     """Download or reuse a model snapshot in Hugging Face's shared cache.
 
-    The download is delegated to ``huggingface_hub.snapshot_download``.
-    Hugging Face determines the cache location and reuses valid files already
-    present in the cache. QAChat does not copy or take ownership of the model
-    files.
+    The download is delegated to ``huggingface_hub.snapshot_download``. Hugging
+    Face determines the cache location and reuses valid files already present
+    in the cache. QAChat does not copy or take ownership of the model files.
 
     Parameters
     ----------
@@ -280,13 +279,18 @@ def download_model(
     RuntimeError
         If Hugging Face does not return the snapshot path as a string.
 
+    Notes
+    -----
+    The identifier in this example is a placeholder. The Hub client determines
+    download behavior and may access the network. This wrapper does not load a
+    model or validate backend compatibility.
+
     Examples
     --------
-    >>> path = qachat.download_model("Qwen/Qwen3-4B")
+    For an actual accessible repository identifier, permit a Hub download:
 
-    Download a specific revision:
-
-    >>> path = qachat.download_model("Qwen/Qwen3-4B", revision="main")
+    >>> import qachat
+    >>> path = qachat.download_model("organization/model")
 
     """
 
