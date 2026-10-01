@@ -98,7 +98,7 @@ from qachat.repository import (
     SKIP_FILES,
     scan_repository,
 )
-from qachat.runtime import choose_backend
+from qachat.runtime import BACKEND_AUTO, choose_backend
 from qachat.sources import read_repository_files
 from qachat.trace_logging import (
     NullTraceLogger,
@@ -541,7 +541,7 @@ class ChatEngine:
             self._send(
                 "settings",
                 profile=asdict(profile),
-                backend=choose_backend("auto"),
+                backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
                 cached_models=sorted(cached),

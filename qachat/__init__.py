@@ -35,6 +35,16 @@ not export every public object from every submodule.
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
+from .model_defaults import (
+    DEFAULT_CHAT_MODEL_MLX,
+    DEFAULT_CHAT_MODEL_TORCH,
+    DEFAULT_EMBEDDING_MODEL_MLX,
+    DEFAULT_EMBEDDING_MODEL_TORCH,
+    MODEL_ROLE_CHAT,
+    MODEL_ROLE_CHOICES,
+    MODEL_ROLE_EMBEDDING,
+    ModelRole,
+)
 from .huggingface import (
     available_models,
     cached_model_snapshot,
@@ -43,6 +53,10 @@ from .huggingface import (
 )
 from .query_formats import (
     LITERATURE_REPOSITORY_INSTRUCTION,
+    QUERY_FORMAT_CHOICES,
+    QUERY_FORMAT_PLAIN,
+    QUERY_FORMAT_QWEN3,
+    QueryFormat,
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
@@ -99,7 +113,16 @@ from .retrievals import (
     semantic_matrix,
     semantic_search,
 )
-from .runtime import Backend, SelectedBackend, choose_backend, torch_device
+from .runtime import (
+    BACKEND_AUTO,
+    BACKEND_CHOICES,
+    BACKEND_MLX,
+    BACKEND_TORCH,
+    Backend,
+    SelectedBackend,
+    choose_backend,
+    torch_device,
+)
 from .sources import (
     SourceFile,
     SourceUnit,
@@ -117,6 +140,10 @@ from .workspace import prepare_sources_workspace
 
 __all__ = [
     "ASSISTANT_ROLE",
+    "BACKEND_AUTO",
+    "BACKEND_CHOICES",
+    "BACKEND_MLX",
+    "BACKEND_TORCH",
     "Backend",
     "ChatSession",
     "Chunk",
@@ -125,16 +152,28 @@ __all__ = [
     "CodeRelation",
     "CodeResult",
     "ConversationTurn",
+    "DEFAULT_CHAT_MODEL_MLX",
+    "DEFAULT_CHAT_MODEL_TORCH",
+    "DEFAULT_EMBEDDING_MODEL_MLX",
+    "DEFAULT_EMBEDDING_MODEL_TORCH",
     "EmbeddingSession",
     "Evidence",
     "HybridResult",
     "LITERATURE_REPOSITORY_INSTRUCTION",
+    "MODEL_ROLE_CHAT",
+    "MODEL_ROLE_CHOICES",
+    "MODEL_ROLE_EMBEDDING",
+    "ModelRole",
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
     "PROJECT_KIND_CHOICES",
     "PROJECT_KIND_CODE",
     "PROJECT_KIND_LITERATURE",
+    "QUERY_FORMAT_CHOICES",
+    "QUERY_FORMAT_PLAIN",
+    "QUERY_FORMAT_QWEN3",
+    "QueryFormat",
     "ProjectProfile",
     "ProgressCallback",
     "ProgressEvent",

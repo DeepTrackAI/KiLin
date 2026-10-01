@@ -1,10 +1,10 @@
 """Describe the model presets displayed by the desktop interface.
 
-``MODEL_CHOICES`` stores application presets for model role, backend, and
-query format. These records are selection hints, not downloaded model files
-or runtime compatibility checks. ``installed_backends`` consults installed
-package metadata; a listed backend is not thereby proven usable on the
-current device.
+``MODEL_CHOICES`` combines core-owned model defaults with GUI presentation
+records for model role, backend, and query format. These records are selection
+hints, not downloaded model files or runtime compatibility checks.
+``installed_backends`` consults installed package metadata; a listed backend
+is not thereby proven usable on the current device.
 
 Key Features
 ------------
@@ -53,7 +53,20 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import Literal
+from typing import TypeAlias
+
+from qachat.model_defaults import (
+    DEFAULT_CHAT_MODEL_MLX,
+    DEFAULT_CHAT_MODEL_TORCH,
+    DEFAULT_EMBEDDING_MODEL_MLX,
+    DEFAULT_EMBEDDING_MODEL_TORCH,
+    MODEL_ROLE_CHAT,
+    MODEL_ROLE_EMBEDDING,
+    ModelRole,
+)
+from qachat.query_formats import QUERY_FORMAT_QWEN3, QueryFormat
+from qachat.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
+
 
 __all__ = [
     "MODEL_CHOICES",
@@ -62,8 +75,7 @@ __all__ = [
     "model_choices",
 ]
 
-ModelRole = Literal["chat", "embedding"]
-ModelBackend = Literal["mlx", "torch"]
+ModelBackend: TypeAlias = SelectedBackend
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,9 +88,9 @@ class ModelChoice:
         Hugging Face repository identifier for this application preset.
     role: ModelRole
         Model role offered by the UI: chat or embedding.
-    backend: ModelBackend
+    backend: SelectedBackend
         Backend associated with this preset: mlx or torch.
-    query_format: str | None, optional
+    query_format: QueryFormat | None, optional
         Embedding query format label when applicable, otherwise None. Defaults
         to ``None``.
 
@@ -88,9 +100,9 @@ class ModelChoice:
         Hugging Face repository identifier for this application preset.
     role: ModelRole
         Model role offered by the UI: chat or embedding.
-    backend: ModelBackend
+    backend: SelectedBackend
         Backend associated with this preset: mlx or torch.
-    query_format: str | None
+    query_format: QueryFormat | None
         Embedding query format label when applicable, otherwise None.
 
     Notes
@@ -103,20 +115,25 @@ class ModelChoice:
 
     model_id: str
     role: ModelRole
-    backend: ModelBackend
-    query_format: str | None = None
+    backend: SelectedBackend
+    query_format: QueryFormat | None = None
 
 
 MODEL_CHOICES = (
-    ModelChoice("Qwen/Qwen3-0.6B-MLX-4bit", "chat", "mlx"),
+    ModelChoice(DEFAULT_CHAT_MODEL_MLX, MODEL_ROLE_CHAT, BACKEND_MLX),
     ModelChoice(
-        "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
-        "embedding",
-        "mlx",
-        "qwen3",
+        DEFAULT_EMBEDDING_MODEL_MLX,
+        MODEL_ROLE_EMBEDDING,
+        BACKEND_MLX,
+        QUERY_FORMAT_QWEN3,
     ),
-    ModelChoice("Qwen/Qwen3-0.6B", "chat", "torch"),
-    ModelChoice("Qwen/Qwen3-Embedding-0.6B", "embedding", "torch", "qwen3"),
+    ModelChoice(DEFAULT_CHAT_MODEL_TORCH, MODEL_ROLE_CHAT, BACKEND_TORCH),
+    ModelChoice(
+        DEFAULT_EMBEDDING_MODEL_TORCH,
+        MODEL_ROLE_EMBEDDING,
+        BACKEND_TORCH,
+        QUERY_FORMAT_QWEN3,
+    ),
 )
 
 
@@ -133,8 +150,8 @@ def installed_backends() -> dict[str, bool]:
     """
 
     required = {
-        "mlx": ("mlx-embeddings", "mlx-lm"),
-        "torch": ("torch", "transformers"),
+        BACKEND_MLX: ("mlx-embeddings", "mlx-lm"),
+        BACKEND_TORCH: ("torch", "transformers"),
     }
     result: dict[str, bool] = {}
     for backend, packages in required.items():

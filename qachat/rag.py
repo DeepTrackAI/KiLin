@@ -118,6 +118,7 @@ from qachat.embeddings import EmbeddingSession
 from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.query_formats import (
     LITERATURE_REPOSITORY_INSTRUCTION,
+    QUERY_FORMAT_PLAIN,
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
@@ -1848,7 +1849,7 @@ class RAGSession:
         """
 
         profile = self.project.profile
-        if profile.query_format == "plain":
+        if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
         instruction = (
             SOFTWARE_REPOSITORY_INSTRUCTION

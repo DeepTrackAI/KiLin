@@ -93,6 +93,8 @@ from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
 from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_MLX,
     Backend,
     SelectedBackend,
     choose_backend as _choose_backend,
@@ -246,7 +248,7 @@ class ChatSession:
         self: ChatSession,
         model_id: str,
         *,
-        backend: Backend = "auto",
+        backend: Backend = BACKEND_AUTO,
         thinking: bool = False,
         temperature: float = 0.0,
         max_new_tokens: int | None = None,
@@ -378,7 +380,7 @@ class ChatSession:
                 revision = None
             self.model_source = source
 
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 mx = import_module("mlx.core")
                 if not mx.metal.is_available():
                     raise RuntimeError("MLX Metal is not available.")
@@ -659,7 +661,7 @@ class ChatSession:
             },
             turn_id=trace_turn_id,
         ):
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 if self.trace.enabled:
                     answer = self._mlx_reply(
                         tokens,
@@ -765,7 +767,7 @@ class ChatSession:
 
         """
 
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             model = cast("MlxModel", self._model)
             context = model.args.max_position_embeddings
         else:
@@ -991,7 +993,7 @@ class ChatSession:
         self._tokenizer = None
         self.reset()
         gc.collect()
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             import_module("mlx.core").clear_cache()
         elif self.device == "cuda":
             import_module("torch").cuda.empty_cache()

@@ -75,6 +75,8 @@ from huggingface_hub import snapshot_download
 
 from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_MLX,
     Backend,
     SelectedBackend,
     choose_backend,
@@ -138,7 +140,7 @@ class EmbeddingSession:
         self: EmbeddingSession,
         model_id: str,
         *,
-        backend: Backend = "auto",
+        backend: Backend = BACKEND_AUTO,
         allow_download: bool = True,
         revision: str | None = None,
         trace: TraceSink | None = None,
@@ -208,7 +210,7 @@ class EmbeddingSession:
                 revision=revision,
             )
             self.model_source = source
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 self._load_mlx(source)
             else:
                 self._load_torch(source)
@@ -358,7 +360,7 @@ class EmbeddingSession:
 
             """
 
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 if not self.trace.enabled:
                     vectors = self._embed_mlx(checked)
                 else:
@@ -512,7 +514,7 @@ class EmbeddingSession:
 
         """
 
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             mx = import_module("mlx.core")
             mx.clear_cache()
         else:
