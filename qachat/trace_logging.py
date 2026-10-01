@@ -32,8 +32,8 @@ Key Features
 
 - **Grouped JSON output**
 
-    Present lifecycle, preparation, conversation, and progress operations in a
-    readable document.
+    Present lifecycle, preparation, conversation, and progress operations using
+    the shared internal conversation-format contract.
 
 - **Optional artifacts**
 
@@ -126,6 +126,16 @@ import traceback
 from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
+
+from qachat.conversation_format import (
+    CONVERSATION_RESUME_STATE_KEY,
+    CONVERSATION_SESSION_CATEGORY,
+    CONVERSATION_SESSION_KEY,
+    CONVERSATION_SESSION_TITLE,
+    LEGACY_CONVERSATION_KEY,
+    conversation_state,
+    new_conversation_session,
+)
 
 __all__ = [
     "FAILURE_POLICY_CHOICES",
@@ -453,26 +463,16 @@ class TraceLogger:
                     )
                 if isinstance(sessions, dict):
                     self._previous_sessions = sessions
-                    for session in sessions.values():
-                        if (
-                            isinstance(session, dict)
-                            and session.get("category") == "conversations"
-                            and isinstance(
-                                session.get(
-                                    "resume_state",
-                                    session.get("conversation"),
-                                ),
-                                dict,
+                try:
+                    self._conversation = conversation_state(existing)
+                except ValueError:
+                    if isinstance(sessions, dict):
+                        try:
+                            self._conversation = conversation_state(
+                                {"sessions": sessions}
                             )
-                        ):
-                            self._conversation = session.get(
-                                "resume_state",
-                                session.get("conversation", {}),
-                            )
-                            break
-                legacy = existing.get("conversation")
-                if isinstance(legacy, dict):
-                    self._conversation = legacy
+                        except ValueError:
+                            pass
             except (OSError, json.JSONDecodeError, AttributeError):
                 raise ValueError("The conversation trace is invalid.")
         _restrict_permissions(self.output_path, 0o600)
@@ -1038,7 +1038,7 @@ class TraceLogger:
         sessions = dict(self._previous_sessions)
         for key, value in current_sessions.items():
             if (
-                key == "05_conversations"
+                key == CONVERSATION_SESSION_KEY
                 and isinstance(sessions.get(key), dict)
                 and isinstance(value, dict)
             ):
@@ -1058,18 +1058,15 @@ class TraceLogger:
                 number += 1
             sessions[candidate] = value
         conversation_session = sessions.setdefault(
-            "05_conversations",
-            {
-                "title": "Conversation turns",
-                "category": "conversations",
-                "turns": {},
-                "operations": {},
-            },
+            CONVERSATION_SESSION_KEY,
+            new_conversation_session(),
         )
         if isinstance(conversation_session, dict):
-            conversation_session.pop("conversation", None)
-            conversation_session.pop("resume_state", None)
-            conversation_session["resume_state"] = self._conversation
+            conversation_session.pop(LEGACY_CONVERSATION_KEY, None)
+            conversation_session.pop(CONVERSATION_RESUME_STATE_KEY, None)
+            conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
+                self._conversation
+            )
         sessions = dict(
             sorted(
                 sessions.items(),
@@ -1722,7 +1719,7 @@ _SESSION_TITLES = {
     "project": "Project and workspace setup",
     "sources": "Reading, extracting, and chunking sources",
     "indexing": "Loading models, embedding, and saving indexes",
-    "conversations": "Conversation turns",
+    CONVERSATION_SESSION_CATEGORY: CONVERSATION_SESSION_TITLE,
     "runtime": "Runtime output and errors",
 }
 
@@ -1731,7 +1728,7 @@ _SESSION_ORDER = {
     "project": 2,
     "sources": 3,
     "indexing": 4,
-    "conversations": 5,
+    CONVERSATION_SESSION_CATEGORY: 5,
     "runtime": 6,
 }
 
@@ -1780,7 +1777,7 @@ def _readable_sessions(
         event_type = str(event.get("event_type", "event"))
         turn_id = event.get("turn_id")
         if isinstance(turn_id, str):
-            session = _session_bucket(sessions, "conversations")
+            session = _session_bucket(sessions, CONVERSATION_SESSION_CATEGORY)
             turns = session.setdefault("turns", {})
             if not isinstance(turns, dict):
                 continue
@@ -2105,7 +2102,7 @@ def _event_session(event_type: str) -> str:
     if event_type.startswith(("index.", "embedding.", "model.")):
         return "indexing"
     if event_type.startswith("conversation."):
-        return "conversations"
+        return CONVERSATION_SESSION_CATEGORY
     if event_type.startswith(("trace.", "gui.trace")):
         return "trace"
     return "runtime"

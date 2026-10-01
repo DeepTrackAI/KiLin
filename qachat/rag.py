@@ -41,7 +41,7 @@ Key Features
 - **Conversation state**
 
     Restore or switch saved conversations around one authoritative JSON path
-    while maintaining explicit model-session ownership.
+    using the shared internal conversation-format contract.
 
 - **Trace alignment**
 
@@ -125,6 +125,7 @@ from qachat.chat import (
 )
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
+from qachat.conversation_format import conversation_state
 from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.query_formats import (
     LITERATURE_REPOSITORY_INSTRUCTION,
@@ -2004,7 +2005,7 @@ class RAGSession:
             return [], [], None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            conversation = _conversation_state(payload)
+            conversation = conversation_state(payload)
             turns = [
                 _turn_from_data(item) for item in conversation.get("turns", [])
             ]
@@ -2125,7 +2126,7 @@ class RAGSession:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     payload = loaded
-            stored = _conversation_state(payload, create=True)
+            stored = conversation_state(payload, create=True)
             stored.update(saved_state)
             _write_json(path, payload)
         self.trace.emit(
@@ -2328,72 +2329,6 @@ def _check_conversation_trace(
         raise ValueError(
             "Enabled RAG tracing must use the conversation path."
         )
-
-
-def _conversation_state(
-    payload: dict[str, object], *, create: bool = False
-) -> dict[str, object]:
-    """Locate resumable state in the chronologically later chat session.
-
-    Parameters
-    ----------
-    payload: dict[str, object]
-        Decoded conversation/trace JSON document.
-    create: bool, optional
-        Whether missing grouped conversation-state containers may be inserted
-        into payload. Defaults to ``False``.
-
-    Returns
-    -------
-    dict[str, object]
-        Mutable conversation/resume-state dictionary within payload.
-
-    Raises
-    ------
-    ValueError
-        If no valid supported state exists and creation is disabled, or the
-        enclosing structure is invalid.
-
-    Notes
-    -----
-    Creation modifies the supplied payload in place. Legacy top-level state is
-    recognized before grouped sessions.
-
-    """
-
-    legacy = payload.get("conversation")
-    if isinstance(legacy, dict):
-        return legacy
-    sessions = (
-        payload.setdefault("sessions", {})
-        if create
-        else payload.get("sessions")
-    )
-    if not isinstance(sessions, dict):
-        raise ValueError("The saved conversation is invalid.")
-    for session in sessions.values():
-        if (
-            isinstance(session, dict)
-            and session.get("category") == "conversations"
-        ):
-            state = (
-                session.setdefault("resume_state", {})
-                if create
-                else session.get("resume_state", session.get("conversation"))
-            )
-            if isinstance(state, dict):
-                return state
-    if create:
-        session = {
-            "title": "Conversation turns",
-            "category": "conversations",
-            "turns": {},
-            "operations": {},
-            "resume_state": {},
-        }
-        sessions["05_conversations"] = session
-        return session["resume_state"]
-    raise ValueError("The saved conversation is invalid.")
 
 
 def _answer_prompt(
