@@ -1,4 +1,69 @@
-"""Split natural source units only when they exceed a token budget."""
+"""Split source units into token-budgeted retrieval chunks.
+
+The chunker preserves source text and provenance while using a caller-supplied
+token-count function. Units already within the maximum size stay whole. An
+oversized unit is split through its children when available, otherwise along
+line boundaries and, if necessary, within an individual long line.
+
+Target size guides splitting; maximum size is the acceptance bound. Overlap
+is retained as source lines or character suffixes. Binary-search helpers
+assume token counts are sufficiently monotonic across candidate prefixes or
+suffixes. The callback is responsible for matching the intended tokenizer.
+No embedding model is loaded by this module.
+
+Key Features
+------------
+
+- **Provenance retention**
+
+    Carry paths, inclusive line ranges, structural labels, notebook cells, and
+    sections into each chunk.
+
+- **Hierarchical splitting**
+
+    Prefer complete source units and child units before splitting plain text.
+
+- **Stable identifiers**
+
+    Hash chunk text and provenance into identifiers without including an
+    absolute repository root.
+
+- **Progress reporting**
+
+    Report completed source units and cache text-token counts within one call.
+
+Module Structure
+----------------
+
+- ``Chunk``
+
+    A searchable source fragment with its original location.
+
+- ``chunk_source_units``
+
+    Create token-bounded chunks while preserving natural units.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+Use a simple character counter to illustrate the API without loading a model:
+
+>>> import qachat
+>>> from pathlib import Path
+>>> unit = qachat.SourceUnit(
+...     path=Path("notes.txt"), text="Brownian motion.",
+...     start_line=1, end_line=1, kind="text",
+... )
+>>> chunks = qachat.chunk_source_units(
+...     [unit], count_tokens=len,
+...     target_tokens=20, max_tokens=30, overlap_tokens=5,
+... )
+
+For model use, pass that model's token counter instead of ``len``.
+
+"""
 
 from __future__ import annotations
 
@@ -20,6 +85,27 @@ __all__ = [
 class Chunk:
     """A searchable source fragment with its original location.
 
+    Parameters
+    ----------
+    identifier: str
+        Stable content-based identifier.
+    path: pathlib.Path
+        Relative source path.
+    text: str
+        Exact source fragment.
+    start_line: int
+        First one-based source line.
+    end_line: int
+        Last one-based source line.
+    kind: str
+        Original source-unit type.
+    symbol: str | None
+        Original symbol name.
+    section: str | None
+        Original document section.
+    cell: int | None, optional
+        One-based notebook cell number when available. Defaults to ``None``.
+
     Attributes
     ----------
     identifier: str
@@ -40,6 +126,13 @@ class Chunk:
         Original document section.
     cell: int | None
         One-based notebook cell number when available.
+
+    Notes
+    -----
+    Line ranges are inclusive and refer to the source-unit coordinate system.
+    Notebook lines are cell-local; PDF lines are page-local with section
+    provenance. Frozen dataclass fields prevent reassignment, not mutation of
+    objects stored within them.
 
     """
 
@@ -69,16 +162,18 @@ def chunk_source_units(
     ----------
     units: list[SourceUnit]
         Natural source units.
-    count_tokens: collections.abc.Callable[[str], int]
+    count_tokens: Callable[[str], int]
         Token counter from the selected embedding model.
     target_tokens: int, optional
-        Preferred size when a unit must be split.
+        Preferred size when a unit must be split. Defaults to ``500``.
     max_tokens: int, optional
-        Largest allowed chunk.
+        Largest allowed chunk. Defaults to ``700``.
     overlap_tokens: int, optional
-        Maximum repeated text between adjacent split chunks.
-    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+        Maximum repeated text between adjacent split chunks. Defaults to
+        ``80``.
+    progress_callback: Callable[[int, int], None] | None, optional
         Called after each top-level source unit with ``current`` and ``total``.
+        Defaults to ``None``.
 
     Returns
     -------
@@ -96,6 +191,28 @@ def chunk_source_units(
     counts: dict[str, int] = {}
 
     def count(text: str) -> int:
+        """Memoize validated token counts during one chunking call.
+
+        Parameters
+        ----------
+        text: str
+            Exact source substring whose count is needed. Empty text has count
+            zero without invoking the tokenizer.
+
+        Returns
+        -------
+        int
+            Nonnegative token count returned by the caller, reused for
+            identical text within this invocation.
+
+        Raises
+        ------
+        ValueError
+            If the callback returns a value other than a nonnegative exact
+            integer.
+
+        """
+
         if text not in counts:
             value = count_tokens(text) if text else 0
             if type(value) is not int or value < 0:
@@ -179,7 +296,7 @@ def _chunk_source_unit(
     ----------
     unit: SourceUnit
         Unit to process.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Checked and cached token counter.
     target_tokens: int
         Preferred split size.
@@ -252,7 +369,8 @@ def _make_chunk(
     end_line: int
         Last source line.
     part: int, optional
-        Character offset used to distinguish pieces of one long line.
+        Character offset used to distinguish pieces of one long line. Defaults
+        to ``0``.
 
     Returns
     -------
@@ -301,13 +419,18 @@ def _largest_prefix(
         Text to search.
     limit: int
         Token limit.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
 
     Returns
     -------
     int
         Number of fitting characters.
+
+    Notes
+    -----
+    The search assumes candidate token counts are sufficiently monotonic for
+    binary search. The tokenizer callback is not checked for that property.
 
     """
 
@@ -338,13 +461,18 @@ def _largest_suffix(
         Text to search.
     limit: int
         Token limit.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
 
     Returns
     -------
     str
         Fitting suffix.
+
+    Notes
+    -----
+    The search assumes candidate token counts are sufficiently monotonic for
+    binary search. The tokenizer callback is not checked for that property.
 
     """
 
@@ -381,13 +509,18 @@ def _largest_line_end(
         Zero-based starting item.
     limit: int
         Token limit.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
 
     Returns
     -------
     int
         Exclusive ending item.
+
+    Notes
+    -----
+    The search assumes candidate token counts are sufficiently monotonic for
+    binary search. The tokenizer callback is not checked for that property.
 
     """
 
@@ -425,13 +558,18 @@ def _overlap_start(
         Current exclusive ending item.
     limit: int
         Token limit.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
 
     Returns
     -------
     int
         Start of the overlapping suffix.
+
+    Notes
+    -----
+    The search assumes candidate token counts are sufficiently monotonic for
+    binary search. The tokenizer callback is not checked for that property.
 
     """
 
@@ -467,7 +605,7 @@ def _split_long_line(
     ----------
     unit: SourceUnit
         Single-line source unit.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
     target_tokens: int
         Preferred split size.
@@ -480,6 +618,12 @@ def _split_long_line(
     -------
     list[Chunk]
         Bounded chunks covering the source line.
+
+    Raises
+    ------
+    ValueError
+        If even one character exceeds the target budget or overlap prevents
+        forward progress.
 
     """
 
@@ -541,7 +685,7 @@ def _split_unit(
     ----------
     unit: SourceUnit
         Source unit to split.
-    count: collections.abc.Callable[[str], int]
+    count: Callable[[str], int]
         Token counter.
     target_tokens: int
         Preferred split size.
