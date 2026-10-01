@@ -1,10 +1,78 @@
-"""Prepare the QAChat environment before tutorial imports.
+"""Prepare the QAChat development environment for tutorial notebooks.
 
-Functions
----------
-prepare_notebook
-    Find the project, verify its Python kernel, and use uv to repair missing
-    declared packages.
+This auxiliary repository module prepares notebooks that run from the QAChat
+source tree. It is intended for tutorials and development workflows and is not
+part of the released ``qachat`` package.
+
+The main entry point locates the QAChat repository, makes the source tree
+importable, verifies that the notebook uses the project's virtual environment,
+and repairs missing declared dependencies through the repository setup route.
+The helper functions implement repository discovery, interpreter validation,
+platform-specific dependency selection, and environment synchronization.
+
+Key Features
+------------
+- **Repository discovery**
+
+    Find the nearest parent directory containing both ``pyproject.toml`` and
+    the ``qachat`` source directory.
+
+- **Kernel validation**
+
+    Verify that the active notebook interpreter is the Python executable from
+    the repository's ``.venv`` environment.
+
+- **Dependency checks**
+
+    Check common tutorial dependencies and add MLX-specific dependencies on
+    native Apple Silicon systems.
+
+- **Environment repair**
+
+    Prefer ``uv sync`` when ``uv`` is available and otherwise fall back to the
+    repository setup script for the current platform.
+
+Module Structure
+----------------
+Functions:
+
+- ``prepare_notebook(start=None) -> pathlib.Path``
+
+    Prepare a tutorial notebook environment and return the repository root.
+
+Private helpers:
+
+- ``_project_root(start) -> pathlib.Path``
+
+    Locate the QAChat repository root.
+
+- ``_project_python(root) -> pathlib.Path``
+
+    Return the expected virtual-environment Python executable.
+
+- ``_same_python(expected) -> bool``
+
+    Check whether the active interpreter matches the project environment.
+
+- ``_required_modules() -> tuple[str, ...]``
+
+    Return the tutorial modules required on the current platform.
+
+- ``_missing_modules() -> tuple[str, ...]``
+
+    Return required modules that cannot be imported by the active kernel.
+
+- ``_sync_environment(root) -> None``
+
+    Synchronize the project environment through ``uv`` or a setup script.
+
+Examples
+--------
+At the start of a tutorial notebook located inside the QAChat repository::
+
+    from notebook import prepare_notebook
+
+    root = prepare_notebook()
 
 """
 
@@ -49,8 +117,10 @@ def prepare_notebook(start: str | Path | None = None) -> Path:
     Raises
     ------
     RuntimeError
-        If the repaired environment is not the selected notebook kernel or
-        required packages remain unavailable.
+        If the repository cannot be found, the active notebook kernel is not
+        the project interpreter, or required packages remain unavailable.
+    subprocess.CalledProcessError
+        If an environment synchronization command fails.
 
     """
 
@@ -85,7 +155,24 @@ def prepare_notebook(start: str | Path | None = None) -> Path:
 
 
 def _project_root(start: Path) -> Path:
-    """Find the nearest parent containing pyproject.toml and qachat."""
+    """Find the QAChat repository root above a starting path.
+
+    Parameters
+    ----------
+    start: pathlib.Path
+        Directory at or below the QAChat repository root.
+
+    Returns
+    -------
+    pathlib.Path
+        Nearest parent containing ``pyproject.toml`` and ``qachat``.
+
+    Raises
+    ------
+    RuntimeError
+        If no QAChat repository root can be found.
+
+    """
 
     candidate = start.expanduser().resolve()
     for directory in (candidate, *candidate.parents):
@@ -101,7 +188,19 @@ def _project_root(start: Path) -> Path:
 
 
 def _project_python(root: Path) -> Path:
-    """Return the expected Python executable inside the project environment."""
+    """Return the expected Python executable for the project environment.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        QAChat repository root.
+
+    Returns
+    -------
+    pathlib.Path
+        Python executable inside the repository's ``.venv`` directory.
+
+    """
 
     if platform.system() == "Windows":
         return root / ".venv/Scripts/python.exe"
@@ -110,7 +209,20 @@ def _project_python(root: Path) -> Path:
 
 
 def _same_python(expected: Path) -> bool:
-    """Return whether the notebook uses the project environment."""
+    """Check whether the notebook uses the project environment.
+
+    Parameters
+    ----------
+    expected: pathlib.Path
+        Expected Python executable in the project environment.
+
+    Returns
+    -------
+    bool
+        ``True`` if the expected executable exists and matches the active
+        Python interpreter.
+
+    """
 
     return (
         expected.exists()
@@ -119,7 +231,14 @@ def _same_python(expected: Path) -> bool:
 
 
 def _required_modules() -> tuple[str, ...]:
-    """Return modules installed by the setup command on this computer."""
+    """Return tutorial modules required on the current platform.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Common tutorial modules, with MLX modules added on Apple Silicon.
+
+    """
 
     modules = list(_COMMON_MODULES)
 
@@ -133,7 +252,14 @@ def _required_modules() -> tuple[str, ...]:
 
 
 def _missing_modules() -> tuple[str, ...]:
-    """Return required modules that the current kernel cannot import."""
+    """Return required modules that the current kernel cannot import.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Names of required modules for which no import specification is found.
+
+    """
 
     return tuple(
         name for name in _required_modules() if find_spec(name) is None
@@ -141,7 +267,22 @@ def _missing_modules() -> tuple[str, ...]:
 
 
 def _sync_environment(root: Path) -> None:
-    """Run the existing setup route or uv sync in the project root."""
+    """Synchronize the QAChat development environment.
+
+    ``uv sync`` is preferred when ``uv`` is available. Otherwise, the
+    repository's platform-specific setup script is used.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        QAChat repository root in which to run the synchronization command.
+
+    Raises
+    ------
+    subprocess.CalledProcessError
+        If the synchronization command exits with a nonzero status.
+
+    """
 
     uv_command = shutil.which("uv")
     if uv_command is not None:
