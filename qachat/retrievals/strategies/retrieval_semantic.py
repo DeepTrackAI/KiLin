@@ -148,7 +148,7 @@ def build_semantic_index(
     batch_size: int | None, optional
         Number of chunks embedded per model call. ``None`` preserves the
         previous all-at-once behavior. Defaults to ``None``.
-    progress_callback: Callable[[int, int], None] | None,, optional
+    progress_callback: Callable[[int, int], None] | None, optional
         optional Called after each embedding batch with ``current`` and
         ``total``. Defaults to ``None``.
 
