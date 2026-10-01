@@ -8,11 +8,13 @@ user prompt. Returned ``Evidence`` records identify the supplied excerpts;
 the module does not independently verify the generated answer or citations.
 
 Conversation turns retain questions, answers, evidence, and effective turn
-parameters. Persistence uses a resumable state in a conversation JSON record
-or in the supplied trace sink. The session has side effects: initialization
-may create files, rebuild indexes, load models, and download missing model
-files according to the profile. ``trace=None`` creates enabled forensic
-tracing in this class, unlike the low-level chat and embedding classes.
+parameters. One authoritative conversation JSON path stores resumable state.
+When tracing is enabled for a RAG session, its trace output is required to use
+that same path; tracing therefore cannot silently redirect conversation
+persistence. The session has side effects: initialization may create files,
+rebuild indexes, load models, and download missing model files according to the
+profile. ``trace=None`` creates enabled forensic tracing in this class, unlike
+the low-level chat and embedding classes.
 
 History and expanded evidence have no automatic summarization or shared
 prompt-token budget. A retrieval count limits the initial fused ranking, not
@@ -38,8 +40,13 @@ Key Features
 
 - **Conversation state**
 
-    Restore or switch saved conversations while maintaining explicit
-    model-session ownership.
+    Restore or switch saved conversations around one authoritative JSON path
+    while maintaining explicit model-session ownership.
+
+- **Trace alignment**
+
+    Bind RAG tracing to the active conversation record so enabling tracing does
+    not change where resumable conversation state is stored.
 
 - **Progress and tracing**
 
@@ -92,7 +99,7 @@ The workspace and model dependencies must already be suitable for its profile.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -446,15 +453,17 @@ class RAGSession:
             Optional callback receiving ProgressEvent records during
             preparation. Callback exceptions propagate. Defaults to ``None``.
         trace: TraceConfig | TraceSink | None, optional
-            Trace configuration or caller-owned sink. None requests a new
-            enabled forensic logger. TraceConfig(enabled=False) disables
-            tracing but not conversation persistence. Defaults to ``None``.
+            Trace configuration or caller-owned sink. ``None`` requests a new
+            enabled forensic logger bound to the conversation path. An enabled
+            TraceConfig without an output path is bound there automatically.
+            An enabled configuration or sink with a different output path is
+            rejected. ``TraceConfig(enabled=False)`` disables tracing but not
+            conversation persistence. Defaults to ``None``.
         conversation_path: str | pathlib.Path | None, optional
-            Optional conversation_*.json path under project logs. Relative
-            paths start at the project root; None chooses a new path under
-            logs/traces. When tracing is enabled, writes go through the sink,
-            so configure its output path consistently with this path. Defaults
-            to ``None``.
+            Optional ``conversation_*.json`` path under project logs. Relative
+            paths start at the project root; ``None`` chooses a new path under
+            ``logs/traces``. This path is authoritative for resumable state and
+            enabled RAG tracing. Defaults to ``None``.
 
         Raises
         ------
@@ -482,11 +491,9 @@ class RAGSession:
         self.conversation_path = self._resolve_conversation_path(
             conversation_path
         )
-        if trace is None:
-            trace = TraceConfig(enabled=True, mode="forensic")
-        self.trace, self._owns_trace = create_trace_logger(
+        self.trace, self._owns_trace = _conversation_trace(
             trace,
-            default_directory=self.conversation_path.parent,
+            self.conversation_path,
         )
         self.trace.emit(
             "session.started",
@@ -1005,8 +1012,7 @@ class RAGSession:
             root.
         trace: TraceSink
             Caller-owned trace sink associated with the target conversation.
-            Its output path should agree with the conversation path when
-            persistence is shared.
+            When enabled, its output path must be the target conversation path.
 
         Returns
         -------
@@ -1025,24 +1031,25 @@ class RAGSession:
 
         Notes
         -----
-        Loaded models and indexes are reused. The trace sink is replaced and
-        made caller-owned before later state loading/validation; failures are
-        not transactional. Generation settings come from the last saved turn
-        when available, otherwise the profile defaults.
+        Loaded models and indexes are reused. The target path and trace
+        sink are validated before the active session is changed. Failures
+        during later state loading are not transactional. Generation settings
+        come from the last
+        saved turn when available, otherwise the profile defaults.
 
         """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
+        target_path = self._resolve_conversation_path(conversation_path)
+        _check_conversation_trace(trace, target_path)
         if self._owns_trace:
             self.trace.close()
         self.trace = trace
         self._owns_trace = False
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
-        self.conversation_path = self._resolve_conversation_path(
-            conversation_path
-        )
+        self.conversation_path = target_path
         messages, turns, checkpoint_id = self._load_conversation()
         self.chat_session.reset()
         if messages:
@@ -2000,10 +2007,10 @@ class RAGSession:
         Notes
         -----
         Builds a hash-identified resumable snapshot. With an enabled trace
-        sink, state is written through update_conversation; otherwise it is
-        written to conversation_path. The hash labels content but this
-        implementation does not store a separate immutable historical snapshot
-        for every checkpoint.
+        sink, state is written through ``update_conversation`` to the same file
+        as ``conversation_path``; otherwise it is written directly to that
+        path. The hash labels content but this implementation does not store a
+        separate immutable historical snapshot for every checkpoint.
 
         """
 
@@ -2096,8 +2103,9 @@ class RAGSession:
 
         Notes
         -----
-        Only the configured conversation_path is moved. It does not relocate an
-        independently configured trace output file.
+        The configured conversation path is authoritative for both resumable
+        state and any enabled RAG trace. Reset semantics for an active logger
+        that references an archived path are handled separately by ``reset``.
 
         """
 
@@ -2177,6 +2185,98 @@ class RAGSession:
             raise ValueError("Conversation folder must not be a link.")
         candidate.parent.mkdir(parents=True, exist_ok=True)
         return candidate
+
+
+def _conversation_trace(
+    trace: TraceConfig | TraceSink | None,
+    conversation_path: Path,
+) -> tuple[TraceSink, bool]:
+    """Create or validate the trace bound to one conversation record.
+
+    Parameters
+    ----------
+    trace: TraceConfig | TraceSink | None
+        Trace request for the RAG session. ``None`` selects an enabled forensic
+        trace. An enabled configuration without an output path is bound to the
+        conversation record automatically.
+    conversation_path: pathlib.Path
+        Authoritative conversation JSON path used for resumable state.
+
+    Returns
+    -------
+    tuple[TraceSink, bool]
+        Trace sink and whether the caller owns its lifetime.
+
+    Raises
+    ------
+    ValueError
+        If an enabled configuration or existing sink targets a different path,
+        or if ``trace`` is not supported by the trace factory.
+
+    Notes
+    -----
+    The stricter one-file rule belongs to ``RAGSession`` rather than the
+    generic trace logger. Disabled tracing remains independent of the
+    conversation path.
+
+    """
+
+    if trace is None:
+        trace = TraceConfig(
+            enabled=True,
+            output_path=conversation_path,
+            mode="forensic",
+        )
+    elif isinstance(trace, TraceConfig) and trace.enabled:
+        if trace.output_path is None:
+            trace = replace(trace, output_path=conversation_path)
+        else:
+            configured = Path(trace.output_path).expanduser().resolve()
+            if configured != conversation_path:
+                raise ValueError(
+                    "Enabled RAG tracing must use the conversation path."
+                )
+
+    sink, owns_sink = create_trace_logger(
+        trace,
+        default_directory=conversation_path.parent,
+    )
+    _check_conversation_trace(sink, conversation_path)
+    return sink, owns_sink
+
+
+def _check_conversation_trace(
+    trace: TraceSink,
+    conversation_path: Path,
+) -> None:
+    """Require an enabled RAG trace to use the conversation record.
+
+    Parameters
+    ----------
+    trace: TraceSink
+        Existing trace sink to validate. Disabled sinks need no output path.
+    conversation_path: pathlib.Path
+        Authoritative conversation JSON path used for resumable state.
+
+    Raises
+    ------
+    ValueError
+        If an enabled sink has no output path or resolves to another file.
+
+    """
+
+    if not trace.enabled:
+        return
+    output_path = trace.output_path
+    if output_path is None:
+        raise ValueError(
+            "Enabled RAG tracing requires an exact conversation path."
+        )
+    resolved = Path(output_path).expanduser().resolve()
+    if resolved != conversation_path:
+        raise ValueError(
+            "Enabled RAG tracing must use the conversation path."
+        )
 
 
 def _conversation_state(
