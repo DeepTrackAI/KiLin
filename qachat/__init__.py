@@ -1,6 +1,6 @@
 """Expose the public API of the QAChat package."""
 
-from .chat import ChatSession
+from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .huggingface import (
@@ -81,6 +81,7 @@ from .trace_logging import (
 from .workspace import prepare_sources_workspace
 
 __all__ = [
+    "ASSISTANT_ROLE",
     "Backend",
     "ChatSession",
     "Chunk",
@@ -103,6 +104,7 @@ __all__ = [
     "RAGSession",
     "RetrievalPlan",
     "SOFTWARE_REPOSITORY_INSTRUCTION",
+    "SYSTEM_ROLE",
     "SelectedBackend",
     "SemanticIndex",
     "SemanticResult",
@@ -112,6 +114,7 @@ __all__ = [
     "TraceLogger",
     "TraceMode",
     "TraceSink",
+    "USER_ROLE",
     "NullTraceLogger",
     "available_models",
     "build_code_graph",
