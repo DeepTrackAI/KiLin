@@ -273,8 +273,8 @@ class ChatEngine:
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
-                mode="forensic",
-                failure_policy="warn",
+                mode=TRACE_MODE_FORENSIC,
+                failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,
         )

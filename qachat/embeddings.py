@@ -645,7 +645,7 @@ class EmbeddingSession:
                     }
                 )
             self.trace.emit(
-                "embedding.tokens.prepared",
+                TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
                 component="embeddings",
                 data=token_data,
                 turn_id=trace_turn_id,
@@ -722,7 +722,7 @@ class EmbeddingSession:
                     }
                 )
             self.trace.emit(
-                "embedding.tokens.prepared",
+                TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
                 component="embeddings",
                 data=token_data,
                 turn_id=trace_turn_id,

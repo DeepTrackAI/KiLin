@@ -6,10 +6,12 @@ revisions. Snapshot lookup resolves a local path, while download requests are
 delegated to ``huggingface_hub`` and may contact the Hub.
 
 Repository presence does not prove that a particular revision is complete or
-loadable. Offline lookup tolerates ``IncompleteSnapshotError`` only when the
-reported snapshot contains ``config.json``; model-specific file validation
-remains the loader's responsibility. Custom cache directories are accepted
-by listing and availability checks, not by the snapshot/download wrappers.
+loadable. Offline lookup accepts a resolved snapshot only when ``config.json``
+is present. Older ``huggingface_hub`` versions can report partial snapshots
+through ``IncompleteSnapshotError``; newer versions may simply return the
+cached directory. QAChat supports both behaviors while leaving model-specific
+file validation to the downstream loader. Custom cache directories are
+accepted by listing and availability checks, not by snapshot/download wrappers.
 
 Key Features
 ------------
@@ -68,7 +70,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
-from huggingface_hub.errors import IncompleteSnapshotError
+
+try:
+    from huggingface_hub.errors import (
+        IncompleteSnapshotError as _IncompleteSnapshotError,
+    )
+except ImportError:
+    class _IncompleteSnapshotError(Exception):
+        """Compatibility placeholder for newer huggingface_hub versions."""
+
 
 __all__ = [
     "available_models",
@@ -191,10 +201,10 @@ def cached_model_snapshot(
     """Return a locally cached model snapshot without downloading files.
 
     The lookup is delegated to ``huggingface_hub.snapshot_download`` with
-    ``local_files_only=True``. Hugging Face can mark a snapshot incomplete even
-    when only auxiliary repository files are absent. In that case, this
-    function accepts the snapshot when ``config.json`` is present and leaves
-    model-specific file validation to the downstream model loader.
+    ``local_files_only=True``. Across supported Hub versions, QAChat accepts
+    the resolved snapshot only when ``config.json`` is available. Older Hub
+    versions may signal a partial snapshot with ``IncompleteSnapshotError``;
+    newer versions can return the cached snapshot directory directly.
 
     Parameters
     ----------
@@ -213,15 +223,14 @@ def cached_model_snapshot(
     ------
     ValueError
         If ``model_id`` is not a non-empty string.
-    huggingface_hub.errors.IncompleteSnapshotError
-        If Hugging Face reports an incomplete snapshot and ``config.json`` is
-        not available in that snapshot.
+    FileNotFoundError
+        If Hugging Face resolves a local snapshot without ``config.json``.
 
     Notes
     -----
-    No custom cache-directory argument is exposed here. On
-    IncompleteSnapshotError only config.json is checked; a returned directory
-    may still lack weights or tokenizer files. Other Hub and filesystem errors
+    No custom cache-directory argument is exposed here. ``config.json`` is
+    the only QAChat-level completeness requirement; a returned directory may
+    still lack weights or tokenizer files. Other Hub and filesystem errors
     propagate.
 
     Examples
@@ -241,11 +250,15 @@ def cached_model_snapshot(
             revision=revision,
             local_files_only=True,
         )
-    except IncompleteSnapshotError as error:
+    except _IncompleteSnapshotError as error:
         path = error.snapshot_path
-        if not (Path(path) / "config.json").is_file():
-            raise
-    return Path(path)
+
+    snapshot = Path(path)
+    if not (snapshot / "config.json").is_file():
+        raise FileNotFoundError(
+            f"Cached model snapshot has no config.json: {snapshot}"
+        )
+    return snapshot
 
 
 def download_model(

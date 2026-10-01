@@ -639,7 +639,7 @@ class ChatSession:
                 list(tokens),
             )
         self.trace.emit(
-            "llm.call.input",
+            TRACE_EVENT_LLM_CALL_INPUT,
             component="chat",
             data=input_data,
             turn_id=trace_turn_id,
@@ -726,7 +726,7 @@ class ChatSession:
                 text=True,
             )
         self.trace.emit(
-            "llm.call.output",
+            TRACE_EVENT_LLM_CALL_OUTPUT,
             component="chat",
             data=output_data,
             turn_id=trace_turn_id,
@@ -886,7 +886,7 @@ class ChatSession:
                 generated,
             )
         self.trace.emit(
-            "llm.call.output.tokens",
+            TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
             component="chat",
             data=data,
             turn_id=trace_turn_id,

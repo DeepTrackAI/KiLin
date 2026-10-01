@@ -21,6 +21,11 @@ direct conversation-state updates have their own write path.
 Key Features
 ------------
 
+- **Canonical trace vocabulary**
+
+    Provide shared identifiers for trace modes, failure policies, and core
+    event types interpreted across QAChat components.
+
 - **Structured spans**
 
     Associate events, timings, parent spans, and conversation-turn identifiers.
@@ -41,6 +46,18 @@ Key Features
 Module Structure
 ----------------
 
+- ``TRACE_MODE_*`` constants and ``TraceMode``
+
+    Canonical identifiers for standard and forensic trace detail.
+
+- ``FAILURE_POLICY_*`` constants and ``FailurePolicy``
+
+    Canonical identifiers controlling trace-write failure handling.
+
+- ``TRACE_EVENT_*`` constants
+
+    Canonical event identifiers interpreted across QAChat components.
+
 - ``NullTraceLogger``
 
     No-op trace used when structured tracing is disabled.
@@ -52,10 +69,6 @@ Module Structure
 - ``TraceLogger``
 
     Collect ordered events and write a grouped conversation-trace JSON file.
-
-- ``TraceMode``
-
-    Type alias for ``"standard"`` or ``"forensic"`` detail.
 
 - ``TraceSink``
 
@@ -80,7 +93,7 @@ Examples
 --------
 >>> import qachat
 >>> logger = qachat.TraceLogger(
-...     qachat.TraceConfig(enabled=True, mode="standard"),
+...     qachat.TraceConfig(enabled=True, mode=qachat.TRACE_MODE_STANDARD),
 ...     default_directory="/path/to/local/traces",
 ... )
 >>> try:
@@ -110,11 +123,23 @@ import sys
 from threading import Lock
 from time import perf_counter
 import traceback
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
 __all__ = [
+    "FAILURE_POLICY_CHOICES",
+    "FAILURE_POLICY_RAISE",
+    "FAILURE_POLICY_WARN",
+    "FailurePolicy",
+    "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
+    "TRACE_EVENT_LLM_CALL_INPUT",
+    "TRACE_EVENT_LLM_CALL_OUTPUT",
+    "TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS",
+    "TRACE_EVENT_PROGRESS_UPDATED",
+    "TRACE_MODE_CHOICES",
+    "TRACE_MODE_FORENSIC",
+    "TRACE_MODE_STANDARD",
     "NullTraceLogger",
     "TraceConfig",
     "TraceLogger",
@@ -127,11 +152,33 @@ __all__ = [
 
 TraceMode: TypeAlias = Literal["standard", "forensic"]
 FailurePolicy: TypeAlias = Literal["warn", "raise"]
+
+TRACE_MODE_STANDARD: Final[TraceMode] = "standard"
+TRACE_MODE_FORENSIC: Final[TraceMode] = "forensic"
+TRACE_MODE_CHOICES: Final[tuple[TraceMode, ...]] = (
+    TRACE_MODE_STANDARD,
+    TRACE_MODE_FORENSIC,
+)
+FAILURE_POLICY_WARN: Final[FailurePolicy] = "warn"
+FAILURE_POLICY_RAISE: Final[FailurePolicy] = "raise"
+FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
+    FAILURE_POLICY_WARN,
+    FAILURE_POLICY_RAISE,
+)
+
+TRACE_EVENT_EMBEDDING_TOKENS_PREPARED: Final[str] = (
+    "embedding.tokens.prepared"
+)
+TRACE_EVENT_LLM_CALL_INPUT: Final[str] = "llm.call.input"
+TRACE_EVENT_LLM_CALL_OUTPUT: Final[str] = "llm.call.output"
+TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS: Final[str] = "llm.call.output.tokens"
+TRACE_EVENT_PROGRESS_UPDATED: Final[str] = "progress.updated"
+
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _FORENSIC_ONLY_EVENTS = frozenset(
     {
-        "embedding.tokens.prepared",
-        "llm.call.output.tokens",
+        TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
+        TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
     }
 )
 
@@ -219,9 +266,9 @@ class TraceConfig:
 
     enabled: bool = False
     output_path: str | Path | None = None
-    mode: TraceMode = "standard"
+    mode: TraceMode = TRACE_MODE_STANDARD
     include_embedding_vectors: bool = False
-    failure_policy: FailurePolicy = "warn"
+    failure_policy: FailurePolicy = FAILURE_POLICY_WARN
 
     def __post_init__(self) -> None:
         """Reject invalid trace settings before any file is opened.
@@ -236,13 +283,13 @@ class TraceConfig:
 
         if type(self.enabled) is not bool:
             raise ValueError("trace enabled must be True or False.")
-        if self.mode not in {"standard", "forensic"}:
+        if self.mode not in TRACE_MODE_CHOICES:
             raise ValueError("trace mode must be standard or forensic.")
         if type(self.include_embedding_vectors) is not bool:
             raise ValueError(
                 "include_embedding_vectors must be True or False."
             )
-        if self.failure_policy not in {"warn", "raise"}:
+        if self.failure_policy not in FAILURE_POLICY_CHOICES:
             raise ValueError("trace failure_policy must be warn or raise.")
         if self.output_path is not None and not isinstance(
             self.output_path, (str, Path)
@@ -459,7 +506,7 @@ class TraceLogger:
 
         """
 
-        return self.config.mode == "forensic"
+        return self.config.mode == TRACE_MODE_FORENSIC
 
     @property
     def include_token_ids(self) -> bool:
@@ -472,7 +519,7 @@ class TraceLogger:
 
         """
 
-        return self.config.mode == "forensic"
+        return self.config.mode == TRACE_MODE_FORENSIC
 
     @property
     def include_embedding_vectors(self) -> bool:
@@ -575,7 +622,7 @@ class TraceLogger:
             raise ValueError("component must be non-empty text.")
         normalized_event_type = event_type.strip()
         if (
-            self.config.mode == "standard"
+            self.config.mode == TRACE_MODE_STANDARD
             and normalized_event_type in _FORENSIC_ONLY_EVENTS
         ):
             return
@@ -957,7 +1004,7 @@ class TraceLogger:
             now = perf_counter()
             event_type = str(event["event_type"])
             if (
-                event_type != "progress.updated"
+                event_type != TRACE_EVENT_PROGRESS_UPDATED
                 or now - self._last_readable_write >= 0.5
             ):
                 self._write_readable_trace()
@@ -980,7 +1027,7 @@ class TraceLogger:
         progress_checkpoints: list[dict[str, object]] = []
         execution_trace: list[dict[str, object]] = []
         for event in self._events:
-            if event.get("event_type") == "progress.updated":
+            if event.get("event_type") == TRACE_EVENT_PROGRESS_UPDATED:
                 progress_checkpoints.append(_progress_checkpoint(event))
             else:
                 execution_trace.append(self._readable_event(event))
@@ -1078,12 +1125,12 @@ class TraceLogger:
             return readable
         artifact_fields = {
             "retrieval.context.expanded": ("chunks_artifact",),
-            "llm.call.input": (
+            TRACE_EVENT_LLM_CALL_INPUT: (
                 "messages_artifact",
                 "rendered_prompt_artifact",
                 "input_token_ids_artifact",
             ),
-            "llm.call.output": ("answer_artifact",),
+            TRACE_EVENT_LLM_CALL_OUTPUT: ("answer_artifact",),
         }.get(str(event.get("event_type")), ())
         readable_data = dict(data)
         resolved: dict[str, object] = {}
@@ -1170,7 +1217,7 @@ class TraceLogger:
         """
 
         self._failed = True
-        if self.config.failure_policy == "raise":
+        if self.config.failure_policy == FAILURE_POLICY_RAISE:
             raise RuntimeError(
                 f"Could not write QAChat trace: {error}"
             ) from error
@@ -2087,7 +2134,7 @@ def _turn_stage(event_type: str) -> str:
         ("retrieval.", "ranking.", "search.", "evidence.")
     ):
         return "retrieval"
-    if event_type == "llm.call.input":
+    if event_type == TRACE_EVENT_LLM_CALL_INPUT:
         return "llm_input"
     if event_type.startswith("llm.call") or event_type == (
         "state.checkpoint.committed"

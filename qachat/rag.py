@@ -48,6 +48,11 @@ Key Features
     Bind RAG tracing to the active conversation record so enabling tracing does
     not change where resumable conversation state is stored.
 
+- **Answer-phase vocabulary**
+
+    Expose canonical phase identifiers for interfaces observing answer
+    retrieval, evidence preparation, generation, saving, and completion.
+
 - **Progress and tracing**
 
     Emit stage callbacks and structured events, with content retention
@@ -55,6 +60,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``ANSWER_PHASE_*`` constants and ``AnswerPhase``
+
+    Canonical machine-readable phases emitted while answering a question.
 
 - ``ConversationTurn``
 
@@ -107,6 +116,7 @@ from pathlib import Path
 import platform
 import sys
 from time import perf_counter
+from typing import Final, Literal, TypeAlias
 from qachat.chat import (
     ASSISTANT_ROLE,
     SYSTEM_ROLE,
@@ -146,6 +156,8 @@ from qachat.retrievals import (
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
 from qachat.trace_logging import (
+    TRACE_EVENT_PROGRESS_UPDATED,
+    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceSink,
@@ -154,12 +166,39 @@ from qachat.trace_logging import (
 )
 
 __all__ = [
+    "ANSWER_PHASE_CHOICES",
+    "ANSWER_PHASE_COMPLETED",
+    "ANSWER_PHASE_EVIDENCE_READY",
+    "ANSWER_PHASE_GENERATING",
+    "ANSWER_PHASE_RETRIEVING",
+    "ANSWER_PHASE_SAVING",
+    "AnswerPhase",
     "ConversationTurn",
     "Evidence",
     "ProgressCallback",
     "ProgressEvent",
     "RAGSession",
 ]
+
+AnswerPhase: TypeAlias = Literal[
+    "retrieving",
+    "evidence_ready",
+    "generating",
+    "saving",
+    "completed",
+]
+ANSWER_PHASE_RETRIEVING: Final[AnswerPhase] = "retrieving"
+ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
+ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
+ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
+ANSWER_PHASE_COMPLETED: Final[AnswerPhase] = "completed"
+ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
+    ANSWER_PHASE_RETRIEVING,
+    ANSWER_PHASE_EVIDENCE_READY,
+    ANSWER_PHASE_GENERATING,
+    ANSWER_PHASE_SAVING,
+    ANSWER_PHASE_COMPLETED,
+)
 
 _INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
@@ -309,7 +348,7 @@ class ProgressEvent:
 
 
 ProgressCallback = Callable[[ProgressEvent], None]
-AnswerPhaseCallback = Callable[[str, dict[str, object]], None]
+AnswerPhaseCallback = Callable[[AnswerPhase, dict[str, object]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -712,7 +751,7 @@ class RAGSession:
             or completed_count
         ):
             trace.emit(
-                "progress.updated",
+                TRACE_EVENT_PROGRESS_UPDATED,
                 component="rag",
                 data=asdict(event),
             )
@@ -864,7 +903,7 @@ class RAGSession:
         if phase_callback is not None and not callable(phase_callback):
             raise ValueError("phase_callback must be callable or None.")
 
-        def report_phase(phase: str, **details: object) -> None:
+        def report_phase(phase: AnswerPhase, **details: object) -> None:
             """Notify an interface without coupling retrieval to GUI code.
 
             Parameters
@@ -964,20 +1003,23 @@ class RAGSession:
                 data=effective,
                 turn_id=turn_id,
             )
-            report_phase("retrieving", message="Retrieving evidence")
+            report_phase(
+                ANSWER_PHASE_RETRIEVING,
+                message="Retrieving evidence",
+            )
             evidence = self._retrieve(
                 question,
                 retrieval_count,
                 trace_turn_id=turn_id,
             )
             report_phase(
-                "evidence_ready",
+                ANSWER_PHASE_EVIDENCE_READY,
                 message=f"{len(evidence)} references found",
                 evidence_count=len(evidence),
             )
             prompt = _answer_prompt(question, evidence)
             report_phase(
-                "generating",
+                ANSWER_PHASE_GENERATING,
                 message="Generating answer",
                 evidence_count=len(evidence),
             )
@@ -993,10 +1035,13 @@ class RAGSession:
                 parameters=effective,
             )
             self.turns.append(turn)
-            report_phase("saving", message="Saving conversation")
+            report_phase(
+                ANSWER_PHASE_SAVING,
+                message="Saving conversation",
+            )
             self._save_conversation(trace_turn_id=turn_id)
             report_phase(
-                "completed",
+                ANSWER_PHASE_COMPLETED,
                 message="Answer ready",
                 evidence_count=len(evidence),
             )
@@ -2231,7 +2276,7 @@ def _conversation_trace(
         trace = TraceConfig(
             enabled=True,
             output_path=conversation_path,
-            mode="forensic",
+            mode=TRACE_MODE_FORENSIC,
         )
     elif isinstance(trace, TraceConfig) and trace.enabled:
         if trace.output_path is None:
