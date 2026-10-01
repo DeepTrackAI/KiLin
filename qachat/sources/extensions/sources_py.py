@@ -1,9 +1,43 @@
-"""Extract natural classes and functions from Python source.
+"""Partition Python source using syntax-tree declaration boundaries.
 
-Functions
----------
-extract_source_units
-    Parse Python syntax without importing or executing the selected file.
+The extractor parses text without importing or executing the analyzed file.
+Top-level functions, asynchronous functions, and classes retain decorator and
+line-range provenance. Class units contain recognized method and intervening
+context units so the chunker can split oversized classes structurally.
+
+A syntax error falls back to a whole-file Python unit. The extractor describes
+source structure, not runtime objects, imports, or executed control flow.
+
+Key Features
+------------
+
+- **AST-based boundaries**
+
+    Use declaration locations, including decorators, to preserve source ranges.
+
+- **Hierarchical classes**
+
+    Expose child methods and context while retaining the complete class text.
+
+- **Text fallback**
+
+    Keep syntactically invalid Python available for retrieval as source text.
+
+Module Structure
+----------------
+
+- ``extract_source_units``
+
+    Return natural units from one Python source file.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".py"])
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
 
 """
 
@@ -92,6 +126,11 @@ def _python_class_unit(
     -------
     SourceUnit
         Complete class unit.
+
+    Raises
+    ------
+    ValueError
+        If the class source slice is unexpectedly empty.
 
     """
 

@@ -1,18 +1,57 @@
-"""Build a common code graph from natural source units.
+"""Build a source-oriented graph of code entities and relationships.
 
-Classes
--------
-CodeEntity
-    One named element found in source code.
-CodeRelation
+Structural source units provide entities and containment relationships.
+Optional suffix-specific extensions add imports, inheritance, calls, and
+other references without executing the source. Names are derived from
+repository-relative paths and available symbols. Resolution is heuristic:
+external references and ambiguous names need not map to a unique local
+entity, and not every runtime dependency is represented.
+
+Key Features
+------------
+
+- **Structural entities**
+
+    Collect modules, classes, functions, and nested source-unit symbols.
+
+- **Heuristic relations**
+
+    Combine containment with relationships supplied by supported language
+    extensions.
+
+- **Stable ordering**
+
+    Deduplicate records and return a reproducibly sorted graph for fixed input.
+
+Module Structure
+----------------
+
+- ``CodeEntity``
+
+    One named source-code element.
+
+- ``CodeRelation``
+
     One directed relationship between code entities.
-CodeGraph
-    Entities and relationships extracted from source.
 
-Functions
----------
-build_code_graph
-    Reuse source units and add language-specific relationships.
+- ``CodeGraph``
+
+    Entities and deterministic code relationships.
+
+- ``build_code_graph``
+
+    Build a code graph without relying on directory roles.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".py"])
+>>> files = qachat.read_repository_files(report)
+>>> units = qachat.extract_source_units(files)
+>>> graph = qachat.build_code_graph(files, units)
 
 """
 
@@ -39,6 +78,15 @@ _EXTENSION_PACKAGE = "qachat.retrievals.code_graph.extensions"
 class CodeEntity:
     """One named source-code element.
 
+    Parameters
+    ----------
+    name: str
+        Stable qualified name.
+    kind: str
+        Source-unit kind.
+    path: pathlib.Path
+        File containing the entity.
+
     Attributes
     ----------
     name: str
@@ -59,6 +107,15 @@ class CodeEntity:
 class CodeRelation:
     """One directed relationship between code entities.
 
+    Parameters
+    ----------
+    source: str
+        Qualified source entity.
+    relation: str
+        Relationship type.
+    target: str
+        Qualified or external target entity.
+
     Attributes
     ----------
     source: str
@@ -78,6 +135,13 @@ class CodeRelation:
 @dataclass(frozen=True, slots=True)
 class CodeGraph:
     """Entities and deterministic code relationships.
+
+    Parameters
+    ----------
+    entities: tuple[CodeEntity, ...]
+        Named elements found in source units.
+    relations: tuple[CodeRelation, ...]
+        Structural and language-specific relationships.
 
     Attributes
     ----------
@@ -109,6 +173,20 @@ def build_code_graph(
     -------
     CodeGraph
         Stable entities and relationships.
+
+    Raises
+    ------
+    ValueError
+        If the source-file or source-unit input is empty.
+    RuntimeError
+        If a language hook returns an invalid relation collection.
+
+    Notes
+    -----
+    Language hooks inspect text without executing it. Missing hooks leave
+    structural entities/containment only. Relations may target external or
+    unresolved names not represented by graph.entities. Fixed inputs produce
+    sorted deduplicated records; this is not a complete runtime call graph.
 
     """
 
@@ -187,7 +265,22 @@ def _add_unit(
     relations: set[CodeRelation],
     known: dict[str, set[str]],
 ) -> None:
-    """Add one natural unit and its children."""
+    """Add one natural unit and its children.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Source unit whose symbol and children are incorporated into the graph.
+    parent: str
+        Qualified containing module or entity name.
+    entities: set[CodeEntity]
+        Mutable set accumulating deduplicated CodeEntity records.
+    relations: set[CodeRelation]
+        Mutable set accumulating deduplicated CodeRelation records.
+    known: dict[str, set[str]]
+        Mapping from recognized names to candidate qualified entity names.
+
+    """
 
     name = _unit_name(unit, parent)
     entities.add(CodeEntity(name, unit.kind, unit.path))
@@ -200,7 +293,21 @@ def _add_unit(
 
 
 def _unit_name(unit: SourceUnit, parent: str) -> str:
-    """Return a qualified name for one source unit."""
+    """Return a qualified name for one source unit.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Source unit whose symbol and children are incorporated into the graph.
+    parent: str
+        Qualified containing module or entity name.
+
+    Returns
+    -------
+    str
+        A qualified name for one source unit.
+
+    """
 
     if unit.symbol is None:
         return parent
@@ -225,19 +332,66 @@ def _unit_name(unit: SourceUnit, parent: str) -> str:
 
 
 def _module_name(path: Path) -> str:
-    """Return a module name from a relative file path."""
+    """Return a module name from a relative file path.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Repository-relative source-file path.
+
+    Returns
+    -------
+    str
+        A module name from a relative file path.
+
+    Notes
+    -----
+    The final suffix is removed and remaining path components are joined with
+    periods. Package __init__ filenames are not collapsed to their parent
+    package here.
+
+    """
 
     return ".".join(path.with_suffix("").parts)
 
 
 def _remember_name(known: dict[str, set[str]], name: str) -> None:
-    """Record a qualified name by its final component."""
+    """Record a qualified name by its final component.
+
+    Parameters
+    ----------
+    known: dict[str, set[str]]
+        Mapping from recognized names to candidate qualified entity names.
+    name: str
+        Name to register or resolve using the known-entity map.
+
+    """
 
     known.setdefault(name.split(".")[-1], set()).add(name)
 
 
 def _resolve_name(name: str, known: dict[str, set[str]]) -> str:
-    """Resolve an unambiguous local name."""
+    """Resolve an unambiguous local name.
+
+    Parameters
+    ----------
+    name: str
+        Name to register or resolve using the known-entity map.
+    known: dict[str, set[str]]
+        Mapping from recognized names to candidate qualified entity names.
+
+    Returns
+    -------
+    str
+        A unique known qualified name when resolvable, otherwise the original
+        reference string.
+
+    Notes
+    -----
+    Ambiguity is preserved rather than resolved using runtime import or
+    dispatch semantics.
+
+    """
 
     candidates = known.get(name.split(".")[-1], set())
     if len(candidates) == 1:

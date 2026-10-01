@@ -1,14 +1,41 @@
-"""Combine independent retrieval rankings with Reciprocal Rank Fusion.
+"""Combine retrieval rankings through reciprocal-rank fusion.
 
-Classes
--------
-HybridResult
-    One chunk with its combined score and contributing channels.
+Each nonempty channel contributes reciprocal rank, not its raw score. Results
+are merged by chunk identifier across semantic, lexical, and code rankings.
+A duplicate within a channel contributes only once, and final ties are broken
+by identifier. The operation does not query models, inspect source files, or
+recompute the supplied rankings.
 
-Functions
----------
-hybrid_search
-    Fuse semantic, lexical, and code-aware ranked results.
+Key Features
+------------
+
+- **Channel-independent scores**
+
+    Fuse rankings whose original score scales differ.
+
+- **Deduplicated evidence**
+
+    Merge channel contributions for each chunk identifier.
+
+- **Inspectable provenance**
+
+    Record which channels contributed to each fused result.
+
+Module Structure
+----------------
+
+- ``HybridResult``
+
+    One chunk ranked across retrieval channels.
+
+- ``hybrid_search``
+
+    Fuse ranked retrieval lists without comparing unlike raw scores.
+
+Examples
+--------
+>>> import qachat
+>>> results = qachat.hybrid_search(count=5)
 
 """
 
@@ -28,7 +55,14 @@ __all__ = [
 
 
 class RankedResult(Protocol):
-    """Required shape of one result from a retrieval channel."""
+    """Structural typing protocol for a ranked item carrying a source chunk.
+
+    Attributes
+    ----------
+    chunk: Chunk
+        Source chunk associated with this position in a ranking.
+
+    """
 
     chunk: Chunk
 
@@ -36,6 +70,15 @@ class RankedResult(Protocol):
 @dataclass(frozen=True, slots=True)
 class HybridResult:
     """One chunk ranked across retrieval channels.
+
+    Parameters
+    ----------
+    score: float
+        Reciprocal Rank Fusion score.
+    chunk: Chunk
+        Retrieved chunk.
+    channels: tuple[str, ...]
+        Channels that returned this chunk.
 
     Attributes
     ----------
@@ -65,16 +108,16 @@ def hybrid_search(
 
     Parameters
     ----------
-    semantic: collections.abc.Sequence[RankedResult], optional
-        Semantic results in best-first order.
-    lexical: collections.abc.Sequence[RankedResult], optional
-        Lexical results in best-first order.
-    code: collections.abc.Sequence[RankedResult], optional
-        Code-aware results in best-first order.
+    semantic: Sequence[RankedResult], optional
+        Semantic results in best-first order. Defaults to ``()``.
+    lexical: Sequence[RankedResult], optional
+        Lexical results in best-first order. Defaults to ``()``.
+    code: Sequence[RankedResult], optional
+        Code-aware results in best-first order. Defaults to ``()``.
     count: int, optional
-        Maximum number of combined results.
+        Maximum number of combined results. Defaults to ``5``.
     rank_constant: int, optional
-        Reciprocal Rank Fusion smoothing constant.
+        Reciprocal Rank Fusion smoothing constant. Defaults to ``60``.
 
     Returns
     -------
@@ -85,6 +128,14 @@ def hybrid_search(
     ------
     ValueError
         If count or rank_constant is invalid.
+
+    Notes
+    -----
+    Each first occurrence of an identifier in a channel contributes 1 /
+    (rank_constant + one-based rank). Duplicate positions still count toward
+    subsequent ranks. All channels have equal weight; original scores are
+    ignored. Final ties use the chunk identifier, and channels are stored in
+    sorted order.
 
     """
 

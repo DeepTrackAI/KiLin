@@ -1,9 +1,34 @@
-"""Start the optional desktop interface without changing QAChat imports.
+"""Create and run QAChat's Qt desktop application.
 
-Functions
----------
-main
-    Create the Qt application or explain which optional dependency is absent.
+``main`` imports the optional Qt components, builds the main window, and runs
+the application event loop. Missing GUI dependencies produce an explanatory
+message and a nonzero return code rather than triggering installation. The
+window module owns communication with the separate engine process.
+
+Key Features
+------------
+
+- **Lazy Qt imports**
+
+    Keep optional GUI imports inside the application startup path.
+
+- **Explicit event loop**
+
+    Return the Qt application exit status to a command-line entry point.
+
+Module Structure
+----------------
+
+- ``main``
+
+    Start the desktop window, or explain how to install Qt.
+
+Examples
+--------
+>>> import qachat.gui.app
+>>> exit_code = qachat.gui.app.main(["qachat"])
+
+This example opens a desktop window and returns after the application exits.
 
 """
 
@@ -18,8 +43,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     Parameters
     ----------
-    arguments: collections.abc.Sequence[str] | None, optional
-        Arguments passed to Qt. None uses the process command line.
+    arguments: Sequence[str] | None, optional
+        Arguments passed to Qt. None uses the process command line. Defaults to
+        ``None``.
 
     Returns
     -------

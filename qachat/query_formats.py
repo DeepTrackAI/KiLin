@@ -1,16 +1,47 @@
-"""Prepare retrieval queries for model-specific embedding formats.
+"""Format instruction-prefixed queries for the Qwen3 retrieval path.
 
-Attributes
-----------
-SOFTWARE_REPOSITORY_INSTRUCTION
-    Default retrieval goal for a software repository.
-LITERATURE_REPOSITORY_INSTRUCTION
-    Default retrieval goal for an academic literature repository.
+The module stores separate software-repository and literature-repository
+instruction strings and joins a validated instruction and question into the
+``Instruct: ...`` / ``Query: ...`` text expected by the configured retrieval
+workflow. It does not embed text, load a model, or alter a chat history.
+Applying this format is a caller decision; ``EmbeddingSession`` does not
+apply it automatically.
 
-Functions
----------
-format_qwen3_query
-    Combine an instruction and question in Qwen3 Embedding query format.
+Key Features
+------------
+
+- **Reusable instructions**
+
+    Keep the software and literature query instructions in named string
+    constants.
+
+- **Explicit formatting**
+
+    Validate and strip the supplied strings before constructing one embedding
+    query.
+
+Module Structure
+----------------
+
+- ``SOFTWARE_REPOSITORY_INSTRUCTION``
+
+    Embedding-query instruction for software source retrieval.
+
+- ``LITERATURE_REPOSITORY_INSTRUCTION``
+
+    Embedding-query instruction for scientific literature retrieval.
+
+- ``format_qwen3_query``
+
+    Format one retrieval query for a Qwen3 embedding model.
+
+Examples
+--------
+>>> import qachat
+>>> query = qachat.format_qwen3_query(
+...     "How are sources split?",
+...     qachat.SOFTWARE_REPOSITORY_INSTRUCTION,
+... )
 
 """
 

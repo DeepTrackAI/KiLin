@@ -1,20 +1,62 @@
-"""Build and search a transparent in-memory lexical index.
+"""Build and query a sparse TF-IDF index over retrieval chunks.
 
-Classes
--------
-LexicalIndex
-    Repository chunks paired with sparse TF-IDF vectors.
-LexicalResult
-    One ranked lexical-search result.
+Term extraction recognizes ASCII-style words and code identifiers, including
+camel-case and underscore components and adjacent compound terms. Document
+vectors use logarithmic term frequency, smoothed inverse document frequency,
+and L2 normalization. Query vectors use the same vocabulary and weighting.
 
-Functions
----------
-lexical_terms
-    Turn text and software identifiers into one-word and two-word terms.
-build_lexical_index
-    Calculate TF-IDF weights once for repository chunks.
-lexical_search
-    Rank indexed chunks by cosine similarity to a text query.
+Search sorts every indexed chunk by score and identifier, including zero-score
+matches when needed to fill the requested result count. This implementation
+is not a multilingual tokenizer, BM25 index, or stop-word-filtering pipeline.
+
+Key Features
+------------
+
+- **Code-aware terms**
+
+    Retain identifier forms and useful component/compound terms.
+
+- **Sparse vectors**
+
+    Store normalized weights without a dense vocabulary matrix.
+
+- **Stable ranking**
+
+    Resolve equal lexical scores using chunk identifiers.
+
+Module Structure
+----------------
+
+- ``LexicalIndex``
+
+    Chunks paired with sparse TF-IDF vectors.
+
+- ``LexicalResult``
+
+    One chunk returned by lexical ranking.
+
+- ``lexical_terms``
+
+    Return lowercase one-word and two-word terms from text.
+
+- ``build_lexical_index``
+
+    Calculate TF-IDF vectors for repository chunks.
+
+- ``lexical_search``
+
+    Rank indexed chunks by TF-IDF cosine similarity to one query.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> terms = qachat.lexical_terms("ChatSession.restore_history")
+
+Build an index from previously prepared chunks with
+``qachat.build_lexical_index(chunks)``.
 
 """
 
@@ -44,6 +86,15 @@ _WORD = re.compile(r"[A-Za-z0-9_]+")
 class LexicalIndex:
     """Chunks paired with sparse TF-IDF vectors.
 
+    Parameters
+    ----------
+    chunks: tuple[Chunk, ...]
+        Searchable repository chunks.
+    vectors: tuple[dict[str, float], ...]
+        Normalized TF-IDF term weights for each chunk.
+    inverse_document_frequency: dict[str, float]
+        Weight of each indexed term across all chunks.
+
     Attributes
     ----------
     chunks: tuple[Chunk, ...]
@@ -63,6 +114,13 @@ class LexicalIndex:
 @dataclass(frozen=True, slots=True)
 class LexicalResult:
     """One chunk returned by lexical ranking.
+
+    Parameters
+    ----------
+    score: float
+        Cosine similarity between the query and chunk TF-IDF vectors.
+    chunk: Chunk
+        Matching repository chunk.
 
     Attributes
     ----------
@@ -98,6 +156,13 @@ def lexical_terms(text: str) -> tuple[str, ...]:
     ------
     ValueError
         If text is not a string.
+
+    Notes
+    -----
+    The patterns are ASCII-oriented. They retain lowercase full identifiers,
+    camel/underscore components longer than one character, and adjacent
+    compound terms. No stemming, language detection, or stop-word removal is
+    performed.
 
     """
 
@@ -140,6 +205,7 @@ def build_lexical_index(
         Repository chunks to index.
     texts: list[str] | None, optional
         Retrieval text for each chunk. Exact chunk text is used when omitted.
+        Defaults to ``None``.
 
     Returns
     -------
@@ -199,7 +265,7 @@ def lexical_search(
     query_text: str
         User query in plain text.
     count: int, optional
-        Maximum number of ranked results to return.
+        Maximum number of ranked results to return. Defaults to ``5``.
 
     Returns
     -------
@@ -210,6 +276,12 @@ def lexical_search(
     ------
     ValueError
         If the index, query, or count is invalid.
+
+    Notes
+    -----
+    A query with no vocabulary overlap still produces zero-score results up to
+    count. Equal scores are ordered by chunk identifier; the function does not
+    impose a positive-score threshold.
 
     """
 
@@ -254,7 +326,21 @@ def _tfidf_vector(
     counts: Counter[str],
     inverse_document_frequency: dict[str, float],
 ) -> dict[str, float]:
-    """Return one normalized sparse TF-IDF vector."""
+    """Return one normalized sparse TF-IDF vector.
+
+    Parameters
+    ----------
+    counts: Counter[str]
+        Counter of extracted terms and their raw occurrence counts.
+    inverse_document_frequency: dict[str, float]
+        Stored vocabulary-to-IDF mapping used to weight known terms.
+
+    Returns
+    -------
+    dict[str, float]
+        One normalized sparse TF-IDF vector.
+
+    """
 
     weights = {
         term: (1.0 + math.log(frequency)) * inverse_document_frequency[term]
@@ -271,7 +357,26 @@ def _sparse_cosine_similarity(
     first: dict[str, float],
     second: dict[str, float],
 ) -> float:
-    """Return cosine similarity between normalized sparse vectors."""
+    """Return cosine similarity between normalized sparse vectors.
+
+    Parameters
+    ----------
+    first: dict[str, float]
+        First sparse term-weight vector, expected to be L2-normalized.
+    second: dict[str, float]
+        Second sparse term-weight vector, expected to be L2-normalized.
+
+    Returns
+    -------
+    float
+        Cosine similarity between normalized sparse vectors.
+
+    Notes
+    -----
+    This computes a sparse dot product over common terms. It equals cosine
+    similarity only when the caller has already normalized both vectors.
+
+    """
 
     if len(first) > len(second):
         first, second = second, first

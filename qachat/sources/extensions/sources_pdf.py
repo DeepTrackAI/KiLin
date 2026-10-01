@@ -1,13 +1,52 @@
-"""Read PDF text and make one unit per non-empty page.
+"""Extract selectable PDF text and expose page-scoped source units.
 
-Functions
----------
-read_source_file
-    Extract text from a binary PDF file.
-extract_source_units
-    Make page-based units from the extracted text.
+The specialized reader uses ``pypdf`` to extract page text, cleans problematic
+surrogate characters, and joins pages with form-feed separators. Extraction
+turns nonblank pages into units labeled ``Page N``. Line numbers refer to the
+extracted text within a page, not to a stable visual layout in the PDF.
 
-Scanned image PDFs require OCR and are not supported here.
+No optical character recognition is performed. Encrypted files and documents
+without extractable text are rejected. Image-only content, equations, columns,
+and reading order are limited by the underlying text extractor.
+
+Key Features
+------------
+
+- **Specialized reading**
+
+    Convert supported PDF page text into the shared ``SourceFile``
+    representation.
+
+- **Page provenance**
+
+    Preserve original page numbers even when blank pages yield no unit.
+
+- **Explicit limitations**
+
+    Report unsupported text extraction rather than silently returning an empty
+    document.
+
+Module Structure
+----------------
+
+- ``read_source_file``
+
+    Extract text from one PDF without executing embedded content.
+
+- ``extract_source_units``
+
+    Return one natural unit for each non-empty PDF page.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".pdf"])
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
+
+The PDF hook requires its optional reader dependency when imported.
 
 """
 
@@ -92,6 +131,19 @@ def _clean_extracted_text(text: str) -> str:
     PDF font maps can produce isolated UTF-16 surrogate characters. They are
     not valid Unicode text and cannot be passed to a model tokenizer. This
     round trip combines valid surrogate pairs and replaces only isolated ones.
+
+    Parameters
+    ----------
+    text: str
+        Text returned by the PDF reader, potentially containing surrogate code
+        points.
+
+    Returns
+    -------
+    str
+        Text with surrogate handling normalized by an intermediate UTF-16
+        encoding/decoding step.
+
     """
 
     return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")

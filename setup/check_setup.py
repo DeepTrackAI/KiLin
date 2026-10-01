@@ -1,4 +1,81 @@
-"""Choose MLX or PyTorch and verify it with a small calculation."""
+"""Select and verify the local calculation backend.
+
+This auxiliary repository module checks that the local QAChat development
+setup can use an appropriate numerical backend. It is intended for setup and
+development workflows and is not part of the released ``qachat`` package.
+
+The module selects MLX on native Apple Silicon and PyTorch on supported Linux
+and Windows systems unless a backend is requested explicitly. It then performs
+a small numerical calculation and compares the result with ordinary Python.
+No language model is loaded during this check.
+
+Key Features
+------------
+- **Platform-aware backend selection**
+
+    Select MLX on Apple Silicon and PyTorch on supported Linux and Windows
+    platforms, while allowing an explicit backend request.
+
+- **PyTorch device selection**
+
+    Prefer CUDA, then Apple MPS, and finally CPU when PyTorch is used.
+
+- **Minimal backend verification**
+
+    Perform a simple addition with the selected backend and verify the result
+    against the corresponding Python calculation.
+
+- **Command-line execution**
+
+    Run the setup check directly and report the interpreter, platform,
+    backend, device, inputs, and result.
+
+Module Structure
+----------------
+Type aliases:
+
+- ``Backend``
+
+    Backend request accepted by the setup check: ``auto``, ``mlx``, or
+    ``torch``.
+
+- ``SelectedBackend``
+
+    Concrete backend selected for a calculation: ``mlx`` or ``torch``.
+
+Functions:
+
+- ``choose_backend(system, machine, requested='auto') -> SelectedBackend``
+
+    Choose the calculation backend for a supported platform.
+
+- ``choose_torch_device(cuda_available, mps_available) -> str``
+
+    Choose the best available PyTorch device.
+
+- ``run_calculation(backend, a, b) -> tuple[str, float]``
+
+    Add two numbers using the selected backend.
+
+- ``check_setup(requested='auto', *, a=2.0, b=3.0) -> dict[str, str | float]``
+
+    Select a backend and verify a simple numerical calculation.
+
+- ``main(argv=None) -> int``
+
+    Run the setup check from the command line.
+
+Examples
+--------
+Run the default platform-aware setup check from the repository::
+
+    python check_setup.py
+
+Request PyTorch explicitly::
+
+    python check_setup.py --backend torch
+
+"""
 
 from __future__ import annotations
 
@@ -119,6 +196,15 @@ def run_calculation(
     tuple[str, float]
         Device name and calculated sum.
 
+    Raises
+    ------
+    ImportError
+        If the selected backend package cannot be imported.
+    RuntimeError
+        If MLX is selected but Metal is unavailable.
+    ValueError
+        If ``backend`` is not ``mlx`` or ``torch``.
+
     """
 
     if backend == "mlx":
@@ -172,7 +258,16 @@ def check_setup(
     Returns
     -------
     dict[str, str | float]
-        Environment, engine, input, and calculation details.
+        Environment, backend, device, input, and calculation details.
+
+    Raises
+    ------
+    ImportError
+        If the selected backend package cannot be imported.
+    RuntimeError
+        If the backend cannot perform the calculation correctly.
+    ValueError
+        If the requested backend, platform, or numerical inputs are invalid.
 
     """
 

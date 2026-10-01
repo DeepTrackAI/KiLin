@@ -1,9 +1,36 @@
-"""Extract paragraph sections from plain-text source.
+"""Split plain-text sources into nonblank paragraph units.
 
-Functions
----------
-extract_source_units
-    Make one natural unit per blank-line-separated paragraph.
+Blank lines delimit paragraphs and are not included in the resulting units.
+Each unit retains its inclusive one-based location in the original file.
+The extractor does not infer headings, sentence boundaries, encoding, or
+semantic structure; decoding has already occurred in the source reader.
+
+Key Features
+------------
+
+- **Paragraph boundaries**
+
+    Group consecutive nonblank lines without rewriting their text.
+
+- **File provenance**
+
+    Keep source paths and original line ranges for each paragraph.
+
+Module Structure
+----------------
+
+- ``extract_source_units``
+
+    Return natural units from one plain-text source file.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".txt"])
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
 
 """
 
@@ -24,7 +51,19 @@ __all__ = [
 
 
 def _is_blank(line: str) -> bool:
-    """Return whether a source line has no visible content."""
+    """Return whether a source line has no visible content.
+
+    Parameters
+    ----------
+    line: str
+        One source line, with or without a line ending.
+
+    Returns
+    -------
+    bool
+        True if the line contains no non-whitespace characters.
+
+    """
 
     return not line.strip()
 
@@ -96,9 +135,9 @@ def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:
     -------
     list[SourceUnit]
         Natural units in source order. A file with no blank lines at all
-        becomes a single paragraph unit covering the whole file -- the
-        same result the generic whole-file fallback would have produced,
-        so short documents are unaffected by this extension existing.
+        becomes a single paragraph unit covering the whole file -- the same
+        result the generic whole-file fallback would have produced, so short
+        documents are unaffected by this extension existing.
 
     """
 

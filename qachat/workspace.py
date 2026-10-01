@@ -1,9 +1,59 @@
-"""Copy selected files and folders into one persistent QAChat workspace.
+"""Copy selected local sources into a managed multi-source workspace.
 
-Functions
----------
-prepare_sources_workspace
-    Add local source snapshots below the workspace's ``sources/`` folder.
+``prepare_sources_workspace`` accepts local files or directories, prepares a
+project profile, copies selected content into ``sources``, and records source
+origins in ``sources.json``. Source names are disambiguated when needed.
+Directory inputs use repository scanning; individual-file inputs have a
+separate extension-and-size check.
+
+This API is cumulative: adding or reselecting sources copies their current
+selected files but does not remove old copies merely because the originals
+were deleted or deselected. It differs from the single-source mirroring API
+in ``qachat.project``. A workspace organizes local files; it is not an
+execution sandbox or a complete defense against hostile filesystem changes.
+Preparation can leave earlier changes in place if a later copy fails.
+
+Key Features
+------------
+
+- **Multiple origins**
+
+    Keep source-origin records and allocate noncolliding names within one
+    sources directory.
+
+- **Selected copying**
+
+    Use profile selection rules and optional per-source selections for
+    directory inputs.
+
+- **Profile integration**
+
+    Initialize a managed project and apply supported configuration updates.
+
+- **Trace integration**
+
+    Emit workspace preparation and source-copy events through the supplied
+    sink.
+
+Module Structure
+----------------
+
+- ``prepare_sources_workspace``
+
+    Add sources to one project without changing their original files.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> project = qachat.prepare_sources_workspace(
+...     ["/path/to/source_repository"], "code",
+...     "/path/to/new_workspace",
+... )
+
+This writes a workspace copy; it does not alter the source repository.
 
 """
 
@@ -40,10 +90,58 @@ def prepare_sources_workspace(
 ) -> QAProject:
     """Add sources to one project without changing their original files.
 
-    Adding sources is cumulative. Re-adding a source updates its selected
-    files without deleting older snapshots. Pass an empty list to reopen an
-    existing workspace unchanged. ``selected_files`` limits each folder to
-    checked relative file paths. ``settings`` is validated before copying.
+    Adding sources is cumulative. Re-adding a source updates its selected files
+    without deleting older snapshots. Pass an empty list to reopen an existing
+    workspace unchanged. ``selected_files`` limits each folder to checked
+    relative file paths. ``settings`` is validated before copying.
+
+    Parameters
+    ----------
+    source_paths: list[str | pathlib.Path] | tuple
+        Local file/directory paths. Runtime validation accepts a list or tuple,
+        although the annotation is Sequence. Entries are resolved,
+        deduplicated, and checked against the destination workspace.
+    kind: ProjectKind
+        Project category, exactly code or literature.
+    workspace_directory: str | pathlib.Path
+        Destination managed workspace, new/empty or already containing a
+        compatible profile.ini. Relative paths use the current working
+        directory.
+    selected_files: Mapping[str, Sequence[str]] | None, optional
+        Optional mapping from resolved original source-path strings to relative
+        selected files. A directory selection must be a nonempty subset of the
+        scan report; None uses the scan selection. Defaults to ``None``.
+    settings: dict[str, object] | None, optional
+        Optional supported profile updates applied through configure_project
+        before copying. Defaults to ``None``.
+    trace: TraceSink | None, optional
+        Optional caller-owned sink receiving preparation and copy events; None
+        uses a null sink. Defaults to ``None``.
+
+    Returns
+    -------
+    QAProject
+        QAProject reopened from the prepared workspace after the selected copy
+        operations.
+
+    Raises
+    ------
+    ValueError
+        If kinds, paths, workspace ownership/profile, source selections, or
+        source-origin records fail their implemented checks.
+    NotADirectoryError
+        If an existing workspace is not a directory.
+    OSError
+        If sources cannot be resolved/read or workspace content cannot be
+        created/copied/written.
+
+    Notes
+    -----
+    Copying is cumulative: removed or deselected original files are not deleted
+    from old workspace copies. Directory sources must have complete scans;
+    direct file sources use a narrower extension/size check. Files, profile,
+    and source-origin records are not committed as one transaction. A workspace
+    is not an execution sandbox.
 
     """
 
@@ -169,7 +267,26 @@ def prepare_sources_workspace(
 
 
 def _contains_only_trace_output(workspace: Path) -> bool:
-    """Allow a new project trace to exist before workspace preparation."""
+    """Allow a new project trace to exist before workspace preparation.
+
+    Parameters
+    ----------
+    workspace: pathlib.Path
+        Resolved managed-workspace path excluded from source copies when
+        applicable.
+
+    Returns
+    -------
+    bool
+        True if the existing workspace contains only the permitted logs/traces
+        preparation structure.
+
+    Notes
+    -----
+    Used to allow an early-created trace directory before the project profile
+    is initialized.
+
+    """
 
     entries = list(workspace.iterdir())
     if len(entries) != 1 or entries[0].name != "logs":
@@ -187,7 +304,29 @@ def _contains_only_trace_output(workspace: Path) -> bool:
 
 
 def _unique_name(source: Path, used: set[str], root: Path) -> str:
-    """Keep the original name unless another source already owns it."""
+    """Keep the original name unless another source already owns it.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Original local source file or directory.
+    used: set[str]
+        Source names already reserved in the source-origin manifest.
+    root: pathlib.Path
+        Managed sources directory in which a name must not collide.
+
+    Returns
+    -------
+    str
+        Original basename when unused, otherwise a basename incorporating a
+        deterministic source-path hash.
+
+    Raises
+    ------
+    ValueError
+        If the hashed alternative is also occupied or reserved.
+
+    """
 
     if source.name not in used and not (root / source.name).exists():
         return source.name
@@ -205,7 +344,48 @@ def _copy_source(
     workspace: Path,
     selected_files: Sequence[str] | None,
 ) -> list[str]:
-    """Copy only files selected by the workspace profile."""
+    """Copy only files selected by the workspace profile.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Original local source file or directory.
+    destination: pathlib.Path
+        Managed destination path for the selected source or file.
+    project: QAProject
+        Resolved project whose profile provides extension and size-selection
+        rules.
+    workspace: pathlib.Path
+        Resolved managed-workspace path excluded from source copies when
+        applicable.
+    selected_files: Sequence[str] | None
+        Optional mapping from resolved original source-path strings to relative
+        selected files. A directory selection must be a nonempty subset of the
+        scan report; None uses the scan selection.
+
+    Returns
+    -------
+    list[str]
+        Relative filenames copied from a directory, or the copied source
+        filename for a single-file input.
+
+    Raises
+    ------
+    ValueError
+        If a source file violates extension/size rules, a directory scan is
+        incomplete, or an explicit selection is empty or outside the eligible
+        scan set.
+    OSError
+        If scanning or copying fails.
+
+    Notes
+    -----
+    The directory path applies scan_repository rules and excludes a nested
+    workspace. Direct files are not passed through all protected-name rules.
+    Existing destination files omitted from this copy operation are left in
+    place.
+
+    """
 
     profile = project.profile
     if source.is_file():
@@ -252,7 +432,30 @@ def _copy_source(
 
 
 def _copy_file(source: Path, destination: Path) -> None:
-    """Replace one snapshot only after its new bytes are complete."""
+    """Replace one snapshot only after its new bytes are complete.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Original local source file or directory.
+    destination: pathlib.Path
+        Managed destination path for the selected source or file.
+
+    Raises
+    ------
+    ValueError
+        If the destination or one of its parent directories is a symbolic link.
+    OSError
+        If creating directories, copying metadata/content, or replacing the
+        target fails.
+
+    Notes
+    -----
+    The file is copied through a predictable temporary sibling and then
+    replaced. These checks are not a race-free security boundary and do not
+    validate every possible temporary-path interference.
+
+    """
 
     if destination.is_symlink():
         raise ValueError(f"Do not copy through a symbolic link: {destination}")
@@ -266,7 +469,34 @@ def _copy_file(source: Path, destination: Path) -> None:
 
 
 def _read_records(path: Path) -> list[dict[str, str]]:
-    """Validate persisted source ownership before using destination names."""
+    """Validate persisted source ownership before using destination names.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Source-origin JSON manifest path.
+
+    Returns
+    -------
+    list[dict[str, str]]
+        List of source-origin record dictionaries, or an empty list when the
+        manifest is missing.
+
+    Raises
+    ------
+    ValueError
+        If the manifest format, record structure, original path, or stored
+        source name is invalid.
+    OSError
+        If the file cannot be read.
+
+    Notes
+    -----
+    Stored records may also contain a files list; the existing return
+    annotation is narrower than that actual JSON structure. This helper does
+    not validate every copied-file entry.
+
+    """
 
     if not path.is_file():
         return []
@@ -288,7 +518,23 @@ def _read_records(path: Path) -> list[dict[str, str]]:
 
 
 def _write_records(path: Path, records: list[dict[str, str]]) -> None:
-    """Save ownership after each successful source copy."""
+    """Save ownership after each successful source copy.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Source-origin JSON manifest path.
+    records: list[dict[str, str]]
+        Source-origin records with original and name strings and, when written
+        by preparation, a list of copied files.
+
+    Notes
+    -----
+    Writes the source-origin format version and supplied records. No
+    multi-writer coordination is provided; records are not checked against
+    destination contents here.
+
+    """
 
     temporary = path.with_suffix(".json.tmp")
     temporary.write_text(

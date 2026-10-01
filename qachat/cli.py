@@ -1,9 +1,42 @@
-"""Provide the small command-line entry point for QAChat.
+"""Launch QAChat's optional graphical interface from the command line.
 
-Functions
----------
-main
-    Parse the launch option and open the requested interface.
+``main`` parses the GUI and backend options. Without ``--gui`` it prints help.
+Before a GUI launch it checks for the requested dependency modules and may
+run ``uv sync`` in a development checkout to install missing extras. This
+preparation may modify the environment and require network access.
+
+The backend argument selects which dependency extra is checked or installed.
+It is not forwarded to the GUI as a project or model backend setting.
+
+Key Features
+------------
+
+- **Explicit GUI launch**
+
+    Defer GUI imports until the caller requests the interface.
+
+- **Environment preparation**
+
+    Check module discoverability and invoke the checkout setup route when
+    dependencies are missing.
+
+Module Structure
+----------------
+
+- ``main``
+
+    Launch the selected QAChat interface.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat.cli
+>>> exit_code = qachat.cli.main([])
+
+A normal GUI launch is ``qachat.cli.main(["--gui"])`` and starts an
+interactive application.
 
 """
 
@@ -21,7 +54,21 @@ import sys
 
 
 def _selected_backend(backend: str) -> str:
-    """Resolve Automatic to the backend used by the local platform."""
+    """Resolve Automatic to the backend used by the local platform.
+
+    Parameters
+    ----------
+    backend: str
+        Requested backend name: auto, mlx, or torch. Auto selects the platform
+        default for dependency preparation.
+
+    Returns
+    -------
+    str
+        Requested explicit name, or mlx on Darwin/arm64 and torch otherwise.
+        This helper does not validate package availability.
+
+    """
 
     if backend != "auto":
         return backend
@@ -31,7 +78,28 @@ def _selected_backend(backend: str) -> str:
 
 
 def _ensure_gui_environment(backend: str) -> None:
-    """Install missing Qt and backend layers into the project environment."""
+    """Install missing Qt and backend layers into the project environment.
+
+    Parameters
+    ----------
+    backend: str
+        Requested backend name: auto, mlx, or torch. Auto selects the platform
+        default for dependency preparation.
+
+    Raises
+    ------
+    RuntimeError
+        If dependency repair is needed but the checkout profile or uv
+        executable is unavailable.
+    subprocess.CalledProcessError
+        If the uv synchronization command fails.
+
+    Notes
+    -----
+    Discoverability checks do not import or validate the dependencies.
+    Successful synchronization can install packages and access the network.
+
+    """
 
     modules = {
         "mlx": ("PySide6", "mlx_embeddings", "mlx_lm"),
@@ -63,14 +131,20 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     Parameters
     ----------
-    arguments: collections.abc.Sequence[str] | None, optional
-        Command-line arguments without the executable name. None reads
-        the real command line.
+    arguments: Sequence[str] | None, optional
+        Command-line arguments without the executable name. None reads the real
+        command line. Defaults to ``None``.
 
     Returns
     -------
     int
         Interface exit code, or zero after displaying help.
+
+    Notes
+    -----
+    The backend choice is used for dependency preparation and is not passed to
+    the GUI application. Argument parsing may terminate with SystemExit for
+    help or invalid options; GUI startup returns its own exit code.
 
     """
 

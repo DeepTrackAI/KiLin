@@ -1,20 +1,64 @@
-"""Build and search a simple in-memory semantic retrieval index.
+"""Build and query an embedding-based chunk index.
 
-Classes
--------
-SemanticIndex
-    Repository chunks paired with precomputed embedding vectors.
-SemanticResult
-    One ranked semantic-search result.
+Index construction embeds chunks in order and can process bounded batches.
+Query search embeds the already-formatted query and compares it with stored
+vectors using cosine similarity. The loop backend operates on Python numeric
+sequences; the NumPy backend can reuse a supplied float32 matrix.
 
-Functions
----------
-build_semantic_index
-    Embed repository chunks once and store the vectors beside them.
-semantic_search
-    Embed one query, compare it with indexed vectors, and rank the matches.
-semantic_matrix
-    Stack an index's embeddings into one array for repeated numpy search.
+The two paths can differ in numerical precision and equal-score ordering.
+A reused matrix must correspond to the index's chunk order and dimensions;
+this relationship is a caller responsibility. No query instruction is added
+by this module.
+
+Key Features
+------------
+
+- **Batched construction**
+
+    Embed source chunks with optional batch-level progress reporting.
+
+- **Two scoring paths**
+
+    Use a straightforward loop or a NumPy matrix operation.
+
+- **Reusable matrix**
+
+    Convert stored vectors once for repeated NumPy searches.
+
+Module Structure
+----------------
+
+- ``SemanticIndex``
+
+    Chunks paired with vectors prepared for semantic search.
+
+- ``SemanticResult``
+
+    One chunk returned by semantic ranking.
+
+- ``build_semantic_index``
+
+    Embed chunks once and return their searchable semantic index.
+
+- ``semantic_search``
+
+    Rank indexed chunks by cosine similarity to one query.
+
+- ``semantic_matrix``
+
+    Stack one index's embeddings into a single numpy array.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> indexes = qachat.load_indexes("/path/to/workspace/indexes/retrieval.json")
+>>> matrix = qachat.semantic_matrix(indexes.semantic)
+
+Pass a compatible live embedding session to ``qachat.semantic_search`` when
+performing a query.
 
 """
 
@@ -42,6 +86,13 @@ __all__ = [
 class SemanticIndex:
     """Chunks paired with vectors prepared for semantic search.
 
+    Parameters
+    ----------
+    chunks: tuple[Chunk, ...]
+        Searchable repository chunks.
+    embeddings: tuple[tuple[float, ...], ...]
+        One embedding vector for each chunk in the same order.
+
     Attributes
     ----------
     chunks: tuple[Chunk, ...]
@@ -58,6 +109,13 @@ class SemanticIndex:
 @dataclass(frozen=True, slots=True)
 class SemanticResult:
     """One chunk returned by semantic ranking.
+
+    Parameters
+    ----------
+    score: float
+        Cosine similarity between the query and chunk vectors.
+    chunk: Chunk
+        Matching repository chunk.
 
     Attributes
     ----------
@@ -89,10 +147,10 @@ def build_semantic_index(
         Loaded embedding model used to make document vectors.
     batch_size: int | None, optional
         Number of chunks embedded per model call. ``None`` preserves the
-        previous all-at-once behavior.
-    progress_callback: collections.abc.Callable[[int, int], None] | None,
-        optional
-        Called after each embedding batch with ``current`` and ``total``.
+        previous all-at-once behavior. Defaults to ``None``.
+    progress_callback: Callable[[int, int], None] | None,, optional
+        optional Called after each embedding batch with ``current`` and
+        ``total``. Defaults to ``None``.
 
     Returns
     -------
@@ -143,12 +201,29 @@ def build_semantic_index(
 def semantic_matrix(index: SemanticIndex) -> np.ndarray:
     """Stack one index's embeddings into a single numpy array.
 
-    Pass the result to ``semantic_search(..., backend="numpy")`` as
-    ``matrix`` to search the same index many times without rebuilding
-    this array on every call -- building it is itself an O(n) pass over
-    every embedding, so a caller running many queries against one index
-    (a benchmark corpus, a "literature"-kind project with a large
-    document collection) should build it once, not once per query.
+    Pass the result to ``semantic_search(..., backend="numpy")`` as ``matrix``
+    to search the same index many times without rebuilding this array on every
+    call -- building it is itself an O(n) pass over every embedding, so a
+    caller running many queries against one index (a benchmark corpus, a
+    "literature"-kind project with a large document collection) should build it
+    once, not once per query.
+
+    Parameters
+    ----------
+    index: SemanticIndex
+        Semantic index containing ordered chunks and their embedding vectors.
+
+    Returns
+    -------
+    np.ndarray
+        NumPy float32 array with one row per stored embedding, normally shape
+        (number_of_chunks, embedding_dimension).
+
+    Notes
+    -----
+    The function converts the stored embeddings; it does not establish their
+    provenance or independently validate chunk/vector count agreement.
+
     """
 
     return np.asarray(index.embeddings, dtype=np.float32)
@@ -175,22 +250,25 @@ def semantic_search(
     embedding_session: EmbeddingSession
         Loaded embedding model used to make the query vector.
     count: int, optional
-        Maximum number of ranked results to return.
+        Maximum number of ranked results to return. Defaults to ``5``.
     backend: str, optional
-        ``"loop"`` (the default) ranks with a plain Python loop over
-        every chunk -- fine at repository scale, a few thousand chunks.
-        ``"numpy"`` computes the identical cosine similarity with numpy
-        instead, worthwhile once an index holds tens of thousands of
-        chunks (a large "literature"-kind project, say). The two
-        backends agree on which chunks rank where in practice, but are
-        not guaranteed bit-for-bit identical: ``"numpy"`` computes in
-        float32 versus the loop's float64, and its top-k selection is
-        not guaranteed stable on exact score ties (the loop's is).
+        ``"loop"`` (the default) ranks with a plain Python loop over every
+        chunk -- fine at repository scale, a few thousand chunks. ``"numpy"``
+        computes the identical cosine similarity with numpy instead, worthwhile
+        once an index holds tens of thousands of chunks (a large
+        "literature"-kind project, say). The two backends agree on which chunks
+        rank where in practice, but are not guaranteed bit-for-bit identical:
+        ``"numpy"`` computes in float32 versus the loop's float64, and its
+        top-k selection is not guaranteed stable on exact score ties (the
+        loop's is).
     matrix: numpy.ndarray | None, optional
         Only used when ``backend="numpy"``. Pass the result of
-        ``semantic_matrix(index)`` to reuse it across many queries
-        against the same index; left as ``None``, it is rebuilt for
-        this one call.
+        ``semantic_matrix(index)`` to reuse it across many queries against the
+        same index; left as ``None``, it is rebuilt for this one call. Defaults
+        to ``None``.
+    trace_turn_id: str | None, optional
+        Optional identifier associating trace events with one conversation
+        turn. Defaults to ``None``.
 
     Returns
     -------
@@ -202,6 +280,13 @@ def semantic_search(
     ValueError
         If the index is empty, count is invalid, backend is unknown, or
         dimensions disagree.
+
+    Notes
+    -----
+    The query is embedded exactly as supplied; model-specific query formatting
+    is a caller responsibility. Loop and NumPy paths can differ for ties and
+    floating-point rounding. A supplied matrix is trusted to match the index
+    order and shape.
 
     """
 
@@ -255,7 +340,39 @@ def _semantic_search_numpy(
     count: int,
     matrix: np.ndarray | None,
 ) -> list[SemanticResult]:
-    """Rank one index's chunks against a query vector with numpy."""
+    """Rank one index's chunks against a query vector with numpy.
+
+    Parameters
+    ----------
+    index: SemanticIndex
+        Semantic index containing ordered chunks and their embedding vectors.
+    query_vector: list[float]
+        Query embedding with the same dimension and model semantics as the
+        indexed vectors.
+    count: int
+        Positive number of highest-scoring chunks requested.
+    matrix: np.ndarray | None
+        Optional float32 matrix matching the index vector dimensions and chunk
+        order. None constructs a matrix from the index.
+
+    Returns
+    -------
+    list[SemanticResult]
+        Highest-scoring SemanticResult records in descending NumPy cosine-score
+        order.
+
+    Raises
+    ------
+    ValueError
+        If vector dimensions do not align, a norm is zero, or NumPy rejects an
+        incompatible matrix shape.
+
+    Notes
+    -----
+    Scoring uses float32 matrix arithmetic and partial selection. Equal-score
+    ordering is not promised to match the loop backend.
+
+    """
 
     if matrix is None:
         matrix = semantic_matrix(index)
@@ -282,7 +399,32 @@ def _cosine_similarity(
     first: list[float] | tuple[float, ...],
     second: list[float] | tuple[float, ...],
 ) -> float:
-    """Return cosine similarity between two equal-length vectors."""
+    """Return cosine similarity between two equal-length vectors.
+
+    Parameters
+    ----------
+    first: list[float] | tuple[float, ...]
+        First numeric vector in a cosine-similarity calculation.
+    second: list[float] | tuple[float, ...]
+        Second numeric vector, required to have the same length and nonzero
+        norm.
+
+    Returns
+    -------
+    float
+        Cosine similarity between two equal-length vectors.
+
+    Raises
+    ------
+    ValueError
+        If vector lengths differ or either vector has zero norm.
+
+    Notes
+    -----
+    The helper does not separately reject non-finite entries; compatible
+    validated vectors are expected from the embedding path.
+
+    """
 
     if len(first) != len(second) or not first:
         raise ValueError("Cosine similarity needs equal non-empty vectors.")

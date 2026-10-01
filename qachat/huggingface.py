@@ -1,8 +1,65 @@
-"""Use Hugging Face's shared cache without owning model storage.
+"""Inspect and reuse Hugging Face's model cache.
 
-This module is a thin connection to ``huggingface_hub``. It lists cached
-models and requests downloads. Hugging Face chooses and manages the cache
-location.
+This module exposes a small cache-facing API rather than a separate model
+store. Listing and availability checks inspect model repositories and cached
+revisions. Snapshot lookup resolves a local path, while download requests are
+delegated to ``huggingface_hub`` and may contact the Hub.
+
+Repository presence does not prove that a particular revision is complete or
+loadable. Offline lookup tolerates ``IncompleteSnapshotError`` only when the
+reported snapshot contains ``config.json``; model-specific file validation
+remains the loader's responsibility. Custom cache directories are accepted
+by listing and availability checks, not by the snapshot/download wrappers.
+
+Key Features
+------------
+
+- **Cache discovery**
+
+    Return sorted model identifiers, repository paths, byte sizes, and revision
+    hashes.
+
+- **Offline resolution**
+
+    Request local files only and return a snapshot directory without loading a
+    model.
+
+- **Delegated downloads**
+
+    Let the Hub client manage cache layout, revisions, and reuse of existing
+    files.
+
+Module Structure
+----------------
+
+- ``available_models``
+
+    Return metadata for models present in a Hugging Face cache.
+
+- ``model_is_available``
+
+    Return whether a model repository is present in a Hugging Face cache.
+
+- ``cached_model_snapshot``
+
+    Return a locally cached model snapshot without downloading files.
+
+- ``download_model``
+
+    Download or reuse a model snapshot in Hugging Face's shared cache.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> models = qachat.available_models()
+>>> cached = qachat.model_is_available("organization/model")
+
+The identifier is illustrative. Request downloads explicitly with
+``qachat.download_model(model_id)``; use
+``qachat.cached_model_snapshot(model_id)`` for local-only lookup.
 
 """
 
@@ -12,7 +69,6 @@ from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
 from huggingface_hub.errors import IncompleteSnapshotError
-
 
 __all__ = [
     "available_models",
@@ -25,19 +81,30 @@ __all__ = [
 def available_models(
     cache_directory: str | Path | None = None,
 ) -> list[dict[str, object]]:
-    """List models in a Hugging Face cache.
+    """Return metadata for models present in a Hugging Face cache.
+
+    Only repositories whose Hugging Face repository type is ``model`` are
+    included. Each returned dictionary contains the model ID, repository path,
+    size on disk, and the commit hashes of all cached revisions.
 
     Parameters
     ----------
     cache_directory: str | pathlib.Path | None, optional
-        Cache to inspect. Defaults to ``None``, which uses Hugging Face's
-        normal shared cache.
+        Hugging Face cache directory to inspect. Defaults to ``None``, which
+        uses the cache selected by ``huggingface_hub``.
 
     Returns
     -------
     list[dict[str, object]]
-        Model IDs, local paths, sizes, and cached revisions. The result is
-        sorted by model ID.
+        Metadata for cached model repositories, sorted by model ID. Each
+        dictionary contains ``model_id``, ``path``, ``size_bytes``, and
+        ``revisions``. Returns an empty list when the cache does not exist.
+
+    Examples
+    --------
+    >>> import qachat
+    >>> models = qachat.available_models()
+    >>> identifiers = [item["model_id"] for item in models]
 
     """
 
@@ -71,24 +138,40 @@ def model_is_available(
     model_id: str,
     cache_directory: str | Path | None = None,
 ) -> bool:
-    """Check whether a model ID is already cached.
+    """Return whether a model repository is present in a Hugging Face cache.
+
+    Availability means that the cache contains a model repository with the
+    exact requested model ID. This function does not inspect whether a
+    particular revision is complete or whether a downstream loader can use it.
 
     Parameters
     ----------
     model_id: str
-        Hugging Face model ID to find.
+        Hugging Face model repository ID to find.
     cache_directory: str | pathlib.Path | None, optional
-        Cache to inspect. Defaults to Hugging Face's normal shared cache.
+        Hugging Face cache directory to inspect. Defaults to ``None``, which
+        uses the cache selected by ``huggingface_hub``.
 
     Returns
     -------
     bool
-        ``True`` when the model has at least one cached revision.
+        ``True`` if the model repository is present; otherwise ``False``.
 
     Raises
     ------
     ValueError
-        If ``model_id`` is empty.
+        If ``model_id`` is not a non-empty string.
+
+    Notes
+    -----
+    This checks whether a repository identifier appears in the cache report. It
+    neither selects a requested revision nor checks model-file completeness or
+    loader compatibility.
+
+    Examples
+    --------
+    >>> import qachat
+    >>> present = qachat.model_is_available("organization/model")
 
     """
 
@@ -105,11 +188,50 @@ def cached_model_snapshot(
     *,
     revision: str | None = None,
 ) -> Path:
-    """Find locally cached model files without downloading anything.
+    """Return a locally cached model snapshot without downloading files.
 
-    A snapshot can be marked incomplete when only repository documentation
-    is missing. Its local model files may still be usable. The model loader
-    checks the files it actually needs after receiving this directory.
+    The lookup is delegated to ``huggingface_hub.snapshot_download`` with
+    ``local_files_only=True``. Hugging Face can mark a snapshot incomplete even
+    when only auxiliary repository files are absent. In that case, this
+    function accepts the snapshot when ``config.json`` is present and leaves
+    model-specific file validation to the downstream model loader.
+
+    Parameters
+    ----------
+    model_id: str
+        Hugging Face model repository ID to resolve.
+    revision: str | None, optional
+        Branch, tag, or commit to resolve. Defaults to ``None``, which uses the
+        repository's default revision.
+
+    Returns
+    -------
+    pathlib.Path
+        Directory containing the resolved local model snapshot.
+
+    Raises
+    ------
+    ValueError
+        If ``model_id`` is not a non-empty string.
+    huggingface_hub.errors.IncompleteSnapshotError
+        If Hugging Face reports an incomplete snapshot and ``config.json`` is
+        not available in that snapshot.
+
+    Notes
+    -----
+    No custom cache-directory argument is exposed here. On
+    IncompleteSnapshotError only config.json is checked; a returned directory
+    may still lack weights or tokenizer files. Other Hub and filesystem errors
+    propagate.
+
+    Examples
+    --------
+    For an actual model identifier already present in the configured shared
+    cache:
+
+    >>> import qachat
+    >>> path = qachat.cached_model_snapshot("organization/model")
+
     """
 
     _check_model_id(model_id)
@@ -131,28 +253,44 @@ def download_model(
     *,
     revision: str | None = None,
 ) -> Path:
-    """Ask Hugging Face to cache a model snapshot.
+    """Download or reuse a model snapshot in Hugging Face's shared cache.
 
-    Existing correct files are reused by Hugging Face.
+    The download is delegated to ``huggingface_hub.snapshot_download``. Hugging
+    Face determines the cache location and reuses valid files already present
+    in the cache. QAChat does not copy or take ownership of the model files.
 
     Parameters
     ----------
     model_id: str
-        Hugging Face model ID to download.
+        Hugging Face model repository ID to download.
     revision: str | None, optional
-        Branch, tag, or commit. Defaults to the repository's normal revision.
+        Branch, tag, or commit to download. Defaults to ``None``, which uses
+        the repository's default revision.
 
     Returns
     -------
     pathlib.Path
-        Cached snapshot directory.
+        Directory containing the downloaded or reused model snapshot.
 
     Raises
     ------
     ValueError
-        If ``model_id`` is empty.
+        If ``model_id`` is not a non-empty string.
     RuntimeError
-        If Hugging Face does not return a path.
+        If Hugging Face does not return the snapshot path as a string.
+
+    Notes
+    -----
+    The identifier in this example is a placeholder. The Hub client determines
+    download behavior and may access the network. This wrapper does not load a
+    model or validate backend compatibility.
+
+    Examples
+    --------
+    For an actual accessible repository identifier, permit a Hub download:
+
+    >>> import qachat
+    >>> path = qachat.download_model("organization/model")
 
     """
 
@@ -170,17 +308,17 @@ def download_model(
 
 
 def _check_model_id(model_id: str) -> None:
-    """Reject an empty model ID.
+    """Validate a Hugging Face model repository ID.
 
     Parameters
     ----------
     model_id: str
-        Value to check.
+        Model repository ID to validate.
 
     Raises
     ------
     ValueError
-        If ``model_id`` is empty.
+        If ``model_id`` is not a non-empty string.
 
     """
 

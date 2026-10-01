@@ -1,16 +1,55 @@
-"""Expand normal RRF results from explicit repository signals.
+"""Expand retrieval context from explicit source references in a question.
 
-Classes
--------
-RetrievalPlan
-    Exact files, functions, and direct function relationships in a question.
+Routing recognizes file paths, known function names, and a fixed vocabulary
+of relationship requests. It produces a ``RetrievalPlan`` and adds matching
+file or function chunks and eligible graph neighbors to an existing ranking.
+This is deterministic text matching over the supplied source metadata, not a
+language-model router or a complete interpretation of the question.
 
-Functions
----------
-plan_retrieval
-    Detect deterministic repository signals without using an LLM.
-expand_retrieval_context
+Expansion deduplicates chunk identifiers while preserving the initial ranked
+results. The expansion itself has no token or result-count ceiling, so callers
+must account for the full expanded context before generating an answer.
+
+Key Features
+------------
+
+- **Explicit references**
+
+    Match known paths and function symbols mentioned in the question.
+
+- **Graph neighbors**
+
+    Recognize selected relationship phrases and include matching neighboring
+    functions.
+
+- **Ordered expansion**
+
+    Keep ranked evidence first and append source-ordered matches without
+    duplicate chunk identifiers.
+
+Module Structure
+----------------
+
+- ``RetrievalPlan``
+
+    Deterministic context expansion requested by one question.
+
+- ``expand_retrieval_context``
+
     Add complete requested context after normal RRF retrieval.
+
+- ``plan_retrieval``
+
+    Detect exact repository context requested by one question.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> graph = qachat.CodeGraph(entities=(), relations=())
+>>> plan = qachat.plan_retrieval("Explain this project.", graph)
 
 """
 
@@ -68,6 +107,19 @@ _WORD = re.compile(r"[A-Za-z0-9]+")
 class RetrievalPlan:
     """Deterministic context expansion requested by one question.
 
+    Parameters
+    ----------
+    paths: tuple[pathlib.Path, ...]
+        Exact repository paths or file names found in the question.
+    functions: tuple[str, ...]
+        Exact repository functions found in the question.
+    relationship: bool
+        Whether the question asks about relationships around a function.
+    related_functions: tuple[str, ...]
+        Direct function neighbors when relationship expansion is requested.
+    signals: tuple[str, ...]
+        Human-readable signals that explain the expansion.
+
     Attributes
     ----------
     paths: tuple[pathlib.Path, ...]
@@ -116,6 +168,12 @@ def plan_retrieval(
     ValueError
         If the question is empty.
 
+    Notes
+    -----
+    Recognizes only kinds in _FUNCTION_KINDS and phrases in _RELATION_PHRASES.
+    A relationship request requires at least one explicit function match. It
+    does not infer arbitrary semantic references.
+
     """
 
     if not isinstance(query_text, str) or not query_text.strip():
@@ -161,9 +219,9 @@ def expand_retrieval_context(
 
     Parameters
     ----------
-    rrf_results: collections.abc.Sequence[HybridResult]
+    rrf_results: Sequence[HybridResult]
         Normal RRF results in best-first order.
-    chunks: collections.abc.Sequence[Chunk]
+    chunks: Sequence[Chunk]
         All searchable repository chunks.
     graph: CodeGraph
         Current repository code graph.
@@ -174,6 +232,12 @@ def expand_retrieval_context(
     -------
     list[Chunk]
         RRF chunks followed by any guaranteed context expansion.
+
+    Notes
+    -----
+    Initial fused results stay first. Explicit-path chunks, named-function
+    chunks, and requested direct function neighbors follow. Deduplication is by
+    chunk identifier. No output-count or token-budget limit is applied.
 
     """
 
@@ -213,7 +277,28 @@ def _explicit_paths(
     query_text: str,
     graph: CodeGraph,
 ) -> tuple[Path, ...]:
-    """Return exact repository paths or file names in the question."""
+    """Return exact repository paths or file names in the question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text to inspect for explicit file/function mentions and
+        recognized relationship phrases.
+    graph: CodeGraph
+        Graph supplying known paths, function entities, and relationships.
+
+    Returns
+    -------
+    tuple[pathlib.Path, ...]
+        Exact repository paths or file names in the question.
+
+    Notes
+    -----
+    Case-folded full path substrings take precedence over basename matches.
+    Basenames use identifier-boundary matching; multiple matching files can be
+    returned.
+
+    """
 
     normalized = query_text.replace("\\", "/").casefold()
     paths = {entity.path for entity in graph.entities}
@@ -237,7 +322,24 @@ def _explicit_functions(
     graph: CodeGraph,
     paths: tuple[Path, ...],
 ) -> tuple[str, ...]:
-    """Return exact repository function names in the question."""
+    """Return exact repository function names in the question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text to inspect for explicit file/function mentions and
+        recognized relationship phrases.
+    graph: CodeGraph
+        Graph supplying known paths, function entities, and relationships.
+    paths: tuple[pathlib.Path, ...]
+        Repository-relative paths already recognized in the question.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Exact repository function names in the question.
+
+    """
 
     normalized = query_text.replace("\\", "/").casefold()
     normalized = _remove_path_mentions(normalized, paths)
@@ -252,7 +354,20 @@ def _explicit_functions(
 
 
 def _has_relationship(query_text: str) -> bool:
-    """Return whether wording asks about code relationships."""
+    """Return whether wording asks about code relationships.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text to inspect for explicit file/function mentions and
+        recognized relationship phrases.
+
+    Returns
+    -------
+    bool
+        Whether wording asks about code relationships.
+
+    """
 
     normalized = " ".join(_WORD.findall(query_text.casefold()))
     padded = f" {normalized} "
@@ -263,7 +378,27 @@ def _direct_function_neighbors(
     functions: tuple[str, ...],
     graph: CodeGraph,
 ) -> tuple[str, ...]:
-    """Return function entities one graph edge from the target functions."""
+    """Return function entities one graph edge from the target functions.
+
+    Parameters
+    ----------
+    functions: tuple[str, ...]
+        Qualified names of recognized function entities.
+    graph: CodeGraph
+        Graph supplying known paths, function entities, and relationships.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Function entities one graph edge from the target functions.
+
+    Notes
+    -----
+    Relations are treated as undirected and are not filtered to calls alone.
+    Only neighbor entities of recognized function kinds are retained; matched
+    seed functions are excluded.
+
+    """
 
     function_names = {
         entity.name
@@ -292,7 +427,23 @@ def _chunks_for_functions(
     graph: CodeGraph,
     functions: tuple[str, ...],
 ) -> list[Chunk]:
-    """Return all chunks belonging to the requested functions."""
+    """Return all chunks belonging to the requested functions.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        Source chunks available for context expansion.
+    graph: CodeGraph
+        Graph supplying known paths, function entities, and relationships.
+    functions: tuple[str, ...]
+        Qualified names of recognized function entities.
+
+    Returns
+    -------
+    list[Chunk]
+        All chunks belonging to the requested functions.
+
+    """
 
     entities = {
         entity.name: entity
@@ -319,7 +470,21 @@ def _chunk_matches_function(
     chunk: Chunk,
     entity: CodeEntity,
 ) -> bool:
-    """Return whether a chunk belongs to one function entity."""
+    """Return whether a chunk belongs to one function entity.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        One candidate source chunk.
+    entity: CodeEntity
+        Function entity whose path and symbol should match the candidate chunk.
+
+    Returns
+    -------
+    bool
+        Whether a chunk belongs to one function entity.
+
+    """
 
     if chunk.path != entity.path or chunk.symbol is None:
         return False
@@ -335,7 +500,23 @@ def _remove_path_mentions(
     query_text: str,
     paths: tuple[Path, ...],
 ) -> str:
-    """Remove matched paths before looking for function names."""
+    """Remove matched paths before looking for function names.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text to inspect for explicit file/function mentions and
+        recognized relationship phrases.
+    paths: tuple[pathlib.Path, ...]
+        Repository-relative paths already recognized in the question.
+
+    Returns
+    -------
+    str
+        Question text with recognized path forms removed before function-name
+        detection.
+
+    """
 
     cleaned = query_text
     for path in paths:
@@ -349,7 +530,22 @@ def _remove_path_mentions(
 
 
 def _function_is_named(query_text: str, function: str) -> bool:
-    """Return whether a qualified or leaf function name is written."""
+    """Return whether a qualified or leaf function name is written.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text to inspect for explicit file/function mentions and
+        recognized relationship phrases.
+    function: str
+        Qualified function name being matched against the question.
+
+    Returns
+    -------
+    bool
+        Whether a qualified or leaf function name is written.
+
+    """
 
     leaf = function.rsplit(".", 1)[-1]
     return _contains_identifier(query_text, function) or _contains_identifier(
@@ -358,19 +554,57 @@ def _function_is_named(query_text: str, function: str) -> bool:
 
 
 def _contains_identifier(text: str, value: str) -> bool:
-    """Return whether one identifier appears with safe boundaries."""
+    """Return whether one identifier appears with safe boundaries.
+
+    Parameters
+    ----------
+    text: str
+        Text in which an identifier is sought.
+    value: str
+        Literal identifier whose boundaries or pattern are checked.
+
+    Returns
+    -------
+    bool
+        Whether one identifier appears with safe boundaries.
+
+    """
 
     return re.search(_identifier_pattern(value), text) is not None
 
 
 def _identifier_pattern(value: str) -> str:
-    """Return a regex pattern for one exact code identifier."""
+    """Return a regex pattern for one exact code identifier.
+
+    Parameters
+    ----------
+    value: str
+        Literal identifier whose boundaries or pattern are checked.
+
+    Returns
+    -------
+    str
+        A regex pattern for one exact code identifier.
+
+    """
 
     return rf"(?<![A-Za-z0-9_]){re.escape(value)}" r"(?![A-Za-z0-9_])"
 
 
 def _source_order(chunks: Sequence[Chunk]) -> list[Chunk]:
-    """Return chunks in deterministic source order."""
+    """Return chunks in deterministic source order.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        Source chunks available for context expansion.
+
+    Returns
+    -------
+    list[Chunk]
+        Chunks in deterministic source order.
+
+    """
 
     return sorted(
         chunks,
@@ -388,7 +622,24 @@ def _append_unique(
     seen: set[str],
     candidates,
 ) -> None:
-    """Append chunks once while preserving candidate order."""
+    """Append chunks once while preserving candidate order.
+
+    Parameters
+    ----------
+    destination: list[Chunk]
+        Mutable output list to extend with previously unseen chunks.
+    seen: set[str]
+        Mutable set of chunk identifiers already included in the output.
+    candidates: object
+        Iterable of candidate chunks appended in iteration order when not
+        already seen.
+
+    Notes
+    -----
+    Mutates both destination and seen. Candidate objects are retained by
+    reference; their contents are not copied or merged.
+
+    """
 
     for chunk in candidates:
         if chunk.identifier in seen:
