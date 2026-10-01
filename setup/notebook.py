@@ -18,13 +18,14 @@ import shutil
 import subprocess
 import sys
 
-COMMON_MODULES = (
+_COMMON_MODULES = (
     "huggingface_hub",
     "pypdf",
     "torch",
     "transformers",
 )
-MLX_MODULES = (
+
+_MLX_MODULES = (
     "mlx",
     "mlx_embeddings",
     "mlx_lm",
@@ -93,7 +94,10 @@ def _project_root(start: Path) -> Path:
         ).is_dir():
             return directory
 
-    raise RuntimeError("Open this notebook from inside the QAChat project.")
+    raise RuntimeError(
+        "You need to open notebook from inside the QAChat project. "
+        f"The current directory is {candidate}."
+    )
 
 
 def _project_python(root: Path) -> Path:
@@ -117,12 +121,13 @@ def _same_python(expected: Path) -> bool:
 def _required_modules() -> tuple[str, ...]:
     """Return modules installed by the setup command on this computer."""
 
-    modules = list(COMMON_MODULES)
-    apple_silicon = (
+    modules = list(_COMMON_MODULES)
+
+    is_apple_silicon = (
         platform.system() == "Darwin" and platform.machine().lower() == "arm64"
     )
-    if apple_silicon:
-        modules.extend(MLX_MODULES)
+    if is_apple_silicon:
+        modules.extend(_MLX_MODULES)
 
     return tuple(modules)
 
