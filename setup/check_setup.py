@@ -24,7 +24,7 @@ check_setup
     Select and verify the calculation backend.
 main
     Run the setup check from the command line,
-    e.g., using `python check_setup.py`.
+    e.g., using ``python check_setup.py``.
 
 """
 
