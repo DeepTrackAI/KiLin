@@ -18,6 +18,14 @@ multi-process locking or a transaction across separate logger instances.
 I/O failure handling applies to event writes according to the configuration;
 direct conversation-state updates have their own write path.
 
+Reopening an exact output path preserves previously saved readable turns and
+conversation-level operations. New records start above the highest saved
+number, including gaps in the existing numbering. Numbering is fixed for the
+lifetime of each logger, so rewriting its accumulated events does not append
+duplicate records. Turn identifiers group events within a logger run; reusing
+an identifier in a later run creates a separate readable turn rather than
+modifying a saved one. Event sequence numbers remain local to each run.
+
 Key Features
 ------------
 
@@ -34,6 +42,11 @@ Key Features
 
     Present lifecycle, preparation, conversation, and progress operations using
     the shared internal conversation-format contract.
+
+- **Sequential trace reuse**
+
+    Retain saved turns and conversation operations when reopening a file, with
+    stable numbering for subsequent writes by the new logger.
 
 - **Optional artifacts**
 
@@ -111,6 +124,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -380,10 +394,17 @@ class TraceLogger:
     Standard mode is not a privacy guarantee: resume state, tracebacks, or
     backend text may contain sensitive data. Artifacts are inline dictionaries.
     There is no append-only log, multi-file transaction, or cross-process
-    locking. Explicitly reusing a file merges grouped state according to the
-    current implementation, not a globally unique event sequence.
+    locking. Close the current writer before opening another logger for the
+    same file. Saved readable turns and conversation operations are retained;
+    new records use numbers above the highest saved keys. Turn identifiers and
+    span identifiers group events only within one logger run. Event sequence
+    numbers and top-level event counts also describe the current run, not the
+    full lifetime of the conversation file.
 
     """
+
+    _turn_offset: int
+    _conversation_operation_offset: int
 
     enabled = True
 
@@ -415,7 +436,11 @@ class TraceLogger:
         Notes
         -----
         The first event is written during construction. Exact JSON paths can be
-        reused; output is not guaranteed to be a new file.
+        reused; output is not guaranteed to be a new file. Saved sessions
+        provide a fixed numbering baseline before that first event is emitted.
+        Later writes do not mutate this baseline or reload changes from another
+        writer. Resumable state is copied separately so its updates cannot
+        modify the saved-session snapshot.
 
         """
 
@@ -475,6 +500,21 @@ class TraceLogger:
                             pass
             except (OSError, json.JSONDecodeError, AttributeError):
                 raise ValueError("The conversation trace is invalid.")
+        # Keep the loaded trace immutable while current events are rewritten.
+        self._conversation = deepcopy(self._conversation)
+        previous_conversation = self._previous_sessions.get(
+            CONVERSATION_SESSION_KEY
+        )
+        if not isinstance(previous_conversation, Mapping):
+            previous_conversation = {}
+        self._turn_offset = _numbered_record_offset(
+            previous_conversation.get("turns"),
+            r"turn_([0-9]+)",
+        )
+        self._conversation_operation_offset = _numbered_record_offset(
+            previous_conversation.get("operations"),
+            r"([0-9]+)_.+",
+        )
         _restrict_permissions(self.output_path, 0o600)
         self.emit(
             "trace.started",
@@ -1017,10 +1057,15 @@ class TraceLogger:
 
         Notes
         -----
-        Projects current in-memory events into grouped sessions and merges with
-        previously loaded sessions. A temporary JSON file replaces the target.
-        The operation is not an immutable snapshot history or a multi-writer
-        transaction. Numbered turn keys are generated per logger run.
+        Projects current events using the fixed numbering offsets captured
+        when the file was opened. Merging into a deep copy preserves the loaded
+        baseline and prevents nested turn, operation, or resume-state mappings
+        from being changed by a write. Repeated writes replace this run's
+        projection without duplicating it or overwriting earlier runs.
+
+        A temporary JSON file replaces the target. This is neither an immutable
+        snapshot history nor a multi-writer transaction. Another writer's
+        changes are not reloaded before replacement.
 
         """
 
@@ -1034,8 +1079,10 @@ class TraceLogger:
         current_sessions = _readable_sessions(
             execution_trace,
             progress_checkpoints,
+            turn_offset=self._turn_offset,
+            conversation_operation_offset=self._conversation_operation_offset,
         )
-        sessions = dict(self._previous_sessions)
+        sessions = deepcopy(self._previous_sessions)
         for key, value in current_sessions.items():
             if (
                 key == CONVERSATION_SESSION_KEY
@@ -1741,9 +1788,51 @@ _TURN_STAGE_TITLES = {
 }
 
 
+def _numbered_record_offset(records: object, pattern: str) -> int:
+    """Find the highest saved number in a readable record mapping.
+
+    Parameters
+    ----------
+    records: object
+        Decoded turn or operation mapping. A missing or non-mapping value
+        contributes no reserved numbers.
+    pattern: str
+        Internal regular expression matching an entire record key. Its first
+        capture group must contain the decimal number, for example
+        ``r"turn_([0-9]+)"`` for readable turns.
+
+    Returns
+    -------
+    int
+        Highest matching number, or ``0`` when no numbered keys are present.
+        Non-string and non-matching keys are ignored but remain in the saved
+        mapping; this helper does not modify or validate their contents.
+
+    Notes
+    -----
+    Use the highest number rather than the number of records: saved traces may
+    contain gaps, legacy names, or keys wider than the usual padding. The
+    result is captured once per logger so repeated writes use a fixed offset.
+
+    """
+
+    if not isinstance(records, Mapping):
+        return 0
+    numbers = (
+        int(match.group(1))
+        for key in records
+        if isinstance(key, str)
+        if (match := re.fullmatch(pattern, key)) is not None
+    )
+    return max(numbers, default=0)
+
+
 def _readable_sessions(
     events: list[dict[str, object]],
     progress: list[dict[str, object]],
+    *,
+    turn_offset: int = 0,
+    conversation_operation_offset: int = 0,
 ) -> dict[str, object]:
     """Group compact events under names that remain useful when folded.
 
@@ -1754,6 +1843,13 @@ def _readable_sessions(
     progress: list[dict[str, object]]
         Sampled progress-checkpoint dictionaries to place beside their
         operations.
+    turn_offset: int, optional
+        Highest saved readable-turn number. New turns start at the next number.
+        Defaults to ``0`` for a fresh trace.
+    conversation_operation_offset: int, optional
+        Highest saved conversation-level operation number. Applies only to
+        conversation events without a turn identifier, not to operations inside
+        a turn or another session category. Defaults to ``0``.
 
     Returns
     -------
@@ -1763,17 +1859,20 @@ def _readable_sessions(
 
     Notes
     -----
-    Turn numbering starts at one for the supplied event list. The helper does
-    not know the previously saved turn count; merging with earlier runs is
-    performed by its caller.
+    Offsets are supplied from a fixed saved-session baseline. The helper
+    builds only this run's projection; its caller merges that projection with
+    saved sessions. Turn identifiers are grouped in first-seen order within
+    this run. Repeated or interleaved events use their own assigned number
+    when naming the turn, even after another turn begins.
 
     """
 
     sessions: dict[str, dict[str, object]] = {}
     span_nodes: dict[str, dict[str, object]] = {}
-    turn_keys: dict[str, str] = {}
-    turn_count = 0
+    turn_numbers: dict[str, int] = {}
+    turn_count = turn_offset
     for event in events:
+        operation_offset = 0
         event_type = str(event.get("event_type", "event"))
         turn_id = event.get("turn_id")
         if isinstance(turn_id, str):
@@ -1781,20 +1880,21 @@ def _readable_sessions(
             turns = session.setdefault("turns", {})
             if not isinstance(turns, dict):
                 continue
-            if turn_id not in turn_keys:
+            if turn_id not in turn_numbers:
                 turn_count += 1
-                turn_keys[turn_id] = f"turn_{turn_count:04d}"
-            turn_key = turn_keys[turn_id]
+                turn_numbers[turn_id] = turn_count
+            turn_number = turn_numbers[turn_id]
+            turn_key = f"turn_{turn_number:04d}"
             turn = turns.setdefault(
                 turn_key,
                 {
-                    "title": _turn_title(event, turn_count),
+                    "title": _turn_title(event, turn_number),
                     "turn_id": turn_id,
                     "stages": {},
                 },
             )
             if event_type == "turn.started":
-                turn["title"] = _turn_title(event, turn_count)
+                turn["title"] = _turn_title(event, turn_number)
             stages = turn["stages"]
             if not isinstance(stages, dict):
                 continue
@@ -1815,8 +1915,15 @@ def _readable_sessions(
             category = _event_session(event_type)
             session = _session_bucket(sessions, category)
             operations = session.setdefault("operations", {})
+            if category == CONVERSATION_SESSION_CATEGORY:
+                operation_offset = conversation_operation_offset
         if isinstance(operations, dict):
-            _append_readable_operation(operations, event, span_nodes)
+            _append_readable_operation(
+                operations,
+                event,
+                span_nodes,
+                offset=operation_offset,
+            )
 
     for session in sessions.values():
         turns = session.get("turns")
@@ -1890,6 +1997,8 @@ def _append_readable_operation(
     operations: dict[str, object],
     event: dict[str, object],
     span_nodes: dict[str, dict[str, object]],
+    *,
+    offset: int = 0,
 ) -> None:
     """Add one compact event, merging span start and finish records.
 
@@ -1901,7 +2010,11 @@ def _append_readable_operation(
         Structured event dictionary used for storage or readable projection.
     span_nodes: dict[str, dict[str, object]]
         Mutable mapping from span identifiers to readable operations, used to
-        merge lifecycle events.
+        merge lifecycle events within the current logger run.
+    offset: int, optional
+        Number of the last operation reserved by an earlier logger run in this
+        group. Defaults to ``0``. The supplied operations contain only records
+        from the current run.
 
     Notes
     -----
@@ -1923,7 +2036,7 @@ def _append_readable_operation(
         node = span_nodes.get(span_id)
         if lifecycle == "started" and node is None:
             node = _compact_event(event)
-            key = _unique_operation_key(operations, base)
+            key = _unique_operation_key(operations, base, offset=offset)
             operations[key] = node
             span_nodes[span_id] = node
         if lifecycle == "started" and node is not None:
@@ -1944,7 +2057,7 @@ def _append_readable_operation(
                 node["result"] = data
             return
 
-    key = _unique_operation_key(operations, event_type)
+    key = _unique_operation_key(operations, event_type, offset=offset)
     operations[key] = _compact_event(event)
 
 
@@ -2008,25 +2121,32 @@ def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
 def _unique_operation_key(
     operations: Mapping[str, object],
     event_type: str,
+    *,
+    offset: int = 0,
 ) -> str:
     """Return a numbered operation name that is readable when collapsed.
 
     Parameters
     ----------
     operations: Mapping[str, object]
-        Readable operation mapping whose keys already identify stored entries.
+        Sequentially generated operation records for the current logger run.
+        Previously saved records are not included in this mapping.
     event_type: str
         Nonblank machine-readable operation/event name, conventionally
         dot-separated.
+    offset: int, optional
+        Highest operation number reserved by a previously saved group.
+        Defaults to ``0``.
 
     Returns
     -------
     str
-        A numbered operation name that is readable when collapsed.
+        Next operation key after the reserved offset and current-run records.
 
     """
 
-    return _numbered_key(len(operations) + 1, event_type.replace(".", "_"))
+    number = offset + len(operations) + 1
+    return _numbered_key(number, event_type.replace(".", "_"))
 
 
 def _numbered_key(number: int, name: str) -> str:
