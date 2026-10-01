@@ -47,6 +47,9 @@ from .query_formats import (
     format_qwen3_query,
 )
 from .project import (
+    PROJECT_KIND_CHOICES,
+    PROJECT_KIND_CODE,
+    PROJECT_KIND_LITERATURE,
     ProjectProfile,
     QAProject,
     initialize_project,
@@ -129,6 +132,9 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "PROJECT_KIND_CHOICES",
+    "PROJECT_KIND_CODE",
+    "PROJECT_KIND_LITERATURE",
     "ProjectProfile",
     "ProgressCallback",
     "ProgressEvent",

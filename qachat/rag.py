@@ -107,10 +107,15 @@ from pathlib import Path
 import platform
 import sys
 from time import perf_counter
-from qachat.chat import ChatSession
+from qachat.chat import (
+    ASSISTANT_ROLE,
+    SYSTEM_ROLE,
+    USER_ROLE,
+    ChatSession,
+)
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
-from qachat.project import QAProject, open_project
+from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.query_formats import (
     LITERATURE_REPOSITORY_INSTRUCTION,
     SOFTWARE_REPOSITORY_INSTRUCTION,
@@ -891,7 +896,7 @@ class RAGSession:
             "history_message_count": len(self.chat_session.messages),
             "history_roles": history_roles,
             "prior_conversation_included": any(
-                role in {"user", "assistant"} for role in history_roles
+                role in {USER_ROLE, ASSISTANT_ROLE} for role in history_roles
             ),
         }
         question_data: dict[str, object] = {
@@ -1847,7 +1852,7 @@ class RAGSession:
             return question
         instruction = (
             SOFTWARE_REPOSITORY_INSTRUCTION
-            if profile.kind == "code"
+            if profile.kind == PROJECT_KIND_CODE
             else LITERATURE_REPOSITORY_INSTRUCTION
         )
         return format_qwen3_query(question, instruction)
@@ -1970,18 +1975,18 @@ class RAGSession:
                 system_prompt = str(
                     conversation.get("system_prompt", _SYSTEM_PROMPT)
                 )
-                messages = [{"role": "system", "content": system_prompt}]
+                messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
                 for turn in turns:
                     messages.extend(
                         (
                             {
-                                "role": "user",
+                                "role": USER_ROLE,
                                 "content": _answer_prompt(
                                     turn.question,
                                     turn.evidence,
                                 ),
                             },
-                            {"role": "assistant", "content": turn.answer},
+                            {"role": ASSISTANT_ROLE, "content": turn.answer},
                         )
                     )
         except (KeyError, TypeError, json.JSONDecodeError) as error:

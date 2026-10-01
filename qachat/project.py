@@ -36,6 +36,14 @@ Key Features
 Module Structure
 ----------------
 
+- ``PROJECT_KIND_CODE`` and ``PROJECT_KIND_LITERATURE``
+
+    Canonical string values for the two supported project categories.
+
+- ``PROJECT_KIND_CHOICES``
+
+    Ordered collection of the supported project-kind values.
+
 - ``ProjectProfile``
 
     Settings loaded from one project's profile.ini.
@@ -77,7 +85,9 @@ Open an existing workspace:
 Access submodule-only configuration helpers through their actual namespace:
 
 >>> import qachat.project
->>> profile = qachat.project.default_project_profile("code")
+>>> profile = qachat.project.default_project_profile(
+...     qachat.PROJECT_KIND_CODE
+... )
 
 """
 
@@ -90,7 +100,7 @@ import json
 from pathlib import Path
 import re
 import shutil
-from typing import Literal, TypeAlias, cast
+from typing import Final, Literal, TypeAlias, cast
 
 from qachat.repository import (
     build_repository_manifest,
@@ -101,6 +111,9 @@ from qachat.runtime import Backend, SelectedBackend
 from qachat.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
+    "PROJECT_KIND_CODE",
+    "PROJECT_KIND_LITERATURE",
+    "PROJECT_KIND_CHOICES",
     "ProjectProfile",
     "QAProject",
     "initialize_project",
@@ -112,8 +125,23 @@ __all__ = [
 
 ProjectKind: TypeAlias = Literal["code", "literature"]
 QueryFormat: TypeAlias = Literal["plain", "qwen3"]
+
+PROJECT_KIND_CODE: Final[ProjectKind] = "code"
+PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
+PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = (
+    PROJECT_KIND_CODE,
+    PROJECT_KIND_LITERATURE,
+)
+
+_PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
+    PROJECT_KIND_CODE: ".py, .ipynb, .m, .md",
+    PROJECT_KIND_LITERATURE: ".pdf, .md, .txt",
+}
 # Literature PDFs need more space than typical code files.
-_DEFAULT_FILE_LIMITS = {"code": 1_048_576, "literature": 20 * 1024 * 1024}
+_DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
+    PROJECT_KIND_CODE: 2**20,
+    PROJECT_KIND_LITERATURE: 20 * 2**20,
+}
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}
@@ -162,13 +190,15 @@ _EDITABLE_SETTINGS = {
     "max_new_tokens": "generation",
 }
 
+
 def default_project_profile(kind: ProjectKind) -> ProjectProfile:
     """Return the settings a new project of this kind would receive.
 
     Parameters
     ----------
     kind: ProjectKind
-        Project category, exactly "code" or "literature".
+        Project category, using ``PROJECT_KIND_CODE`` or
+        ``PROJECT_KIND_LITERATURE``.
 
     Returns
     -------
@@ -178,7 +208,7 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
     Raises
     ------
     ValueError
-        If kind is not code or literature.
+        If ``kind`` is not one of ``PROJECT_KIND_CHOICES``.
 
     Notes
     -----
@@ -187,11 +217,9 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
 
     """
 
-    if kind not in {"code", "literature"}:
+    if kind not in PROJECT_KIND_CHOICES:
         raise ValueError("kind must be code or literature.")
-    extensions = (
-        ".py, .ipynb, .m, .md" if kind == "code" else ".pdf, .md, .txt"
-    )
+    extensions = _PROJECT_EXTENSIONS[kind]
     parser = ConfigParser()
     parser.read_string(
         _DEFAULT_PROFILE.format(
@@ -299,7 +327,7 @@ class ProjectProfile:
 
     Parameters
     ----------
-    kind: "code" | "literature"
+    kind: ProjectKind
         Type of material in the project.
     source: str
         Source folder, relative to the project or absolute.
@@ -338,7 +366,7 @@ class ProjectProfile:
 
     Attributes
     ----------
-    kind: "code" | "literature"
+    kind: ProjectKind
         Type of material in the project.
     source: str
         Source folder, relative to the project or absolute.
@@ -496,7 +524,7 @@ def initialize_project(
     ----------
     directory: str | pathlib.Path
         Existing project, repository, or document folder.
-    kind: "code" | "literature"
+    kind: ProjectKind
         Type of source material in the project.
 
     Returns
@@ -522,7 +550,7 @@ def initialize_project(
 
     """
 
-    if kind not in {"code", "literature"}:
+    if kind not in PROJECT_KIND_CHOICES:
         raise ValueError("kind must be code or literature.")
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
@@ -530,17 +558,15 @@ def initialize_project(
 
     profile_path = root / "profile.ini"
     if not profile_path.exists():
-        source_name = "repository" if kind == "code" else "documents"
+        source_name = (
+            "repository" if kind == PROJECT_KIND_CODE else "documents"
+        )
         if (root / "sources").is_dir():
             source = "sources"
         else:
             source = source_name if (root / source_name).is_dir() else "."
 
-        extensions = (
-            ".py, .ipynb, .m, .md"
-            if kind == "code"
-            else ".pdf, .md, .txt"
-        )
+        extensions = _PROJECT_EXTENSIONS[kind]
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,
@@ -580,7 +606,7 @@ def prepare_project_workspace(
     ----------
     source_directory: str | pathlib.Path
         Existing source code or literature folder.
-    kind: "code" | "literature"
+    kind: ProjectKind
         Type of source material in the project.
     workspace_root: str | pathlib.Path
         QAChat sandbox folder that contains managed project workspaces.
@@ -611,7 +637,7 @@ def prepare_project_workspace(
 
     """
 
-    if kind not in {"code", "literature"}:
+    if kind not in PROJECT_KIND_CHOICES:
         raise ValueError("kind must be code or literature.")
 
     source = Path(source_directory).expanduser().resolve(strict=True)
@@ -641,11 +667,7 @@ def prepare_project_workspace(
     profile_path = root / "profile.ini"
     if not profile_path.exists():
 
-        extensions = (
-            ".py, .ipynb, .m, .md"
-            if kind == "code"
-            else ".pdf, .md, .txt"
-        )
+        extensions = _PROJECT_EXTENSIONS[kind]
         profile_path.write_text(
             _DEFAULT_PROFILE.format(
                 kind=kind,
@@ -951,7 +973,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
     """
 
     kind_value = _required(parser, "project", "kind")
-    if kind_value not in {"code", "literature"}:
+    if kind_value not in PROJECT_KIND_CHOICES:
         raise ValueError("project.kind must be code or literature.")
     kind = cast("ProjectKind", kind_value)
 

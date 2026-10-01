@@ -89,7 +89,7 @@ import gc
 from importlib import import_module
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast, Literal, TYPE_CHECKING, TypeAlias
+from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
 from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
@@ -107,16 +107,15 @@ __all__ = [
     "ChatSession",
 ]
 
-SYSTEM_ROLE = "system"
-USER_ROLE = "user"
-ASSISTANT_ROLE = "assistant"
-
 Role: TypeAlias = Literal["system", "user", "assistant"]
-_ROLES = {
-    SYSTEM_ROLE,
-    USER_ROLE,
-    ASSISTANT_ROLE,
-}
+
+SYSTEM_ROLE: Final[Role] = "system"
+USER_ROLE: Final[Role] = "user"
+ASSISTANT_ROLE: Final[Role] = "assistant"
+
+_ROLES: Final[frozenset[Role]] = frozenset(
+    (SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE)
+)
 
 if TYPE_CHECKING:
     from mlx.nn import Module as MlxModel
