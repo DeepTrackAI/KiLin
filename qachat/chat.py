@@ -1,7 +1,90 @@
-"""Load a language model and keep one conversation in memory.
+"""Manage one local language-model chat session.
 
-``ChatSession`` selects MLX or PyTorch, loads one compatible model, formats
-messages, generates replies, and releases the model when finished.
+This module provides ``ChatSession``, the low-level QAChat abstraction for
+loading one compatible language model and maintaining one in-memory
+conversation. It resolves the calculation backend, loads the model and
+tokenizer, formats chat messages, generates replies, records optional
+execution traces, and releases model resources when the session is closed.
+
+The implementation supports MLX on Apple Silicon and PyTorch on other
+supported platforms. Models may be loaded from a local directory, from an
+existing Hugging Face cache entry, or, when explicitly allowed, through the
+normal Hugging Face download mechanism.
+
+Conversation state is intentionally lightweight. Messages are stored as a
+sequence of ``system``, ``user``, and ``assistant`` mappings. The model
+remains loaded across replies, while generation-only settings can be changed
+without reloading it.
+
+Key Features
+------------
+- **Backend-aware model loading**
+
+    Select MLX or PyTorch through the shared QAChat runtime utilities and load
+    only the dependencies required by the selected backend.
+
+- **Local-first model resolution**
+
+    Accept local model directories directly and, when downloads are disabled,
+    resolve Hugging Face model IDs through the existing shared cache.
+
+- **In-memory conversation state**
+
+    Keep one ordered chat history together with an optional system prompt and
+    support resetting or restoring that history.
+
+- **Configurable generation**
+
+    Control thinking mode, sampling temperature, and reply length at session
+    creation or update generation-only settings without reloading the model.
+
+- **Context-aware reply limits**
+
+    Use an explicit token limit when provided, otherwise derive the available
+    generation budget from the model's reported context size.
+
+- **Structured tracing**
+
+    Emit model-loading, prompt, generation, timing, and optional content or
+    token-ID trace data through a caller-provided ``TraceSink``.
+
+- **Explicit resource release**
+
+    Release model and tokenizer references, clear conversation history, run
+    garbage collection, and clear backend caches when the session is closed.
+
+Module Structure
+----------------
+Classes:
+
+- ``ChatSession``
+
+    Load one model, maintain one conversation, generate replies, and release
+    the associated resources.
+
+The remaining functions are private validation and bookkeeping helpers used
+internally by ``ChatSession``.
+
+Examples
+--------
+Create a session using the platform-default backend and send a message:
+
+>>> chat = qachat.ChatSession("Qwen/Qwen3-4B")
+>>> question = "Explain Brownian motion briefly."
+>>> answer = chat.reply(question)
+>>> print(answer)
+
+Callers should invoke ``close()`` explicitly
+when the loaded model is no longer needed:
+
+>>> chat.close()
+
+Use only locally available model files:
+
+>>> chat = qachat.ChatSession(
+...     "Qwen/Qwen3-4B",
+...     allow_download=False,
+... )
 
 """
 
@@ -44,45 +127,76 @@ Tokenizer: TypeAlias = MlxTokenizer | TorchTokenizer
 class ChatSession:
     """A loaded model, its settings, and one in-memory conversation.
 
+    ``ChatSession`` owns the runtime objects required for one conversational
+    model session. Construction selects a backend, validates generation
+    settings, initializes the message history, and immediately loads the model
+    and tokenizer.
+
     Parameters
     ----------
     model_id: str
-        A Hugging Face model ID or local model directory.
+        Hugging Face model ID or path to a local model directory.
     backend: "auto" | "mlx" | "torch", optional
-        ``auto`` selects MLX on Apple Silicon and PyTorch elsewhere.
+        Calculation backend. ``auto`` delegates platform selection to the
+        shared QAChat runtime utilities.
     thinking: bool, optional
-        Ask a compatible chat template to enable thinking output.
+        Whether a compatible chat template should enable thinking output.
+        Defaults to ``False``.
     temperature: float, optional
-        ``0`` uses repeatable greedy generation. A higher value samples.
+        Sampling temperature. ``0`` requests deterministic greedy generation;
+        positive values enable sampling. Defaults to ``0``.
     max_new_tokens: int | None, optional
-        Optional generation length. ``None`` uses the remaining model context
-        instead of an application-defined limit.
+        Session-level maximum number of tokens generated for each reply.
+        ``None`` uses the remaining model context unless a per-reply override
+        is supplied.
     system_prompt: str | None, optional
-        Optional instruction kept at the beginning of the conversation.
+        Optional system instruction placed first in the conversation history.
     allow_download: bool, optional
-        If ``True``, Hugging Face downloads missing files to its normal cache.
-        If ``False``, loading only uses local files.
+        Whether model loading may download missing Hugging Face files.
+        ``False`` restricts model IDs to locally cached snapshots or local
+        directories. Defaults to ``True``.
     revision: str | None, optional
-        Optional Hugging Face branch, tag, or commit.
+        Optional Hugging Face branch, tag, or commit to load.
     trace: TraceSink | None, optional
-        Structured execution trace shared with the calling session.
+        Trace sink receiving structured model-loading and generation events.
+        ``None`` disables trace output through a ``NullTraceLogger``.
 
     Attributes
     ----------
     model_id: str
-        Loaded Hugging Face model ID or local directory.
+        Requested Hugging Face model ID or local model directory.
+    model_source: str
+        Resolved source passed to the backend loader.
     backend: "mlx" | "torch"
-        Selected calculation engine.
+        Selected calculation backend.
     device: str
-        Device used by the selected engine.
+        Device used for generation, such as ``metal``, ``cuda``, ``mps``, or
+        ``cpu``.
     thinking: bool
         Whether compatible templates enable thinking output.
     temperature: float
-        Sampling temperature.
+        Current sampling temperature.
     max_new_tokens: int | None
-        Optional session-level reply length.
+        Current session-level generation-length limit.
     messages: list[dict[str, str]]
-        Conversation kept in memory.
+        Ordered in-memory conversation history.
+    trace: TraceSink
+        Trace sink used by the session.
+
+    Raises
+    ------
+    ValueError
+        If ``model_id`` or any generation setting is invalid.
+    RuntimeError
+        If the selected backend cannot be used or the model cannot be loaded.
+    ImportError
+        If a dependency required by the selected backend is unavailable.
+
+    Notes
+    -----
+    The session loads the model during construction. Call ``close()`` when the
+    model is no longer needed so backend caches and Python references can be
+    released explicitly.
 
     """
 
@@ -110,7 +224,22 @@ class ChatSession:
         revision: str | None = None,
         trace: TraceSink | None = None,
     ) -> None:
-        """Initialize settings, history, tokenizer, and model."""
+        """Initialize and load one chat session.
+
+        Validation is performed before model loading where possible. The
+        initial history contains only the normalized system prompt when one is
+        supplied.
+
+        Raises
+        ------
+        ValueError
+            If the model identifier or a session setting is invalid.
+        RuntimeError
+            If the selected backend is unavailable or model loading fails.
+        ImportError
+            If a dependency required by the selected backend is unavailable.
+
+        """
 
         self.trace = trace if trace is not None else NullTraceLogger()
         self.backend = _choose_backend(backend)
@@ -138,14 +267,27 @@ class ChatSession:
         allow_download: bool,
         revision: str | None,
     ) -> None:
-        """Load only the selected engine and model.
+        """Resolve and load the selected model and tokenizer.
 
         Parameters
         ----------
         allow_download: bool
-            Whether Hugging Face may fetch missing files.
+            Whether backend loaders may fetch missing Hugging Face files.
         revision: str | None
-            Optional Hugging Face revision.
+            Optional Hugging Face branch, tag, or commit.
+
+        Raises
+        ------
+        RuntimeError
+            If MLX is selected but Metal is unavailable.
+        ImportError
+            If a dependency required by the selected backend is unavailable.
+
+        Notes
+        -----
+        Local directories are passed directly to the backend loader. When
+        downloads are disabled and ``model_id`` is not a local directory, the
+        corresponding cached Hugging Face snapshot is resolved first.
 
         """
 
@@ -231,8 +373,25 @@ class ChatSession:
     ) -> None:
         """Update generation-only settings without reloading the model.
 
-        Only temperature, thinking, and answer length may change here. All
-        values are checked before any setting is applied.
+        Supported settings are ``temperature``, ``thinking``, and
+        ``max_new_tokens``. All supplied values are validated before any
+        setting is changed, so the update is applied atomically.
+
+        Parameters
+        ----------
+        settings: dict[str, object]
+            Generation settings to update. Omitted supported settings retain
+            their current values.
+        trace_turn_id: str | None, optional
+            Optional trace identifier associating the settings change with a
+            conversation turn.
+
+        Raises
+        ------
+        ValueError
+            If ``settings`` is not a dictionary, contains an unsupported key,
+            or contains an invalid value.
+
         """
 
         if not isinstance(settings, dict):
@@ -283,27 +442,39 @@ class ChatSession:
         max_new_tokens: int | None = None,
         trace_turn_id: str | None = None,
     ) -> str:
-        """Generate and remember one reply.
+        """Generate, return, and remember one assistant reply.
+
+        The new user message is appended to the existing history for prompt
+        construction. The selected chat template converts the complete
+        conversation into model tokens, after which MLX or PyTorch performs
+        generation. The user message and generated assistant reply are stored
+        only after generation succeeds.
 
         Parameters
         ----------
         message: str
-            New user message.
+            Non-empty user message.
         max_new_tokens: int | None, optional
-            Optional one-reply override. ``None`` uses the session setting or
-            the remaining model context.
+            Per-reply generation-length override. ``None`` uses the session
+            setting and, if that is also ``None``, the remaining model
+            context.
+        trace_turn_id: str | None, optional
+            Optional trace identifier associating emitted events and artifacts
+            with the current conversation turn.
 
         Returns
         -------
         str
-            Generated assistant text.
+            Generated assistant text with surrounding whitespace removed.
 
         Raises
         ------
         RuntimeError
-            If the session is closed or the model returns no text.
+            If the session is closed or the model returns no usable text.
         ValueError
-            If the message or token setting is invalid.
+            If ``message`` is empty, ``max_new_tokens`` is invalid, the model
+            context size is unavailable when needed, or the conversation has
+            exhausted the model context.
 
         """
 
@@ -483,17 +654,23 @@ class ChatSession:
         self: ChatSession,
         prompt_tokens: int,
     ) -> int:
-        """Calculate the model's remaining context.
+        """Return the model context still available for generation.
 
         Parameters
         ----------
         prompt_tokens: int
-            Number of tokens already used by the prompt.
+            Number of tokens occupied by the formatted prompt.
 
         Returns
         -------
         int
-            Tokens available for generation.
+            Positive number of tokens available for generation.
+
+        Raises
+        ------
+        ValueError
+            If the model does not report a valid context size or the prompt
+            already fills the available context.
 
         """
 
@@ -524,19 +701,22 @@ class ChatSession:
         *,
         trace_turn_id: str | None = None,
     ) -> str:
-        """Generate through MLX.
+        """Generate one decoded reply through MLX.
 
         Parameters
         ----------
         tokens: list[int]
-            Formatted prompt tokens.
+            Tokenized and formatted conversation prompt.
         token_budget: int
-            Maximum tokens for this reply.
+            Maximum number of new tokens to generate.
+        trace_turn_id: str | None, optional
+            Reserved trace identifier for parity with backend generation
+            helpers. The current MLX generation path does not use it directly.
 
         Returns
         -------
         str
-            Decoded reply.
+            Decoded model output.
 
         """
 
@@ -559,19 +739,21 @@ class ChatSession:
         *,
         trace_turn_id: str | None = None,
     ) -> str:
-        """Generate through PyTorch.
+        """Generate one decoded reply through PyTorch.
 
         Parameters
         ----------
         tokens: list[int]
-            Formatted prompt tokens.
+            Tokenized and formatted conversation prompt.
         token_budget: int
-            Maximum tokens for this reply.
+            Maximum number of new tokens to generate.
+        trace_turn_id: str | None, optional
+            Optional trace identifier used when recording generated token IDs.
 
         Returns
         -------
         str
-            Decoded reply.
+            Decoded model output with special tokens removed.
 
         """
 
@@ -620,7 +802,13 @@ class ChatSession:
         )
 
     def reset(self: ChatSession) -> None:
-        """Forget the conversation while keeping the model loaded."""
+        """Reset the conversation while keeping the model loaded.
+
+        The history is replaced with its initial state: an empty list when no
+        system prompt is configured, or a single system message otherwise.
+        Generation settings and loaded runtime objects are unchanged.
+
+        """
 
         self.messages = self._new_history()
 
@@ -628,17 +816,25 @@ class ChatSession:
         self: ChatSession,
         messages: list[dict[str, str]],
     ) -> None:
-        """Replace the in-memory conversation with checked saved messages.
+        """Replace the in-memory conversation with validated messages.
 
         Parameters
         ----------
         messages: list[dict[str, str]]
-            Saved system, user, and assistant messages in conversation order.
+            Saved messages in conversation order. Each item must contain a
+            supported ``role`` and non-empty ``content``. A system message, if
+            present, may only appear first.
 
         Raises
         ------
         ValueError
-            If the saved conversation has an invalid message.
+            If the history is not a list, an item is not a mapping, a role is
+            unsupported or misplaced, or message content is empty.
+
+        Notes
+        -----
+        Message content is stripped before being stored. The supplied list is
+        not retained by reference.
 
         """
 
@@ -673,7 +869,16 @@ class ChatSession:
         self.messages = checked
 
     def close(self: ChatSession) -> None:
-        """Release the model, tokenizer, conversation, and engine cache."""
+        """Release model resources and reset the conversation.
+
+        Closing clears the model and tokenizer references, restores the initial
+        history, runs Python garbage collection, and clears the active MLX,
+        CUDA, or MPS cache when applicable.
+
+        Repeated calls are safe. After closing, ``reply()`` raises
+        ``RuntimeError``; create a new ``ChatSession`` to load the model again.
+
+        """
 
         if self._model is None:
             return
@@ -690,12 +895,13 @@ class ChatSession:
             import_module("torch").mps.empty_cache()
 
     def _new_history(self: ChatSession) -> list[dict[str, str]]:
-        """Create empty history with the optional system instruction.
+        """Create the initial conversation history.
 
         Returns
         -------
         list[dict[str, str]]
-            Initial conversation messages.
+            Empty history when no system prompt is configured, otherwise a
+            single normalized system message.
 
         """
 
@@ -711,19 +917,24 @@ class ChatSession:
 
 
 def _check_bool(value: bool, label: str) -> bool:
-    """Check a Boolean setting.
+    """Validate a Boolean setting.
 
     Parameters
     ----------
     value: bool
-        Value to check.
+        Value to validate.
     label: str
-        Setting name used in an error.
+        Setting name included in an error message.
 
     Returns
     -------
     bool
-        Checked value.
+        Validated Boolean value.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not a Boolean.
 
     """
 
@@ -734,17 +945,22 @@ def _check_bool(value: bool, label: str) -> bool:
 
 
 def _check_temperature(value: float) -> float:
-    """Check a sampling temperature.
+    """Validate and normalize a sampling temperature.
 
     Parameters
     ----------
     value: float
-        Temperature to check.
+        Numeric temperature to validate.
 
     Returns
     -------
     float
-        Checked temperature.
+        Temperature converted to ``float``.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is Boolean, non-numeric, or negative.
 
     """
 
@@ -758,7 +974,28 @@ def _check_temperature(value: float) -> float:
 
 
 def _text_token_count(tokenizer: object, text: str) -> int | None:
-    """Count decoded output with the active tokenizer when necessary."""
+    """Count tokens in decoded text when the tokenizer permits it.
+
+    Parameters
+    ----------
+    tokenizer: object
+        Tokenizer-like object that may provide an ``encode`` method.
+    text: str
+        Decoded generated text to tokenize.
+
+    Returns
+    -------
+    int | None
+        Number of encoded tokens, or ``None`` when token counting is not
+        supported or fails with a handled tokenizer error.
+
+    Notes
+    -----
+    The helper first requests encoding without added special tokens. It falls
+    back to a simpler ``encode(text)`` call for tokenizer implementations that
+    do not accept ``add_special_tokens``.
+
+    """
 
     encode = getattr(tokenizer, "encode", None)
     if not callable(encode):
@@ -777,17 +1014,22 @@ def _text_token_count(tokenizer: object, text: str) -> int | None:
 
 
 def _check_max_new_tokens(value: int | None) -> int | None:
-    """Check an optional generation length without imposing an upper cap.
+    """Validate an optional generation-length limit.
 
     Parameters
     ----------
     value: int | None
-        Token count to check.
+        Token limit to validate.
 
     Returns
     -------
     int | None
-        Checked value.
+        Validated positive integer or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is neither ``None`` nor a positive non-Boolean integer.
 
     """
 
@@ -798,17 +1040,22 @@ def _check_max_new_tokens(value: int | None) -> int | None:
 
 
 def _check_system_prompt(value: str | None) -> str | None:
-    """Check and normalize an optional system instruction.
+    """Validate and normalize an optional system instruction.
 
     Parameters
     ----------
     value: str | None
-        System instruction to check.
+        System instruction to validate.
 
     Returns
     -------
     str | None
-        Stripped instruction or ``None``.
+        Stripped non-empty instruction or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If ``value`` is not ``None`` or non-empty text.
 
     """
 
