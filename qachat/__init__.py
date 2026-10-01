@@ -1,4 +1,36 @@
-"""Expose the public API of the QAChat package."""
+"""Expose the package-level QAChat API.
+
+This initializer re-exports the conversation, source-processing, retrieval,
+project, workspace, and tracing objects listed in ``__all__``. Examples in
+QAChat documentation use this namespace when an object is exported here.
+Objects exported only by a submodule must be accessed through that submodule.
+
+Importing this package does not construct a model session or start the GUI.
+Model sessions load their backend dependencies when instantiated; the GUI
+has a separate entry point. Imported submodules may nevertheless require
+non-model dependencies such as NumPy.
+
+Key Features
+------------
+
+- **Public facade**
+
+    Collect the existing public classes, constants, and functions without
+    wrapping or changing their behavior.
+
+- **Separate lifecycles**
+
+    Keep model construction and GUI launch as explicit operations performed by
+    callers.
+
+Module Structure
+----------------
+
+The public names are listed explicitly in ``__all__``. They are grouped
+by implementation module in the import section below. This initializer does
+not export every public object from every submodule.
+
+"""
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .chunking import Chunk, chunk_source_units
