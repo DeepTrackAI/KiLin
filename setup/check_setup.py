@@ -1,30 +1,79 @@
 """Select and verify the local calculation backend.
 
-This module provides utilities to select the calculation backend supported by
-the current platform and to verify that the selected backend can perform a
-simple numerical calculation correctly.
+This auxiliary repository module checks that the local QAChat development
+setup can use an appropriate numerical backend. It is intended for setup and
+development workflows and is not part of the released ``qachat`` package.
 
-On Apple Silicon, MLX is selected by default. On supported Linux and Windows
-systems, PyTorch is selected by default. A backend can also be selected
-explicitly from the command line.
+The module selects MLX on native Apple Silicon and PyTorch on supported Linux
+and Windows systems unless a backend is requested explicitly. It then performs
+a small numerical calculation and compares the result with ordinary Python.
+No language model is loaded during this check.
 
-The setup check performs a simple addition using the selected backend and
-compares the result with the corresponding Python calculation. It does not load
-or run a language model.
+Key Features
+------------
+- **Platform-aware backend selection**
 
-Functions
----------
-choose_backend
-    Choose the calculation backend for the current platform.
-choose_torch_device
+    Select MLX on Apple Silicon and PyTorch on supported Linux and Windows
+    platforms, while allowing an explicit backend request.
+
+- **PyTorch device selection**
+
+    Prefer CUDA, then Apple MPS, and finally CPU when PyTorch is used.
+
+- **Minimal backend verification**
+
+    Perform a simple addition with the selected backend and verify the result
+    against the corresponding Python calculation.
+
+- **Command-line execution**
+
+    Run the setup check directly and report the interpreter, platform,
+    backend, device, inputs, and result.
+
+Module Structure
+----------------
+Type aliases:
+
+- ``Backend``
+
+    Backend request accepted by the setup check: ``auto``, ``mlx``, or
+    ``torch``.
+
+- ``SelectedBackend``
+
+    Concrete backend selected for a calculation: ``mlx`` or ``torch``.
+
+Functions:
+
+- ``choose_backend(system, machine, requested='auto') -> SelectedBackend``
+
+    Choose the calculation backend for a supported platform.
+
+- ``choose_torch_device(cuda_available, mps_available) -> str``
+
     Choose the best available PyTorch device.
-run_calculation
-    Perform a simple calculation using the selected backend.
-check_setup
-    Select and verify the calculation backend.
-main
-    Run the setup check from the command line,
-    e.g., using ``python check_setup.py``.
+
+- ``run_calculation(backend, a, b) -> tuple[str, float]``
+
+    Add two numbers using the selected backend.
+
+- ``check_setup(requested='auto', *, a=2.0, b=3.0) -> dict[str, str | float]``
+
+    Select a backend and verify a simple numerical calculation.
+
+- ``main(argv=None) -> int``
+
+    Run the setup check from the command line.
+
+Examples
+--------
+Run the default platform-aware setup check from the repository::
+
+    python check_setup.py
+
+Request PyTorch explicitly::
+
+    python check_setup.py --backend torch
 
 """
 
@@ -147,6 +196,15 @@ def run_calculation(
     tuple[str, float]
         Device name and calculated sum.
 
+    Raises
+    ------
+    ImportError
+        If the selected backend package cannot be imported.
+    RuntimeError
+        If MLX is selected but Metal is unavailable.
+    ValueError
+        If ``backend`` is not ``mlx`` or ``torch``.
+
     """
 
     if backend == "mlx":
@@ -200,7 +258,16 @@ def check_setup(
     Returns
     -------
     dict[str, str | float]
-        Environment, engine, input, and calculation details.
+        Environment, backend, device, input, and calculation details.
+
+    Raises
+    ------
+    ImportError
+        If the selected backend package cannot be imported.
+    RuntimeError
+        If the backend cannot perform the calculation correctly.
+    ValueError
+        If the requested backend, platform, or numerical inputs are invalid.
 
     """
 
