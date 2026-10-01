@@ -377,6 +377,8 @@ class TraceLogger:
         Keep an exact payload inline so the conversation stays portable.
     update_conversation(data)
         Merge resumable conversation state into this same JSON document.
+    reset_conversation_state()
+        Clear retained conversation state and readable conversation records.
     close()
         Emit the closing event and mark subsequent event writes closed.
 
@@ -1006,6 +1008,34 @@ class TraceLogger:
         self._conversation.update(_json_value(dict(data)))
         self._write_readable_trace()
 
+    def reset_conversation_state(self) -> None:
+        """Clear retained state for an archived conversation.
+
+        Notes
+        -----
+        Removes resumable conversation state, saved readable turns and
+        conversation-level operations, and conversation events accumulated by
+        the current logger run. Non-conversation sessions and events remain so
+        a reset can continue using the same loaded models and project context.
+
+        This method changes only in-memory logger state. It does not write,
+        archive, delete, or recreate the output file. A subsequent event or
+        conversation-state update writes the new projection. Turn and
+        conversation-operation numbering restart from one after the reset.
+
+        """
+
+        with self._lock:
+            self._conversation = {}
+            self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
+            self._events = [
+                event
+                for event in self._events
+                if not _is_conversation_event(event)
+            ]
+            self._turn_offset = 0
+            self._conversation_operation_offset = 0
+
     def close(self) -> None:
         """Emit the closing event and mark subsequent event writes closed.
 
@@ -1291,6 +1321,8 @@ class NullTraceLogger:
         Return no artifact while tracing is disabled.
     update_conversation(data)
         Accept resumable state without writing it.
+    reset_conversation_state()
+        Keep resetting conversation state harmless while disabled.
     close()
         Keep closing a disabled trace harmless.
 
@@ -1436,6 +1468,16 @@ class NullTraceLogger:
         data: Mapping[str, object]
             Optional event or conversation-state mapping. Values are converted
             through the implemented JSON conversion helper.
+
+        """
+
+    def reset_conversation_state(self) -> None:
+        """Keep resetting conversation state harmless while disabled.
+
+        Notes
+        -----
+        A null sink retains neither resumable conversation state nor readable
+        trace records, so there is nothing to clear.
 
         """
 
@@ -1825,6 +1867,35 @@ def _numbered_record_offset(records: object, pattern: str) -> int:
         if (match := re.fullmatch(pattern, key)) is not None
     )
     return max(numbers, default=0)
+
+
+def _is_conversation_event(event: Mapping[str, object]) -> bool:
+    """Return whether an event belongs to the active conversation.
+
+    Parameters
+    ----------
+    event: Mapping[str, object]
+        Structured trace event to classify.
+
+    Returns
+    -------
+    bool
+        ``True`` for turn-associated events and conversation-level events.
+
+    Notes
+    -----
+    A string ``turn_id`` is authoritative because turn events can use event
+    names routed to several readable stages. Events without a turn identifier
+    are conversation-specific only when their event-name prefix routes to the
+    conversation session.
+
+    """
+
+    if isinstance(event.get("turn_id"), str):
+        return True
+    return _event_session(str(event.get("event_type", ""))) == (
+        CONVERSATION_SESSION_CATEGORY
+    )
 
 
 def _readable_sessions(

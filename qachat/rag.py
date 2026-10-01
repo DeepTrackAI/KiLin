@@ -1155,8 +1155,9 @@ class RAGSession:
         -----
         Archives the selected conversation file when present, clears in-memory
         turns/checkpoint identity, and resets the chat history to its system
-        instruction. It does not reload models or clear an enabled trace sink's
-        retained resume-state dictionary.
+        instruction. An enabled trace then discards conversation-specific
+        retained state before recording the reset in a fresh active file.
+        Loaded models, indexes, and non-conversation trace context are reused.
 
         """
 
@@ -1167,7 +1168,9 @@ class RAGSession:
         self.chat_session.reset()
         self.turns = []
         self._checkpoint_id = None
-        getattr(self, "trace", NullTraceLogger()).emit(
+        trace = getattr(self, "trace", NullTraceLogger())
+        trace.reset_conversation_state()
+        trace.emit(
             "conversation.reset",
             component="rag",
             data={
