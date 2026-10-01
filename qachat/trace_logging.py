@@ -165,9 +165,9 @@ class TraceConfig:
 
     Parameters
     ----------
-    enabled: bool, optional, optional
+    enabled: bool, optional
         Whether events should be written. Defaults to ``False``.
-    output_path: str | pathlib.Path | None, optional, optional
+    output_path: str | pathlib.Path | None, optional
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
     mode: TraceMode, optional
@@ -1349,10 +1349,7 @@ class NullTraceLogger:
         """
 
     def close(self) -> None:
-        """Keep closing a disabled trace harmless.
-
-
-        """
+        """Keep closing a disabled trace harmless."""
 
 
 TraceSink: TypeAlias = TraceLogger | NullTraceLogger
@@ -1440,10 +1437,7 @@ class TraceTextStream:
         return len(text)
 
     def flush(self) -> None:
-        """Record the remaining text fragment.
-
-
-        """
+        """Record the remaining text fragment."""
 
         if self._buffer:
             self._emit(self._buffer)
