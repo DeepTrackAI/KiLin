@@ -5,6 +5,7 @@ from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .huggingface import (
     available_models,
+    cached_model_snapshot,
     download_model,
     model_is_available,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "build_repository_manifest",
     "build_lexical_index",
     "build_semantic_index",
+    "cached_model_snapshot",
     "choose_backend",
     "chunk_source_units",
     "code_search",
