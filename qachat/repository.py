@@ -1,120 +1,90 @@
-"""Select and track files in a local source repository.
+"""Select local source files and compare content manifests.
 
-This module provides the repository-inspection layer used by QAChat to decide
-which local files may be considered source material. Repository scans inspect
-filesystem metadata without reading file contents and apply explicit
-inclusion, exclusion, file-type, size, and safety rules.
+``scan_repository`` inspects metadata without reading file contents. It
+applies literal suffix matching, relative include/exclude scopes, size and
+entry limits, and built-in skip rules. Exclusions and protected-name rules
+cannot be overridden by an inclusion. Descendant symbolic links and
+junctions are skipped rather than traversed.
 
-Selected files can subsequently be hashed into a repository manifest. The
-manifest records relative paths, file sizes, and SHA-256 content hashes so a
-current repository state can be compared with a previously saved state
-independently of the repository's absolute location.
+``build_repository_manifest`` then reads selected files to compute SHA-256
+hashes. Manifests contain relative paths, sizes, and hashes, not the absolute
+source location or modification times. Comparing manifests detects changes
+in selected content, not changes in every file in the repository.
 
-Repository traversal is intentionally conservative. Symbolic links and
-junctions are not followed, common environment and generated directories are
-skipped, potentially secret files and model-weight formats are blocked, and
-filesystem roots and the user's home directory cannot be scanned directly.
+These routines are not a security sandbox or an atomic filesystem snapshot.
+Manifest construction expects a trusted scan report and does not repeat all
+scan-time path checks. A scan's ``complete`` flag reports recoverable I/O
+failures; callers requiring a full snapshot must check that flag themselves.
+Relative repository paths use ``PROJECT_ROOT`` (the package's parent), while
+relative saved-manifest paths use the process working directory.
 
 Key Features
 ------------
-- **Metadata-only repository scanning**
 
-    Inspect paths, entry types, and file sizes without reading file contents
-    during repository selection.
+- **Selection reports**
 
-- **Explicit source selection**
+    Return sorted selected/skipped rows with metadata and explanatory reasons.
 
-    Select supported file types globally or restrict scanning with relative
-    include and exclude paths. Exclusions take precedence over inclusions.
+- **Content fingerprints**
 
-- **Conservative traversal**
+    Read selected file bytes only when building a versioned manifest.
 
-    Avoid links, environments, caches, generated folders, model weights, and
-    files that may contain credentials or private keys.
+- **Change reports**
 
-- **Resource limits**
+    Compare normalized size/hash records and return sorted added, removed, and
+    modified paths.
 
-    Bound individual file size and the total number of filesystem entries
-    inspected during a scan.
+- **Missing-baseline distinction**
 
-- **Content manifests**
-
-    Hash selected files with SHA-256 into a location-independent manifest
-    suitable for persistence and later comparison.
-
-- **Change detection**
-
-    Compare repository manifests or rescan a repository to identify added,
-    removed, and modified selected files.
+    Treat an absent saved manifest as a non-match even when the current
+    selection is empty.
 
 Module Structure
 ----------------
-Constants:
-
-- ``DEFAULT_EXTENSIONS``
-
-    File extensions considered source material by default.
-
-- ``SKIP_DIRECTORIES``
-
-    Directory names that are not traversed.
-
-- ``SKIP_FILES``
-
-    File names skipped because they are generated or potentially secret.
-
-- ``BLOCKED_SUFFIXES``
-
-    File suffixes blocked for model weights or potentially secret material.
-
-Functions:
-
-- ``scan_repository``
-
-    Preview selected and skipped repository entries without reading file
-    contents.
 
 - ``build_repository_manifest``
 
-    Hash the files selected by ``scan_repository``.
+    Build a content manifest for selected repository files.
 
 - ``compare_repository_manifests``
 
-    Compare two manifests and report added, removed, and modified files.
+    Compare two repository content manifests.
 
 - ``detect_repository_changes``
 
-    Rescan a repository and compare it with a saved manifest.
+    Detect added, removed, or modified selected repository files.
 
 - ``repository_has_changed``
 
-    Return whether selected repository content differs from a saved manifest.
+    Return whether selected repository content has changed.
 
-The remaining functions and ``_MANIFEST_VERSION`` are private implementation
-details used for validation, normalization, and manifest handling.
+- ``scan_repository``
+
+    Preview files selected from a local repository without reading them.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Module settings
+---------------
+``PROJECT_ROOT`` anchors relative repository paths to the package parent.
+``DEFAULT_EXTENSIONS`` supplies the default literal filename suffixes.
+``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` implement
+the name-based exclusions. These module settings are not included in
+``__all__`` or re-exported from the package root.
 
 Examples
 --------
-Preview the files QAChat would select from a local repository:
-
->>> report = qachat.scan_repository("my_project")
->>> report["selected_files"][:2]
-['README.md', 'qachat/__init__.py']
-
-Restrict selection to one repository subtree:
-
+>>> import qachat
 >>> report = qachat.scan_repository(
-...     "my_project",
-...     include_paths=["qachat"],
-...     exclude_paths=["qachat/tests"],
+...     "/path/to/repository", extensions=[".py", ".md"],
 ... )
+>>> if not report["complete"]:
+...     raise RuntimeError("Repository scan was incomplete.")
+>>> manifest = qachat.build_repository_manifest(report)
+>>> changes = qachat.compare_repository_manifests(manifest, manifest)
 
-Check whether selected source content differs from a saved manifest:
-
->>> changed = qachat.repository_has_changed(
-...     "my_project",
-...     "workspace/indexes/source_manifest.json",
-... )
+Use an absolute repository path to avoid dependence on the package location.
 
 """
 
@@ -219,6 +189,19 @@ def _selection_paths(
     -------
     tuple[str, ...]
         Normalized paths with duplicates removed.
+
+    Raises
+    ------
+    ValueError
+        If values is not a list/tuple, an item is blank or non-string, or it
+        contains absolute/drive-qualified paths, parent traversal, wildcards,
+        colon, or a null byte.
+
+    Notes
+    -----
+    Separators are normalized and duplicates are removed in first-seen order.
+    Whitespace is tested for blank input but is not stripped from a nonblank
+    path. The path "." denotes the whole selection scope.
 
     """
 
@@ -368,6 +351,18 @@ def _normalize_extensions(
     tuple[str, ...]
         Lowercase extensions with duplicates removed.
 
+    Raises
+    ------
+    ValueError
+        If extensions is not a list/tuple or an item is not a supported literal
+        suffix string.
+
+    Notes
+    -----
+    Compound suffixes and special dot-file names are allowed by the literal
+    suffix grammar. The empty sequence is valid; it selects no files.
+    Whitespace and wildcard patterns are rejected.
+
     """
 
     if not isinstance(extensions, (list, tuple)):
@@ -441,31 +436,63 @@ def scan_repository(
     Parameters
     ----------
     repository: str | pathlib.Path
-        Local project folder. A relative path starts at the QAChat root.
+        Local source directory. Absolute paths are used directly; relative
+        paths are resolved against repository.PROJECT_ROOT, the parent of the
+        installed package directory.
     extensions: list[str] | tuple[str, ...], optional
-        File extensions to select.
+        Literal filename suffixes with optional leading periods. They are
+        normalized to lowercase and matched against lowercase names. An empty
+        sequence selects no files. Defaults to ``DEFAULT_EXTENSIONS``.
     include_paths: list[str] | tuple[str, ...], optional
-        Optional paths that limit the selection.
+        Relative repository paths limiting the selection. An empty sequence
+        permits all otherwise eligible paths. No glob patterns are accepted.
+        Defaults to ``()``.
     exclude_paths: list[str] | tuple[str, ...], optional
-        Optional paths removed from the selection. Exclusions win.
+        Relative repository paths excluded before inclusion checks. Excluded
+        directories are not traversed. Defaults to ``()``.
     max_file_bytes: int, optional
-        Largest file allowed.
+        Maximum selected-file size in bytes; an exact positive integer. Files
+        exactly at the limit are allowed. Defaults to ``1048576``.
     max_entries: int, optional
-        Maximum number of entries inspected.
+        Maximum encountered directory entries, including skipped files and
+        directories. Exceeding the bound aborts without returning a partial
+        report. Defaults to ``10000``.
 
     Returns
     -------
     dict[str, object]
-        Selected paths, byte counts, skipped entries, and explanations.
+        Scan report with repository (resolved absolute path), extensions,
+        include_paths, exclude_paths, and max_file_bytes. visited_entries
+        counts encountered entries; complete is False after recoverable
+        descendant I/O errors. selected_files is a sorted list of relative
+        POSIX paths and selected_bytes is their metadata-size sum. entries
+        contains sorted rows with path, kind, size_bytes, status
+        (selected/skipped), and reason. Traversed directories do not receive a
+        selected row; skipped directories do. A kind of unknown records an
+        inspection failure.
 
     Raises
     ------
-    FileNotFoundError
-        If the repository does not exist.
-    NotADirectoryError
-        If the selected path is a file.
     ValueError
-        If a setting is invalid or the entry limit is reached.
+        If the repository value or selection settings are invalid, a
+        home/filesystem root is selected, or max_entries is exceeded.
+    FileNotFoundError
+        If the requested source root cannot be resolved because it does not
+        exist.
+    NotADirectoryError
+        If the resolved source is not a directory.
+    OSError
+        If resolving the source or listing the root fails. Descendant
+        listing/stat errors are recorded in an incomplete report.
+
+    Notes
+    -----
+    No file contents are read and no .gitignore syntax is interpreted. Built-in
+    name/suffix rules still apply inside included paths. Link and containment
+    checks are best-effort traversal checks, not race-free access control. A
+    chosen root may resolve through a link before traversal; descendant links
+    and junctions are skipped. Check complete before treating the result as a
+    full inventory.
 
     """
 
@@ -614,16 +641,20 @@ def build_repository_manifest(
     Raises
     ------
     ValueError
-        If the scan report does not contain a valid repository path, selected
-        file list, or relative file path.
+        If report fields have the wrong expected types; individual selected
+        path strings are not fully validated.
     FileNotFoundError
-        If the repository no longer exists or a selected file disappears
-        before it can be hashed.
+        If the source root or selected regular file is missing.
+    OSError
+        If a file cannot be opened, read, or inspected.
 
     Notes
     -----
-    Unlike ``scan_repository``, this function reads every selected file to
-    calculate its SHA-256 content hash.
+    This function reads every selected file in binary blocks and takes its size
+    after hashing. It does not check report["complete"], reject parent/absolute
+    path strings, or repeat scan-time link containment checks. Supply a trusted
+    complete scan report and keep the source stable when a consistent snapshot
+    is needed. Duplicate normalized path keys overwrite earlier records.
 
     """
 
@@ -669,8 +700,8 @@ def compare_repository_manifests(
     Parameters
     ----------
     saved: dict[str, object] | None
-        Previously saved manifest. ``None`` represents an empty previous
-        state.
+        Previous supported manifest. None denotes no baseline and always yields
+        matches=False, including when the current file mapping is empty.
     current: dict[str, object]
         Current repository manifest.
 
@@ -688,8 +719,10 @@ def compare_repository_manifests(
 
     Notes
     -----
-    A file is modified when its stored size or SHA-256 record differs between
-    the two manifests.
+    Modified records differ in size_bytes or sha256 after extra record fields
+    are discarded. Paths, nonnegative sizes, and hash syntax are not fully
+    validated. All change lists are sorted lexically; no files are read during
+    comparison.
 
     """
 
@@ -737,6 +770,22 @@ def _load_repository_manifest(
     dict[str, object] | None
         Loaded manifest, or ``None`` when no saved manifest exists.
 
+    Raises
+    ------
+    ValueError
+        If the argument is neither a mapping nor a usable path, an existing
+        path is not a file, or decoded JSON is not an object.
+    json.JSONDecodeError
+        If an existing file contains invalid JSON.
+    OSError
+        If the manifest file cannot be opened or read.
+
+    Notes
+    -----
+    A dictionary is returned as supplied without copying or validating its
+    manifest records. Relative paths use the current working directory. A
+    nonexistent path and None both return None.
+
     """
 
     if manifest is None:
@@ -778,25 +827,61 @@ def detect_repository_changes(
     Parameters
     ----------
     repository: str | pathlib.Path
-        Repository folder to inspect.
+        Local source directory. Absolute paths are used directly; relative
+        paths are resolved against repository.PROJECT_ROOT, the parent of the
+        installed package directory.
     saved_manifest: str | pathlib.Path | dict[str, object] | None
-        Saved manifest mapping or path to ``source_manifest.json``. A missing
-        file is treated as an empty previous state.
-    extensions, include_paths, exclude_paths, max_file_bytes, max_entries
-        Selection settings passed directly to :func:`scan_repository`.
+        Previously saved manifest mapping or JSON file path, or None. A missing
+        path means no baseline, not an empty versioned manifest. Relative
+        manifest paths use the process working directory.
+    extensions: list[str] | tuple[str, ...], optional
+        Literal filename suffixes with optional leading periods. They are
+        normalized to lowercase and matched against lowercase names. An empty
+        sequence selects no files. Defaults to ``DEFAULT_EXTENSIONS``.
+    include_paths: list[str] | tuple[str, ...], optional
+        Relative repository paths limiting the selection. An empty sequence
+        permits all otherwise eligible paths. No glob patterns are accepted.
+        Defaults to ``()``.
+    exclude_paths: list[str] | tuple[str, ...], optional
+        Relative repository paths excluded before inclusion checks. Excluded
+        directories are not traversed. Defaults to ``()``.
+    max_file_bytes: int, optional
+        Maximum selected-file size in bytes; an exact positive integer. Files
+        exactly at the limit are allowed. Defaults to ``1048576``.
+    max_entries: int, optional
+        Maximum encountered directory entries, including skipped files and
+        directories. Exceeding the bound aborts without returning a partial
+        report. Defaults to ``10000``.
 
     Returns
     -------
     dict[str, object]
         ``matches`` plus ``added``, ``removed``, and ``modified`` paths.
 
+    Raises
+    ------
+    ValueError
+        If scan settings or manifest records are invalid, or the entry limit is
+        exceeded.
+    OSError
+        If required roots, selected files, or manifest files cannot be
+        accessed.
+    json.JSONDecodeError
+        If the saved manifest file is not valid JSON.
+
+    Notes
+    -----
+    The wrapper scans and hashes all currently selected files. It does not
+    reject a report with complete=False, so inaccessible entries can look
+    removed. Use the same selection settings as the saved baseline to compare
+    the same scope. None or a missing manifest always means matches=False.
+
     Examples
     --------
-    >>> changes = detect_repository_changes(
-    ...     "my_project", "workspace/indexes/source_manifest.json"
+    >>> import qachat
+    >>> changes = qachat.detect_repository_changes(
+    ...     "/path/to/repository", "/path/to/source_manifest.json",
     ... )
-    >>> changes["matches"]
-    True
 
     """
 
@@ -828,11 +913,56 @@ def repository_has_changed(
     This Boolean convenience wrapper rescans the repository through
     ``detect_repository_changes`` and negates the resulting ``matches`` value.
 
+    Parameters
+    ----------
+    repository: str | pathlib.Path
+        Local source directory. Absolute paths are used directly; relative
+        paths are resolved against repository.PROJECT_ROOT, the parent of the
+        installed package directory.
+    saved_manifest: str | pathlib.Path | dict[str, object] | None
+        Previously saved manifest mapping or JSON file path, or None. A missing
+        path means no baseline, not an empty versioned manifest. Relative
+        manifest paths use the process working directory.
+    extensions: list[str] | tuple[str, ...], optional
+        Literal filename suffixes with optional leading periods. They are
+        normalized to lowercase and matched against lowercase names. An empty
+        sequence selects no files. Defaults to ``DEFAULT_EXTENSIONS``.
+    include_paths: list[str] | tuple[str, ...], optional
+        Relative repository paths limiting the selection. An empty sequence
+        permits all otherwise eligible paths. No glob patterns are accepted.
+        Defaults to ``()``.
+    exclude_paths: list[str] | tuple[str, ...], optional
+        Relative repository paths excluded before inclusion checks. Excluded
+        directories are not traversed. Defaults to ``()``.
+    max_file_bytes: int, optional
+        Maximum selected-file size in bytes; an exact positive integer. Files
+        exactly at the limit are allowed. Defaults to ``1048576``.
+    max_entries: int, optional
+        Maximum encountered directory entries, including skipped files and
+        directories. Exceeding the bound aborts without returning a partial
+        report. Defaults to ``10000``.
+
     Returns
     -------
     bool
         ``True`` when selected repository content differs from the saved
         manifest, otherwise ``False``.
+
+    Raises
+    ------
+    ValueError
+        If selection settings or manifest data are invalid.
+    OSError
+        If the scan, hashing, or manifest read cannot complete.
+    json.JSONDecodeError
+        If the saved manifest file contains invalid JSON.
+
+    Notes
+    -----
+    This performs the complete scan-and-hash workflow, not a timestamp-only
+    shortcut. An absent baseline returns True even for an empty current
+    selection. Selection, manifest, and I/O exceptions propagate from
+    detect_repository_changes.
 
     """
 
@@ -867,6 +997,13 @@ def _manifest_files(
     ValueError
         If the manifest version is unsupported or its file records, sizes, or
         hashes have an invalid structure.
+
+    Notes
+    -----
+    Validation is structural only: file keys must be strings, sizes exact
+    integers, and digests strings. It does not require relative paths,
+    nonnegative sizes, or 64-character hexadecimal digests. Extra record keys
+    are ignored in the returned copy.
 
     """
 

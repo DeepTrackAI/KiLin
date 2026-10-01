@@ -1,20 +1,66 @@
-"""Read repository files and coordinate natural-unit extraction.
+"""Read selected repository files and extract provenance-bearing text units.
 
-Classes
--------
-SourceFile
-    Text read or extracted from one selected repository file.
-SourceUnit
-    One natural, traceable part of a source file.
+The reader consumes a scan report and checks resolved file containment before
+reading. Text files use UTF-8; format-specific readers may transform binary
+sources such as PDFs into text. Extraction discovers a suffix-specific hook,
+otherwise retaining the whole nonblank file as one source unit.
 
-Functions
----------
-read_repository_files
-    Safely read files selected by qachat.repository.scan_repository.
-extract_source_units
-    Send known file types to automatically found extension modules.
+Paths identify source files relative to the scanned repository. Line ranges
+are inclusive and one-based. Their coordinate system follows the extractor:
+ordinary text uses file lines, notebooks use cell-local lines, and PDFs use
+page-local lines with a page label in ``section``. These distinctions must be
+preserved by callers presenting citations. No source code is executed.
 
-Extension modules use the sources_<extension>.py naming convention.
+Key Features
+------------
+
+- **Selected-file reading**
+
+    Read the paths listed in a scan report and validate reader results.
+
+- **Extension dispatch**
+
+    Load hooks by file suffix, falling back only when the hook module itself is
+    absent.
+
+- **Structured units**
+
+    Carry symbols, sections, cell numbers, child units, and line ranges into
+    retrieval preparation.
+
+- **Progress callbacks**
+
+    Notify callers after each input file without suppressing their callback
+    errors.
+
+Module Structure
+----------------
+
+- ``SourceFile``
+
+    One repository file converted to text.
+
+- ``SourceUnit``
+
+    One natural section of a source file.
+
+- ``read_repository_files``
+
+    Read files selected by qachat.repository.scan_repository.
+
+- ``extract_source_units``
+
+    Identify natural source units without executing source code.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository")
+>>> files = qachat.read_repository_files(report)
+>>> units = qachat.extract_source_units(files)
 
 """
 
@@ -41,6 +87,13 @@ EXTENSION_PACKAGE = "qachat.sources.extensions"
 class SourceFile:
     """One repository file converted to text.
 
+    Parameters
+    ----------
+    path: pathlib.Path
+        File path relative to the repository root.
+    text: str
+        UTF-8 text or text extracted from a document.
+
     Attributes
     ----------
     path: pathlib.Path
@@ -57,6 +110,29 @@ class SourceFile:
 @dataclass(frozen=True, slots=True)
 class SourceUnit:
     """One natural section of a source file.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        File path relative to the repository root.
+    text: str
+        Exact source text covered by this unit.
+    start_line: int
+        First one-based source line.
+    end_line: int
+        Last one-based source line.
+    kind: str
+        Unit type, such as python_function or markdown_section.
+    symbol: str | None, optional
+        Class, method, function, or section name when available. Defaults to
+        ``None``.
+    section: str | None, optional
+        Document section or PDF page name when available. Defaults to ``None``.
+    cell: int | None, optional
+        One-based notebook cell number when available. Defaults to ``None``.
+    children: tuple[SourceUnit, ...], optional
+        Smaller natural units used only when this unit is too large. Defaults
+        to ``()``.
 
     Attributes
     ----------
@@ -78,6 +154,14 @@ class SourceUnit:
         One-based notebook cell number when available.
     children: tuple[SourceUnit, ...]
         Smaller natural units used only when this unit is too large.
+
+    Notes
+    -----
+    Frozen/slotted fields describe provenance; no text is executed. Line
+    coordinates are file-local for ordinary text, cell-local for notebooks, and
+    page-local for PDFs. Use cell and section to interpret those coordinates.
+    Children can cover structural portions of a parent unit and are used when
+    chunking oversized units.
 
     """
 
@@ -106,8 +190,9 @@ def read_repository_files(
     ----------
     report: dict[str, object]
         Repository scan report.
-    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
+    progress_callback: Callable[[int, int], None] | None, optional
         Called after each selected file is read with ``current`` and ``total``.
+        Defaults to ``None``.
 
     Returns
     -------
@@ -117,7 +202,22 @@ def read_repository_files(
     Raises
     ------
     ValueError
-        If the report, a selected path, or selected file is invalid.
+        If report structure, file containment, regular-file status, UTF-8
+        decoding, or the optional callback is invalid.
+    RuntimeError
+        If an extension reader returns something other than SourceFile.
+    OSError
+        If a selected file cannot be resolved or read.
+    ImportError
+        If an existing reader extension cannot import a required dependency.
+
+    Notes
+    -----
+    The reader follows the selected_files list; it does not rerun selection
+    rules or reject report["complete"]=False. Resolved containment is checked,
+    but filesystem changes can still occur between checking and opening. PDF
+    and other extension-specific errors propagate. Progress callbacks are
+    invoked after each completed file.
 
     """
 
@@ -190,13 +290,32 @@ def extract_source_units(
     ----------
     files: list[SourceFile]
         Repository files converted to text.
-    progress_callback: collections.abc.Callable[[int, int], None] | None, optional
-        Called after each file is structurally extracted with ``current`` and ``total``.
+    progress_callback: Callable[[int, int], None] | None, optional
+        Called after each file is structurally extracted with ``current`` and
+        ``total``. Defaults to ``None``.
 
     Returns
     -------
     list[SourceUnit]
         Natural units in the same order as the input files.
+
+    Raises
+    ------
+    ValueError
+        If a progress callback is not callable or an extension rejects its
+        source content.
+    RuntimeError
+        If an extractor does not return a list containing only SourceUnit
+        records.
+    ImportError
+        If an existing extension cannot import a required dependency.
+
+    Notes
+    -----
+    Missing extension modules trigger a whole-nonblank-file fallback.
+    ModuleNotFoundError for a dependency inside an existing extension is not
+    treated as a missing hook. Source order is preserved and callback
+    exceptions propagate.
 
     """
 
@@ -239,7 +358,26 @@ def extract_source_units(
 
 
 def _extension_module(path: Path) -> ModuleType | None:
-    """Find an extension module using the source file suffix."""
+    """Find an extension module using the source file suffix.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Repository-relative source path used for provenance or suffix
+        selection.
+
+    Returns
+    -------
+    ModuleType | None
+        Imported suffix-specific module, or None when the file has no supported
+        hook module.
+
+    Notes
+    -----
+    Only ModuleNotFoundError naming the requested hook itself is suppressed;
+    errors from its imports propagate.
+
+    """
 
     suffix = path.suffix.lower().lstrip(".")
     if not suffix:
@@ -255,7 +393,29 @@ def _extension_module(path: Path) -> ModuleType | None:
 
 
 def _read_text_file(target: Path, relative_path: Path) -> SourceFile:
-    """Read one UTF-8 text file."""
+    """Read one UTF-8 text file.
+
+    Parameters
+    ----------
+    target: pathlib.Path
+        Resolved on-disk file path to read.
+    relative_path: pathlib.Path
+        Repository-relative path stored in the returned source record.
+
+    Returns
+    -------
+    SourceFile
+        SourceFile containing unchanged decoded UTF-8 text and the supplied
+        relative path.
+
+    Raises
+    ------
+    ValueError
+        If bytes are not valid UTF-8 text.
+    OSError
+        If the file cannot be read.
+
+    """
 
     try:
         text = target.read_text(encoding="utf-8")
@@ -279,7 +439,47 @@ def _source_unit(
     cell: int | None = None,
     children: tuple[SourceUnit, ...] = (),
 ) -> SourceUnit | None:
-    """Build a non-empty unit from inclusive one-based source lines."""
+    """Build a non-empty unit from inclusive one-based source lines.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Repository-relative source path used for provenance or suffix
+        selection.
+    lines: list[str]
+        Source text split into ordered lines, retaining line endings where
+        supplied.
+    start_line: int
+        Inclusive one-based first line in the supplied source coordinate
+        system.
+    end_line: int
+        Inclusive one-based last line in the supplied source coordinate system.
+    kind: str
+        Structural label assigned by the format-specific extractor.
+    symbol: str | None, optional
+        Optional code-symbol name associated with this unit. Defaults to
+        ``None``.
+    section: str | None, optional
+        Optional section heading or PDF page label. Defaults to ``None``.
+    cell: int | None, optional
+        Optional one-based notebook cell position; line ranges are then
+        cell-local. Defaults to ``None``.
+    children: tuple[SourceUnit, ...], optional
+        Ordered nested source units used for structural subdivision. Defaults
+        to ``()``.
+
+    Returns
+    -------
+    SourceUnit | None
+        Unit containing the requested inclusive line slice, or None when the
+        slice is empty or whitespace-only.
+
+    Notes
+    -----
+    The helper preserves supplied provenance and child objects. Bounds and
+    structural labels are trusted rather than comprehensively validated.
+
+    """
 
     if start_line > end_line:
         return None

@@ -1,9 +1,39 @@
-"""Extract code and Markdown cells from Jupyter notebooks.
+"""Extract code and Markdown cell text from notebook JSON.
 
-Functions
----------
-extract_source_units
-    Read notebook JSON while ignoring outputs, metadata, and raw cells.
+This hook reads notebook cells from the already-loaded JSON text. Only code
+and Markdown cells become source units; outputs, execution state, attachments,
+and raw cells are not indexed here. Cell numbers are one-based positions in
+the original cell sequence, including cells skipped by the extractor.
+Line ranges are local to each cell, not to the notebook JSON document.
+
+Key Features
+------------
+
+- **Cell provenance**
+
+    Preserve the original notebook path and cell position.
+
+- **Text-only extraction**
+
+    Use cell source text without executing cells or indexing output payloads.
+
+Module Structure
+----------------
+
+- ``extract_source_units``
+
+    Return non-empty code and Markdown cells from one notebook.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository(
+...     "/path/to/repository", extensions=[".ipynb"],
+... )
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
 
 """
 

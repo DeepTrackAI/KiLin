@@ -1,22 +1,83 @@
-"""Open one configurable QAChat project folder.
+"""Read project profiles and prepare a managed single-source workspace.
 
-Classes
--------
-ProjectProfile
-    Models, source selection, chunking, retrieval, and generation settings.
-QAProject
-    Resolved source, index, and log paths for one project.
+``QAProject`` groups an existing project directory, its ``profile.ini``
+profile, selected source directory, and managed index/log directories.
+Initialization creates a default profile only when one is missing. Opening a
+project validates its profile and source location and creates index/log
+directories as needed; it is not a strictly read-only operation.
 
-Functions
----------
-initialize_project
-    Create a missing profile.ini, then open the project.
-open_project
-    Read profile.ini and prepare the project output folders.
-default_project_profile
-    Return validated settings for a new project.
-configure_project
-    Validate and save editable profile settings.
+``prepare_project_workspace`` mirrors selected files from one original
+repository into a managed workspace and compares source manifests to update
+that copy. This is distinct from the cumulative multi-source copying API in
+``qachat.workspace``. Neither API provides process or filesystem sandboxing.
+Configuration helpers validate settings through the INI reader before writing
+the revised profile.
+
+Key Features
+------------
+
+- **Typed project records**
+
+    Represent profile settings and resolved workspace paths with dataclasses.
+
+- **Validated profiles**
+
+    Read backend, model, query-format, scan, chunk, retrieval, and generation
+    settings.
+
+- **Managed source copy**
+
+    Track original selected content using size and SHA-256 manifests.
+
+- **Explicit configuration**
+
+    Update supported profile options while preserving other INI fields.
+
+Module Structure
+----------------
+
+- ``ProjectProfile``
+
+    Settings loaded from one project's profile.ini.
+
+- ``QAProject``
+
+    Resolved paths and settings for one QAChat project.
+
+- ``initialize_project``
+
+    Create a missing project profile, then open the project.
+
+- ``open_project``
+
+    Open a configured project and prepare its output folders.
+
+- ``prepare_project_workspace``
+
+    Mirror one source folder into a managed QAChat workspace.
+
+- ``default_project_profile``
+
+    Return the settings a new project of this kind would receive.
+
+- ``configure_project``
+
+    Validate and save settings without changing source ownership.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+Open an existing workspace:
+
+>>> import qachat
+>>> project = qachat.open_project("/path/to/workspace")
+
+Access submodule-only configuration helpers through their actual namespace:
+
+>>> import qachat.project
+>>> profile = qachat.project.default_project_profile("code")
 
 """
 
@@ -102,7 +163,29 @@ _EDITABLE_SETTINGS = {
 }
 
 def default_project_profile(kind: ProjectKind) -> ProjectProfile:
-    """Return the settings a new project of this kind would receive."""
+    """Return the settings a new project of this kind would receive.
+
+    Parameters
+    ----------
+    kind: ProjectKind
+        Project category, exactly "code" or "literature".
+
+    Returns
+    -------
+    ProjectProfile
+        The settings a new project of this kind would receive.
+
+    Raises
+    ------
+    ValueError
+        If kind is not code or literature.
+
+    Notes
+    -----
+    This parses the built-in profile template without touching a project
+    directory or loading models.
+
+    """
 
     if kind not in {"code", "literature"}:
         raise ValueError("kind must be code or literature.")
@@ -127,7 +210,39 @@ def configure_project(
     *,
     trace: TraceSink | None = None,
 ) -> QAProject:
-    """Validate and save settings without changing source ownership."""
+    """Validate and save settings without changing source ownership.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Local project directory, with relative paths interpreted from the
+        current working directory.
+    settings: dict[str, object]
+        Dictionary of supported profile options to update. Unknown names are
+        rejected; values are converted into INI text and then revalidated.
+    trace: TraceSink | None, optional
+        Optional caller-owned trace sink for configuration-change events. None
+        disables those events through a null sink. Defaults to ``None``.
+
+    Returns
+    -------
+    QAProject
+        Reopened QAProject containing the validated updated profile.
+
+    Raises
+    ------
+    ValueError
+        If a setting key or resulting profile value is invalid.
+    OSError
+        If the profile or managed directories cannot be read or written.
+
+    Notes
+    -----
+    The profile is validated before replacing profile.ini. A trace error after
+    writing does not roll back the file. This updates configuration only; it
+    does not reconfigure a loaded RAGSession or rebuild indexes in place.
+
+    """
 
     active_trace = trace if trace is not None else NullTraceLogger()
     project = open_project(directory)
@@ -182,6 +297,45 @@ def configure_project(
 class ProjectProfile:
     """Settings loaded from one project's profile.ini.
 
+    Parameters
+    ----------
+    kind: "code" | "literature"
+        Type of material in the project.
+    source: str
+        Source folder, relative to the project or absolute.
+    extensions: tuple[str, ...]
+        File extensions included during scanning.
+    max_file_bytes: int
+        Largest source file read by QAChat.
+    backend: "auto" | "mlx" | "torch"
+        Preferred calculation backend.
+    allow_download: bool
+        Whether Hugging Face may download missing model files.
+    chat_mlx: str
+        Chat model IDs for the two backends.
+    chat_torch: str
+        Chat model IDs for the two backends.
+    embedding_mlx: str
+        Embedding model IDs for the two backends.
+    embedding_torch: str
+        Embedding model IDs for the two backends.
+    query_format: "plain" | "qwen3"
+        Query format expected by the embedding model.
+    target_tokens: int
+        Chunk size settings.
+    max_tokens: int
+        Chunk size settings.
+    overlap_tokens: int
+        Chunk size settings.
+    retrieval_count: int
+        Number of results requested from each retrieval stage.
+    thinking: bool
+        Whether compatible chat templates enable thinking.
+    temperature: float
+        Chat generation temperature.
+    max_new_tokens: int | None
+        Optional maximum generated tokens per answer.
+
     Attributes
     ----------
     kind: "code" | "literature"
@@ -196,13 +350,21 @@ class ProjectProfile:
         Preferred calculation backend.
     allow_download: bool
         Whether Hugging Face may download missing model files.
-    chat_mlx, chat_torch: str
+    chat_mlx: str
         Chat model IDs for the two backends.
-    embedding_mlx, embedding_torch: str
+    chat_torch: str
+        Chat model IDs for the two backends.
+    embedding_mlx: str
+        Embedding model IDs for the two backends.
+    embedding_torch: str
         Embedding model IDs for the two backends.
     query_format: "plain" | "qwen3"
         Query format expected by the embedding model.
-    target_tokens, max_tokens, overlap_tokens: int
+    target_tokens: int
+        Chunk size settings.
+    max_tokens: int
+        Chunk size settings.
+    overlap_tokens: int
         Chunk size settings.
     retrieval_count: int
         Number of results requested from each retrieval stage.
@@ -212,6 +374,20 @@ class ProjectProfile:
         Chat generation temperature.
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
+
+    Methods
+    -------
+    chat_model(backend)
+        Return the chat model configured for one selected backend.
+    embedding_model(backend)
+        Return the embedding model configured for one selected backend.
+
+    Notes
+    -----
+    Values normally come from the validated INI reader. Direct dataclass
+    construction is not validated. Model accessors return the configured MLX
+    value only for backend="mlx" and the PyTorch value otherwise. Changes
+    require constructing a new profile; the dataclass fields are frozen.
 
     """
 
@@ -235,12 +411,38 @@ class ProjectProfile:
     max_new_tokens: int | None
 
     def chat_model(self, backend: SelectedBackend) -> str:
-        """Return the chat model configured for one selected backend."""
+        """Return the chat model configured for one selected backend.
+
+        Parameters
+        ----------
+        backend: SelectedBackend
+            Already selected "mlx" or "torch" backend; this accessor does not
+            validate the value.
+
+        Returns
+        -------
+        str
+            The chat model configured for one selected backend.
+
+        """
 
         return self.chat_mlx if backend == "mlx" else self.chat_torch
 
     def embedding_model(self, backend: SelectedBackend) -> str:
-        """Return the embedding model configured for one selected backend."""
+        """Return the embedding model configured for one selected backend.
+
+        Parameters
+        ----------
+        backend: SelectedBackend
+            Already selected "mlx" or "torch" backend; this accessor does not
+            validate the value.
+
+        Returns
+        -------
+        str
+            The embedding model configured for one selected backend.
+
+        """
 
         return self.embedding_mlx if backend == "mlx" else self.embedding_torch
 
@@ -248,6 +450,19 @@ class ProjectProfile:
 @dataclass(frozen=True, slots=True)
 class QAProject:
     """Resolved paths and settings for one QAChat project.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Project folder containing profile.ini.
+    source: pathlib.Path
+        Folder containing source code or literature documents.
+    indexes: pathlib.Path
+        Folder containing reusable retrieval indexes.
+    logs: pathlib.Path
+        Folder containing persistent conversation records.
+    profile: ProjectProfile
+        Parsed project settings.
 
     Attributes
     ----------
@@ -297,6 +512,13 @@ def initialize_project(
         If the selected path is not a directory.
     ValueError
         If kind is invalid or conflicts with an existing profile.
+
+    Notes
+    -----
+    Requires an existing directory. A missing profile.ini is initialized using
+    the selected kind; an existing profile is preserved and checked for kind
+    compatibility. Opening the resulting project creates indexes/logs
+    directories. No model is loaded.
 
     """
 
@@ -349,11 +571,10 @@ def prepare_project_workspace(
     ``indexes/``, ``logs/``, ``profile.ini``, and ``source_snapshot.json``.
     Only files selected by the project's repository rules are mirrored.
 
-    Reopening the same source compares a saved SHA-256 manifest and copies
-    only files that were added or modified while deleting files that were
-    removed.  If another source folder with the same basename already owns
-    the preferred workspace name, a short path hash is appended to avoid a
-    collision.
+    Reopening the same source compares a saved SHA-256 manifest and copies only
+    files that were added or modified while deleting files that were removed.
+    If another source folder with the same basename already owns the preferred
+    workspace name, a short path hash is appended to avoid a collision.
 
     Parameters
     ----------
@@ -368,6 +589,25 @@ def prepare_project_workspace(
     -------
     QAProject
         Project whose source points to the synchronized sandbox snapshot.
+
+    Raises
+    ------
+    ValueError
+        If kind is unsupported, source/workspace locations conflict, an
+        existing managed profile is inconsistent, or a unique workspace
+        location cannot be selected.
+    NotADirectoryError
+        If the original source is not a directory.
+    OSError
+        If scanning, hashing, copying, deleting, or writing metadata fails.
+
+    Notes
+    -----
+    This mirrors one original repository using its selected-source manifest. It
+    is not the cumulative multi-source API in qachat.workspace. The current
+    implementation does not reject incomplete scans, revalidate unchanged
+    copied files, or provide an atomic transaction across the snapshot and
+    manifest. Source copying is organization, not execution sandboxing.
 
     """
 
@@ -479,7 +719,36 @@ def prepare_project_workspace(
 
 
 def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
-    """Choose a readable workspace name without a source collision."""
+    """Choose a readable workspace name without a source collision.
+
+    Parameters
+    ----------
+    preferred_root: pathlib.Path
+        Preferred managed-workspace directory beneath the supplied workspace
+        root.
+    source: pathlib.Path
+        Resolved original source directory whose identity is recorded in a
+        workspace manifest.
+
+    Returns
+    -------
+    pathlib.Path
+        Preferred root when compatible with the original source, otherwise a
+        source-path-hashed collision root.
+
+    Raises
+    ------
+    ValueError
+        If the deterministic collision root already belongs to another recorded
+        source.
+
+    Notes
+    -----
+    Ownership is inferred from stored source_directory metadata. Missing or
+    malformed metadata is not a general proof that an existing directory is
+    safe to replace.
+
+    """
 
     if not preferred_root.exists():
         return preferred_root
@@ -530,6 +799,13 @@ def open_project(directory: str | Path) -> QAProject:
     ValueError
         If a profile setting is missing or invalid.
 
+    Notes
+    -----
+    The root and configured source must already be directories and profile.ini
+    must exist. A profile may name an absolute source outside the project. The
+    function creates indexes and logs directories before returning; it does not
+    load models.
+
     """
 
     root = Path(directory).expanduser().resolve(strict=True)
@@ -564,7 +840,25 @@ def open_project(directory: str | Path) -> QAProject:
 
 
 def _read_json_if_possible(path: Path) -> dict[str, object] | None:
-    """Return one JSON object, or ``None`` when it is missing or invalid."""
+    """Return one JSON object, or ``None`` when it is missing or invalid.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Local JSON path to read or replace.
+
+    Returns
+    -------
+    dict[str, object] | None
+        Decoded dictionary when an existing file can be read as a JSON object,
+        otherwise None.
+
+    Notes
+    -----
+    This helper deliberately treats missing, unreadable, and malformed JSON as
+    an unavailable baseline.
+
+    """
 
     if not path.is_file():
         return None
@@ -576,7 +870,21 @@ def _read_json_if_possible(path: Path) -> dict[str, object] | None:
 
 
 def _write_json(path: Path, value: dict[str, object]) -> None:
-    """Atomically write one readable JSON object."""
+    """Atomically write one readable JSON object.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Local JSON path to read or replace.
+    value: dict[str, object]
+        Dictionary serialized into the JSON file.
+
+    Notes
+    -----
+    The implementation writes through a temporary file and replaces the target.
+    It does not lock against other writers or commit related files as a group.
+
+    """
 
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f"{path.suffix}.tmp")
@@ -588,7 +896,19 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
 
 
 def _remove_empty_directories(root: Path) -> None:
-    """Remove empty snapshot directories left after deleted source files."""
+    """Remove empty snapshot directories left after deleted source files.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Directory whose empty descendant directories should be removed.
+
+    Notes
+    -----
+    Directories are attempted deepest first. Nonempty or otherwise unremovable
+    directories are left in place; OSError is suppressed.
+
+    """
 
     directories = sorted(
         (path for path in root.rglob("*") if path.is_dir()),
@@ -603,7 +923,32 @@ def _remove_empty_directories(root: Path) -> None:
 
 
 def _read_profile(parser: ConfigParser) -> ProjectProfile:
-    """Read and validate every supported project setting."""
+    """Read and validate every supported project setting.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+
+    Returns
+    -------
+    ProjectProfile
+        ProjectProfile with parsed source, backend, model, chunking, retrieval,
+        and generation fields.
+
+    Raises
+    ------
+    ValueError
+        If required profile values are missing, unsupported, malformed, or
+        violate the implemented numeric bounds.
+
+    Notes
+    -----
+    The temperature check rejects negative values but not NaN or positive
+    infinity. Extension validation here is less restrictive than the repository
+    scanner; scan-time validation can still reject a profile extension.
+
+    """
 
     kind_value = _required(parser, "project", "kind")
     if kind_value not in {"code", "literature"}:
@@ -695,7 +1040,28 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
 
 def _required(parser: ConfigParser, section: str, option: str) -> str:
-    """Return one required, non-empty profile value."""
+    """Return one required, non-empty profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    str
+        One required, non-empty profile value.
+
+    Raises
+    ------
+    ValueError
+        If the section/option is missing or its stripped text is empty.
+
+    """
 
     if not parser.has_option(section, option):
         raise ValueError(f"Missing profile setting: {section}.{option}.")
@@ -710,7 +1076,28 @@ def _positive_integer(
     section: str,
     option: str,
 ) -> int:
-    """Return one positive whole-number profile value."""
+    """Return one positive whole-number profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    int
+        One positive whole-number profile value.
+
+    Raises
+    ------
+    ValueError
+        If the option is not an integer or is not positive.
+
+    """
 
     value = _integer(parser, section, option)
     if value < 1:
@@ -723,7 +1110,28 @@ def _non_negative_integer(
     section: str,
     option: str,
 ) -> int:
-    """Return one non-negative whole-number profile value."""
+    """Return one non-negative whole-number profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    int
+        One non-negative whole-number profile value.
+
+    Raises
+    ------
+    ValueError
+        If the option is not an integer or is negative.
+
+    """
 
     value = _integer(parser, section, option)
     if value < 0:
@@ -732,7 +1140,28 @@ def _non_negative_integer(
 
 
 def _integer(parser: ConfigParser, section: str, option: str) -> int:
-    """Return one whole-number profile value."""
+    """Return one whole-number profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    int
+        One whole-number profile value.
+
+    Raises
+    ------
+    ValueError
+        If the option is missing, empty, or not a valid integer.
+
+    """
 
     value = _required(parser, section, option)
     try:
@@ -748,7 +1177,29 @@ def _optional_integer(
     section: str,
     option: str,
 ) -> int | None:
-    """Return a positive integer or None from one profile value."""
+    """Return a positive integer or None from one profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    int | None
+        A positive integer or None from one profile value.
+
+    Raises
+    ------
+    ValueError
+        If the option is neither the supported none spelling nor a positive
+        integer.
+
+    """
 
     value = _required(parser, section, option)
     if value.casefold() == "none":
@@ -765,7 +1216,29 @@ def _optional_integer(
 
 
 def _boolean(parser: ConfigParser, section: str, option: str) -> bool:
-    """Return one Boolean profile value."""
+    """Return one Boolean profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    bool
+        One Boolean profile value.
+
+    Raises
+    ------
+    ValueError
+        If the option is missing or is not a supported ConfigParser Boolean
+        spelling.
+
+    """
 
     _required(parser, section, option)
     try:
@@ -777,7 +1250,32 @@ def _boolean(parser: ConfigParser, section: str, option: str) -> bool:
 
 
 def _float(parser: ConfigParser, section: str, option: str) -> float:
-    """Return one numeric profile value."""
+    """Return one numeric profile value.
+
+    Parameters
+    ----------
+    parser: ConfigParser
+        ConfigParser containing the profile sections and values.
+    section: str
+        INI section containing the requested option.
+    option: str
+        Name of the option within that INI section.
+
+    Returns
+    -------
+    float
+        One numeric profile value.
+
+    Raises
+    ------
+    ValueError
+        If the required option cannot be converted to float.
+
+    Notes
+    -----
+    This conversion does not reject non-finite floating-point values.
+
+    """
 
     value = _required(parser, section, option)
     try:

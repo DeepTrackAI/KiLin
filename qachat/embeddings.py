@@ -1,13 +1,62 @@
-"""Load one embedding model and turn text into comparable vectors.
+"""Load a compatible embedding model and produce normalized text vectors.
 
-Classes
--------
-EmbeddingSession
-    Load compatible MLX or PyTorch embedding weights, count tokens, and embed
-    document or query text supplied by the caller.
+``EmbeddingSession`` resolves a local or Hugging Face model source and loads
+one backend-specific model and tokenizer during construction. MLX uses the
+model's ``text_embeds`` output; PyTorch pools the last unmasked hidden-state
+token. These are model-family assumptions, not interchangeable pooling rules
+for every model hosted by Hugging Face.
 
-Chat models and embedding models are independent. A later RAG layer can use
-any supported chat model with any supported embedding model.
+Document batches and queries share the same embedding path. Query instruction
+formatting is deliberately separate. Tokenization does not truncate input,
+so callers must select suitable text lengths. Returned vectors are checked
+for count, dimensional consistency, finite numeric values, and nonzero norm.
+Explicitly close a session to release its model references and backend caches.
+
+Key Features
+------------
+
+- **Local or cached loading**
+
+    Resolve model files once and reuse the loaded model for subsequent batches.
+
+- **Tokenizer-aware counting**
+
+    Expose token counts including the tokenizer special tokens for upstream
+    chunk sizing.
+
+- **Normalized vectors**
+
+    Apply the backend pooling path and L2 normalization before checking
+    returned vectors.
+
+- **Controlled tracing**
+
+    Trace query operations while suppressing detailed per-document embedding
+    traces by default.
+
+Module Structure
+----------------
+
+- ``EmbeddingSession``
+
+    One loaded embedding model and tokenizer.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> embedding = qachat.EmbeddingSession(
+...     "/path/to/local/embedding-model", allow_download=False,
+... )
+>>> try:
+...     vectors = embedding.embed_documents(["Brownian motion"])
+...     query_vector = embedding.embed_query("What is diffusion?")
+... finally:
+...     embedding.close()
+
+The local model must support the selected backend's embedding path.
 
 """
 
@@ -46,13 +95,16 @@ class EmbeddingSession:
     model_id: str
         Hugging Face model ID or local model snapshot.
     backend: "auto" | "mlx" | "torch", optional
-        ``auto`` selects MLX on Apple Silicon and PyTorch elsewhere.
+        ``auto`` selects MLX on Apple Silicon and PyTorch elsewhere. Defaults
+        to ``'auto'``.
     allow_download: bool, optional
         Whether Hugging Face may download missing files to its normal cache.
+        Defaults to ``True``.
     revision: str | None, optional
-        Optional Hugging Face branch, tag, or commit.
+        Optional Hugging Face branch, tag, or commit. Defaults to ``None``.
     trace: TraceSink | None, optional
-        Structured execution trace shared with the calling session.
+        Structured execution trace shared with the calling session. Defaults to
+        ``None``.
 
     Attributes
     ----------
@@ -62,6 +114,17 @@ class EmbeddingSession:
         Selected calculation backend.
     device: str
         Device used for embedding calculations.
+
+    Methods
+    -------
+    count_tokens(text)
+        Count tokens with the selected embedding tokenizer.
+    embed_documents(texts, *, trace_turn_id=None, purpose='documents')
+        Embed repository text without changing it.
+    embed_query(query_text, *, trace_turn_id=None)
+        Embed one query exactly as provided.
+    close()
+        Release model references and backend caches.
 
     """
 
@@ -80,7 +143,39 @@ class EmbeddingSession:
         revision: str | None = None,
         trace: TraceSink | None = None,
     ) -> None:
-        """Check settings, find the snapshot, and load one backend."""
+        """Check settings, find the snapshot, and load one backend.
+
+        Parameters
+        ----------
+        model_id: str
+            Hugging Face model ID or local model snapshot.
+        backend: "auto" | "mlx" | "torch", optional
+            ``auto`` selects MLX on Apple Silicon and PyTorch elsewhere.
+            Defaults to ``'auto'``.
+        allow_download: bool, optional
+            Whether Hugging Face may download missing files to its normal
+            cache. Defaults to ``True``.
+        revision: str | None, optional
+            Optional Hugging Face branch, tag, or commit. Defaults to ``None``.
+        trace: TraceSink | None, optional
+            Structured execution trace shared with the calling session.
+            Defaults to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If model_id is blank or non-string, allow_download is not Boolean,
+            or backend selection is invalid.
+        ImportError
+            If the selected embedding backend dependency is unavailable.
+
+        Notes
+        -----
+        Model loading occurs during construction. Cache, download, tokenizer,
+        and backend loader errors propagate. The pooling implementation
+        requires a compatible embedding model.
+
+        """
 
         if not isinstance(model_id, str) or not model_id.strip():
             raise ValueError(
@@ -177,6 +272,13 @@ class EmbeddingSession:
         ----------
         texts: list[str]
             Non-empty repository text values.
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
+        purpose: str, optional
+            Operation label used in trace records. The exact value "documents"
+            suppresses detailed embedding traces; other labels use the
+            trace-enabled path. Defaults to ``'documents'``.
 
         Returns
         -------
@@ -189,6 +291,14 @@ class EmbeddingSession:
             If the session is closed or returns invalid vectors.
         ValueError
             If an input is empty or invalid.
+
+        Notes
+        -----
+        Text values are checked for nonblank content but are not stripped. An
+        empty list returns an empty list even after closing; nonempty input
+        requires loaded objects. Inputs are not truncated. Detailed tracing is
+        suppressed for purpose="documents"; query/other operations can retain
+        text or vectors according to sink settings.
 
         """
 
@@ -232,7 +342,21 @@ class EmbeddingSession:
         calculation_started_at = perf_counter()
 
         def calculate() -> list[list[float]]:
-            """Run one backend call and validate its vectors."""
+            """Run one backend call and validate its vectors.
+
+            Returns
+            -------
+            list[list[float]]
+                Validated vectors, in the same order as the closed-over input
+                texts.
+
+            Notes
+            -----
+            This nested helper selects the backend and performs vector checks.
+            It uses the surrounding operation identifiers and does not own
+            session cleanup.
+
+            """
 
             if self.backend == "mlx":
                 if not self.trace.enabled:
@@ -329,6 +453,9 @@ class EmbeddingSession:
         ----------
         query_text: str
             Text formatted for the selected embedding model.
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
 
         Returns
         -------
@@ -340,6 +467,12 @@ class EmbeddingSession:
         ValueError
             If the query text is empty.
 
+        Notes
+        -----
+        The query is embedded as supplied. Apply qachat.format_qwen3_query or
+        another model-specific instruction format before calling this method
+        when required by the chosen model.
+
         """
 
         checked = _check_texts([query_text])[0]
@@ -350,7 +483,10 @@ class EmbeddingSession:
         )[0]
 
     def close(self: EmbeddingSession) -> None:
-        """Release model references and backend caches."""
+        """Release model references and backend caches.
+
+
+        """
 
         self._model = None
         self._tokenizer = None
@@ -360,13 +496,20 @@ class EmbeddingSession:
     def _clear_backend_cache(self: EmbeddingSession) -> None:
         """Release the backend's cached allocator memory.
 
-        ``close()`` calls this once, when the session ends. A caller
-        embedding many batches in one un-closed session (for example
-        ``build_semantic_index`` batching over a large chunk list) can
-        call it after each batch too -- MLX in particular keeps every
-        batch's freed buffers cached for reuse rather than returning
-        them to the OS, so the cache otherwise grows across batches even
-        when no single batch is large.
+        ``close()`` calls this once, when the session ends. A caller embedding
+        many batches in one un-closed session (for example
+        ``build_semantic_index`` batching over a large chunk list) can call it
+        after each batch too -- MLX in particular keeps every batch's freed
+        buffers cached for reuse rather than returning them to the OS, so the
+        cache otherwise grows across batches even when no single batch is
+        large.
+
+        Notes
+        -----
+        For PyTorch, cleanup requests are made for available CUDA and MPS
+        caches. This is a cache-release request, not a guarantee that all model
+        memory has been returned to the operating system.
+
         """
 
         if self.backend == "mlx":
@@ -454,6 +597,15 @@ class EmbeddingSession:
         ----------
         texts: list[str]
             Checked input text.
+        operation_id: str | None, optional
+            Optional identifier linking token preparation to the enclosing
+            embedding operation. Defaults to ``None``.
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
+        record_trace: bool, optional
+            Whether this backend call should construct detailed embedding/token
+            trace data, subject to sink settings. Defaults to ``True``.
 
         Returns
         -------
@@ -520,6 +672,15 @@ class EmbeddingSession:
         ----------
         texts: list[str]
             Checked input text.
+        operation_id: str | None, optional
+            Optional identifier linking token preparation to the enclosing
+            embedding operation. Defaults to ``None``.
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
+        record_trace: bool, optional
+            Whether this backend call should construct detailed embedding/token
+            trace data, subject to sink settings. Defaults to ``True``.
 
         Returns
         -------

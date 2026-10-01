@@ -1,4 +1,48 @@
-"""Choose a local calculation backend and device."""
+"""Choose backend and device names without loading inference models.
+
+Automatic backend selection returns MLX on native Darwin/arm64 and PyTorch
+otherwise. An explicit MLX request is rejected outside that platform. These
+checks do not verify that dependencies are installed or that a model is
+compatible. Device selection uses caller-supplied availability flags in CUDA,
+MPS, then CPU priority order; it does not probe the hardware itself.
+
+Key Features
+------------
+
+- **Backend policy**
+
+    Centralize the string-valued backend selection used by model sessions.
+
+- **Device priority**
+
+    Choose a PyTorch device from already-probed availability flags.
+
+Module Structure
+----------------
+
+- ``Backend``
+
+    Type alias for ``"auto"``, ``"mlx"``, or ``"torch"``.
+
+- ``SelectedBackend``
+
+    Type alias for a resolved ``"mlx"`` or ``"torch"`` backend.
+
+- ``choose_backend``
+
+    Choose MLX or PyTorch for this computer.
+
+- ``torch_device``
+
+    Choose the best available PyTorch device.
+
+Examples
+--------
+>>> import qachat
+>>> backend = qachat.choose_backend("auto")
+>>> device = qachat.torch_device(False, False)
+
+"""
 
 from __future__ import annotations
 
@@ -27,7 +71,7 @@ def choose_backend(requested: Backend) -> SelectedBackend:
 
     Returns
     -------
-    Literal["mlx", "torch"]
+    "mlx" | "torch"
         Selected backend.
 
     Raises

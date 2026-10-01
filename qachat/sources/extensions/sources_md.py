@@ -1,9 +1,37 @@
-"""Extract heading sections from Markdown source.
+"""Partition Markdown text at ATX-style heading lines.
 
-Functions
----------
-extract_source_units
-    Keep the preamble and make one natural unit for each heading section.
+Heading lines beginning with one to six hash characters define successive
+flat sections. The text before the first heading is preserved separately.
+This implementation does not parse nested Markdown structure, setext
+headings, or fenced-code state; a heading-shaped line in a code fence can be
+recognized as a section boundary.
+
+Key Features
+------------
+
+- **Heading sections**
+
+    Attach recognized heading text to section provenance.
+
+- **Original coordinates**
+
+    Keep inclusive source-file line ranges and original section text.
+
+Module Structure
+----------------
+
+- ``extract_source_units``
+
+    Return natural units from one Markdown source file.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".md"])
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
 
 """
 

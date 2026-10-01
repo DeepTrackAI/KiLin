@@ -1,13 +1,95 @@
-"""Receive QAChat events and export one ordered, readable JSON trace.
+"""Record structured execution events and resumable conversation state.
 
-Classes
--------
-TraceConfig
-    Configure whether and where a trace is written.
-TraceLogger
-    Add timestamps and hierarchy, then atomically write the trace.
-NullTraceLogger
-    Preserve the same calling interface while tracing is disabled.
+``TraceLogger`` collects events and writes a grouped JSON representation using
+replacement of a temporary file. Span contexts link start, completion, and
+failure events. ``NullTraceLogger`` accepts the same calling pattern without
+writing, while ``TraceTextStream`` converts diagnostic output into events.
+
+Standard mode reduces detailed token/prompt event output; forensic mode lets
+callers attach complete content and token identifiers. Embedding-vector
+capture has a separate flag. These settings are not a sanitization boundary:
+conversation resume state, exceptions, or diagnostic text can still contain
+questions, answers, source excerpts, paths, and other sensitive information.
+Artifacts returned by this implementation are inline JSON records rather than
+separately stored artifact files.
+
+Event writes are serialized within one logger, but the module does not provide
+multi-process locking or a transaction across separate logger instances.
+I/O failure handling applies to event writes according to the configuration;
+direct conversation-state updates have their own write path.
+
+Key Features
+------------
+
+- **Structured spans**
+
+    Associate events, timings, parent spans, and conversation-turn identifiers.
+
+- **Grouped JSON output**
+
+    Present lifecycle, preparation, conversation, and progress operations in a
+    readable document.
+
+- **Optional artifacts**
+
+    Carry inline content and vectors when callers request them.
+
+- **Ownership control**
+
+    Distinguish caller-supplied sinks from loggers created by the factory.
+
+Module Structure
+----------------
+
+- ``NullTraceLogger``
+
+    No-op trace used when structured tracing is disabled.
+
+- ``TraceConfig``
+
+    Settings for one QAChat execution trace.
+
+- ``TraceLogger``
+
+    Collect ordered events and write a grouped conversation-trace JSON file.
+
+- ``TraceMode``
+
+    Type alias for ``"standard"`` or ``"forensic"`` detail.
+
+- ``TraceSink``
+
+    Type alias for a concrete or null trace logger.
+
+- ``TraceTextStream``
+
+    Turn ordinary backend text output into timestamped trace events.
+
+- ``create_trace_logger``
+
+    Return a trace and whether the caller owns its lifetime.
+
+- ``trace_text_preview``
+
+    Return three opening and three closing words for trace inspection.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> logger = qachat.TraceLogger(
+...     qachat.TraceConfig(enabled=True, mode="standard"),
+...     default_directory="/path/to/local/traces",
+... )
+>>> try:
+...     with logger.span("example.operation", component="example"):
+...         logger.emit("example.ready", component="example")
+... finally:
+...     logger.close()
+
+Protect trace directories as potentially sensitive project data.
 
 """
 
@@ -83,20 +165,55 @@ class TraceConfig:
 
     Parameters
     ----------
-    enabled: bool, optional
-        Whether events should be written.
-    output_path: str | pathlib.Path | None, optional
+    enabled: bool, optional, optional
+        Whether events should be written. Defaults to ``False``.
+    output_path: str | pathlib.Path | None, optional, optional
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
-    mode: "standard" | "forensic", optional
-        Standard records decisions, ranks, hashes, timings, and resumable
-        conversation checkpoints. Forensic also stores exact retrieved text,
-        rendered model prompts, and token artifacts.
+    mode: TraceMode, optional
+        Trace detail mode. Standard suppresses designated forensic events;
+        forensic enables content/token flags used by callers. Resume state and
+        arbitrary diagnostics can still contain full text in either mode.
+        Defaults to ``'standard'``.
     include_embedding_vectors: bool, optional
-        Store full embedding vectors as artifacts. They are omitted by
-        default because they are large and are not human-readable.
-    failure_policy: "warn" | "raise", optional
-        Warn and disable tracing after an I/O error, or stop the operation.
+        Whether callers are allowed to attach complete embedding vectors. This
+        flag is independent of mode. Defaults to ``False``.
+    failure_policy: FailurePolicy, optional
+        Event-write I/O handling: warn disables later event writes and emits a
+        warning, while raise converts the failure to RuntimeError. Direct
+        conversation-state writes do not use this policy. Defaults to
+        ``'warn'``.
+
+    Attributes
+    ----------
+    enabled: bool
+        Whether events should be written.
+    output_path: str | pathlib.Path | None
+        Exact conversation ``.json`` file or folder for the trace. ``None``
+        uses the caller's project-specific default folder.
+    mode: TraceMode
+        Trace detail mode. Standard suppresses designated forensic events;
+        forensic enables content/token flags used by callers. Resume state and
+        arbitrary diagnostics can still contain full text in either mode.
+    include_embedding_vectors: bool
+        Whether callers are allowed to attach complete embedding vectors. This
+        flag is independent of mode.
+    failure_policy: FailurePolicy
+        Event-write I/O handling: warn disables later event writes and emits a
+        warning, while raise converts the failure to RuntimeError. Direct
+        conversation-state writes do not use this policy.
+
+    Raises
+    ------
+    ValueError
+        If Boolean fields, mode, failure policy, or output-path type fail
+        validation.
+
+    Notes
+    -----
+    Configuration validates values before a logger is created; it does not
+    create directories or prove that an output path is writable. The trace is
+    not encrypted or automatically redacted.
 
     """
 
@@ -107,7 +224,15 @@ class TraceConfig:
     failure_policy: FailurePolicy = "warn"
 
     def __post_init__(self) -> None:
-        """Reject invalid trace settings before any file is opened."""
+        """Reject invalid trace settings before any file is opened.
+
+        Raises
+        ------
+        ValueError
+            If enabled/vector flags are not exact booleans, mode or policy is
+            unsupported, or output_path has an invalid type.
+
+        """
 
         if type(self.enabled) is not bool:
             raise ValueError("trace enabled must be True or False.")
@@ -126,7 +251,82 @@ class TraceConfig:
 
 
 class TraceLogger:
-    """Maintain one complete, strictly ordered, atomic conversation trace."""
+    """Collect ordered events and write a grouped conversation-trace JSON file.
+
+    Construction resolves the output path, creates its parent directory,
+    optionally loads prior grouped state, and emits the initial event. Event
+    mutation is guarded by this instance's lock; different instances or
+    processes are not coordinated.
+
+    Parameters
+    ----------
+    config: TraceConfig
+        Enabled TraceConfig controlling output location, detail flags, and
+        event-write I/O policy.
+    default_directory: str | pathlib.Path
+        Fallback output directory when the configuration does not name an exact
+        JSON file.
+
+    Attributes
+    ----------
+    config: TraceConfig
+        Configuration used to create this logger.
+    output_path: pathlib.Path
+        Resolved JSON output path, potentially an explicitly reused
+        conversation file.
+    readable_path: pathlib.Path
+        Alias of output_path; there is no separate readable-output file.
+    trace_id: str
+        Random correlation identifier for the current logger instance.
+    enabled: bool
+        True for this concrete sink; it does not reflect the private
+        closed/failed flags.
+    include_content: bool
+        Whether mode is forensic; callers consult this before providing full
+        content.
+    include_token_ids: bool
+        Whether mode is forensic; callers consult this before providing token
+        IDs.
+    include_embedding_vectors: bool
+        Configured embedding-vector flag, independent of mode.
+
+    Methods
+    -------
+    new_id(prefix)
+        Return a short, readable correlation identifier.
+    emit(...)
+        Record one event and refresh the readable output when required.
+    exception(...)
+        Record one failure with its complete Python traceback.
+    settings_changed(...)
+        Record only settings whose effective values changed.
+    span(...)
+        Record operation start, completion, failure, and duration.
+    artifact(name, value, *, text=False)
+        Keep an exact payload inline so the conversation stays portable.
+    update_conversation(data)
+        Merge resumable conversation state into this same JSON document.
+    close()
+        Emit the closing event and mark subsequent event writes closed.
+
+    Raises
+    ------
+    ValueError
+        If configuration is disabled or an existing conversation-trace file
+        cannot be read as expected.
+    OSError
+        If the output directory cannot be created. Event-write errors follow
+        the configured policy.
+
+    Notes
+    -----
+    Standard mode is not a privacy guarantee: resume state, tracebacks, or
+    backend text may contain sensitive data. Artifacts are inline dictionaries.
+    There is no append-only log, multi-file transaction, or cross-process
+    locking. Explicitly reusing a file merges grouped state according to the
+    current implementation, not a globally unique event sequence.
+
+    """
 
     enabled = True
 
@@ -136,7 +336,31 @@ class TraceLogger:
         *,
         default_directory: str | Path,
     ) -> None:
-        """Create one trace file and record its first event."""
+        """Create one trace file and record its first event.
+
+        Parameters
+        ----------
+        config: TraceConfig
+            Enabled TraceConfig controlling output location, detail flags, and
+            event-write I/O policy.
+        default_directory: str | pathlib.Path
+            Fallback output directory when the configuration does not name an
+            exact JSON file.
+
+        Raises
+        ------
+        ValueError
+            If config.enabled is false or an existing conversation-trace
+            document is invalid.
+        OSError
+            If the output directory cannot be created.
+
+        Notes
+        -----
+        The first event is written during construction. Exact JSON paths can be
+        reused; output is not guaranteed to be a new file.
+
+        """
 
         if not config.enabled:
             raise ValueError("TraceLogger requires an enabled TraceConfig.")
@@ -226,24 +450,58 @@ class TraceLogger:
 
     @property
     def include_content(self) -> bool:
-        """Return whether exact source and prompt text may be stored."""
+        """Return whether exact source and prompt text may be stored.
+
+        Returns
+        -------
+        bool
+            Whether exact source and prompt text may be stored.
+
+        """
 
         return self.config.mode == "forensic"
 
     @property
     def include_token_ids(self) -> bool:
-        """Return whether exact tokenizer output may be stored."""
+        """Return whether exact tokenizer output may be stored.
+
+        Returns
+        -------
+        bool
+            Whether exact tokenizer output may be stored.
+
+        """
 
         return self.config.mode == "forensic"
 
     @property
     def include_embedding_vectors(self) -> bool:
-        """Return whether full embedding vectors may be stored."""
+        """Return whether full embedding vectors may be stored.
+
+        Returns
+        -------
+        bool
+            Whether full embedding vectors may be stored.
+
+        """
 
         return self.config.include_embedding_vectors
 
     def new_id(self, prefix: str) -> str:
-        """Return a short, readable correlation identifier."""
+        """Return a short, readable correlation identifier.
+
+        Parameters
+        ----------
+        prefix: str
+            Human-readable prefix sanitized before appending a random
+            correlation identifier.
+
+        Returns
+        -------
+        str
+            A short, readable correlation identifier.
+
+        """
 
         clean = _safe_name(prefix) or "item"
         return f"{clean}_{uuid4().hex[:12]}"
@@ -261,7 +519,53 @@ class TraceLogger:
         started_elapsed_ms: float | None = None,
         duration_ms: float | None = None,
     ) -> None:
-        """Append one timestamped event in exact sequence order."""
+        """Record one event and refresh the readable output when required.
+
+        Parameters
+        ----------
+        event_type: str
+            Nonblank machine-readable operation/event name, conventionally
+            dot-separated.
+        component: str
+            Nonblank emitting subsystem name recorded on the event.
+        data: Mapping[str, object] | None, optional
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper. Defaults to
+            ``None``.
+        status: str, optional
+            Event status label; the logger does not restrict it to a fixed
+            enumeration. Defaults to ``'completed'``.
+        turn_id: str | None, optional
+            Optional identifier connecting this event to a conversation turn.
+            Defaults to ``None``.
+        span_id: str | None, optional
+            Optional identifier for the operation span associated with the
+            event. Defaults to ``None``.
+        parent_span_id: str | None, optional
+            Optional parent operation identifier. Span contexts infer it from
+            the current context when omitted. Defaults to ``None``.
+        started_elapsed_ms: float | None, optional
+            Optional operation-start offset from logger creation, in
+            milliseconds. Defaults to ``None``.
+        duration_ms: float | None, optional
+            Optional operation duration, in milliseconds. Defaults to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If event_type or component is blank or non-string.
+        RuntimeError
+            If an event write encounters OSError and failure_policy is raise.
+
+        Notes
+        -----
+        Closed or failed loggers return before validation. Standard mode drops
+        designated forensic-only events. Event sequencing is serialized within
+        this logger. Progress-only rewrites can be throttled; other accepted
+        events trigger an output refresh. Arbitrary payload content is not
+        automatically redacted.
+
+        """
 
         if self._closed or self._failed:
             return
@@ -319,7 +623,45 @@ class TraceLogger:
         started_elapsed_ms: float | None = None,
         duration_ms: float | None = None,
     ) -> None:
-        """Record one failure with its complete Python traceback."""
+        """Record one failure with its complete Python traceback.
+
+        Parameters
+        ----------
+        event_type: str
+            Nonblank machine-readable operation/event name, conventionally
+            dot-separated.
+        error: BaseException
+            Exception whose type, message, and formatted traceback are recorded
+            or handled.
+        component: str
+            Nonblank emitting subsystem name recorded on the event.
+        data: Mapping[str, object] | None, optional
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper. Defaults to
+            ``None``.
+        turn_id: str | None, optional
+            Optional identifier connecting this event to a conversation turn.
+            Defaults to ``None``.
+        span_id: str | None, optional
+            Optional identifier for the operation span associated with the
+            event. Defaults to ``None``.
+        parent_span_id: str | None, optional
+            Optional parent operation identifier. Span contexts infer it from
+            the current context when omitted. Defaults to ``None``.
+        started_elapsed_ms: float | None, optional
+            Optional operation-start offset from logger creation, in
+            milliseconds. Defaults to ``None``.
+        duration_ms: float | None, optional
+            Optional operation duration, in milliseconds. Defaults to ``None``.
+
+        Notes
+        -----
+        Formats the complete traceback and merges error data into the event.
+        Tracebacks can reveal paths or user data in either trace mode. The
+        exception is recorded, not re-raised by this method; span handles
+        propagation separately.
+
+        """
 
         details = dict(data or {})
         details["error_type"] = type(error).__name__
@@ -354,6 +696,38 @@ class TraceLogger:
         The compact ``changes`` object keeps configuration history easy to
         inspect while the surrounding snapshot events retain complete state.
         Each entry names the earlier and effective value explicitly.
+
+        Parameters
+        ----------
+        event_type: str
+            Nonblank machine-readable operation/event name, conventionally
+            dot-separated.
+        component: str
+            Nonblank emitting subsystem name recorded on the event.
+        before: Mapping[str, object]
+            Effective settings before the requested change.
+        after: Mapping[str, object]
+            Effective settings after the requested change.
+        data: Mapping[str, object] | None, optional
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper. Defaults to
+            ``None``.
+        turn_id: str | None, optional
+            Optional identifier connecting this event to a conversation turn.
+            Defaults to ``None``.
+
+        Returns
+        -------
+        bool
+            True if normalized effective values differ, otherwise False.
+
+        Notes
+        -----
+        A True result means a difference was found, not proof that a file write
+        occurred: the sink may be closed/failed or event output may be disabled
+        by its policy. Added and removed setting keys participate in
+        comparison.
+
         """
 
         changes = {
@@ -386,7 +760,41 @@ class TraceLogger:
         turn_id: str | None = None,
         parent_span_id: str | None = None,
     ) -> Iterator[str]:
-        """Record operation start, completion, failure, and duration."""
+        """Record operation start, completion, failure, and duration.
+
+        Parameters
+        ----------
+        event_type: str
+            Nonblank machine-readable operation/event name, conventionally
+            dot-separated.
+        component: str
+            Nonblank emitting subsystem name recorded on the event.
+        data: Mapping[str, object] | None, optional
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper. Defaults to
+            ``None``.
+        turn_id: str | None, optional
+            Optional identifier connecting this event to a conversation turn.
+            Defaults to ``None``.
+        parent_span_id: str | None, optional
+            Optional parent operation identifier. Span contexts infer it from
+            the current context when omitted. Defaults to ``None``.
+
+        Yields
+        ------
+        str
+            Generated span identifier used by the start/completion/failure
+            events.
+
+        Notes
+        -----
+        Use as a context manager. Parent span identity is taken from a
+        ContextVar when not supplied. BaseException from the managed body is
+        recorded and re-raised; the prior active span is restored in a finally
+        block. Trace errors can themselves propagate according to the sink
+        behavior.
+
+        """
 
         span_id = self.new_id("span")
         if parent_span_id is None:
@@ -440,7 +848,38 @@ class TraceLogger:
         *,
         text: bool = False,
     ) -> dict[str, object] | None:
-        """Keep an exact payload inline so the conversation stays portable."""
+        """Keep an exact payload inline so the conversation stays portable.
+
+        Parameters
+        ----------
+        name: str
+            Human-readable artifact or operation label normalized for the
+            stored key.
+        value: object
+            Python value to convert or package as trace content.
+        text: bool, optional
+            Whether to store str(value) as a text artifact instead of using the
+            JSON conversion helper. Defaults to ``False``.
+
+        Returns
+        -------
+        dict[str, object] | None
+            Inline dictionary containing name, format, and inline_content, or
+            None after close/failure.
+
+        Raises
+        ------
+        ValueError
+            If sanitizing the artifact name leaves no safe character.
+
+        Notes
+        -----
+        This method returns a payload; it does not write a separate artifact
+        file or emit an event. It does not enforce include_content itself.
+        Callers are responsible for checking detail/privacy flags before
+        attaching sensitive values.
+
+        """
 
         if self._closed or self._failed:
             return None
@@ -455,13 +894,41 @@ class TraceLogger:
         }
 
     def update_conversation(self, data: Mapping[str, object]) -> None:
-        """Merge resumable conversation state into this same JSON document."""
+        """Merge resumable conversation state into this same JSON document.
+
+        Parameters
+        ----------
+        data: Mapping[str, object]
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper.
+
+        Raises
+        ------
+        OSError
+            If the direct state rewrite fails.
+
+        Notes
+        -----
+        Merges converted fields into the retained state and immediately
+        rewrites the grouped output. It does not clear omitted fields, acquire
+        the event lock, check closed/failed flags, or route OSError through
+        failure_policy.
+
+        """
 
         self._conversation.update(_json_value(dict(data)))
         self._write_readable_trace()
 
     def close(self) -> None:
-        """Finish this trace and close its file."""
+        """Emit the closing event and mark subsequent event writes closed.
+
+        Notes
+        -----
+        Repeated calls return without another closing event. The implementation
+        opens files only for individual writes, so there is no persistent file
+        handle to close. Retained events and resume state remain in memory.
+
+        """
 
         if self._closed:
             return
@@ -469,7 +936,21 @@ class TraceLogger:
         self._closed = True
 
     def _write_event(self, event: dict[str, object]) -> None:
-        """Append in memory and atomically refresh the conversation JSON."""
+        """Append an event in memory and conditionally refresh the output file.
+
+        Parameters
+        ----------
+        event: dict[str, object]
+            Structured event dictionary used for storage or readable
+            projection.
+
+        Notes
+        -----
+        Progress updates rewrite at most once per configured interval in this
+        method; other events rewrite immediately. OSError is passed to
+        _handle_io_failure. The event remains in memory when writing fails.
+
+        """
 
         try:
             self._events.append(event)
@@ -485,7 +966,16 @@ class TraceLogger:
             self._handle_io_failure(error)
 
     def _write_readable_trace(self) -> None:
-        """Write a compact, named hierarchy for human inspection."""
+        """Write a compact, named hierarchy for human inspection.
+
+        Notes
+        -----
+        Projects current in-memory events into grouped sessions and merges with
+        previously loaded sessions. A temporary JSON file replaces the target.
+        The operation is not an immutable snapshot history or a multi-writer
+        transaction. Numbered turn keys are generated per logger run.
+
+        """
 
         progress_checkpoints: list[dict[str, object]] = []
         execution_trace: list[dict[str, object]] = []
@@ -567,7 +1057,20 @@ class TraceLogger:
         self,
         event: dict[str, object],
     ) -> dict[str, object]:
-        """Return one event, resolving only its essential exact artifacts."""
+        """Return one event, resolving only its essential exact artifacts.
+
+        Parameters
+        ----------
+        event: dict[str, object]
+            Structured event dictionary used for storage or readable
+            projection.
+
+        Returns
+        -------
+        dict[str, object]
+            One event, resolving only its essential exact artifacts.
+
+        """
 
         readable = dict(event)
         data = event.get("data")
@@ -604,7 +1107,27 @@ class TraceLogger:
         return readable
 
     def _artifact_content(self, reference: object) -> object:
-        """Read one trusted trace artifact for the human-readable view."""
+        """Resolve an inline or supported legacy file artifact.
+
+        Parameters
+        ----------
+        reference: object
+            Inline artifact reference, or a legacy artifact-file reference
+            constrained to the output directory.
+
+        Returns
+        -------
+        object
+            Artifact content, or None for an unsupported, missing, unreadable,
+            or invalid legacy reference.
+
+        Notes
+        -----
+        Inline content takes precedence. Legacy paths must resolve inside the
+        trace output directory. This is a compatibility read, not arbitrary
+        remote artifact retrieval.
+
+        """
 
         if not isinstance(reference, Mapping):
             return None
@@ -625,7 +1148,26 @@ class TraceLogger:
             return None
 
     def _handle_io_failure(self, error: OSError) -> None:
-        """Apply the configured policy after trace storage fails."""
+        """Apply the configured policy after trace storage fails.
+
+        Parameters
+        ----------
+        error: OSError
+            Exception whose type, message, and formatted traceback are recorded
+            or handled.
+
+        Raises
+        ------
+        RuntimeError
+            If failure_policy is raise.
+
+        Notes
+        -----
+        Marks the logger failed first. Warn policy emits a RuntimeWarning and
+        returns; later emit calls become no-ops. Direct update_conversation
+        calls do not pass through this handler.
+
+        """
 
         self._failed = True
         if self.config.failure_policy == "raise":
@@ -640,7 +1182,34 @@ class TraceLogger:
 
 
 class NullTraceLogger:
-    """No-op trace used when structured tracing is disabled."""
+    """No-op trace used when structured tracing is disabled.
+
+    Methods
+    -------
+    new_id(prefix)
+        Return a usable correlation ID without storing it.
+    emit(*args, **kwargs)
+        Accept an event without writing it.
+    exception(*args, **kwargs)
+        Accept an exception without writing it.
+    settings_changed(*args, **kwargs)
+        Accept a settings comparison without writing it.
+    span(*args, **kwargs)
+        Preserve the span interface without writing events.
+    artifact(*args, **kwargs)
+        Return no artifact while tracing is disabled.
+    update_conversation(data)
+        Accept resumable state without writing it.
+    close()
+        Keep closing a disabled trace harmless.
+
+    Notes
+    -----
+    All detail flags and enabled are false. Calls accept trace-shaped arguments
+    without performing validation or file I/O. Correlation IDs and a span
+    context are still available so callers need not branch on tracing state.
+
+    """
 
     enabled = False
     include_content = False
@@ -651,46 +1220,171 @@ class NullTraceLogger:
     trace_id = "trace_disabled"
 
     def new_id(self, prefix: str) -> str:
-        """Return a usable correlation ID without storing it."""
+        """Return a usable correlation ID without storing it.
+
+        Parameters
+        ----------
+        prefix: str
+            Human-readable prefix sanitized before appending a random
+            correlation identifier.
+
+        Returns
+        -------
+        str
+            A usable correlation ID without storing it.
+
+        """
 
         return f"{_safe_name(prefix) or 'item'}_{uuid4().hex[:12]}"
 
     def emit(self, *args: object, **kwargs: object) -> None:
-        """Accept an event without writing it."""
+        """Accept an event without writing it.
+
+        Parameters
+        ----------
+        *args: object
+            Positional arguments accepted for compatibility with the active
+            trace interface; ignored by the null sink.
+        **kwargs: object
+            Keyword arguments accepted for compatibility with the active trace
+            interface; ignored by the null sink.
+
+        """
 
     def exception(self, *args: object, **kwargs: object) -> None:
-        """Accept an exception without writing it."""
+        """Accept an exception without writing it.
+
+        Parameters
+        ----------
+        *args: object
+            Positional arguments accepted for compatibility with the active
+            trace interface; ignored by the null sink.
+        **kwargs: object
+            Keyword arguments accepted for compatibility with the active trace
+            interface; ignored by the null sink.
+
+        """
 
     def settings_changed(self, *args: object, **kwargs: object) -> bool:
-        """Accept a settings comparison without writing it."""
+        """Accept a settings comparison without writing it.
+
+        Parameters
+        ----------
+        *args: object
+            Positional arguments accepted for compatibility with the active
+            trace interface; ignored by the null sink.
+        **kwargs: object
+            Keyword arguments accepted for compatibility with the active trace
+            interface; ignored by the null sink.
+
+        Returns
+        -------
+        bool
+            False unconditionally; settings are not compared by the null
+            implementation.
+
+        """
 
         return False
 
     @contextmanager
     def span(self, *args: object, **kwargs: object) -> Iterator[str]:
-        """Preserve the span interface without writing events."""
+        """Preserve the span interface without writing events.
+
+        Parameters
+        ----------
+        *args: object
+            Positional arguments accepted for compatibility with the active
+            trace interface; ignored by the null sink.
+        **kwargs: object
+            Keyword arguments accepted for compatibility with the active trace
+            interface; ignored by the null sink.
+
+        Yields
+        ------
+        str
+            Generated correlation identifier without any trace events.
+
+        Notes
+        -----
+        Use as a context manager. Exceptions from the caller's body propagate
+        normally; no trace is recorded.
+
+        """
 
         yield self.new_id("span")
 
     def artifact(
         self, *args: object, **kwargs: object
     ) -> dict[str, object] | None:
-        """Return no artifact while tracing is disabled."""
+        """Return no artifact while tracing is disabled.
+
+        Parameters
+        ----------
+        *args: object
+            Positional arguments accepted for compatibility with the active
+            trace interface; ignored by the null sink.
+        **kwargs: object
+            Keyword arguments accepted for compatibility with the active trace
+            interface; ignored by the null sink.
+
+        Returns
+        -------
+        dict[str, object] | None
+            None unconditionally; the supplied value is not serialized.
+
+        """
 
         return None
 
     def update_conversation(self, data: Mapping[str, object]) -> None:
-        """Accept resumable state without writing it."""
+        """Accept resumable state without writing it.
+
+        Parameters
+        ----------
+        data: Mapping[str, object]
+            Optional event or conversation-state mapping. Values are converted
+            through the implemented JSON conversion helper.
+
+        """
 
     def close(self) -> None:
-        """Keep closing a disabled trace harmless."""
+        """Keep closing a disabled trace harmless.
+
+
+        """
 
 
 TraceSink: TypeAlias = TraceLogger | NullTraceLogger
 
 
 class TraceTextStream:
-    """Turn ordinary backend text output into timestamped trace events."""
+    """Turn ordinary backend text output into timestamped trace events.
+
+    Parameters
+    ----------
+    trace: TraceSink | Callable
+        Fixed sink or zero-argument callable returning the currently active
+        sink.
+    stream_name: str
+        Diagnostic stream label included in backend.output events, such as
+        stdout or stderr.
+
+    Methods
+    -------
+    write(text)
+        Record complete non-empty lines and retain any final fragment.
+    flush()
+        Record the remaining text fragment.
+
+    Notes
+    -----
+    This is the small write/flush adapter used for redirected backend
+    diagnostics, not a complete TextIOBase implementation. Lines are buffered
+    until newline or flush; blank lines are ignored. Output can contain
+    sensitive backend text.
+
+    """
 
     def __init__(
         self,
@@ -700,8 +1394,18 @@ class TraceTextStream:
     ) -> None:
         """Keep incomplete lines until a newline or explicit flush.
 
-        A provider lets a long-running GUI switch output from its startup
-        trace to the currently open project's trace.
+        A provider lets a long-running GUI switch output from its startup trace
+        to the currently open project's trace.
+
+        Parameters
+        ----------
+        trace: TraceSink | Callable
+            Fixed sink or zero-argument callable returning the currently active
+            sink.
+        stream_name: str
+            Diagnostic stream label included in backend.output events, such as
+            stdout or stderr.
+
         """
 
         self._trace_provider = trace if callable(trace) else lambda: trace
@@ -709,7 +1413,25 @@ class TraceTextStream:
         self._buffer = ""
 
     def write(self, text: str) -> int:
-        """Record complete non-empty lines and retain any final fragment."""
+        """Record complete non-empty lines and retain any final fragment.
+
+        Parameters
+        ----------
+        text: str
+            Text to buffer, preview, or package as specified by the operation.
+
+        Returns
+        -------
+        int
+            Number of characters accepted from text, including any buffered
+            fragment.
+
+        Notes
+        -----
+        Complete nonblank lines are emitted immediately; a trailing partial
+        line remains buffered. Sink errors propagate to the caller.
+
+        """
 
         self._buffer += str(text)
         while "\n" in self._buffer:
@@ -718,14 +1440,29 @@ class TraceTextStream:
         return len(text)
 
     def flush(self) -> None:
-        """Record the remaining text fragment."""
+        """Record the remaining text fragment.
+
+
+        """
 
         if self._buffer:
             self._emit(self._buffer)
             self._buffer = ""
 
     def _emit(self, line: str) -> None:
-        """Ignore blank output and trace one complete line."""
+        """Ignore blank output and trace one complete line.
+
+        Parameters
+        ----------
+        line: str
+            One diagnostic output line or final buffered fragment.
+
+        Notes
+        -----
+        Obtains the current sink when a provider callable was supplied, then
+        emits a backend.output event. Blank text is ignored.
+
+        """
 
         if line.strip():
             self._trace_provider().emit(
@@ -740,7 +1477,35 @@ def create_trace_logger(
     *,
     default_directory: str | Path,
 ) -> tuple[TraceSink, bool]:
-    """Return a trace and whether the caller owns its lifetime."""
+    """Return a trace and whether the caller owns its lifetime.
+
+    Parameters
+    ----------
+    trace: TraceConfig | TraceSink | None
+        Trace configuration or existing sink. None produces a NullTraceLogger
+        in the factory.
+    default_directory: str | pathlib.Path
+        Fallback output directory when the configuration does not name an exact
+        JSON file.
+
+    Returns
+    -------
+    tuple[TraceSink, bool]
+        Pair (sink, owns_sink). Ownership is True only for a new enabled logger
+        constructed from TraceConfig; existing and null sinks are not owned.
+
+    Raises
+    ------
+    ValueError
+        If trace is not None, TraceConfig, TraceLogger, or NullTraceLogger.
+
+    Notes
+    -----
+    None selects a null sink at this factory layer. RAGSession changes its own
+    None default to an enabled forensic configuration before calling this
+    factory. Logger-construction I/O and validation errors propagate.
+
+    """
 
     if trace is None:
         return NullTraceLogger(), False
@@ -763,7 +1528,32 @@ def _trace_path(
     default_directory: Path,
     trace_id: str,
 ) -> Path:
-    """Resolve an exact trace file without overwriting an earlier run."""
+    """Resolve a configured trace path or choose a timestamped JSON filename.
+
+    Parameters
+    ----------
+    configured: str | pathlib.Path | None
+        Configured exact JSON output file, output directory, or None.
+    default_directory: pathlib.Path
+        Fallback output directory when the configuration does not name an exact
+        JSON file.
+    trace_id: str
+        Logger correlation identifier. This parameter is retained by the helper
+        signature but is not used to construct the path.
+
+    Returns
+    -------
+    pathlib.Path
+        Output path after home-directory expansion. Relative paths remain
+        relative to the working directory.
+
+    Notes
+    -----
+    Directory-based names use a UTC timestamp with microseconds. The helper
+    neither checks for collisions nor reserves the file. An exact .json path
+    may already exist. The trace_id argument does not participate in naming.
+
+    """
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S-%fZ")
     name = f"conversation_{timestamp}.json"
@@ -776,13 +1566,38 @@ def _trace_path(
 
 
 def _safe_name(value: str) -> str:
-    """Return a portable single path component."""
+    """Return a portable single path component.
+
+    Parameters
+    ----------
+    value: str
+        Python value to convert or package as trace content.
+
+    Returns
+    -------
+    str
+        A portable single path component.
+
+    Notes
+    -----
+    Sanitizes to the configured safe character set and strips leading/trailing
+    punctuation. The result can be empty; callers decide whether to reject it
+    or use a fallback.
+
+    """
 
     return _SAFE_NAME.sub("-", value).strip("-._")
 
 
 def _utc_timestamp() -> str:
-    """Return one readable UTC timestamp with millisecond precision."""
+    """Return one readable UTC timestamp with millisecond precision.
+
+    Returns
+    -------
+    str
+        One readable UTC timestamp with millisecond precision.
+
+    """
 
     return (
         datetime.now(timezone.utc)
@@ -792,13 +1607,43 @@ def _utc_timestamp() -> str:
 
 
 def _milliseconds(seconds: float) -> float:
-    """Round a duration without converting it to text."""
+    """Round a duration without converting it to text.
+
+    Parameters
+    ----------
+    seconds: float
+        Duration in seconds to round for the stored millisecond value.
+
+    Returns
+    -------
+    float
+        Seconds multiplied by 1000 and rounded to three decimal places.
+
+    """
 
     return round(seconds * 1000, 3)
 
 
 def trace_text_preview(text: str) -> str:
-    """Return three opening and three closing words for trace inspection."""
+    """Return three opening and three closing words for trace inspection.
+
+    Parameters
+    ----------
+    text: str
+        Text to buffer, preview, or package as specified by the operation.
+
+    Returns
+    -------
+    str
+        Three opening and three closing words for trace inspection.
+
+    Notes
+    -----
+    Whitespace is normalized. Text with at most six words is returned in full;
+    longer text keeps the first three and last three words separated by an
+    ellipsis. This is a display preview, not the exact source text.
+
+    """
 
     words = text.split()
     if len(words) <= 6:
@@ -807,7 +1652,20 @@ def trace_text_preview(text: str) -> str:
 
 
 def _progress_checkpoint(event: Mapping[str, object]) -> dict[str, object]:
-    """Flatten one sampled progress event for compact inspection."""
+    """Flatten one sampled progress event for compact inspection.
+
+    Parameters
+    ----------
+    event: Mapping[str, object]
+        Structured event dictionary used for storage or readable projection.
+
+    Returns
+    -------
+    dict[str, object]
+        Compact checkpoint with selected event and progress fields for readable
+        output.
+
+    """
 
     data = event.get("data")
     details = dict(data) if isinstance(data, Mapping) else {}
@@ -849,7 +1707,29 @@ def _readable_sessions(
     events: list[dict[str, object]],
     progress: list[dict[str, object]],
 ) -> dict[str, object]:
-    """Group compact events under names that remain useful when folded."""
+    """Group compact events under names that remain useful when folded.
+
+    Parameters
+    ----------
+    events: list[dict[str, object]]
+        Ordered non-progress trace events for the current logger run.
+    progress: list[dict[str, object]]
+        Sampled progress-checkpoint dictionaries to place beside their
+        operations.
+
+    Returns
+    -------
+    dict[str, object]
+        Ordered mapping of readable session categories, operations, numbered
+        turns/stages, and progress checkpoints.
+
+    Notes
+    -----
+    Turn numbering starts at one for the supplied event list. The helper does
+    not know the previously saved turn count; merging with earlier runs is
+    performed by its caller.
+
+    """
 
     sessions: dict[str, dict[str, object]] = {}
     span_nodes: dict[str, dict[str, object]] = {}
@@ -936,7 +1816,27 @@ def _session_bucket(
     sessions: dict[str, dict[str, object]],
     category: str,
 ) -> dict[str, object]:
-    """Return one consistently named top-level session."""
+    """Return one consistently named top-level session.
+
+    Parameters
+    ----------
+    sessions: dict[str, dict[str, object]]
+        Mutable readable-session mapping indexed by ordered category names.
+    category: str
+        Recognized top-level trace category used by the session-order and title
+        tables.
+
+    Returns
+    -------
+    dict[str, object]
+        One consistently named top-level session.
+
+    Notes
+    -----
+    Mutates sessions by creating the category bucket when absent. Category must
+    exist in the configured title/order tables.
+
+    """
 
     key = _numbered_key(_SESSION_ORDER[category], category)
     return sessions.setdefault(
@@ -953,7 +1853,25 @@ def _append_readable_operation(
     event: dict[str, object],
     span_nodes: dict[str, dict[str, object]],
 ) -> None:
-    """Add one compact event, merging span start and finish records."""
+    """Add one compact event, merging span start and finish records.
+
+    Parameters
+    ----------
+    operations: dict[str, object]
+        Readable operation mapping whose keys already identify stored entries.
+    event: dict[str, object]
+        Structured event dictionary used for storage or readable projection.
+    span_nodes: dict[str, dict[str, object]]
+        Mutable mapping from span identifiers to readable operations, used to
+        merge lifecycle events.
+
+    Notes
+    -----
+    Mutates operations and span_nodes. A recognized span start creates a node;
+    completion/failure updates the existing node rather than appending a full
+    duplicate lifecycle record.
+
+    """
 
     event_type = str(event.get("event_type", "event"))
     span_id = event.get("span_id")
@@ -993,7 +1911,20 @@ def _append_readable_operation(
 
 
 def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
-    """Remove repeated transport metadata from a readable event."""
+    """Remove repeated transport metadata from a readable event.
+
+    Parameters
+    ----------
+    event: Mapping[str, object]
+        Structured event dictionary used for storage or readable projection.
+
+    Returns
+    -------
+    dict[str, object]
+        Readable dictionary of event status/identity, timing, nonredundant
+        details, and resolved artifact content.
+
+    """
 
     compact: dict[str, object] = {
         "event": {
@@ -1040,20 +1971,66 @@ def _unique_operation_key(
     operations: Mapping[str, object],
     event_type: str,
 ) -> str:
-    """Return a numbered operation name that is readable when collapsed."""
+    """Return a numbered operation name that is readable when collapsed.
+
+    Parameters
+    ----------
+    operations: Mapping[str, object]
+        Readable operation mapping whose keys already identify stored entries.
+    event_type: str
+        Nonblank machine-readable operation/event name, conventionally
+        dot-separated.
+
+    Returns
+    -------
+    str
+        A numbered operation name that is readable when collapsed.
+
+    """
 
     return _numbered_key(len(operations) + 1, event_type.replace(".", "_"))
 
 
 def _numbered_key(number: int, name: str) -> str:
-    """Create a stable JSON key with a visible order and title."""
+    """Create a stable JSON key with a visible order and title.
+
+    Parameters
+    ----------
+    number: int
+        One-based display order or turn number supplied by the grouping code.
+    name: str
+        Human-readable artifact or operation label normalized for the stored
+        key.
+
+    Returns
+    -------
+    str
+        Two-digit-minimum order prefix followed by a lowercase sanitized title,
+        using item when no title characters remain.
+
+    """
 
     clean = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     return f"{number:02d}_{clean or 'item'}"
 
 
 def _turn_title(event: Mapping[str, object], number: int) -> str:
-    """Name a conversation turn from its exact question when available."""
+    """Name a conversation turn from its exact question when available.
+
+    Parameters
+    ----------
+    event: Mapping[str, object]
+        Structured event dictionary used for storage or readable projection.
+    number: int
+        One-based display order or turn number supplied by the grouping code.
+
+    Returns
+    -------
+    str
+        Human-readable title derived from event question text when present,
+        otherwise a numbered turn label.
+
+    """
 
     data = event.get("data")
     question = data.get("question") if isinstance(data, Mapping) else None
@@ -1064,7 +2041,21 @@ def _turn_title(event: Mapping[str, object], number: int) -> str:
 
 
 def _event_session(event_type: str) -> str:
-    """Choose the human session containing one non-turn event."""
+    """Choose the human session containing one non-turn event.
+
+    Parameters
+    ----------
+    event_type: str
+        Nonblank machine-readable operation/event name, conventionally
+        dot-separated.
+
+    Returns
+    -------
+    str
+        Recognized category name selected from the event-type prefixes and
+        fallback policy.
+
+    """
 
     if event_type.startswith(("project.", "workspace.", "gui.project")):
         return "project"
@@ -1080,7 +2071,21 @@ def _event_session(event_type: str) -> str:
 
 
 def _turn_stage(event_type: str) -> str:
-    """Choose a nested conversation phase for one turn event."""
+    """Choose a nested conversation phase for one turn event.
+
+    Parameters
+    ----------
+    event_type: str
+        Nonblank machine-readable operation/event name, conventionally
+        dot-separated.
+
+    Returns
+    -------
+    str
+        Recognized conversation-stage name selected from the event-type routing
+        rules.
+
+    """
 
     if event_type.startswith(("embedding.", "query.")):
         return "embedding"
@@ -1098,7 +2103,19 @@ def _turn_stage(event_type: str) -> str:
 
 
 def _progress_session(stage: str) -> str:
-    """Place sampled progress beside the operation it describes."""
+    """Place sampled progress beside the operation it describes.
+
+    Parameters
+    ----------
+    stage: str
+        Preparation stage label mapped to a readable session category.
+
+    Returns
+    -------
+    str
+        Top-level category associated with the supplied preparation stage.
+
+    """
 
     if any(word in stage for word in ("read", "extract", "chunk", "source")):
         return "sources"
@@ -1108,7 +2125,28 @@ def _progress_session(stage: str) -> str:
 
 
 def _json_value(value: object) -> object:
-    """Convert supported Python values to deterministic JSON-safe data."""
+    """Convert supported Python objects into trace-serializable values.
+
+    Parameters
+    ----------
+    value: object
+        Python value to convert or package as trace content.
+
+    Returns
+    -------
+    object
+        Converted scalar, mapping, list, or string representation accepted by
+        the logger's JSON-writing path.
+
+    Notes
+    -----
+    Dataclasses and paths are converted, sequences become lists, sets are
+    ordered by string representation, and other objects fall back to str.
+    Non-finite floats are not rejected; arbitrary object string representations
+    need not be deterministic. This conversion is not redaction or strict
+    portable JSON validation.
+
+    """
 
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -1126,7 +2164,22 @@ def _json_value(value: object) -> object:
 
 
 def _restrict_permissions(path: Path, mode: int) -> None:
-    """Apply private local permissions where the platform supports them."""
+    """Apply private local permissions where the platform supports them.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Filesystem path whose permissions should be restricted.
+    mode: int
+        POSIX-style permission mask passed to chmod, for example 0o600.
+
+    Notes
+    -----
+    OSError from chmod is ignored, allowing tracing to proceed on platforms
+    that cannot apply the requested permission mode. Private permissions are
+    therefore best-effort, not a guaranteed protection boundary.
+
+    """
 
     try:
         path.chmod(mode)
@@ -1135,7 +2188,14 @@ def _restrict_permissions(path: Path, mode: int) -> None:
 
 
 def _package_versions() -> dict[str, str | None]:
-    """Return versions of packages that can affect a QAChat trace."""
+    """Return versions of packages that can affect a QAChat trace.
+
+    Returns
+    -------
+    dict[str, str | None]
+        Versions of packages that can affect a QAChat trace.
+
+    """
 
     names = (
         "qachat",

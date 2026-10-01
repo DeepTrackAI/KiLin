@@ -1,16 +1,50 @@
-"""Retrieve chunks through deterministic code relationships.
+"""Retrieve chunks near code entities recognized in a question.
 
-Classes
--------
-CodeResult
-    One chunk found through a code relationship.
+Name matching normalizes identifiers and detects a configured set of operator
+symbols. Resolved entities seed an undirected traversal of the supplied graph;
+matching chunks are ranked by graph distance and deterministic tie-breakers.
+The graph and name resolver are heuristics, so a match is not proof of a
+runtime call, dependency, or intended meaning of a word in the question.
 
-Functions
----------
-resolve_code_entities
-    Match query wording to named code entities.
-code_search
-    Rank chunks belonging to matched and related entities.
+Key Features
+------------
+
+- **Entity seeds**
+
+    Resolve known leaf names, qualified names, and configured operator-related
+    method names.
+
+- **Bounded graph traversal**
+
+    Search neighboring entities up to the requested hop count.
+
+- **Source-backed results**
+
+    Return only chunks whose source path and symbol match a candidate entity.
+
+Module Structure
+----------------
+
+- ``CodeResult``
+
+    One chunk found through code-aware retrieval.
+
+- ``resolve_code_entities``
+
+    Return entities explicitly named by a query.
+
+- ``code_search``
+
+    Find chunks for explicitly named and related code entities.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> graph = qachat.CodeGraph(entities=(), relations=())
+>>> names = qachat.resolve_code_entities(graph, "How does loading work?")
 
 """
 
@@ -81,6 +115,17 @@ _OPERATOR_PATTERN = re.compile(
 class CodeResult:
     """One chunk found through code-aware retrieval.
 
+    Parameters
+    ----------
+    score: float
+        Deterministic score based on graph distance.
+    chunk: Chunk
+        Chunk belonging to the matched or related entity.
+    entity: str
+        Qualified code entity that led to the chunk.
+    distance: int
+        Number of relationships from the query match.
+
     Attributes
     ----------
     score: float
@@ -104,7 +149,34 @@ def resolve_code_entities(
     graph: CodeGraph,
     query_text: str,
 ) -> list[CodeEntity]:
-    """Return entities explicitly named by a query."""
+    """Return entities explicitly named by a query.
+
+    Parameters
+    ----------
+    graph: CodeGraph
+        Source-derived graph used to recognize entities and traverse
+        relationships.
+    query_text: str
+        Nonblank question text used for identifier and configured operator
+        matching.
+
+    Returns
+    -------
+    list[CodeEntity]
+        Entities explicitly named by a query.
+
+    Raises
+    ------
+    ValueError
+        If query_text is not nonblank text.
+
+    Notes
+    -----
+    Name and operator matching are heuristic. Normalized leaf-name matches
+    favor the longest recognized leaf names; this does not prove the question
+    refers to a particular runtime object.
+
+    """
 
     if not isinstance(query_text, str) or not query_text.strip():
         raise ValueError("query_text must be non-empty text.")
@@ -151,7 +223,44 @@ def code_search(
     count: int = 5,
     max_distance: int = 1,
 ) -> list[CodeResult]:
-    """Find chunks for explicitly named and related code entities."""
+    """Find chunks for explicitly named and related code entities.
+
+    Parameters
+    ----------
+    graph: CodeGraph
+        Source-derived graph used to recognize entities and traverse
+        relationships.
+    chunks: list[Chunk]
+        Available retrieval chunks whose paths and symbols can match graph
+        entities.
+    query_text: str
+        Nonblank question text used for identifier and configured operator
+        matching.
+    count: int, optional
+        Positive exact integer limiting returned code results. Defaults to
+        ``5``.
+    max_distance: int, optional
+        Nonnegative exact integer bounding undirected graph hops from matched
+        seeds. Defaults to ``1``.
+
+    Returns
+    -------
+    list[CodeResult]
+        CodeResult list limited by count, ordered by graph distance and the
+        implemented specificity/identifier tie-breakers.
+
+    Raises
+    ------
+    ValueError
+        If count or max_distance is invalid, or query_text is blank/non-string.
+
+    Notes
+    -----
+    No model is queried. Traversal treats all relation types as undirected
+    links. Only chunks matching a candidate entity path and symbol become
+    results. No matched entity yields an empty result list.
+
+    """
 
     if type(count) is not int or count < 1:
         raise ValueError("count must be a positive whole number.")
@@ -214,7 +323,19 @@ def code_search(
 
 
 def _name_words(text: str) -> str:
-    """Return compact lowercase words for identifier matching."""
+    """Return compact lowercase words for identifier matching.
+
+    Parameters
+    ----------
+    text: str
+        Identifier or question text normalized into lowercase word components.
+
+    Returns
+    -------
+    str
+        Compact lowercase words for identifier matching.
+
+    """
 
     expanded = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", text)
     return " ".join(_WORD.findall(expanded.replace("_", " ").lower()))
@@ -226,12 +347,27 @@ def _operator_seed_entities(
 ) -> list[CodeEntity]:
     """Return entities for an operator symbol written literally in the query.
 
-    A symbol only counts when it is not adjacent to a letter or digit on
-    either side. This keeps ordinary punctuation and numbers from triggering
-    a match -- a hyphen inside "well-known" or a slash inside "9/30" never
-    reaches this far -- while still recognizing a symbol set off by
-    whitespace, quotes, backticks, or parentheses, the way "the & operator",
-    "using `>>`", and "(a & b)" all are.
+    A symbol only counts when it is not adjacent to a letter or digit on either
+    side. This keeps ordinary punctuation and numbers from triggering a match
+    -- a hyphen inside "well-known" or a slash inside "9/30" never reaches this
+    far -- while still recognizing a symbol set off by whitespace, quotes,
+    backticks, or parentheses, the way "the & operator", "using `>>`", and "(a
+    & b)" all are.
+
+    Parameters
+    ----------
+    graph: CodeGraph
+        Source-derived graph used to recognize entities and traverse
+        relationships.
+    query_text: str
+        Nonblank question text used for identifier and configured operator
+        matching.
+
+    Returns
+    -------
+    list[CodeEntity]
+        Entities for an operator symbol written literally in the query.
+
     """
 
     dunder_names: set[str] = set()
@@ -250,13 +386,13 @@ def _contains_whole_words(query_words: str, name_words: str) -> bool:
     """Return whether name_words appears in query_words as whole words.
 
     Both arguments are already space-joined, lowercase word sequences from
-    :func:`_name_words`. A plain substring check would let a short entity
-    name match inside an unrelated longer word that merely starts the same
-    way -- for example the module entity ``project`` would match the query
-    word ``projects`` (an ordinary English plural, not a reference to
+    :func:`_name_words`. A plain substring check would let a short entity name
+    match inside an unrelated longer word that merely starts the same way --
+    for example the module entity ``project`` would match the query word
+    ``projects`` (an ordinary English plural, not a reference to
     ``qachat/project.py``), or ``act`` would match inside ``react``. This
-    instead requires name_words to appear at a word boundary on both sides,
-    so only an actual whole-word (or whole-phrase, for multi-word names)
+    instead requires name_words to appear at a word boundary on both sides, so
+    only an actual whole-word (or whole-phrase, for multi-word names)
     occurrence counts as an explicit reference.
 
     Parameters
@@ -289,7 +425,30 @@ def _graph_distances(
     seeds: set[str],
     max_distance: int,
 ) -> dict[str, int]:
-    """Return shortest undirected distances from seed entities."""
+    """Return shortest undirected distances from seed entities.
+
+    Parameters
+    ----------
+    graph: CodeGraph
+        Source-derived graph used to recognize entities and traverse
+        relationships.
+    seeds: set[str]
+        Entity names used as distance-zero graph traversal seeds.
+    max_distance: int
+        Nonnegative exact integer bounding undirected graph hops from matched
+        seeds.
+
+    Returns
+    -------
+    dict[str, int]
+        Shortest undirected distances from seed entities.
+
+    Notes
+    -----
+    Computes minimum hop distances in an undirected adjacency map. Relations
+    need not have explicit entity records at both endpoints.
+
+    """
 
     distances = {seed: 0 for seed in seeds}
     frontier = set(seeds)
@@ -307,6 +466,20 @@ def _graph_distances(
 
 
 def _symbols_match(entity: str, symbol: str) -> bool:
-    """Return whether a graph entity corresponds to a chunk symbol."""
+    """Return whether a graph entity corresponds to a chunk symbol.
+
+    Parameters
+    ----------
+    entity: str
+        Qualified graph entity name to compare with a source symbol.
+    symbol: str
+        Optional source-unit symbol name to compare with a graph entity.
+
+    Returns
+    -------
+    bool
+        Whether a graph entity corresponds to a chunk symbol.
+
+    """
 
     return entity == symbol or entity.endswith(f".{symbol}")

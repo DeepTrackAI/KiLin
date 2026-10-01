@@ -1,9 +1,37 @@
-"""Extract natural classes and functions from MATLAB source.
+"""Partition MATLAB text using recognizable declaration boundaries.
 
-Functions
----------
-extract_source_units
-    Read MATLAB declarations as text without executing the selected file.
+The extractor recognizes class and function declarations and selected class
+blocks using line-oriented patterns. It preserves intervening source context
+and marks class children such as methods or constructors where recognized.
+It is not a full MATLAB parser: multiline declarations, block comments, and
+nested constructs can require interpretation beyond these heuristics.
+
+Key Features
+------------
+
+- **Structural hints**
+
+    Label recognizable MATLAB classes, functions, and class sections.
+
+- **Context retention**
+
+    Preserve text between declarations for later chunking.
+
+Module Structure
+----------------
+
+- ``extract_source_units``
+
+    Return natural units from one MATLAB source file.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".m"])
+>>> units = qachat.extract_source_units(qachat.read_repository_files(report))
 
 """
 

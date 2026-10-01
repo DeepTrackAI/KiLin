@@ -1,9 +1,36 @@
-"""Extract MATLAB relationships for the shared code graph.
+"""Extract lightweight MATLAB relationships using textual patterns.
 
-Functions
----------
-extract_code_relations
-    Find calls and inheritance without executing MATLAB source.
+This extension recognizes selected inheritance and function-call forms in
+MATLAB source. It uses regular expressions and known entity names, not a
+MATLAB parser or interpreter. Complex declarations, strings, comments, and
+nested constructs can therefore be incomplete or ambiguous. The source is
+never executed by this hook.
+
+Key Features
+------------
+
+- **Textual graph hints**
+
+    Add recognizable MATLAB inheritance and call relationships to the
+    structural graph.
+
+- **Shared name resolution**
+
+    Use repository entity names supplied by the graph builder.
+
+Module Structure
+----------------
+
+- ``extract_code_relations``
+
+    Return code relationships found in one MATLAB source file.
+
+Examples
+--------
+>>> import qachat
+>>> report = qachat.scan_repository("/path/to/repository", extensions=[".m"])
+>>> files = qachat.read_repository_files(report)
+>>> graph = qachat.build_code_graph(files, qachat.extract_source_units(files))
 
 """
 
@@ -59,6 +86,12 @@ def extract_code_relations(
     -------
     set[CodeRelation]
         Calls and inheritance relationships found without executing code.
+
+    Notes
+    -----
+    Regular-expression matches are structural hints, not full MATLAB parsing.
+    Complex comments, strings, multiline declarations, and nested definitions
+    can be ambiguous or missed.
 
     """
 

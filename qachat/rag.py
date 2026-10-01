@@ -1,13 +1,91 @@
-"""Assemble retrieval and chat into one persistent QAChat session.
+"""Coordinate retrieval, chat generation, and resumable project conversations.
 
-Classes
--------
-Evidence
-    One traceable source chunk supplied to the chat model.
-ConversationTurn
-    One saved question, answer, evidence set, and settings snapshot.
-RAGSession
-    Open a project, reuse or build indexes, answer, log, and resume.
+``RAGSession`` opens a configured project, loads an embedding session, reuses
+or builds source chunks and retrieval indexes, then loads a chat session.
+For each question it combines semantic, lexical, and code-based rankings,
+expands explicitly requested context, and formats evidence into the model's
+user prompt. Returned ``Evidence`` records identify the supplied excerpts;
+the module does not independently verify the generated answer or citations.
+
+Conversation turns retain questions, answers, evidence, and effective turn
+parameters. Persistence uses a resumable state in a conversation JSON record
+or in the supplied trace sink. The session has side effects: initialization
+may create files, rebuild indexes, load models, and download missing model
+files according to the profile. ``trace=None`` creates enabled forensic
+tracing in this class, unlike the low-level chat and embedding classes.
+
+History and expanded evidence have no automatic summarization or shared
+prompt-token budget. A retrieval count limits the initial fused ranking, not
+necessarily the final expanded evidence set. Explicit cleanup releases owned
+models and trace resources.
+
+Key Features
+------------
+
+- **Project orchestration**
+
+    Connect scanning, source extraction, token-aware chunking, indexing,
+    retrieval, and chat generation.
+
+- **Persistent indexes**
+
+    Compare selected-source manifests and configuration metadata before reusing
+    saved retrieval data.
+
+- **Inspectable evidence**
+
+    Retain chunk provenance and ranking information alongside each answer.
+
+- **Conversation state**
+
+    Restore or switch saved conversations while maintaining explicit
+    model-session ownership.
+
+- **Progress and tracing**
+
+    Emit stage callbacks and structured events, with content retention
+    controlled by trace settings.
+
+Module Structure
+----------------
+
+- ``ConversationTurn``
+
+    One retained question, generated answer, and supplied evidence.
+
+- ``Evidence``
+
+    One source chunk supplied to the chat model.
+
+- ``ProgressCallback``
+
+    Callback type receiving a ``ProgressEvent``.
+
+- ``ProgressEvent``
+
+    One structured progress update emitted while opening a RAG session.
+
+- ``RAGSession``
+
+    A loaded project, reusable indexes, models, and conversation.
+
+Private helpers implement the normalization, validation, and bookkeeping
+used by these operations; they are not added to the package-level API.
+
+Examples
+--------
+>>> import qachat
+>>> session = qachat.RAGSession(
+...     "/path/to/configured/workspace",
+...     trace=qachat.TraceConfig(enabled=False),
+... )
+>>> try:
+...     answer = session.ask("How does this repository select files?")
+... finally:
+...     session.close()
+
+Disabling tracing does not disable conversation checkpoint persistence.
+The workspace and model dependencies must already be suitable for its profile.
 
 """
 
@@ -86,13 +164,44 @@ _SYSTEM_PROMPT = (
 class Evidence:
     """One source chunk supplied to the chat model.
 
+    Parameters
+    ----------
+    citation: int
+        One-based citation number used in the answer prompt.
+    path: pathlib.Path
+        Source path relative to the configured source folder.
+    start_line: int
+        One-based source line range. For a notebook cell (``cell`` is not
+        None), these are local to that cell -- every cell starts at line 1 --
+        not a position in the underlying ``.ipynb`` file, which has no
+        meaningful line numbering a Jupyter reader would recognize.
+    end_line: int
+        One-based source line range. For a notebook cell (``cell`` is not
+        None), these are local to that cell -- every cell starts at line 1 --
+        not a position in the underlying ``.ipynb`` file, which has no
+        meaningful line numbering a Jupyter reader would recognize.
+    symbol: str | None
+        Function, class, or section name when available.
+    text: str
+        Exact retrieved source text.
+    cell: int | None, optional
+        One-based notebook cell number, when this evidence came from a
+        ``.ipynb`` source. None for every other source type. Required to tell
+        two notebook cells apart when they happen to share the same local
+        start_line/end_line range. Defaults to ``None``.
+
     Attributes
     ----------
     citation: int
         One-based citation number used in the answer prompt.
     path: pathlib.Path
         Source path relative to the configured source folder.
-    start_line, end_line: int
+    start_line: int
+        One-based source line range. For a notebook cell (``cell`` is not
+        None), these are local to that cell -- every cell starts at line 1 --
+        not a position in the underlying ``.ipynb`` file, which has no
+        meaningful line numbering a Jupyter reader would recognize.
+    end_line: int
         One-based source line range. For a notebook cell (``cell`` is not
         None), these are local to that cell -- every cell starts at line 1 --
         not a position in the underlying ``.ipynb`` file, which has no
@@ -103,9 +212,17 @@ class Evidence:
         Exact retrieved source text.
     cell: int | None
         One-based notebook cell number, when this evidence came from a
-        ``.ipynb`` source. None for every other source type. Required to
-        tell two notebook cells apart when they happen to share the same
-        local start_line/end_line range.
+        ``.ipynb`` source. None for every other source type. Required to tell
+        two notebook cells apart when they happen to share the same local
+        start_line/end_line range.
+
+    Notes
+    -----
+    Line numbers refer to extractor coordinates. Notebook lines are cell-local;
+    PDF lines are page-local. This record stores cell but has no section/page
+    field, so not all source-unit page provenance survives into Evidence. The
+    model prompt currently includes path/line/symbol but not the notebook cell
+    identifier.
 
     """
 
@@ -122,6 +239,30 @@ class Evidence:
 class ProgressEvent:
     """One structured progress update emitted while opening a RAG session.
 
+    Parameters
+    ----------
+    stage: str
+        Stable machine-readable stage name for notebook or GUI clients.
+    percent: float
+        Approximate overall session-preparation progress from 0 to 100.
+    message: str
+        Short human-readable description of the current work.
+    current: int | None, optional
+        Optional item counts when a stage has a meaningful count. Defaults to
+        ``None``.
+    total: int | None, optional
+        Optional item counts when a stage has a meaningful count. Defaults to
+        ``None``.
+    remaining: int | None, optional
+        Number of items still remaining in the current counted stage. Defaults
+        to ``None``.
+    elapsed_seconds: float | None, optional
+        Elapsed time for the current counted stage. Defaults to ``None``.
+    eta_seconds: float | None, optional
+        Estimated seconds remaining for the current counted stage. This is an
+        estimate based on the average throughput observed so far. Defaults to
+        ``None``.
+
     Attributes
     ----------
     stage: str
@@ -130,7 +271,9 @@ class ProgressEvent:
         Approximate overall session-preparation progress from 0 to 100.
     message: str
         Short human-readable description of the current work.
-    current, total: int | None
+    current: int | None
+        Optional item counts when a stage has a meaningful count.
+    total: int | None
         Optional item counts when a stage has a meaningful count.
     remaining: int | None
         Number of items still remaining in the current counted stage.
@@ -158,7 +301,23 @@ AnswerPhaseCallback = Callable[[str, dict[str, object]], None]
 
 @dataclass(frozen=True, slots=True)
 class ConversationTurn:
-    """One persisted question and grounded answer.
+    """One retained question, generated answer, and supplied evidence.
+
+    The record stores what was supplied and generated; it does not certify
+    answer correctness or citation grounding.
+
+    Parameters
+    ----------
+    timestamp: str
+        UTC time in ISO 8601 form.
+    question: str
+        Original user question.
+    answer: str
+        Chat-model response.
+    evidence: tuple[Evidence, ...]
+        Source chunks supplied for this answer.
+    parameters: dict[str, object]
+        Exact project and model settings used for this turn.
 
     Attributes
     ----------
@@ -172,6 +331,12 @@ class ConversationTurn:
         Source chunks supplied for this answer.
     parameters: dict[str, object]
         Exact project and model settings used for this turn.
+
+    Notes
+    -----
+    The dataclass is frozen, but its parameters dictionary is still mutable.
+    Parameter fields describe effective application settings, not every
+    backend-internal generation option.
 
     """
 
@@ -189,16 +354,18 @@ class RAGSession:
     ----------
     project_directory: str | pathlib.Path
         QAChat project folder containing profile.ini.
-    progress_callback: collections.abc.Callable[[ProgressEvent], None] | None
-        Optional UI-agnostic callback that receives structured progress events
-        while the session checks or builds indexes and loads models.
+    progress_callback: ProgressCallback | None, optional
+        Optional callback receiving ProgressEvent records during preparation.
+        Callback exceptions propagate. Defaults to ``None``.
     trace: TraceConfig | TraceSink | None, optional
-        Structured trace configuration or an existing shared trace. By
-        default, a forensic trace is stored in this project's logs/traces
-        folder. Pass ``TraceConfig(enabled=False)`` to disable it.
+        Trace configuration or caller-owned sink. None requests a new enabled
+        forensic logger. TraceConfig(enabled=False) disables tracing but not
+        conversation persistence. Defaults to ``None``.
     conversation_path: str | pathlib.Path | None, optional
-        Self-contained conversation and trace file below ``logs/traces``.
-        When omitted, a new timestamped conversation file is created.
+        Optional conversation_*.json path under project logs. Relative paths
+        start at the project root; None chooses a new path under logs/traces.
+        When tracing is enabled, writes go through the sink, so configure its
+        output path consistently with this path. Defaults to ``None``.
 
     Attributes
     ----------
@@ -210,6 +377,49 @@ class RAGSession:
         Either reused or rebuilt for this opening.
     turns: list[ConversationTurn]
         Previous and current persisted interactions.
+    conversation_path: pathlib.Path
+        Path used when loading conversation state and when saving without an
+        enabled trace sink.
+    trace: TraceSink
+        Active structured trace sink, potentially caller-owned.
+    chat_session: ChatSession
+        Loaded chat model and its in-memory formatted conversation.
+    embedding_session: EmbeddingSession
+        Loaded embedding model and tokenizer.
+    chunks: list[Chunk]
+        Chunks used by the current retrieval indexes.
+    source_changes: dict[str, object]
+        Selected-source manifest comparison, including configuration-change
+        information when provided.
+
+    Methods
+    -------
+    ask(...)
+        Retrieve evidence, generate an answer, and save the turn.
+    switch_conversation(conversation_path, *, trace)
+        Load a conversation without reloading models or indexes.
+    reset()
+        Archive the active conversation and clear it from memory.
+    close()
+        Release both models while keeping indexes and logs on disk.
+
+    Raises
+    ------
+    ValueError
+        If the callback, profile, conversation state, source/index data, or a
+        validated model setting is invalid.
+    OSError
+        If required project/source/state files cannot be read or written.
+    ImportError
+        If a required backend/reader dependency is unavailable.
+
+    Notes
+    -----
+    Construction performs I/O and loads models. A rebuilt index reads selected
+    source contents and writes index/manifest metadata. Forensic traces and
+    resumable state can contain complete source excerpts and conversations. No
+    automatic evidence-token budget, answer validation, or history
+    summarization is supplied. Close explicitly to release owned resources.
 
     """
 
@@ -226,7 +436,40 @@ class RAGSession:
         trace: TraceConfig | TraceSink | None = None,
         conversation_path: str | Path | None = None,
     ) -> None:
-        """Open a project, its models, indexes, and saved conversation."""
+        """Open a project, its models, indexes, and saved conversation.
+
+        Parameters
+        ----------
+        project_directory: str | pathlib.Path
+            QAChat project folder containing profile.ini.
+        progress_callback: ProgressCallback | None, optional
+            Optional callback receiving ProgressEvent records during
+            preparation. Callback exceptions propagate. Defaults to ``None``.
+        trace: TraceConfig | TraceSink | None, optional
+            Trace configuration or caller-owned sink. None requests a new
+            enabled forensic logger. TraceConfig(enabled=False) disables
+            tracing but not conversation persistence. Defaults to ``None``.
+        conversation_path: str | pathlib.Path | None, optional
+            Optional conversation_*.json path under project logs. Relative
+            paths start at the project root; None chooses a new path under
+            logs/traces. When tracing is enabled, writes go through the sink,
+            so configure its output path consistently with this path. Defaults
+            to ``None``.
+
+        Raises
+        ------
+        ValueError
+            If a non-None progress callback is not callable; profile, source,
+            index, and model validation errors also propagate.
+
+        Notes
+        -----
+        Attempts to close partially constructed model sessions after a
+        preparation exception. Trace construction occurs before model loading.
+        Heavy dependencies and model downloads are governed by the selected
+        profile.
+
+        """
 
         session_started_at = perf_counter()
         if progress_callback is not None and not callable(progress_callback):
@@ -400,7 +643,40 @@ class RAGSession:
         elapsed_seconds: float | None = None,
         eta_seconds: float | None = None,
     ) -> None:
-        """Send one structured progress event when a callback is configured."""
+        """Send one structured progress event when a callback is configured.
+
+        Parameters
+        ----------
+        stage: str
+            Machine-readable preparation stage name.
+        percent: float
+            Approximate overall preparation percentage passed to progress
+            consumers.
+        message: str
+            Human-readable progress description.
+        current: int | None, optional
+            Completed item count for this stage, when meaningful. Defaults to
+            ``None``.
+        total: int | None, optional
+            Total item count for this stage, when meaningful. Defaults to
+            ``None``.
+        remaining: int | None, optional
+            Items remaining in the current stage, when meaningful. Defaults to
+            ``None``.
+        elapsed_seconds: float | None, optional
+            Elapsed duration of the current counted stage. Defaults to
+            ``None``.
+        eta_seconds: float | None, optional
+            Estimated remaining stage duration from observed average
+            throughput, not a completion guarantee. Defaults to ``None``.
+
+        Notes
+        -----
+        Trace progress is reduced to configured percentage checkpoints while
+        callbacks receive the emitted ProgressEvent. This reports estimates,
+        not guaranteed completion or elapsed limits.
+
+        """
 
         event = ProgressEvent(
             stage=stage,
@@ -442,7 +718,39 @@ class RAGSession:
         total: int,
         started_at: float,
     ) -> None:
-        """Emit throttled counted progress with elapsed time and ETA."""
+        """Emit throttled counted progress with elapsed time and ETA.
+
+        Parameters
+        ----------
+        stage: str
+            Machine-readable preparation stage name.
+        start_percent: float
+            Overall progress value at the start of this counted stage.
+        end_percent: float
+            Overall progress value assigned to completion of this counted
+            stage.
+        label: str
+            Human-readable stage description used to compose the progress
+            message.
+        current: int
+            Completed item count for this stage, when meaningful.
+        total: int
+            Total item count for this stage, when meaningful.
+        started_at: float
+            perf_counter timestamp captured at the beginning of the stage.
+
+        Raises
+        ------
+        ValueError
+            If counts do not satisfy 0 <= current <= total.
+
+        Notes
+        -----
+        Updates between endpoints may be throttled by elapsed time. Remaining
+        time uses average throughput and is unavailable before a positive
+        count; callback failures are not swallowed.
+
+        """
 
         if total < 0 or current < 0 or current > total:
             raise ValueError(
@@ -487,17 +795,25 @@ class RAGSession:
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
+        The initial retrieval count applies to each ranking and fusion stage;
+        explicit file/function context may expand the final evidence.
+        Generation settings supplied here persist on the loaded chat session
+        after validation.
+
         Parameters
         ----------
         question: str
             User question about the opened project.
-        retrieval_count: int | None
-            Optional evidence count for this question only.
-        generation_settings: dict[str, object] | None
+        retrieval_count: int | None, optional
+            Optional evidence count for this question only. Defaults to
+            ``None``.
+        generation_settings: dict[str, object] | None, optional
             Optional temperature, thinking, and answer length for this and
-            later questions, until changed again.
-        phase_callback: collections.abc.Callable | None
-            Optional callback receiving the current answer phase and details.
+            later questions, until changed again. Defaults to ``None``.
+        phase_callback: AnswerPhaseCallback | None, optional
+            Optional callback receiving (phase_name, details_dict) for answer
+            phases. Its exceptions propagate; it is not an asynchronous
+            notification queue. Defaults to ``None``.
 
         Returns
         -------
@@ -510,6 +826,15 @@ class RAGSession:
             If the session is closed.
         ValueError
             If the question is empty.
+
+        Notes
+        -----
+        The method appends chat history and a ConversationTurn before
+        checkpoint writing finishes. A persistence or late phase-callback
+        failure does not roll back that state. Evidence is supplied in the
+        prompt but generated claims/citations are not checked. Full chat
+        history and all expanded evidence are used without an aggregate
+        token-budget guard.
 
         """
 
@@ -527,7 +852,21 @@ class RAGSession:
             raise ValueError("phase_callback must be callable or None.")
 
         def report_phase(phase: str, **details: object) -> None:
-            """Notify an interface without coupling retrieval to GUI code."""
+            """Notify an interface without coupling retrieval to GUI code.
+
+            Parameters
+            ----------
+            phase: str
+                Machine-readable answer phase reported to the caller.
+            **details: object
+                Additional phase-specific event fields passed to the callback.
+
+            Notes
+            -----
+            The nested helper calls the closed-over callback only when
+            supplied. It does not catch callback exceptions.
+
+            """
 
             if phase_callback is not None:
                 phase_callback(phase, details)
@@ -656,7 +995,42 @@ class RAGSession:
         *,
         trace: TraceSink,
     ) -> list[ConversationTurn]:
-        """Load a conversation without reloading models or indexes."""
+        """Load a conversation without reloading models or indexes.
+
+        Parameters
+        ----------
+        conversation_path: str | pathlib.Path
+            Conversation JSON path beneath the project logs tree, using a
+            conversation_*.json filename. Relative paths start at the project
+            root.
+        trace: TraceSink
+            Caller-owned trace sink associated with the target conversation.
+            Its output path should agree with the conversation path when
+            persistence is shared.
+
+        Returns
+        -------
+        list[ConversationTurn]
+            New list of the loaded ConversationTurn records.
+
+        Raises
+        ------
+        RuntimeError
+            If the session has already been closed.
+        ValueError
+            If the path, saved state, restored history, or saved generation
+            settings are invalid.
+        OSError
+            If saved state or trace writes cannot be accessed.
+
+        Notes
+        -----
+        Loaded models and indexes are reused. The trace sink is replaced and
+        made caller-owned before later state loading/validation; failures are
+        not transactional. Generation settings come from the last saved turn
+        when available, otherwise the profile defaults.
+
+        """
 
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
@@ -711,6 +1085,20 @@ class RAGSession:
         pathlib.Path | None
             Renamed conversation log, or None when no active log exists.
 
+        Raises
+        ------
+        RuntimeError
+            If the session is closed.
+        OSError
+            If the existing conversation cannot be archived.
+
+        Notes
+        -----
+        Archives the selected conversation file when present, clears in-memory
+        turns/checkpoint identity, and resets the chat history to its system
+        instruction. It does not reload models or clear an enabled trace sink's
+        retained resume-state dictionary.
+
         """
 
         if self._closed:
@@ -733,7 +1121,16 @@ class RAGSession:
         return archived_path
 
     def close(self: RAGSession) -> None:
-        """Release both models while keeping indexes and logs on disk."""
+        """Release both models while keeping indexes and logs on disk.
+
+        Notes
+        -----
+        The closed flag is set in a finally block and an owned trace is closed
+        there. Caller-owned sinks are not closed. Backend cleanup errors
+        propagate; this is not a guarantee that every allocation is released if
+        earlier cleanup fails.
+
+        """
 
         if self._closed:
             return
@@ -752,7 +1149,29 @@ class RAGSession:
         embedding_session: EmbeddingSession,
         report: dict[str, object] | None = None,
     ) -> tuple[list[Chunk], CodeGraph]:
-        """Read configured source and produce chunks and its code graph."""
+        """Read configured source and produce chunks and its code graph.
+
+        Parameters
+        ----------
+        embedding_session: EmbeddingSession
+            Loaded embedding session used for tokenizer-aware chunking and/or
+            index/query embedding.
+        report: dict[str, object] | None, optional
+            Optional existing scan report. None causes a scan using the project
+            profile. Defaults to ``None``.
+
+        Returns
+        -------
+        tuple[list[Chunk], CodeGraph]
+            Pair (chunks, code_graph) derived from the selected source files.
+
+        Notes
+        -----
+        Reads selected content, extracts units, counts tokens through the
+        embedding tokenizer, and builds the heuristic code graph. A supplied
+        incomplete scan is not rejected here.
+
+        """
 
         profile = self.project.profile
         if report is None:
@@ -912,7 +1331,28 @@ class RAGSession:
         str,
         dict[str, object],
     ]:
-        """Reuse indexes when source hashes and index settings still match."""
+        """Reuse indexes when source hashes and index settings still match.
+
+        Parameters
+        ----------
+        embedding_session: EmbeddingSession
+            Loaded embedding session used for tokenizer-aware chunking and/or
+            index/query embedding.
+
+        Returns
+        -------
+        tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]
+            Tuple (chunks, indexes, index_status, source_changes), where status
+            is reused or rebuilt.
+
+        Notes
+        -----
+        A selected-source manifest and stored configuration metadata control
+        reuse. Existing vectors are loaded only if the stored bundle is
+        accepted. Source completeness is not checked here; index and metadata
+        files are written separately rather than as one transaction.
+
+        """
 
         profile = self.project.profile
         self._emit_progress(
@@ -1160,7 +1600,34 @@ class RAGSession:
         *,
         trace_turn_id: str | None = None,
     ) -> tuple[Evidence, ...]:
-        """Run hybrid retrieval and deterministic context expansion."""
+        """Run hybrid retrieval and deterministic context expansion.
+
+        Parameters
+        ----------
+        question: str
+            User question supplied to query formatting or evidence retrieval.
+        retrieval_count: int | None, optional
+            Optional positive initial retrieval-result count; None uses the
+            project profile. Explicit context expansion may produce more
+            evidence. Defaults to ``None``.
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
+
+        Returns
+        -------
+        tuple[Evidence, ...]
+            Evidence tuple numbered from one after rank fusion and context
+            expansion.
+
+        Notes
+        -----
+        Semantic search receives the configured query format, while lexical and
+        code searches use the raw question. Explicit context expansion is not
+        capped by retrieval_count. Trace details use previews; the evidence
+        records keep full chunk text.
+
+        """
 
         count = retrieval_count or self.project.profile.retrieval_count
         query_text = self._format_query(question)
@@ -1349,7 +1816,24 @@ class RAGSession:
         return evidence
 
     def _format_query(self: RAGSession, question: str) -> str:
-        """Apply the embedding model's configured query format."""
+        """Apply the embedding model's configured query format.
+
+        Parameters
+        ----------
+        question: str
+            User question supplied to query formatting or evidence retrieval.
+
+        Returns
+        -------
+        str
+            Unmodified question for plain format, or instruction-prefixed
+            software/literature query for qwen3.
+
+        Notes
+        -----
+        Formatting is for the embedding model, not the chat template.
+
+        """
 
         profile = self.project.profile
         if profile.query_format == "plain":
@@ -1362,7 +1846,20 @@ class RAGSession:
         return format_qwen3_query(question, instruction)
 
     def _index_metadata(self: RAGSession) -> dict[str, object]:
-        """Return settings that determine reusable index compatibility."""
+        """Return settings that determine reusable index compatibility.
+
+        Returns
+        -------
+        dict[str, object]
+            Settings that determine reusable index compatibility.
+
+        Notes
+        -----
+        These fields identify the configured embedding/model/chunking choices,
+        not the resolved model commit or implementation/library versions. The
+        caller separately compares a selected-source manifest.
+
+        """
 
         profile = self.project.profile
         return {
@@ -1381,7 +1878,27 @@ class RAGSession:
     def _parameters(
         self: RAGSession, retrieval_count: int | None = None
     ) -> dict[str, object]:
-        """Return the complete settings snapshot recorded for one turn."""
+        """Return the complete settings snapshot recorded for one turn.
+
+        Parameters
+        ----------
+        retrieval_count: int | None, optional
+            Optional positive initial retrieval-result count; None uses the
+            project profile. Explicit context expansion may produce more
+            evidence. Defaults to ``None``.
+
+        Returns
+        -------
+        dict[str, object]
+            The complete settings snapshot recorded for one turn.
+
+        Notes
+        -----
+        Returns configured project/model metadata and live chat generation
+        settings. A retrieval-count argument records an answer-specific
+        override; callers omitting it record the profile count.
+
+        """
 
         profile = self.project.profile
         return {
@@ -1401,7 +1918,28 @@ class RAGSession:
     def _load_conversation(
         self: RAGSession,
     ) -> tuple[list[dict[str, str]], list[ConversationTurn], str | None]:
-        """Load saved chat messages and human-readable turns."""
+        """Load saved chat messages and human-readable turns.
+
+        Returns
+        -------
+        tuple[list[dict[str, str]], list[ConversationTurn], str | None]
+            Tuple (chat_messages, turns, checkpoint_id), with empty
+            history/turns and None when the file is absent.
+
+        Raises
+        ------
+        ValueError
+            If saved JSON or recognized conversation state is invalid.
+        OSError
+            If saved state cannot be read.
+
+        Notes
+        -----
+        Recognizes legacy and grouped trace conversation records. It does not
+        validate that saved messages, turns, evidence, profile, and indexes are
+        mutually consistent.
+
+        """
 
         path = self.conversation_path
         if not path.is_file():
@@ -1451,7 +1989,23 @@ class RAGSession:
         *,
         trace_turn_id: str | None = None,
     ) -> None:
-        """Save exact chat state and inspectable interaction records."""
+        """Save exact chat state and inspectable interaction records.
+
+        Parameters
+        ----------
+        trace_turn_id: str | None, optional
+            Optional identifier associating trace events with one conversation
+            turn. Defaults to ``None``.
+
+        Notes
+        -----
+        Builds a hash-identified resumable snapshot. With an enabled trace
+        sink, state is written through update_conversation; otherwise it is
+        written to conversation_path. The hash labels content but this
+        implementation does not store a separate immutable historical snapshot
+        for every checkpoint.
+
+        """
 
         conversation = {
             "system_prompt": _SYSTEM_PROMPT,
@@ -1532,7 +2086,20 @@ class RAGSession:
         self._checkpoint_id = checkpoint_id
 
     def _archive_conversation(self: RAGSession) -> Path | None:
-        """Rename the active conversation log with a readable UTC time."""
+        """Rename the active conversation log with a readable UTC time.
+
+        Returns
+        -------
+        pathlib.Path | None
+            Archive path after renaming an existing conversation, or None if
+            there was no file to archive.
+
+        Notes
+        -----
+        Only the configured conversation_path is moved. It does not relocate an
+        independently configured trace output file.
+
+        """
 
         path = self.conversation_path
         if not path.is_file():
@@ -1548,7 +2115,34 @@ class RAGSession:
         self,
         conversation_path: str | Path | None,
     ) -> Path:
-        """Keep saved conversation state inside this project's logs folder."""
+        """Keep saved conversation state inside this project's logs folder.
+
+        Parameters
+        ----------
+        conversation_path: str | pathlib.Path | None
+            Conversation JSON path beneath the project logs tree, using a
+            conversation_*.json filename. Relative paths start at the project
+            root.
+
+        Returns
+        -------
+        pathlib.Path
+            Resolved JSON path beneath the project logs directory, without
+            creating a conversation record.
+
+        Raises
+        ------
+        ValueError
+            If the resolved path leaves project logs, lacks the required
+            conversation_*.json naming, or fails the implemented folder-link
+            check.
+
+        Notes
+        -----
+        None allocates a timestamped name beneath logs/traces. Path resolution
+        is not a multi-process filename reservation.
+
+        """
 
         if conversation_path is None:
             directory = self.project.logs / "traces"
@@ -1588,7 +2182,33 @@ class RAGSession:
 def _conversation_state(
     payload: dict[str, object], *, create: bool = False
 ) -> dict[str, object]:
-    """Locate resumable state in the chronologically later chat session."""
+    """Locate resumable state in the chronologically later chat session.
+
+    Parameters
+    ----------
+    payload: dict[str, object]
+        Decoded conversation/trace JSON document.
+    create: bool, optional
+        Whether missing grouped conversation-state containers may be inserted
+        into payload. Defaults to ``False``.
+
+    Returns
+    -------
+    dict[str, object]
+        Mutable conversation/resume-state dictionary within payload.
+
+    Raises
+    ------
+    ValueError
+        If no valid supported state exists and creation is disabled, or the
+        enclosing structure is invalid.
+
+    Notes
+    -----
+    Creation modifies the supplied payload in place. Legacy top-level state is
+    recognized before grouped sessions.
+
+    """
 
     legacy = payload.get("conversation")
     if isinstance(legacy, dict):
@@ -1629,7 +2249,29 @@ def _answer_prompt(
     question: str,
     evidence: tuple[Evidence, ...],
 ) -> str:
-    """Combine one question with numbered, traceable evidence."""
+    """Combine one question with numbered, traceable evidence.
+
+    Parameters
+    ----------
+    question: str
+        User question supplied to query formatting or evidence retrieval.
+    evidence: tuple[Evidence, ...]
+        Ordered retrieved chunks with citation numbers and source provenance.
+
+    Returns
+    -------
+    str
+        Chat user-message text containing numbered evidence blocks and the
+        question.
+
+    Notes
+    -----
+    Evidence text is inserted without semantic validation. The current label
+    includes path, line range, and optional symbol, but not notebook cell or
+    PDF page metadata. This is prompt construction, not instruction isolation
+    for untrusted source text.
+
+    """
 
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
@@ -1645,7 +2287,21 @@ def _answer_prompt(
 
 
 def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
-    """Convert one conversation turn to JSON-safe data."""
+    """Convert one conversation turn to JSON-safe data.
+
+    Parameters
+    ----------
+    turn: ConversationTurn
+        One completed conversation turn with question, answer, evidence, and
+        parameters.
+
+    Returns
+    -------
+    dict[str, object]
+        Dictionary of turn values and serialized evidence paths suitable for
+        JSON persistence.
+
+    """
 
     return {
         "timestamp": turn.timestamp,
@@ -1663,7 +2319,35 @@ def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
 
 
 def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
-    """Restore one conversation turn from JSON data."""
+    """Restore one conversation turn from JSON data.
+
+    Parameters
+    ----------
+    data: dict[str, object]
+        Dictionary decoded from or prepared for persisted conversation JSON.
+
+    Returns
+    -------
+    ConversationTurn
+        Reconstructed ConversationTurn with evidence records and copied
+        parameters.
+
+    Raises
+    ------
+    ValueError
+        If evidence is not a list, parameters is not a dictionary, or numeric
+        conversion fails.
+    KeyError
+        If required turn/evidence fields are absent.
+    TypeError
+        If a saved value cannot be converted as expected.
+
+    Notes
+    -----
+    This is structural reconstruction and coercion, not validation of the
+    original answer or current source content.
+
+    """
 
     evidence_data = data["evidence"]
     if not isinstance(evidence_data, list):
@@ -1699,7 +2383,26 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
 
 
 def _resume_checkpoint_id(snapshot: dict[str, object]) -> str:
-    """Return a stable identity for one complete restorable session state."""
+    """Return a stable identity for one complete restorable session state.
+
+    Parameters
+    ----------
+    snapshot: dict[str, object]
+        Resumable state dictionary whose canonical JSON serialization is
+        hashed.
+
+    Returns
+    -------
+    str
+        A stable identity for one complete restorable session state.
+
+    Notes
+    -----
+    The identifier hashes sorted JSON of the supplied snapshot. It is a content
+    label, not a signature or a guarantee that a historical snapshot remains
+    stored.
+
+    """
 
     encoded = json.dumps(
         snapshot,
@@ -1711,7 +2414,21 @@ def _resume_checkpoint_id(snapshot: dict[str, object]) -> str:
 
 
 def _write_json(path: Path, data: dict[str, object]) -> None:
-    """Write readable JSON atomically."""
+    """Write readable JSON atomically.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Destination JSON path.
+    data: dict[str, object]
+        Dictionary decoded from or prepared for persisted conversation JSON.
+
+    Notes
+    -----
+    Serializes through a temporary file then replaces the destination. No
+    inter-process lock or multi-file transaction is provided.
+
+    """
 
     temporary = path.with_suffix(f"{path.suffix}.tmp")
     temporary.write_text(
@@ -1726,7 +2443,26 @@ def _chunk_trace_data(
     *,
     include_text: bool,
 ) -> dict[str, object]:
-    """Return chunk identity and an optional compact text preview."""
+    """Return chunk identity and an optional compact text preview.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        Source chunk whose provenance and optional trace preview are recorded.
+    include_text: bool
+        Whether to include a shortened text preview in trace data.
+
+    Returns
+    -------
+    dict[str, object]
+        Chunk identity and an optional compact text preview.
+
+    Notes
+    -----
+    The include_text flag adds the trace_text_preview result, not the complete
+    source chunk.
+
+    """
 
     data: dict[str, object] = {
         "identifier": chunk.identifier,
@@ -1750,7 +2486,29 @@ def _ranked_trace_data(
     *,
     include_text: bool = False,
 ) -> dict[str, object]:
-    """Return ranked chunks, adding exact text only in forensic traces."""
+    """Return ranked chunks, adding exact text only in forensic traces.
+
+    Parameters
+    ----------
+    results: object
+        Iterable of ranked result objects with chunk and score attributes, plus
+        optional ranking metadata.
+    include_text: bool, optional
+        Whether to include a shortened text preview in trace data. Defaults to
+        ``False``.
+
+    Returns
+    -------
+    dict[str, object]
+        Ranked chunks, adding exact text only in forensic traces.
+
+    Notes
+    -----
+    Ranks are one-based in the supplied iteration order. Optional channel,
+    entity, and distance fields are included only when the result object
+    exposes them.
+
+    """
 
     rows: list[dict[str, object]] = []
     for rank, result in enumerate(results, start=1):
