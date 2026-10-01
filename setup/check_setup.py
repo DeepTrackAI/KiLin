@@ -1,4 +1,32 @@
-"""Choose MLX or PyTorch and verify it with a small calculation."""
+"""Select and verify the local calculation backend.
+
+This module provides utilities to select the calculation backend supported by
+the current platform and to verify that the selected backend can perform a
+simple numerical calculation correctly.
+
+On Apple Silicon, MLX is selected by default. On supported Linux and Windows
+systems, PyTorch is selected by default. A backend can also be selected
+explicitly from the command line.
+
+The setup check performs a simple addition using the selected backend and
+compares the result with the corresponding Python calculation. It does not load
+or run a language model.
+
+Functions
+---------
+choose_backend
+    Choose the calculation backend for the current platform.
+choose_torch_device
+    Choose the best available PyTorch device.
+run_calculation
+    Perform a simple calculation using the selected backend.
+check_setup
+    Select and verify the calculation backend.
+main
+    Run the setup check from the command line,
+    e.g., using `python check_setup.py`.
+
+"""
 
 from __future__ import annotations
 
