@@ -1,9 +1,120 @@
-"""Select local repository files without reading their contents.
+"""Select and track files in a local source repository.
 
-Functions
----------
-scan_repository
-    Return selected paths, sizes, and skip reasons for inspection.
+This module provides the repository-inspection layer used by QAChat to decide
+which local files may be considered source material. Repository scans inspect
+filesystem metadata without reading file contents and apply explicit
+inclusion, exclusion, file-type, size, and safety rules.
+
+Selected files can subsequently be hashed into a repository manifest. The
+manifest records relative paths, file sizes, and SHA-256 content hashes so a
+current repository state can be compared with a previously saved state
+independently of the repository's absolute location.
+
+Repository traversal is intentionally conservative. Symbolic links and
+junctions are not followed, common environment and generated directories are
+skipped, potentially secret files and model-weight formats are blocked, and
+filesystem roots and the user's home directory cannot be scanned directly.
+
+Key Features
+------------
+- **Metadata-only repository scanning**
+
+    Inspect paths, entry types, and file sizes without reading file contents
+    during repository selection.
+
+- **Explicit source selection**
+
+    Select supported file types globally or restrict scanning with relative
+    include and exclude paths. Exclusions take precedence over inclusions.
+
+- **Conservative traversal**
+
+    Avoid links, environments, caches, generated folders, model weights, and
+    files that may contain credentials or private keys.
+
+- **Resource limits**
+
+    Bound individual file size and the total number of filesystem entries
+    inspected during a scan.
+
+- **Content manifests**
+
+    Hash selected files with SHA-256 into a location-independent manifest
+    suitable for persistence and later comparison.
+
+- **Change detection**
+
+    Compare repository manifests or rescan a repository to identify added,
+    removed, and modified selected files.
+
+Module Structure
+----------------
+Constants:
+
+- ``DEFAULT_EXTENSIONS``
+
+    File extensions considered source material by default.
+
+- ``SKIP_DIRECTORIES``
+
+    Directory names that are not traversed.
+
+- ``SKIP_FILES``
+
+    File names skipped because they are generated or potentially secret.
+
+- ``BLOCKED_SUFFIXES``
+
+    File suffixes blocked for model weights or potentially secret material.
+
+Functions:
+
+- ``scan_repository``
+
+    Preview selected and skipped repository entries without reading file
+    contents.
+
+- ``build_repository_manifest``
+
+    Hash the files selected by ``scan_repository``.
+
+- ``compare_repository_manifests``
+
+    Compare two manifests and report added, removed, and modified files.
+
+- ``detect_repository_changes``
+
+    Rescan a repository and compare it with a saved manifest.
+
+- ``repository_has_changed``
+
+    Return whether selected repository content differs from a saved manifest.
+
+The remaining functions and ``_MANIFEST_VERSION`` are private implementation
+details used for validation, normalization, and manifest handling.
+
+Examples
+--------
+Preview the files QAChat would select from a local repository:
+
+>>> report = qachat.scan_repository("my_project")
+>>> report["selected_files"][:2]
+['README.md', 'qachat/__init__.py']
+
+Restrict selection to one repository subtree:
+
+>>> report = qachat.scan_repository(
+...     "my_project",
+...     include_paths=["qachat"],
+...     exclude_paths=["qachat/tests"],
+... )
+
+Check whether selected source content differs from a saved manifest:
+
+>>> changed = qachat.repository_has_changed(
+...     "my_project",
+...     "workspace/indexes/source_manifest.json",
+... )
 
 """
 
@@ -483,11 +594,12 @@ def scan_repository(
 def build_repository_manifest(
     report: dict[str, object],
 ) -> dict[str, object]:
-    """Hash the files selected by :func:`scan_repository`.
+    """Build a content manifest for selected repository files.
 
-    The manifest intentionally contains only relative paths, file sizes, and
-    SHA-256 content hashes.  It therefore remains stable when the same source
-    tree is copied to a different directory.
+    Files listed in a report returned by ``scan_repository`` are read and
+    hashed with SHA-256. The manifest contains only relative paths, file sizes,
+    and hashes, so it remains stable when the same source tree is copied to a
+    different directory.
 
     Parameters
     ----------
@@ -498,6 +610,20 @@ def build_repository_manifest(
     -------
     dict[str, object]
         JSON-safe manifest describing the selected repository content.
+
+    Raises
+    ------
+    ValueError
+        If the scan report does not contain a valid repository path, selected
+        file list, or relative file path.
+    FileNotFoundError
+        If the repository no longer exists or a selected file disappears
+        before it can be hashed.
+
+    Notes
+    -----
+    Unlike ``scan_repository``, this function reads every selected file to
+    calculate its SHA-256 content hash.
 
     """
 
@@ -538,10 +664,33 @@ def compare_repository_manifests(
     saved: dict[str, object] | None,
     current: dict[str, object],
 ) -> dict[str, object]:
-    """Describe whether two repository manifests contain the same files.
+    """Compare two repository content manifests.
 
-    Returns added, removed, and modified relative paths so callers can decide
-    whether to synchronize a sandbox copy or rebuild a retrieval index.
+    Parameters
+    ----------
+    saved: dict[str, object] | None
+        Previously saved manifest. ``None`` represents an empty previous
+        state.
+    current: dict[str, object]
+        Current repository manifest.
+
+    Returns
+    -------
+    dict[str, object]
+        Comparison containing ``matches`` and sorted ``added``, ``removed``,
+        and ``modified`` relative paths.
+
+    Raises
+    ------
+    ValueError
+        If either manifest has an unsupported format version or invalid file
+        records.
+
+    Notes
+    -----
+    A file is modified when its stored size or SHA-256 record differs between
+    the two manifests.
+
     """
 
     current_files = _manifest_files(current)
@@ -674,9 +823,17 @@ def repository_has_changed(
     max_file_bytes: int = 1_048_576,
     max_entries: int = 10_000,
 ) -> bool:
-    """Return ``True`` when selected repository content has changed.
+    """Return whether selected repository content has changed.
 
-    This is a Boolean wrapper around :func:`detect_repository_changes`.
+    This Boolean convenience wrapper rescans the repository through
+    ``detect_repository_changes`` and negates the resulting ``matches`` value.
+
+    Returns
+    -------
+    bool
+        ``True`` when selected repository content differs from the saved
+        manifest, otherwise ``False``.
+
     """
 
     changes = detect_repository_changes(
@@ -693,7 +850,25 @@ def repository_has_changed(
 def _manifest_files(
     manifest: dict[str, object],
 ) -> dict[str, dict[str, object]]:
-    """Return checked file records from one repository manifest."""
+    """Validate and return file records from a repository manifest.
+
+    Parameters
+    ----------
+    manifest: dict[str, object]
+        Repository manifest to validate.
+
+    Returns
+    -------
+    dict[str, dict[str, object]]
+        Checked mapping from relative paths to size and SHA-256 records.
+
+    Raises
+    ------
+    ValueError
+        If the manifest version is unsupported or its file records, sizes, or
+        hashes have an invalid structure.
+
+    """
 
     if manifest.get("format_version") != _MANIFEST_VERSION:
         raise ValueError("Unsupported repository manifest version.")
