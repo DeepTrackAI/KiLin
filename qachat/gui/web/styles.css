@@ -259,8 +259,8 @@ button:disabled { opacity: .62; cursor: default; }
 .answer-message { margin: 20px 0 12px; line-height: 1.65; white-space: pre-wrap; cursor: pointer; }
 .answer-phase { color: var(--control); cursor: default; }
 .answer-phase-label { color: var(--control); }
-.answer-phase-detail { width: fit-content; margin-top: 8px; color: transparent; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 42%, color-mix(in srgb, var(--muted) 70%, white) 50%, var(--muted) 58%, var(--muted) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; font-size: 13px; animation: stage-shimmer 2.6s linear infinite; }
-@keyframes stage-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+.answer-phase-detail { width: fit-content; margin-top: 8px; color: transparent; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 42%, color-mix(in srgb, var(--muted) 55%, white) 50%, var(--muted) 58%, var(--muted) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; font-size: 13px; animation: stage-shimmer 2.6s linear infinite; }
+@keyframes stage-shimmer { from { background-position: 80% 0; } to { background-position: 20% 0; } }
 @media (prefers-reduced-motion: reduce) { .answer-phase-detail { color: var(--muted); background: none; animation: none; } }
 .answer-message.typing::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--control); animation: typing-caret .8s steps(1) infinite; }
 .turn.failed .answer-message { color: #9c3936; }

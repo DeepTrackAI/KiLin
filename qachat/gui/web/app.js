@@ -1182,6 +1182,7 @@ function showTurnPhase(label, detail = "") {
  */
 function addPendingTurn(question) {
   resetAnswerStages();
+  activity.classList.add("answer-progress");
   if (conversation.querySelector(".conversation-empty")) conversation.replaceChildren();
   const item = document.createElement("article");
   item.className = "turn pending";
