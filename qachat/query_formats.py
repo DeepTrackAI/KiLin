@@ -23,6 +23,18 @@ Key Features
 Module Structure
 ----------------
 
+- ``QUERY_FORMAT_PLAIN`` and ``QUERY_FORMAT_QWEN3``
+
+    Canonical identifiers for the supported embedding-query formats.
+
+- ``QUERY_FORMAT_CHOICES``
+
+    Ordered collection of the supported query-format identifiers.
+
+- ``QueryFormat``
+
+    Type alias for the supported embedding-query formats.
+
 - ``SOFTWARE_REPOSITORY_INSTRUCTION``
 
     Embedding-query instruction for software source retrieval.
@@ -47,12 +59,27 @@ Examples
 
 from __future__ import annotations
 
+from typing import Final, Literal, TypeAlias
+
 
 __all__ = [
+    "QUERY_FORMAT_PLAIN",
+    "QUERY_FORMAT_QWEN3",
+    "QUERY_FORMAT_CHOICES",
+    "QueryFormat",
     "SOFTWARE_REPOSITORY_INSTRUCTION",
     "LITERATURE_REPOSITORY_INSTRUCTION",
     "format_qwen3_query",
 ]
+
+QueryFormat: TypeAlias = Literal["plain", "qwen3"]
+
+QUERY_FORMAT_PLAIN: Final[QueryFormat] = "plain"
+QUERY_FORMAT_QWEN3: Final[QueryFormat] = "qwen3"
+QUERY_FORMAT_CHOICES: Final[tuple[QueryFormat, ...]] = (
+    QUERY_FORMAT_PLAIN,
+    QUERY_FORMAT_QWEN3,
+)
 
 SOFTWARE_REPOSITORY_INSTRUCTION = (
     "Given a question about a software repository, retrieve relevant code "

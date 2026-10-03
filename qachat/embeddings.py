@@ -75,12 +75,19 @@ from huggingface_hub import snapshot_download
 
 from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_MLX,
     Backend,
     SelectedBackend,
     choose_backend,
     torch_device,
 )
-from qachat.trace_logging import NullTraceLogger, TraceSink, trace_text_preview
+from qachat.trace_logging import (
+    TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
+    NullTraceLogger,
+    TraceSink,
+    trace_text_preview,
+)
 
 __all__ = [
     "EmbeddingSession",
@@ -138,7 +145,7 @@ class EmbeddingSession:
         self: EmbeddingSession,
         model_id: str,
         *,
-        backend: Backend = "auto",
+        backend: Backend = BACKEND_AUTO,
         allow_download: bool = True,
         revision: str | None = None,
         trace: TraceSink | None = None,
@@ -208,7 +215,7 @@ class EmbeddingSession:
                 revision=revision,
             )
             self.model_source = source
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 self._load_mlx(source)
             else:
                 self._load_torch(source)
@@ -358,7 +365,7 @@ class EmbeddingSession:
 
             """
 
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 if not self.trace.enabled:
                     vectors = self._embed_mlx(checked)
                 else:
@@ -512,7 +519,7 @@ class EmbeddingSession:
 
         """
 
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             mx = import_module("mlx.core")
             mx.clear_cache()
         else:
@@ -643,7 +650,7 @@ class EmbeddingSession:
                     }
                 )
             self.trace.emit(
-                "embedding.tokens.prepared",
+                TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
                 component="embeddings",
                 data=token_data,
                 turn_id=trace_turn_id,
@@ -720,7 +727,7 @@ class EmbeddingSession:
                     }
                 )
             self.trace.emit(
-                "embedding.tokens.prepared",
+                TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
                 component="embeddings",
                 data=token_data,
                 turn_id=trace_turn_id,

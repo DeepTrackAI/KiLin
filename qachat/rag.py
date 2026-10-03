@@ -41,12 +41,17 @@ Key Features
 - **Conversation state**
 
     Restore or switch saved conversations around one authoritative JSON path
-    while maintaining explicit model-session ownership.
+    using the shared internal conversation-format contract.
 
 - **Trace alignment**
 
     Bind RAG tracing to the active conversation record so enabling tracing does
     not change where resumable conversation state is stored.
+
+- **Answer-phase vocabulary**
+
+    Expose canonical phase identifiers for interfaces observing answer
+    retrieval, evidence preparation, generation, saving, and completion.
 
 - **Progress and tracing**
 
@@ -55,6 +60,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``ANSWER_PHASE_*`` constants and ``AnswerPhase``
+
+    Canonical machine-readable phases emitted while answering a question.
 
 - ``ConversationTurn``
 
@@ -107,12 +116,20 @@ from pathlib import Path
 import platform
 import sys
 from time import perf_counter
-from qachat.chat import ChatSession
+from typing import Final, Literal, TypeAlias
+from qachat.chat import (
+    ASSISTANT_ROLE,
+    SYSTEM_ROLE,
+    USER_ROLE,
+    ChatSession,
+)
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
-from qachat.project import QAProject, open_project
+from qachat.conversation_format import conversation_state
+from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.query_formats import (
     LITERATURE_REPOSITORY_INSTRUCTION,
+    QUERY_FORMAT_PLAIN,
     SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
@@ -140,6 +157,8 @@ from qachat.retrievals import (
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
 from qachat.trace_logging import (
+    TRACE_EVENT_PROGRESS_UPDATED,
+    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceSink,
@@ -148,12 +167,39 @@ from qachat.trace_logging import (
 )
 
 __all__ = [
+    "ANSWER_PHASE_CHOICES",
+    "ANSWER_PHASE_COMPLETED",
+    "ANSWER_PHASE_EVIDENCE_READY",
+    "ANSWER_PHASE_GENERATING",
+    "ANSWER_PHASE_RETRIEVING",
+    "ANSWER_PHASE_SAVING",
+    "AnswerPhase",
     "ConversationTurn",
     "Evidence",
     "ProgressCallback",
     "ProgressEvent",
     "RAGSession",
 ]
+
+AnswerPhase: TypeAlias = Literal[
+    "retrieving",
+    "evidence_ready",
+    "generating",
+    "saving",
+    "completed",
+]
+ANSWER_PHASE_RETRIEVING: Final[AnswerPhase] = "retrieving"
+ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
+ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
+ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
+ANSWER_PHASE_COMPLETED: Final[AnswerPhase] = "completed"
+ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
+    ANSWER_PHASE_RETRIEVING,
+    ANSWER_PHASE_EVIDENCE_READY,
+    ANSWER_PHASE_GENERATING,
+    ANSWER_PHASE_SAVING,
+    ANSWER_PHASE_COMPLETED,
+)
 
 _INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
@@ -303,7 +349,7 @@ class ProgressEvent:
 
 
 ProgressCallback = Callable[[ProgressEvent], None]
-AnswerPhaseCallback = Callable[[str, dict[str, object]], None]
+AnswerPhaseCallback = Callable[[AnswerPhase, dict[str, object]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,7 +752,7 @@ class RAGSession:
             or completed_count
         ):
             trace.emit(
-                "progress.updated",
+                TRACE_EVENT_PROGRESS_UPDATED,
                 component="rag",
                 data=asdict(event),
             )
@@ -909,7 +955,7 @@ class RAGSession:
         if phase_callback is not None and not callable(phase_callback):
             raise ValueError("phase_callback must be callable or None.")
 
-        def report_phase(phase: str, **details: object) -> None:
+        def report_phase(phase: AnswerPhase, **details: object) -> None:
             """Notify an interface without coupling retrieval to GUI code.
 
             Parameters
@@ -942,7 +988,7 @@ class RAGSession:
             "history_message_count": len(self.chat_session.messages),
             "history_roles": history_roles,
             "prior_conversation_included": any(
-                role in {"user", "assistant"} for role in history_roles
+                role in {USER_ROLE, ASSISTANT_ROLE} for role in history_roles
             ),
         }
         question_data: dict[str, object] = {
@@ -1009,7 +1055,10 @@ class RAGSession:
                 data=effective,
                 turn_id=turn_id,
             )
-            report_phase("retrieving", message="Retrieving evidence")
+            report_phase(
+                ANSWER_PHASE_RETRIEVING,
+                message="Retrieving evidence",
+            )
             evidence = self._retrieve(
                 question,
                 retrieval_count,
@@ -1019,13 +1068,13 @@ class RAGSession:
                 ),
             )
             report_phase(
-                "evidence_ready",
+                ANSWER_PHASE_EVIDENCE_READY,
                 message=f"{len(evidence)} references found",
                 evidence_count=len(evidence),
             )
             prompt = _answer_prompt(question, evidence)
             report_phase(
-                "generating",
+                ANSWER_PHASE_GENERATING,
                 message="Generating answer",
                 evidence_count=len(evidence),
             )
@@ -1041,10 +1090,13 @@ class RAGSession:
                 parameters=effective,
             )
             self.turns.append(turn)
-            report_phase("saving", message="Saving conversation")
+            report_phase(
+                ANSWER_PHASE_SAVING,
+                message="Saving conversation",
+            )
             self._save_conversation(trace_turn_id=turn_id)
             report_phase(
-                "completed",
+                ANSWER_PHASE_COMPLETED,
                 message="Answer ready",
                 evidence_count=len(evidence),
             )
@@ -1157,8 +1209,9 @@ class RAGSession:
         -----
         Archives the selected conversation file when present, clears in-memory
         turns/checkpoint identity, and resets the chat history to its system
-        instruction. It does not reload models or clear an enabled trace sink's
-        retained resume-state dictionary.
+        instruction. An enabled trace then discards conversation-specific
+        retained state before recording the reset in a fresh active file.
+        Loaded models, indexes, and non-conversation trace context are reused.
 
         """
 
@@ -1169,7 +1222,9 @@ class RAGSession:
         self.chat_session.reset()
         self.turns = []
         self._checkpoint_id = None
-        getattr(self, "trace", NullTraceLogger()).emit(
+        trace = getattr(self, "trace", NullTraceLogger())
+        trace.reset_conversation_state()
+        trace.emit(
             "conversation.reset",
             component="rag",
             data={
@@ -1920,11 +1975,11 @@ class RAGSession:
         """
 
         profile = self.project.profile
-        if profile.query_format == "plain":
+        if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
         instruction = (
             SOFTWARE_REPOSITORY_INSTRUCTION
-            if profile.kind == "code"
+            if profile.kind == PROJECT_KIND_CODE
             else LITERATURE_REPOSITORY_INSTRUCTION
         )
         return format_qwen3_query(question, instruction)
@@ -2030,7 +2085,7 @@ class RAGSession:
             return [], [], None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-            conversation = _conversation_state(payload)
+            conversation = conversation_state(payload)
             turns = [
                 _turn_from_data(item) for item in conversation.get("turns", [])
             ]
@@ -2047,18 +2102,18 @@ class RAGSession:
                 system_prompt = str(
                     conversation.get("system_prompt", _SYSTEM_PROMPT)
                 )
-                messages = [{"role": "system", "content": system_prompt}]
+                messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
                 for turn in turns:
                     messages.extend(
                         (
                             {
-                                "role": "user",
+                                "role": USER_ROLE,
                                 "content": _answer_prompt(
                                     turn.question,
                                     turn.evidence,
                                 ),
                             },
-                            {"role": "assistant", "content": turn.answer},
+                            {"role": ASSISTANT_ROLE, "content": turn.answer},
                         )
                     )
         except (KeyError, TypeError, json.JSONDecodeError) as error:
@@ -2151,7 +2206,7 @@ class RAGSession:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     payload = loaded
-            stored = _conversation_state(payload, create=True)
+            stored = conversation_state(payload, create=True)
             stored.update(saved_state)
             _write_json(path, payload)
         self.trace.emit(
@@ -2302,7 +2357,7 @@ def _conversation_trace(
         trace = TraceConfig(
             enabled=True,
             output_path=conversation_path,
-            mode="forensic",
+            mode=TRACE_MODE_FORENSIC,
         )
     elif isinstance(trace, TraceConfig) and trace.enabled:
         if trace.output_path is None:
@@ -2354,72 +2409,6 @@ def _check_conversation_trace(
         raise ValueError(
             "Enabled RAG tracing must use the conversation path."
         )
-
-
-def _conversation_state(
-    payload: dict[str, object], *, create: bool = False
-) -> dict[str, object]:
-    """Locate resumable state in the chronologically later chat session.
-
-    Parameters
-    ----------
-    payload: dict[str, object]
-        Decoded conversation/trace JSON document.
-    create: bool, optional
-        Whether missing grouped conversation-state containers may be inserted
-        into payload. Defaults to ``False``.
-
-    Returns
-    -------
-    dict[str, object]
-        Mutable conversation/resume-state dictionary within payload.
-
-    Raises
-    ------
-    ValueError
-        If no valid supported state exists and creation is disabled, or the
-        enclosing structure is invalid.
-
-    Notes
-    -----
-    Creation modifies the supplied payload in place. Legacy top-level state is
-    recognized before grouped sessions.
-
-    """
-
-    legacy = payload.get("conversation")
-    if isinstance(legacy, dict):
-        return legacy
-    sessions = (
-        payload.setdefault("sessions", {})
-        if create
-        else payload.get("sessions")
-    )
-    if not isinstance(sessions, dict):
-        raise ValueError("The saved conversation is invalid.")
-    for session in sessions.values():
-        if (
-            isinstance(session, dict)
-            and session.get("category") == "conversations"
-        ):
-            state = (
-                session.setdefault("resume_state", {})
-                if create
-                else session.get("resume_state", session.get("conversation"))
-            )
-            if isinstance(state, dict):
-                return state
-    if create:
-        session = {
-            "title": "Conversation turns",
-            "category": "conversations",
-            "turns": {},
-            "operations": {},
-            "resume_state": {},
-        }
-        sessions["05_conversations"] = session
-        return session["resume_state"]
-    raise ValueError("The saved conversation is invalid.")
 
 
 def _answer_prompt(

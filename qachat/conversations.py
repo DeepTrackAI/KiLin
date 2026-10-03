@@ -7,8 +7,9 @@ A branch records its parent's identifier and checkpoint reference; it does
 not duplicate the parent's complete trace-event history.
 
 Files support both legacy top-level conversation records and grouped trace
-sessions. Writes replace a temporary JSON file, but this module provides no
-multi-process lock or transaction across registry and filesystem updates.
+sessions through the shared internal conversation-format contract. Writes
+replace a temporary JSON file, but this module provides no multi-process lock
+or transaction across registry and filesystem updates.
 Conversation files can contain full questions, answers, and source excerpts.
 
 Key Features
@@ -61,6 +62,12 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 from uuid import uuid4
+
+from qachat.conversation_format import (
+    CONVERSATION_SESSION_KEY,
+    conversation_state,
+    new_conversation_session,
+)
 
 __all__ = ["ConversationInfo", "ConversationStore"]
 
@@ -341,7 +348,7 @@ class ConversationStore:
         path = self._new_path()
         copied_state: dict[str, object] = {}
         if parent is not None:
-            saved = _conversation_record(_read_json(self.state_path(parent)))
+            saved = conversation_state(_read_json(self.state_path(parent)))
             metadata = ConversationInfo.__dataclass_fields__
             copied_state = {
                 key: value
@@ -352,13 +359,9 @@ class ConversationStore:
             path,
             {
                 "sessions": {
-                    "05_conversations": {
-                        "title": "Conversation turns",
-                        "category": "conversations",
-                        "turns": {},
-                        "operations": {},
-                        "resume_state": {**asdict(item), **copied_state},
-                    }
+                    CONVERSATION_SESSION_KEY: new_conversation_session(
+                        {**asdict(item), **copied_state}
+                    )
                 }
             },
         )
@@ -527,7 +530,7 @@ class ConversationStore:
             if path.is_symlink() or not path.is_file():
                 continue
             try:
-                record = _conversation_record(_read_json(path))
+                record = conversation_state(_read_json(path))
                 if not isinstance(record, dict):
                     continue
                 item = ConversationInfo(
@@ -562,7 +565,7 @@ class ConversationStore:
 
         path = self._paths[item.conversation_id]
         payload = _read_json(path)
-        conversation = _conversation_record(payload, create=True)
+        conversation = conversation_state(payload, create=True)
         conversation.update(asdict(item))
         _write_json(path, payload)
         self._items[item.conversation_id] = item
@@ -659,7 +662,7 @@ class ConversationStore:
 
         """
 
-        record = _conversation_record(_read_json(path))
+        record = conversation_state(_read_json(path))
         value = record.get("checkpoint_id")
         return value if isinstance(value, str) and value else None
 
@@ -692,74 +695,6 @@ def _read_json(path: Path) -> dict[str, object]:
     if not isinstance(payload, dict):
         raise ValueError("The saved conversation is invalid.")
     return payload
-
-
-def _conversation_record(
-    payload: dict[str, object], *, create: bool = False
-) -> dict[str, object]:
-    """Return state nested after project and indexing trace sessions.
-
-    Parameters
-    ----------
-    payload: dict[str, object]
-        Decoded or serializable JSON document containing conversation data.
-    create: bool, optional
-        Whether missing grouped conversation containers may be inserted into
-        the supplied dictionary. Defaults to ``False``.
-
-    Returns
-    -------
-    dict[str, object]
-        Mutable legacy conversation or grouped resume-state dictionary within
-        payload.
-
-    Raises
-    ------
-    ValueError
-        If no valid state exists and creation is disabled, or the sessions
-        container is invalid.
-
-    Notes
-    -----
-    When create=True, the supplied payload may be modified in place. A
-    recognized legacy top-level conversation dictionary takes precedence over
-    grouped sessions.
-
-    """
-
-    legacy = payload.get("conversation")
-    if isinstance(legacy, dict):
-        return legacy
-    sessions = (
-        payload.setdefault("sessions", {})
-        if create
-        else payload.get("sessions")
-    )
-    if not isinstance(sessions, dict):
-        raise ValueError("The saved conversation is invalid.")
-    for session in sessions.values():
-        if (
-            isinstance(session, dict)
-            and session.get("category") == "conversations"
-        ):
-            record = (
-                session.setdefault("resume_state", {})
-                if create
-                else session.get("resume_state", session.get("conversation"))
-            )
-            if isinstance(record, dict):
-                return record
-    if create:
-        session = {
-            "title": "Conversation turns",
-            "category": "conversations",
-            "turns": {},
-            "operations": {},
-            "resume_state": {},
-        }
-        sessions["05_conversations"] = session
-        return session["resume_state"]
-    raise ValueError("The saved conversation is invalid.")
 
 
 def _write_json(path: Path, payload: object) -> None:

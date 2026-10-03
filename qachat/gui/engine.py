@@ -74,13 +74,10 @@ from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
-import re
 import sys
-from time import perf_counter
 from typing import Callable
 
 from qachat.gui.model_catalog import (
-    DEFAULT_MODEL_IDS,
     MODEL_CHOICES,
     installed_backends,
     model_choices,
@@ -88,16 +85,24 @@ from qachat.gui.model_catalog import (
 from qachat import RAGSession, prepare_sources_workspace
 from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
-from qachat.project import QAProject, default_project_profile, open_project
+from qachat.project import (
+    PROJECT_KIND_CODE,
+    PROJECT_KIND_CHOICES,
+    QAProject,
+    default_project_profile,
+    open_project,
+)
 from qachat.repository import (
     BLOCKED_SUFFIXES,
     DEFAULT_EXTENSIONS,
     SKIP_FILES,
     scan_repository,
 )
-from qachat.runtime import choose_backend
+from qachat.runtime import BACKEND_AUTO, choose_backend
 from qachat.sources import read_repository_files
 from qachat.trace_logging import (
+    FAILURE_POLICY_WARN,
+    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -270,8 +275,8 @@ class ChatEngine:
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
-                mode="forensic",
-                failure_policy="warn",
+                mode=TRACE_MODE_FORENSIC,
+                failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,
         )
@@ -370,111 +375,17 @@ class ChatEngine:
         )
 
     def startup(self) -> None:
-        """Report saved projects and retain the legacy recent suggestion.
+        """Suggest the most recently used valid sandbox project.
 
 
         """
 
-        self.list_saved_projects("")
         project = self._find_saved_project(None, "")
-        if project is None:
-            self._send("startup", project=None)
-        else:
+        if project is not None:
             folder, kind = project
             self._send("startup", project=str(folder), kind=kind)
-
-    def readiness(self) -> None:
-        """Report backend packages and required local model availability."""
-
-        try:
-            backend = choose_backend("auto")
-            packages = installed_backends()
-            cached = {str(item["model_id"]) for item in available_models()}
-            required = list(DEFAULT_MODEL_IDS[backend])
-            missing = [
-                model_id for model_id in required if model_id not in cached
-            ]
-            self._send(
-                "readiness",
-                backend=backend,
-                environment_ready=packages.get(backend, False),
-                required_models=required,
-                cached_models=sorted(cached),
-                missing_models=missing,
-                ready=packages.get(backend, False) and not missing,
-            )
-        except Exception as error:
-            self._report_error("gui.readiness.failed", error, str(error))
-
-    def install_required_models(self) -> None:
-        """Download every missing model required by the default GUI presets."""
-
-        started = perf_counter()
-        try:
-            backend = choose_backend("auto")
-            if not installed_backends().get(backend, False):
-                raise RuntimeError(
-                    f"The {backend.upper()} runtime is not installed. Restart "
-                    "QAChat through "
-                    f"`uv run qachat --gui --backend {backend}`."
-                )
-            cached = {str(item["model_id"]) for item in available_models()}
-            missing = [
-                model_id
-                for model_id in DEFAULT_MODEL_IDS[backend]
-                if model_id not in cached
-            ]
-            total = len(missing)
-            if not missing:
-                self._send("installation_complete", elapsed_seconds=0.0)
-                self.readiness()
-                return
-            self._send("installation_started", total=total, backend=backend)
-            for index, model_id in enumerate(missing, start=1):
-                model_started = perf_counter()
-                self._send(
-                    "installation_progress",
-                    index=index,
-                    total=total,
-                    model_id=model_id,
-                    elapsed_seconds=perf_counter() - started,
-                )
-                download_model(model_id)
-                self._send(
-                    "installation_model_complete",
-                    index=index,
-                    total=total,
-                    model_id=model_id,
-                    model_seconds=perf_counter() - model_started,
-                    elapsed_seconds=perf_counter() - started,
-                )
-            self._send(
-                "installation_complete",
-                elapsed_seconds=perf_counter() - started,
-            )
-            self.readiness()
-        except Exception as error:
-            self._report_error(
-                "gui.installation.failed",
-                error,
-                f"Setup could not finish: {error}",
-            )
-
-    def list_saved_projects(self, workspace: str) -> None:
-        """Report valid projects, newest first, without loading models."""
-
-        self._send(
-            "projects",
-            projects=[
-                {
-                    "project": str(folder),
-                    "name": folder.name,
-                    "kind": kind,
-                    "updated_at": updated_at,
-                }
-                for updated_at, folder, kind in self._saved_projects(workspace)
-            ],
-        )
+        else:
+            self._send("startup", project=None)
 
     def find_saved_project(self, kind: str, workspace: str) -> None:
         """Refresh Resume for the selected type and workspace folder.
@@ -529,25 +440,14 @@ class ChatEngine:
 
         """
 
-        projects = [
-            project
-            for project in self._saved_projects(workspace)
-            if kind is None or project[2] == kind
-        ]
-        if not projects:
+        if kind is not None and kind not in PROJECT_KIND_CHOICES:
             return None
-        _, folder, saved_kind = projects[0]
-        return folder, saved_kind
-
-    def _saved_projects(self, workspace: str) -> list[tuple[float, Path, str]]:
-        """Return valid saved projects in descending activity order."""
-
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
         elif self.sandbox.is_dir():
             folders = list(self.sandbox.iterdir())
         else:
-            return []
+            return None
 
         projects: list[tuple[float, Path, str]] = []
         for folder in folders:
@@ -561,7 +461,9 @@ class ChatEngine:
                 parser.read(profile_path, encoding="utf-8")
                 saved_kind = parser.get("project", "kind")
                 source_text = parser.get("project", "source")
-                if saved_kind not in {"code", "literature"}:
+                if saved_kind not in PROJECT_KIND_CHOICES:
+                    continue
+                if kind is not None and saved_kind != kind:
                     continue
                 if not source_text.strip():
                     continue
@@ -586,23 +488,20 @@ class ChatEngine:
                 projects.append((recent, folder, saved_kind))
             except (ConfigError, OSError, ValueError):
                 continue
-        projects.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
-        return projects
+        if not projects:
+            return None
+        _, folder, saved_kind = max(
+            projects, key=lambda item: (item[0], str(item[1]))
+        )
+        return folder, saved_kind
 
-    def resume_project(
-        self,
-        directory: str,
-        conversation_id: str | None = None,
-    ) -> None:
+    def resume_project(self, directory: str) -> None:
         """Reopen a saved project without copying source files.
 
         Parameters
         ----------
         directory: str
             Workspace containing an existing profile.ini.
-        conversation_id: str | None
-            Saved conversation to reopen. When omitted, reopen the most recent
-            conversation discovered in the workspace.
 
         """
 
@@ -610,11 +509,6 @@ class ChatEngine:
             project = open_project(directory)
             self.close()
             conversation = self._open_conversation_store(project)
-            if conversation_id:
-                if self.conversation_store is None:
-                    raise RuntimeError("Conversation store is not open.")
-                conversation = self.conversation_store.select(conversation_id)
-                self.active_conversation = conversation
             self._start_project_trace(project.root, conversation)
             self._activate_project(project, conversation)
         except Exception as error:
@@ -649,7 +543,7 @@ class ChatEngine:
             self._send(
                 "settings",
                 profile=asdict(profile),
-                backend=choose_backend("auto"),
+                backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
                 cached_models=sorted(cached),
@@ -851,10 +745,14 @@ class ChatEngine:
         """
 
         try:
-            if kind not in {"code", "literature"}:
+            if kind not in PROJECT_KIND_CHOICES:
                 raise ValueError("Choose code or literature.")
             if not sources and not workspace.strip():
-                example = "code_repo" if kind == "code" else "literature_repo"
+                example = (
+                    "code_repo"
+                    if kind == PROJECT_KIND_CODE
+                    else "literature_repo"
+                )
                 sources = [str(ROOT / "example_repos" / example)]
                 selected_files = None
             if not workspace.strip():
@@ -1014,98 +912,16 @@ class ChatEngine:
             max_new_tokens=session.chat_session.max_new_tokens,
             active_conversation_id=conversation.conversation_id,
             conversations=[
-                {
-                    **asdict(item),
-                    "empty": self.conversation_store.is_empty(
-                        item.conversation_id
-                    ),
-                }
+                asdict(item)
                 for item in self.conversation_store.conversations()
             ],
         )
-
-    def _name_active_conversation(
-        self, question: str, naming_model: str
-    ) -> None:
-        """Generate and persist a short title without RAG instructions."""
-
-        if (
-            self.session is None
-            or self.conversation_store is None
-            or self.active_conversation is None
-        ):
-            return
-        self._send("status", message="Naming conversation…")
-        self.session.use_chat_model(naming_model)
-        chat = self.session.chat_session
-        history = [dict(message) for message in chat.messages]
-        previous_thinking = chat.thinking
-        try:
-            chat.restore_history(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Create a concise conversation title. Use three "
-                            "to six words. Describe the topic, not the user's "
-                            "request. Do not use citations, brackets, "
-                            "quotation marks, labels, or punctuation. "
-                            "Example: 'Help me "
-                            "understand RFE' becomes 'Understanding Recursive "
-                            "Feature Elimination'. Return only the title."
-                        ),
-                    }
-                ]
-            )
-            chat.configure_generation({"thinking": False})
-            title = chat.reply(
-                f"Question: {question}\nTitle:", max_new_tokens=18
-            )
-        finally:
-            chat.restore_history(history)
-            chat.configure_generation({"thinking": previous_thinking})
-        title = re.sub(r"<think>.*?</think>", "", title, flags=re.S)
-        title = title.splitlines()[0] if title.splitlines() else ""
-        title = re.sub(r"^(?:title\s*:\s*)", "", title, flags=re.I)
-        title = re.sub(r"^\[[0-9, ]+\]\s*", "", title)
-        title = " ".join(title.strip().strip('"\'').split())
-        title = re.sub(
-            r"^help me understand\s+",
-            "Understanding ",
-            title,
-            flags=re.I,
-        )
-        fallback = " ".join(question.strip().rstrip("?.!").split())
-        fallback = re.sub(
-            r"^help me understand\s+",
-            "Understanding ",
-            fallback,
-            flags=re.I,
-        )
-        fallback = re.sub(
-            r"^what (?:is|are)\s+",
-            "Understanding ",
-            fallback,
-            flags=re.I,
-        )
-        if not title or re.search(r"\bunderstand(?:ing)? me\b", title, re.I):
-            title = fallback
-        title = " ".join(title.split()[:6])[:80]
-        if not title:
-            return
-        renamed = self.conversation_store.rename(
-            self.active_conversation.conversation_id, title
-        )
-        self.active_conversation = renamed
-        self.active_trace.update_conversation(asdict(renamed))
-        self._send_conversations("conversations")
 
     def ask(
         self,
         question: str,
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
-        effort: str | None = None,
     ) -> None:
         """Ask the loaded project and return its saved answer and evidence.
 
@@ -1117,7 +933,8 @@ class ChatEngine:
         question: str
             Question about the active project.
         retrieval_count: int | None, optional
-            Explicit evidence count used by non-GUI callers.
+            Number of evidence results to use for this answer. Defaults to
+            ``None``.
         generation_settings: dict[str, object] | None, optional
             Temperature, thinking, and answer length for this answer. Defaults
             to ``None``.
@@ -1134,49 +951,17 @@ class ChatEngine:
         try:
             if self.session is None:
                 raise RuntimeError("Open a project before asking a question.")
-            generation_settings = dict(generation_settings or {})
-            title_question = str(
-                generation_settings.pop("_title_question", question)
-            )
-            presets = {
-                "light": ("Qwen/Qwen3-0.6B-MLX-4bit", 5),
-                "instant": ("Qwen/Qwen3-0.6B-MLX-4bit", 20),
-                "lagom": ("mlx-community/Qwen3-14B-4bit", 20),
-                "thorough": ("mlx-community/Qwen3-14B-4bit", 50),
-                "deep": (
-                    "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
-                    50,
-                ),
-            }
-            if effort is not None and effort not in presets:
-                raise ValueError(
-                    "Effort must be light, instant, lagom, thorough, or deep."
-                )
-            if (
-                effort is not None
-                and not self.session.turns
-                and self.conversation_store is not None
-                and self.active_conversation is not None
-                and self.active_conversation.name.startswith("Conversation ")
-            ):
-                self._name_active_conversation(
-                    title_question, presets["light"][0]
-                )
-            if effort is not None:
-                model_id, retrieval_count = presets[effort]
-                self.session.use_chat_model(model_id)
             self._send("status", message="Finding evidence and answering…")
             options: dict[str, object] = {}
             if retrieval_count is not None:
                 options["retrieval_count"] = retrieval_count
-            if generation_settings:
+            if generation_settings is not None:
                 options["generation_settings"] = generation_settings
-            if effort is not None:
-                options["phase_callback"] = lambda phase, details: self._send(
-                    "answer_phase",
-                    phase=phase,
-                    **details,
-                )
+            options["phase_callback"] = lambda phase, details: self._send(
+                "answer_phase",
+                phase=phase,
+                **details,
+            )
             self.session.ask(question, **options)
             if (
                 self.conversation_store is not None
@@ -1188,7 +973,6 @@ class ChatEngine:
                 self.active_trace.update_conversation(
                     asdict(self.active_conversation)
                 )
-                self._send_conversations("conversations")
             self._send("answered", turn=asdict(self.session.turns[-1]))
         except Exception as error:
             self._report_error(
@@ -1310,23 +1094,6 @@ class ChatEngine:
             parent_id = (
                 self.active_conversation.conversation_id if branch else None
             )
-            if not branch:
-                empty = next(
-                    (
-                        item
-                        for item in reversed(
-                            self.conversation_store.conversations()
-                        )
-                        if self.conversation_store.is_empty(
-                            item.conversation_id
-                        )
-                    ),
-                    None,
-                )
-                if empty is not None:
-                    self.conversation_store.select(empty.conversation_id)
-                    self._switch_conversation(empty)
-                    return
             conversation = self.conversation_store.create(
                 branch_from=parent_id
             )
@@ -1417,82 +1184,6 @@ class ChatEngine:
                 str(error),
             )
 
-    def delete_conversation(self, conversation_id: str) -> None:
-        """Archive one conversation and select a remaining conversation."""
-
-        try:
-            if (
-                self.session is None
-                or self.conversation_store is None
-                or self.active_conversation is None
-            ):
-                raise RuntimeError("Open a project first.")
-            deleting_active = (
-                conversation_id
-                == self.active_conversation.conversation_id
-            )
-            if deleting_active:
-                self._close_project_trace()
-            replacement, archived_path = self.conversation_store.archive(
-                conversation_id
-            )
-            if deleting_active:
-                self._switch_conversation(replacement)
-            else:
-                self._send_conversations("conversations")
-            self.active_trace.emit(
-                "conversation.deleted",
-                component="gui_engine",
-                data={
-                    "conversation_id": conversation_id,
-                    "archived_path": str(archived_path),
-                },
-            )
-        except Exception as error:
-            self._report_error(
-                "gui.conversation_delete.failed",
-                error,
-                str(error),
-            )
-
-    def rename_project(self, name: str) -> None:
-        """Rename the active workspace folder, then reopen the same chat."""
-
-        try:
-            if self.session is None or self.active_conversation is None:
-                raise RuntimeError("Open a project first.")
-            clean = name.strip()
-            if (
-                not clean
-                or clean in {".", ".."}
-                or Path(clean).name != clean
-                or "/" in clean
-                or "\\" in clean
-            ):
-                raise ValueError("Use a single folder name without / or \\.")
-            source = self.session.project.root
-            destination = source.with_name(clean)
-            if destination == source:
-                return
-            if destination.exists():
-                raise ValueError(f"A folder named {clean!r} already exists.")
-            conversation_id = self.active_conversation.conversation_id
-            self.close()
-            source.rename(destination)
-            project = open_project(destination)
-            store = ConversationStore(project.root)
-            conversation = store.select(conversation_id)
-            self.conversation_store = store
-            self.active_conversation = conversation
-            self._start_project_trace(project.root, conversation)
-            self._activate_project(project, conversation)
-        except Exception as error:
-            self._report_error(
-                "gui.project.rename.failed",
-                error,
-                f"Could not rename the project: {error}",
-            )
-
     def _switch_conversation(self, conversation: ConversationInfo) -> None:
         """Move the live session and trace to one conversation file.
 
@@ -1568,12 +1259,7 @@ class ChatEngine:
             event,
             active_conversation_id=(self.active_conversation.conversation_id),
             conversations=[
-                {
-                    **asdict(item),
-                    "empty": self.conversation_store.is_empty(
-                        item.conversation_id
-                    ),
-                }
+                asdict(item)
                 for item in self.conversation_store.conversations()
             ],
             **data,
@@ -1949,21 +1635,12 @@ def main() -> None:
                         engine.download(command["model_id"])
                     elif action == "startup":
                         engine.startup()
-                    elif action == "readiness":
-                        engine.readiness()
-                    elif action == "install_required_models":
-                        engine.install_required_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
                             command["kind"], command["workspace"]
                         )
-                    elif action == "saved_projects":
-                        engine.list_saved_projects(command["workspace"])
                     elif action == "resume":
-                        engine.resume_project(
-                            command["project"],
-                            command.get("conversation_id"),
-                        )
+                        engine.resume_project(command["project"])
                     elif action == "close":
                         engine.close()
                     elif action == "preview":
@@ -1981,10 +1658,8 @@ def main() -> None:
                     elif action == "ask":
                         engine.ask(
                             command["question"],
-                            generation_settings=command.get(
-                                "generation_settings"
-                            ),
-                            effort=command.get("effort"),
+                            command.get("retrieval_count"),
+                            command.get("generation_settings"),
                         )
                     elif action == "new_conversation":
                         engine.create_conversation()
@@ -1997,12 +1672,6 @@ def main() -> None:
                             command["conversation_id"],
                             command["name"],
                         )
-                    elif action == "delete_conversation":
-                        engine.delete_conversation(
-                            command["conversation_id"]
-                        )
-                    elif action == "rename_project":
-                        engine.rename_project(command["name"])
                     elif action == "reset":
                         engine.reset()
                     else:
