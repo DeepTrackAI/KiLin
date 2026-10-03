@@ -244,6 +244,18 @@ class ChatBridge(QObject):
             {"action": "settings", "kind": kind, "workspace": workspace}
         )
 
+    @Slot()
+    def requestReadiness(self) -> None:
+        """Ask the backend to check runtime and required model availability."""
+
+        self.commandRequested.emit({"action": "readiness"})
+
+    @Slot()
+    def installRequiredModels(self) -> None:
+        """Ask the backend to download all missing default models."""
+
+        self.commandRequested.emit({"action": "install_required_models"})
+
     @Slot(str)
     def downloadModel(self, model_id: str) -> None:
         """Download one suggested model only after the user chooses it.

@@ -56,6 +56,7 @@ from importlib.metadata import PackageNotFoundError, version
 from typing import Literal
 
 __all__ = [
+    "DEFAULT_MODEL_IDS",
     "MODEL_CHOICES",
     "ModelChoice",
     "installed_backends",
@@ -108,6 +109,12 @@ class ModelChoice:
 
 
 MODEL_CHOICES = (
+    ModelChoice("mlx-community/Qwen3-14B-4bit", "chat", "mlx"),
+    ModelChoice(
+        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        "chat",
+        "mlx",
+    ),
     ModelChoice("Qwen/Qwen3-0.6B-MLX-4bit", "chat", "mlx"),
     ModelChoice(
         "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
@@ -118,6 +125,19 @@ MODEL_CHOICES = (
     ModelChoice("Qwen/Qwen3-0.6B", "chat", "torch"),
     ModelChoice("Qwen/Qwen3-Embedding-0.6B", "embedding", "torch", "qwen3"),
 )
+
+DEFAULT_MODEL_IDS = {
+    "mlx": (
+        "Qwen/Qwen3-0.6B-MLX-4bit",
+        "mlx-community/Qwen3-14B-4bit",
+        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+    ),
+    "torch": (
+        "Qwen/Qwen3-0.6B",
+        "Qwen/Qwen3-Embedding-0.6B",
+    ),
+}
 
 
 def installed_backends() -> dict[str, bool]:

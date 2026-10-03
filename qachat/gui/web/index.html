@@ -122,6 +122,13 @@
     <section id="models-panel" class="models-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="models-title">
       <div class="models-card">
         <div class="models-heading"><h2 id="models-title">Settings</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
+        <section id="first-run-setup" class="settings-section readiness-card hidden" aria-live="polite">
+          <h3>QAChat setup</h3>
+          <p id="readiness-summary">Checking the local environment…</p>
+          <ol id="readiness-steps" class="readiness-steps"></ol>
+          <p id="readiness-time" class="hint"></p>
+          <button id="install-required" class="primary" type="button">Install required models</button>
+        </section>
         <section class="settings-section">
           <h3>Project</h3>
           <div class="advanced-fields">

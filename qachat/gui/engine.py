@@ -76,9 +76,11 @@ import json
 from pathlib import Path
 import re
 import sys
+from time import perf_counter
 from typing import Callable
 
 from qachat.gui.model_catalog import (
+    DEFAULT_MODEL_IDS,
     MODEL_CHOICES,
     installed_backends,
     model_choices,
@@ -380,6 +382,83 @@ class ChatEngine:
         else:
             folder, kind = project
             self._send("startup", project=str(folder), kind=kind)
+
+    def readiness(self) -> None:
+        """Report backend packages and required local model availability."""
+
+        try:
+            backend = choose_backend("auto")
+            packages = installed_backends()
+            cached = {str(item["model_id"]) for item in available_models()}
+            required = list(DEFAULT_MODEL_IDS[backend])
+            missing = [
+                model_id for model_id in required if model_id not in cached
+            ]
+            self._send(
+                "readiness",
+                backend=backend,
+                environment_ready=packages.get(backend, False),
+                required_models=required,
+                cached_models=sorted(cached),
+                missing_models=missing,
+                ready=packages.get(backend, False) and not missing,
+            )
+        except Exception as error:
+            self._report_error("gui.readiness.failed", error, str(error))
+
+    def install_required_models(self) -> None:
+        """Download every missing model required by the default GUI presets."""
+
+        started = perf_counter()
+        try:
+            backend = choose_backend("auto")
+            if not installed_backends().get(backend, False):
+                raise RuntimeError(
+                    f"The {backend.upper()} runtime is not installed. Restart "
+                    "QAChat through "
+                    f"`uv run qachat --gui --backend {backend}`."
+                )
+            cached = {str(item["model_id"]) for item in available_models()}
+            missing = [
+                model_id
+                for model_id in DEFAULT_MODEL_IDS[backend]
+                if model_id not in cached
+            ]
+            total = len(missing)
+            if not missing:
+                self._send("installation_complete", elapsed_seconds=0.0)
+                self.readiness()
+                return
+            self._send("installation_started", total=total, backend=backend)
+            for index, model_id in enumerate(missing, start=1):
+                model_started = perf_counter()
+                self._send(
+                    "installation_progress",
+                    index=index,
+                    total=total,
+                    model_id=model_id,
+                    elapsed_seconds=perf_counter() - started,
+                )
+                download_model(model_id)
+                self._send(
+                    "installation_model_complete",
+                    index=index,
+                    total=total,
+                    model_id=model_id,
+                    model_seconds=perf_counter() - model_started,
+                    elapsed_seconds=perf_counter() - started,
+                )
+            self._send(
+                "installation_complete",
+                elapsed_seconds=perf_counter() - started,
+            )
+            self.readiness()
+        except Exception as error:
+            self._report_error(
+                "gui.installation.failed",
+                error,
+                f"Setup could not finish: {error}",
+            )
 
     def list_saved_projects(self, workspace: str) -> None:
         """Report valid projects, newest first, without loading models."""
@@ -1870,6 +1949,10 @@ def main() -> None:
                         engine.download(command["model_id"])
                     elif action == "startup":
                         engine.startup()
+                    elif action == "readiness":
+                        engine.readiness()
+                    elif action == "install_required_models":
+                        engine.install_required_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
                             command["kind"], command["workspace"]

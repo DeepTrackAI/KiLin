@@ -38,6 +38,8 @@ let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
 let installedBackends = {};
+let requiredModels = [];
+let readinessEnvironmentReady = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
@@ -169,7 +171,10 @@ function applyAppearance(value) {
 function renderSavedProjects(projects) {
   const host = byId("saved-projects");
   host.replaceChildren();
-  const groups = [["code", "Code projects"], ["literature", "Literature projects"]];
+  const groups = [
+    ["code", "Resume previous code projects"],
+    ["literature", "Resume previous literature projects"],
+  ];
   for (const [kind, title] of groups) {
     const matches = projects.filter((project) => project.kind === kind);
     if (!matches.length) continue;
@@ -181,8 +186,8 @@ function renderSavedProjects(projects) {
     for (const project of matches) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = project.name;
-      button.title = project.project;
+      button.textContent = `Resume ${project.name}`;
+      button.title = `Resume ${project.kind} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
         setBusy(true, "Resuming project…");
@@ -672,6 +677,9 @@ function showError(message, tracePath = "") {
     downloadingModel = null;
   }
   setBusy(false);
+  if (!byId("first-run-setup").classList.contains("hidden")) {
+    byId("install-required").disabled = !readinessEnvironmentReady;
+  }
   byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
 }
@@ -685,6 +693,7 @@ function showError(message, tracePath = "") {
  */
 function setBusy(value, message = "") {
   busy = value;
+  if (!value) activity.classList.remove("answer-progress");
   byId("open").disabled = value || !bridge;
   byId("send").disabled = !ready;
   byId("send").classList.toggle("stopping", value && ready);
@@ -752,6 +761,7 @@ function showProgress(data) {
  */
 function clearSourcePreview() {
   activeReference?.button?.classList.remove("active");
+  activeReference?.holder?.classList.remove("expanded");
   activeReference?.preview?.remove();
   activeReference = null;
 }
@@ -777,18 +787,17 @@ function makeSourcePreview() {
   preview.setAttribute("aria-label", "Cited source preview");
   const heading = document.createElement("header");
   heading.className = "source-preview-heading";
-  const title = document.createElement("strong");
+  const note = document.createElement("p");
+  note.className = "hint";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "sidebar-toggle";
   close.textContent = "Close";
-  const note = document.createElement("p");
-  note.className = "hint";
   const lines = document.createElement("pre");
   lines.className = "source-preview-lines";
-  heading.append(title, close);
-  preview.append(heading, note, lines);
-  return { preview, title, close, note, lines };
+  heading.append(note, close);
+  preview.append(heading, lines);
+  return { preview, close, note, lines };
 }
 
 /**
@@ -809,12 +818,12 @@ function openReference(item, source, button, holder) {
   }
   clearSourcePreview();
   const nodes = makeSourcePreview();
-  nodes.title.textContent = source.path;
   nodes.note.textContent = "Loading nearby lines…";
   nodes.close.addEventListener("click", clearSourcePreview);
   holder.append(nodes.preview);
+  holder.classList.add("expanded");
   button.classList.add("active");
-  activeReference = { turnIndex, citation, button, ...nodes };
+  activeReference = { turnIndex, citation, button, holder, ...nodes };
   bridge?.previewReference(turnIndex, activeReference.citation);
   nodes.preview.scrollIntoView({ block: "nearest" });
 }
@@ -870,7 +879,6 @@ function selectTurn(item, turn, citation = null) {
 function renderSourcePreview(data) {
   if (!activeReference || data.turn_index !== activeReference.turnIndex
       || data.citation !== activeReference.citation) return;
-  activeReference.title.textContent = data.path;
   const location = data.page
     ? `Page ${data.page} · lines ${data.start_line}–${data.end_line}`
     : `Lines ${data.start_line}–${data.end_line}`;
@@ -1077,6 +1085,9 @@ function updateEffort(index) {
     "--effort-percent",
     `${(effortLevels.indexOf(level) / (effortLevels.length - 1)) * 100}%`,
   );
+  [...document.querySelectorAll(".effort-points i")].forEach((point, pointIndex) => {
+    point.classList.toggle("selected", pointIndex === effortLevels.indexOf(level));
+  });
 }
 
 /**
@@ -1096,14 +1107,19 @@ function stopPhaseAnimation() {
 function showTurnPhase(label, detail = "") {
   if (!pendingTurn) return;
   stopPhaseAnimation();
+  pendingTurn.detail.textContent = detail;
+  pendingTurn.detail.classList.toggle("hidden", !detail);
   let dots = 1;
   const paint = () => {
     const suffix = ".".repeat(dots);
-    pendingTurn.answer.textContent = `${label}${suffix}${detail ? ` · ${detail}` : ""}`;
-    dots = dots === 3 ? 1 : dots + 1;
+    pendingTurn.label.textContent = `${label}${suffix}`;
   };
   paint();
-  phaseTimer = setInterval(paint, 400);
+  phaseTimer = setInterval(() => {
+    dots += 1;
+    paint();
+    if (dots === 3) stopPhaseAnimation();
+  }, 400);
 }
 
 /**
@@ -1121,10 +1137,15 @@ function addPendingTurn(question) {
   questionNode.textContent = question;
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
+  const phaseLabel = document.createElement("div");
+  phaseLabel.className = "answer-phase-label";
+  const phaseDetail = document.createElement("div");
+  phaseDetail.className = "answer-phase-detail";
+  answer.append(phaseLabel, phaseDetail);
   item.append(questionNode, answer);
   conversation.append(item);
-  pendingTurn = { item, answer };
-  showTurnPhase("Retrieving");
+  pendingTurn = { item, answer, label: phaseLabel, detail: phaseDetail };
+  showTurnPhase("Generating", "Starting retrieval");
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
@@ -1200,6 +1221,55 @@ function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
+  } else if (data.event === "readiness") {
+    requiredModels = data.required_models || [];
+    readinessEnvironmentReady = Boolean(data.environment_ready);
+    cachedModels = new Set(data.cached_models || []);
+    const card = byId("first-run-setup");
+    const steps = byId("readiness-steps");
+    steps.replaceChildren();
+    const runtime = document.createElement("li");
+    runtime.textContent = data.environment_ready
+      ? `${String(data.backend).toUpperCase()} runtime is ready`
+      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run qachat --gui`;
+    runtime.classList.toggle("complete", data.environment_ready);
+    steps.append(runtime);
+    for (const modelId of requiredModels) {
+      const item = document.createElement("li");
+      const present = cachedModels.has(modelId);
+      item.textContent = `${present ? "Ready" : "Missing"}: ${modelId}`;
+      item.classList.toggle("complete", present);
+      steps.append(item);
+    }
+    card.classList.toggle("hidden", data.ready);
+    byId("readiness-summary").textContent = data.ready
+      ? "QAChat is ready."
+      : `${data.missing_models.length} required model${data.missing_models.length === 1 ? "" : "s"} need to be downloaded.`;
+    byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    refreshModelStatus();
+    if (!data.ready) {
+      byId("models-panel").classList.remove("hidden");
+      byId("close-models").focus();
+    }
+  } else if (data.event === "installation_started") {
+    setBusy(true, `Preparing ${data.total} required models…`);
+    byId("first-run-setup").classList.remove("hidden");
+    byId("install-required").disabled = true;
+    byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
+  } else if (data.event === "installation_progress") {
+    const elapsed = seconds(data.elapsed_seconds || 0);
+    byId("readiness-summary").textContent = `Downloading ${data.index} of ${data.total}`;
+    byId("readiness-time").textContent = `${elapsed} elapsed · downloading ${data.model_id}`;
+    byId("activity-percent").textContent = `Model ${data.index} of ${data.total}`;
+    byId("activity-text").textContent = `Downloading ${data.model_id}`;
+    byId("activity-detail").textContent = `${elapsed} elapsed`;
+  } else if (data.event === "installation_model_complete") {
+    cachedModels.add(data.model_id);
+    byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
+  } else if (data.event === "installation_complete") {
+    byId("readiness-summary").textContent = "Required models are installed.";
+    byId("readiness-time").textContent = `Setup completed in ${seconds(data.elapsed_seconds)}.`;
+    setBusy(false);
   } else if (data.event === "settings") {
     showSettings(data);
   } else if (data.event === "projects") {
@@ -1229,33 +1299,39 @@ function onEvent(raw) {
   } else if (data.event === "status") {
     setBusy(true, data.message);
   } else if (data.event === "answer_phase") {
+    activity.classList.add("answer-progress");
     if (data.phase === "retrieving") {
-      showTurnPhase("Retrieving");
-      byId("activity-percent").textContent = "Retrieving evidence";
+      showTurnPhase("Generating", data.message || "Searching project evidence");
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
     } else if (data.phase === "evidence_ready") {
-      showTurnPhase("Preparing evidence");
-      byId("activity-percent").textContent = "Evidence ready";
-      byId("activity-text").textContent = data.message || "Preparing retrieved evidence for the model";
-      byId("activity-detail").textContent = data.evidence_count == null
-        ? ""
-        : `${data.evidence_count} references will be supplied to the model`;
+      showTurnPhase(
+        "Generating",
+        data.evidence_count == null
+          ? "Preparing retrieved evidence"
+          : `Preparing ${data.evidence_count} retrieved references`,
+      );
+      byId("activity-text").textContent = data.evidence_count == null
+        ? "Preparing retrieved evidence for the model"
+        : `Preparing ${data.evidence_count} retrieved references for the model`;
+      byId("activity-detail").textContent = "";
     } else if (data.phase === "generating") {
-      showTurnPhase("Generating");
-      byId("activity-percent").textContent = "Generating answer";
-      byId("activity-text").textContent = data.message || "Writing the answer";
-      byId("activity-detail").textContent = data.evidence_count == null
-        ? ""
-        : `Using ${data.evidence_count} retrieved references`;
+      showTurnPhase(
+        "Generating",
+        data.evidence_count == null
+          ? "Writing the answer"
+          : `Writing with ${data.evidence_count} retrieved references`,
+      );
+      byId("activity-text").textContent = data.evidence_count == null
+        ? "Writing the answer"
+        : `Writing the answer using ${data.evidence_count} retrieved references`;
+      byId("activity-detail").textContent = "";
     } else if (data.phase === "saving") {
-      showTurnPhase("Saving answer");
-      byId("activity-percent").textContent = "Saving answer";
+      showTurnPhase("Generating", data.message || "Saving the answer");
       byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
       byId("activity-detail").textContent = "";
     } else if (data.phase === "completed") {
       stopPhaseAnimation();
-      byId("activity-percent").textContent = "Answer ready";
       byId("activity-text").textContent = data.message || "Displaying the completed response";
       byId("activity-detail").textContent = "";
     }
@@ -1333,6 +1409,7 @@ function onEvent(raw) {
       activeReference.note.textContent = data.message;
     }
   } else if (data.event === "answered") {
+    activity.classList.remove("answer-progress");
     completePendingTurn(data.turn);
   } else if (data.event === "reset") {
     renderConversationEmpty();
@@ -1416,6 +1493,11 @@ byId("send").addEventListener("click", (event) => {
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", () => byId("models-panel").classList.add("hidden"));
+byId("install-required").addEventListener("click", () => {
+  if (busy || !bridge) return;
+  setBusy(true, "Checking required models…");
+  bridge.installRequiredModels();
+});
 byId("cancel-model-download").addEventListener("click", () => {
   if (downloadingModel) bridge?.stopOperation();
 });
@@ -1624,6 +1706,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     refreshSavedProject();
   });
   bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+  bridge.requestReadiness();
   showWorkspace(false);
   updateEffort(2);
   setBusy(false);
