@@ -62,7 +62,7 @@ native dialog or drag-and-drop. The engine previews directory selections
 using repository scanning. The tree shows selected and skipped entries;
 protected entries remain unavailable. Oversized eligible files can be checked
 explicitly, which increases the submitted size limit to accommodate them.
-Additional UTF-8 suffixes can be entered in Advanced settings.
+Additional UTF-8 suffixes can be entered in Settings.
 
 The selected sources are copied into the workspace's `sources/` directory.
 This multi-source route is cumulative: re-adding a source updates matching
@@ -77,7 +77,7 @@ example-source route requires an example repository that is not included in
 this attached archive. A workspace is a directory organization convention,
 not an execution sandbox or a protection boundary for hostile inputs.
 
-Advanced settings configure the profile before indexing and model loading.
+Settings configure the profile before indexing and model loading.
 New GUI projects leave preparation downloads disabled unless explicitly
 allowed. Literature defaults permit larger files than code defaults; the
 profile and the current GUI fields remain the effective configuration.

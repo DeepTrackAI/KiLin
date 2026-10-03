@@ -61,6 +61,7 @@ from PySide6.QtCore import QObject, QProcess, QUrl, Signal, Slot
 from PySide6.QtGui import (
     QCloseEvent,
     QCursor,
+    QDesktopServices,
     QDragEnterEvent,
     QDragMoveEvent,
     QDropEvent,
@@ -107,8 +108,8 @@ class ChatBridge(QObject):
         Scan selected roots without copying them.
     openProject(sources_json, kind, workspace, selected_json, settings_json)
         Request project preparation in the backend process.
-    askQuestion(question, retrieval_count, settings_json)
-        Request one answer with the current conversation settings.
+    askQuestion(question, effort, settings_json)
+        Request one answer with the selected GUI effort preset.
     previewReference(turn_index, citation)
         Request source context for one saved answer citation.
     resetConversation()
@@ -121,10 +122,14 @@ class ChatBridge(QObject):
         Open a saved conversation without reloading project resources.
     renameConversation(conversation_id, name)
         Rename a saved conversation in the project catalog.
-    findSavedProject(kind, workspace)
-        Refresh Resume for the selected project type and workspace.
+    deleteConversation(conversation_id)
+        Archive a conversation and remove it from the project catalog.
+    listSavedProjects(workspace)
+        List valid saved code and literature projects.
     resumeProject(directory)
         Open a saved project without changing its source snapshot.
+    resumeProjectConversation(directory, conversation_id)
+        Reopen a saved project at one exact conversation.
     closeProject()
         Release models when the user chooses a different project.
     stopOperation()
@@ -141,9 +146,16 @@ class ChatBridge(QObject):
 
     event = Signal(str)
     pathsSelected = Signal(list)
+    attachmentsSelected = Signal(list)
     workspaceSelected = Signal(str)
     commandRequested = Signal(dict)
     stopRequested = Signal()
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        """Keep only the currently opened project path on the UI side."""
+
+        super().__init__(parent)
+        self.project_root: Path | None = None
 
     @Slot()
     def chooseSources(self) -> None:
@@ -182,6 +194,22 @@ class ChatBridge(QObject):
         paths, _ = QFileDialog.getOpenFileNames(None, "Choose source files")
         if paths:
             self.pathsSelected.emit(paths)
+
+    @Slot()
+    def chooseAttachmentFolder(self) -> None:
+        """Choose one folder for the current chat message."""
+
+        path = QFileDialog.getExistingDirectory(None, "Attach folder")
+        if path:
+            self.attachmentsSelected.emit([path])
+
+    @Slot()
+    def chooseAttachmentFiles(self) -> None:
+        """Choose one or more files for the current chat message."""
+
+        paths, _ = QFileDialog.getOpenFileNames(None, "Attach files")
+        if paths:
+            self.attachmentsSelected.emit(paths)
 
     @Slot()
     def chooseWorkspace(self) -> None:
@@ -339,9 +367,9 @@ class ChatBridge(QObject):
             }
         )
 
-    @Slot(str, int, str)
+    @Slot(str, str, str)
     def askQuestion(
-        self, question: str, retrieval_count: int, settings_json: str
+        self, question: str, effort: str, settings_json: str
     ) -> None:
         """Request one answer with the current conversation settings.
 
@@ -352,8 +380,8 @@ class ChatBridge(QObject):
         ----------
         question: str
             User question forwarded to the loaded RAG session.
-        retrieval_count: int
-            Requested positive initial result count forwarded to the backend.
+        effort: str
+            Light, instant, lagom, thorough, or deep GUI effort preset.
         settings_json: str
             JSON-encoded profile or generation-settings dictionary for the
             requested operation.
@@ -375,7 +403,7 @@ class ChatBridge(QObject):
             {
                 "action": "ask",
                 "question": question,
-                "retrieval_count": retrieval_count,
+                "effort": effort,
                 "generation_settings": json.loads(settings_json),
             }
         )
@@ -475,6 +503,45 @@ class ChatBridge(QObject):
             }
         )
 
+    @Slot(str)
+    def deleteConversation(self, conversation_id: str) -> None:
+        """Archive a conversation and remove it from the visible catalog."""
+
+        self.commandRequested.emit(
+            {
+                "action": "delete_conversation",
+                "conversation_id": conversation_id,
+            }
+        )
+
+    @Slot(str)
+    def renameProject(self, name: str) -> None:
+        """Ask the backend to rename the active project directory."""
+
+        self.commandRequested.emit({"action": "rename_project", "name": name})
+
+    @Slot(str)
+    def openWorkspaceFile(self, relative_path: str) -> None:
+        """Open one validated project file with its desktop application."""
+
+        if self.project_root is None:
+            return
+        try:
+            root = self.project_root.resolve(strict=True)
+            path = (root / relative_path).resolve(strict=True)
+            if not path.is_file() or not path.is_relative_to(root):
+                raise ValueError("File is outside the open project.")
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        except (OSError, ValueError):
+            self.event.emit(
+                json.dumps(
+                    {
+                        "event": "error",
+                        "message": "Could not open that project file.",
+                    }
+                )
+            )
+
     @Slot(str, str)
     def findSavedProject(self, kind: str, workspace: str) -> None:
         """Refresh Resume for the selected project type and workspace.
@@ -498,6 +565,14 @@ class ChatBridge(QObject):
         )
 
     @Slot(str)
+    def listSavedProjects(self, workspace: str) -> None:
+        """List all valid saved projects without loading their models."""
+
+        self.commandRequested.emit(
+            {"action": "saved_projects", "workspace": workspace}
+        )
+
+    @Slot(str)
     def resumeProject(self, directory: str) -> None:
         """Open a saved project without changing its source snapshot.
 
@@ -509,6 +584,22 @@ class ChatBridge(QObject):
         """
 
         self.commandRequested.emit({"action": "resume", "project": directory})
+
+    @Slot(str, str)
+    def resumeProjectConversation(
+        self,
+        directory: str,
+        conversation_id: str,
+    ) -> None:
+        """Reopen a project at the exact conversation active before a stop."""
+
+        self.commandRequested.emit(
+            {
+                "action": "resume",
+                "project": directory,
+                "conversation_id": conversation_id,
+            }
+        )
 
     @Slot()
     def closeProject(self) -> None:
@@ -752,6 +843,10 @@ class ChatWindow(QMainWindow):
                     and isinstance(event, dict)
                     and "event" in event
                 ):
+                    if event["event"] == "opened" and isinstance(
+                        event.get("project"), str
+                    ):
+                        self.bridge.project_root = Path(event["project"])
                     self.bridge.event.emit(json.dumps(event))
             except (UnicodeError, ValueError):
                 continue
@@ -796,8 +891,8 @@ class ChatWindow(QMainWindow):
             return
         if self._stopping:
             self._stopping = False
-            self.bridge.event.emit(json.dumps({"event": "stopped"}))
             self._start_engine()
+            self.bridge.event.emit(json.dumps({"event": "stopped"}))
         else:
             self.bridge.event.emit(
                 json.dumps(

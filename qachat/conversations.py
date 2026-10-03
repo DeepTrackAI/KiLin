@@ -434,6 +434,55 @@ class ConversationStore:
         self._update_metadata(updated)
         return updated
 
+    def is_empty(self, conversation_id: str) -> bool:
+        """Return whether a conversation has no saved turns."""
+
+        item = self._require(conversation_id)
+        record = _conversation_record(_read_json(self.state_path(item)))
+        turns = record.get("turns", [])
+        if not isinstance(turns, list):
+            raise ValueError("The saved conversation is invalid.")
+        return not turns
+
+    def archive(
+        self, conversation_id: str
+    ) -> tuple[ConversationInfo, Path]:
+        """Remove a conversation from the catalog and retain its JSON.
+
+        The record is moved into ``logs/traces/deleted`` so deletion remains
+        recoverable. When the last conversation is archived, a new empty
+        conversation is created automatically.
+        """
+
+        item = self._require(conversation_id)
+        source = self.state_path(item)
+        deleted = self.root / "deleted"
+        deleted.mkdir(parents=True, exist_ok=True)
+        if deleted.is_symlink():
+            raise ValueError(
+                "The deleted-conversations folder must not be a link."
+            )
+        destination = deleted / source.name
+        number = 2
+        while destination.exists():
+            destination = deleted / f"{source.stem}_{number}{source.suffix}"
+            number += 1
+        source.rename(destination)
+        self._items.pop(conversation_id)
+        self._paths.pop(conversation_id)
+        if not self._items:
+            return self.create(), destination
+        if self._active_id == conversation_id:
+            replacement = max(
+                self._items.values(),
+                key=lambda candidate: (
+                    candidate.updated_at_utc,
+                    candidate.conversation_id,
+                ),
+            )
+            self._active_id = replacement.conversation_id
+        return self.active(), destination
+
     def state_path(self, conversation: ConversationInfo | str) -> Path:
         """Resolve the registered file path of a conversation.
 

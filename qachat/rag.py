@@ -785,6 +785,57 @@ class RAGSession:
             eta_seconds=eta,
         )
 
+    def use_chat_model(self: RAGSession, model_id: str) -> None:
+        """Switch the generation model while preserving conversation state.
+
+        The embedding model and retrieval indexes are left unchanged. The old
+        model is released before the replacement is loaded to avoid holding
+        two large language models in memory at once.
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if self.backend != "mlx":
+            raise RuntimeError("GUI effort presets currently require MLX.")
+        if self.chat_session.model_id == model_id:
+            return
+        old = self.chat_session
+        old_model_id = old.model_id
+        messages = [dict(message) for message in old.messages]
+        settings = {
+            "thinking": old.thinking,
+            "temperature": old.temperature,
+            "max_new_tokens": old.max_new_tokens,
+        }
+        old.close()
+        try:
+            replacement = ChatSession(
+                model_id,
+                backend=self.backend,
+                system_prompt=_SYSTEM_PROMPT,
+                allow_download=self.project.profile.allow_download,
+                trace=self.trace,
+                **settings,
+            )
+        except Exception:
+            self.chat_session = ChatSession(
+                old_model_id,
+                backend=self.backend,
+                system_prompt=_SYSTEM_PROMPT,
+                allow_download=self.project.profile.allow_download,
+                trace=self.trace,
+                **settings,
+            )
+            self.chat_session.restore_history(messages)
+            raise
+        replacement.restore_history(messages)
+        self.chat_session = replacement
+        self.trace.emit(
+            "chat.model.switched",
+            component="rag",
+            data={"from": old_model_id, "to": model_id},
+        )
+
     def ask(
         self: RAGSession,
         question: str,
@@ -956,6 +1007,9 @@ class RAGSession:
                 question,
                 retrieval_count,
                 trace_turn_id=turn_id,
+                status_callback=lambda message: report_phase(
+                    "retrieving", message=message
+                ),
             )
             report_phase(
                 "evidence_ready",
@@ -1599,6 +1653,7 @@ class RAGSession:
         retrieval_count: int | None = None,
         *,
         trace_turn_id: str | None = None,
+        status_callback: Callable[[str], None] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -1629,7 +1684,12 @@ class RAGSession:
 
         """
 
+        def report(message: str) -> None:
+            if status_callback is not None:
+                status_callback(message)
+
         count = retrieval_count or self.project.profile.retrieval_count
+        report("Formatting the search query")
         query_text = self._format_query(question)
         trace = getattr(self, "trace", NullTraceLogger())
         query_data: dict[str, object] = {
@@ -1651,6 +1711,7 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            report("Embedding the query and running semantic search")
             semantic = semantic_search(
                 self.indexes.semantic,
                 query_text,
@@ -1667,11 +1728,13 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Semantic search ranked {len(semantic)} results")
         with trace.span(
             "retrieval.lexical",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            report("Running lexical search")
             lexical = lexical_search(
                 self.indexes.lexical,
                 question,
@@ -1686,11 +1749,17 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Lexical search ranked {len(lexical)} results")
         with trace.span(
             "retrieval.code",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            report(
+                "Searching the code graph"
+                if self.project.profile.kind == "code"
+                else "Checking structured relationships"
+            )
             code = code_search(
                 self.indexes.code_graph,
                 self.chunks,
@@ -1706,6 +1775,12 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(
+            f"Code graph search ranked {len(code)} results"
+            if self.project.profile.kind == "code"
+            else f"Structured relationship search found {len(code)} results"
+        )
+        report("Combining and ranking search results")
         combined = hybrid_search(
             semantic=semantic,
             lexical=lexical,
@@ -1721,6 +1796,7 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Hybrid ranking kept {len(combined)} results")
         plan = plan_retrieval(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
@@ -1752,6 +1828,7 @@ class RAGSession:
             },
             turn_id=trace_turn_id,
         )
+        report("Expanding related context")
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
