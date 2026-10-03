@@ -49,6 +49,10 @@ let activeConversationId = "";
 let pendingTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
+let answerStageTimer = null;
+let answerStageKey = null;
+let answerStageQueue = [];
+let completedTurnWaiting = null;
 let selectedEffort = "lagom";
 let resumeAfterStop = false;
 let activeProjectKind = "code";
@@ -664,6 +668,7 @@ function openWorkspaceFile(path) {
 
 function showError(message, tracePath = "") {
   stopPhaseAnimation();
+  resetAnswerStages();
   if (pendingTurn) {
     pendingTurn.answer.textContent = "Could not complete this answer.";
     pendingTurn.item.classList.add("failed");
@@ -1098,6 +1103,53 @@ function stopPhaseAnimation() {
   phaseTimer = null;
 }
 
+const ANSWER_STAGE_DURATION_MS = 1700;
+
+function resetAnswerStages() {
+  clearTimeout(answerStageTimer);
+  answerStageTimer = null;
+  answerStageKey = null;
+  answerStageQueue = [];
+  completedTurnWaiting = null;
+}
+
+function advanceAnswerStage() {
+  if (answerStageTimer) return;
+  const stage = answerStageQueue.shift();
+  if (!stage) {
+    answerStageKey = null;
+    if (completedTurnWaiting) {
+      const turn = completedTurnWaiting;
+      completedTurnWaiting = null;
+      completePendingTurn(turn);
+    }
+    return;
+  }
+  answerStageKey = stage.key;
+  showTurnPhase("Generating", stage.detail);
+  answerStageTimer = setTimeout(() => {
+    answerStageTimer = null;
+    answerStageKey = null;
+    advanceAnswerStage();
+  }, ANSWER_STAGE_DURATION_MS);
+}
+
+function queueAnswerStage(key, detail) {
+  if (!pendingTurn || answerStageKey === key) return;
+  const queued = answerStageQueue.find((stage) => stage.key === key);
+  if (queued) {
+    queued.detail = detail;
+  } else {
+    answerStageQueue.push({ key, detail });
+  }
+  advanceAnswerStage();
+}
+
+function completeAfterAnswerStages(turn) {
+  completedTurnWaiting = turn;
+  advanceAnswerStage();
+}
+
 /**
  * Animate a pending answer phase while no completed answer is available.
  *
@@ -1106,9 +1158,10 @@ function stopPhaseAnimation() {
  */
 function showTurnPhase(label, detail = "") {
   if (!pendingTurn) return;
-  stopPhaseAnimation();
   pendingTurn.detail.textContent = detail;
   pendingTurn.detail.classList.toggle("hidden", !detail);
+  if (pendingTurn.label.textContent.startsWith(label)) return;
+  stopPhaseAnimation();
   let dots = 1;
   const paint = () => {
     const suffix = ".".repeat(dots);
@@ -1128,6 +1181,7 @@ function showTurnPhase(label, detail = "") {
  * @param question Validated question text submitted by the user.
  */
 function addPendingTurn(question) {
+  resetAnswerStages();
   if (conversation.querySelector(".conversation-empty")) conversation.replaceChildren();
   const item = document.createElement("article");
   item.className = "turn pending";
@@ -1145,7 +1199,7 @@ function addPendingTurn(question) {
   item.append(questionNode, answer);
   conversation.append(item);
   pendingTurn = { item, answer, label: phaseLabel, detail: phaseDetail };
-  showTurnPhase("Generating", "Starting retrieval");
+  queueAnswerStage("retrieving", "Retrieving project evidence");
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
@@ -1180,6 +1234,7 @@ function bindAnswerSelection(answer, item, turn) {
  */
 function completePendingTurn(turn) {
   stopPhaseAnimation();
+  resetAnswerStages();
   updateProjectSummary(currentTurnCount + 1);
   const current = pendingTurn;
   if (!current) {
@@ -1196,7 +1251,7 @@ function completePendingTurn(turn) {
   let position = 0;
   clearInterval(answerTimer);
   answerTimer = setInterval(() => {
-    position += 1;
+    position += 3;
     current.answer.textContent = text.slice(0, position);
     conversationScroll.scrollTop = conversationScroll.scrollHeight;
     if (position < text.length) return;
@@ -1208,7 +1263,7 @@ function completePendingTurn(turn) {
     renderAnswer(current.answer, turn, current.item);
     selectTurn(current.item, turn);
     setBusy(false);
-  }, 25);
+  }, 12);
 }
 
 /**
@@ -1301,12 +1356,19 @@ function onEvent(raw) {
   } else if (data.event === "answer_phase") {
     activity.classList.add("answer-progress");
     if (data.phase === "retrieving") {
-      showTurnPhase("Generating", data.message || "Searching project evidence");
+      const message = data.message || "Searching project evidence";
+      if (/expand/i.test(message)) {
+        queueAnswerStage("expanding", "Expanding related context");
+      } else if (/rank|combin/i.test(message)) {
+        queueAnswerStage("ranking", "Combining and ranking the evidence");
+      } else {
+        queueAnswerStage("retrieving", "Retrieving project evidence");
+      }
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
     } else if (data.phase === "evidence_ready") {
-      showTurnPhase(
-        "Generating",
+      queueAnswerStage(
+        "preparing",
         data.evidence_count == null
           ? "Preparing retrieved evidence"
           : `Preparing ${data.evidence_count} retrieved references`,
@@ -1316,8 +1378,8 @@ function onEvent(raw) {
         : `Preparing ${data.evidence_count} retrieved references for the model`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === "generating") {
-      showTurnPhase(
-        "Generating",
+      queueAnswerStage(
+        "writing",
         data.evidence_count == null
           ? "Writing the answer"
           : `Writing with ${data.evidence_count} retrieved references`,
@@ -1327,7 +1389,7 @@ function onEvent(raw) {
         : `Writing the answer using ${data.evidence_count} retrieved references`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === "saving") {
-      showTurnPhase("Generating", data.message || "Saving the answer");
+      queueAnswerStage("saving", data.message || "Saving the answer");
       byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
       byId("activity-detail").textContent = "";
     } else if (data.phase === "completed") {
@@ -1379,6 +1441,7 @@ function onEvent(raw) {
     setBusy(false);
   } else if (data.event === "conversation_opened") {
     stopPhaseAnimation();
+    resetAnswerStages();
     clearInterval(answerTimer);
     answerTimer = null;
     pendingTurn = null;
@@ -1409,8 +1472,7 @@ function onEvent(raw) {
       activeReference.note.textContent = data.message;
     }
   } else if (data.event === "answered") {
-    activity.classList.remove("answer-progress");
-    completePendingTurn(data.turn);
+    completeAfterAnswerStages(data.turn);
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
@@ -1426,6 +1488,7 @@ function onEvent(raw) {
     if (resumeAfterStop) {
       resumeAfterStop = false;
       stopPhaseAnimation();
+      resetAnswerStages();
       pendingTurn?.item.remove();
       pendingTurn = null;
       ready = false;
