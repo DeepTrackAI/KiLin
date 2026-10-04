@@ -69,6 +69,7 @@ from qachat.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
 
 
 __all__ = [
+    "GUI_REQUIRED_MODEL_IDS",
     "MODEL_CHOICES",
     "ModelChoice",
     "installed_backends",
@@ -120,6 +121,12 @@ class ModelChoice:
 
 
 MODEL_CHOICES = (
+    ModelChoice("Qwen/Qwen3-0.6B-MLX-4bit", MODEL_ROLE_CHAT, BACKEND_MLX),
+    ModelChoice(
+        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        MODEL_ROLE_CHAT,
+        BACKEND_MLX,
+    ),
     ModelChoice(DEFAULT_CHAT_MODEL_MLX, MODEL_ROLE_CHAT, BACKEND_MLX),
     ModelChoice(
         DEFAULT_EMBEDDING_MODEL_MLX,
@@ -135,6 +142,19 @@ MODEL_CHOICES = (
         QUERY_FORMAT_QWEN3,
     ),
 )
+
+GUI_REQUIRED_MODEL_IDS = {
+    BACKEND_MLX: (
+        "Qwen/Qwen3-0.6B-MLX-4bit",
+        DEFAULT_CHAT_MODEL_MLX,
+        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        DEFAULT_EMBEDDING_MODEL_MLX,
+    ),
+    BACKEND_TORCH: (
+        DEFAULT_CHAT_MODEL_TORCH,
+        DEFAULT_EMBEDDING_MODEL_TORCH,
+    ),
+}
 
 
 def installed_backends() -> dict[str, bool]:

@@ -16,14 +16,10 @@
 
 // Resolve fixed DOM identifiers after the deferred script can see the page.
 const byId = (id) => document.getElementById(id);
-const ANSWER_PHASE_RETRIEVING = "retrieving";
-const ANSWER_PHASE_EVIDENCE_READY = "evidence_ready";
-const ANSWER_PHASE_GENERATING = "generating";
-const ANSWER_PHASE_SAVING = "saving";
-const ANSWER_PHASE_COMPLETED = "completed";
 const setup = byId("setup");
 const chat = byId("chat");
 const conversation = byId("conversation");
+const conversationScroll = byId("conversation-scroll");
 const activity = byId("activity");
 const error = byId("error");
 const shell = document.querySelector(".app-shell");
@@ -42,6 +38,8 @@ let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
 let installedBackends = {};
+let requiredModels = [];
+let readinessEnvironmentReady = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
@@ -51,21 +49,87 @@ let activeConversationId = "";
 let pendingTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
+let answerStageTimer = null;
+let answerStageKey = null;
+let answerStageQueue = [];
+let completedTurnWaiting = null;
+let selectedEffort = "lagom";
+let resumeAfterStop = false;
+let activeProjectKind = "code";
+let lastEmptyPrompt = { code: -1, literature: -1 };
+let messageAttachments = [];
+let currentTurnCount = 0;
+const effortLevels = [
+  { key: "light", name: "Light", detail: "0.6B model · 5 references" },
+  { key: "instant", name: "Instant", detail: "0.6B model · 20 references" },
+  { key: "lagom", name: "Lagom", detail: "8B model · 20 references" },
+  { key: "thorough", name: "Thorough", detail: "8B model · 50 references" },
+  { key: "deep", name: "Deep", detail: "27B model · 50 references" },
+];
+const emptyChatContent = {
+  code: {
+    prompts: [
+      "What would you like to understand about this codebase?",
+      "Which part of your project should we explore?",
+      "What do you want to trace through the code?",
+      "What behavior would you like to investigate?",
+      "Where should we start in this repository?",
+    ],
+    suggestions: [
+      "Explain a concept", "Find where a feature is implemented",
+      "Trace a function through the code", "Compare two approaches",
+      "Find evidence across my files", "Explain how modules connect",
+      "Identify code related to an error", "Summarize an architecture decision",
+      "Find tests for a behavior",
+    ],
+  },
+  literature: {
+    prompts: [
+      "What would you like to understand from your literature?",
+      "Which concept should we explore across these sources?",
+      "What evidence are you looking for?",
+      "What would you like to compare in the literature?",
+      "Which finding should we investigate?",
+    ],
+    suggestions: [
+      "Explain a concept", "Find evidence across my files",
+      "Compare two approaches", "Summarize findings on a topic",
+      "Find supporting and conflicting evidence", "Trace a claim to its sources",
+      "Compare methods across papers", "Identify gaps in the evidence",
+      "Find how a term is defined",
+    ],
+  },
+};
+
+function turnCountLabel(count) {
+  return `${count} ${count === 1 ? "turn" : "turns"}`;
+}
+
+function updateProjectSummary(count = currentTurnCount) {
+  currentTurnCount = Number(count) || 0;
+  const projectName = byId("project-name").textContent.trim();
+  byId("topbar-project-name").textContent = projectName;
+  byId("topbar-turn-count").textContent = turnCountLabel(currentTurnCount);
+  byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
+}
+
+function updateFloatingHeader() {
+  const scrolled = ready && conversationScroll.scrollTop > 96;
+  document.querySelector(".topbar").classList.toggle("floating", scrolled);
+  byId("topbar-project").classList.toggle("hidden", !scrolled);
+}
 
 /**
  * Hide and clear the previously offered saved-project shortcut.
  */
-function hideResume() {
-  byId("recent-project").classList.add("hidden");
-  byId("resume-recent").dataset.project = "";
-}
+function hideResume() { byId("saved-projects").classList.add("hidden"); }
 
 /**
  * Ask the engine for a saved project only on an idle setup screen.
  */
 function refreshSavedProject() {
   if (!bridge || busy || ready) return;
-  bridge.findSavedProject(byId("kind").value, byId("workspace-path").value.trim());
+  bridge.listSavedProjects(byId("workspace-path").value.trim());
 }
 
 /**
@@ -86,7 +150,58 @@ function showWorkspace(visible) {
   // Keep the workspace out of the layout until a project is actually open.
   shell.classList.toggle("sidebar-open", visible);
   byId("toggle-workspace").classList.toggle("hidden", !ready);
-  byId("toggle-workspace").textContent = visible ? "Hide panels" : "Show panels";
+  const control = byId("toggle-workspace");
+  control.setAttribute("aria-label", visible ? "Hide side panels" : "Show side panels");
+  control.title = control.getAttribute("aria-label");
+  control.classList.toggle("panels-hidden", !visible);
+}
+
+function showConversations(visible) {
+  shell.classList.toggle("conversations-hidden", !visible);
+  const control = byId("toggle-conversations");
+  control.classList.toggle("hidden", !ready);
+  control.classList.toggle("panels-hidden", !visible);
+  control.setAttribute("aria-label", visible ? "Hide conversations" : "Show conversations");
+  control.title = control.getAttribute("aria-label");
+}
+
+function applyAppearance(value) {
+  const selected = ["system", "light", "dark"].includes(value) ? value : "system";
+  document.documentElement.dataset.appearance = selected;
+  localStorage.setItem("qachat-appearance", selected);
+  if (byId("appearance")) byId("appearance").value = selected;
+}
+
+function renderSavedProjects(projects) {
+  const host = byId("saved-projects");
+  host.replaceChildren();
+  const groups = [
+    ["code", "Resume previous code projects"],
+    ["literature", "Resume previous literature projects"],
+  ];
+  for (const [kind, title] of groups) {
+    const matches = projects.filter((project) => project.kind === kind);
+    if (!matches.length) continue;
+    const group = document.createElement("div");
+    group.className = "saved-project-group";
+    const heading = document.createElement("strong");
+    heading.textContent = title;
+    group.append(heading);
+    for (const project of matches) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `Resume ${project.name}`;
+      button.title = `Resume ${project.kind} project from ${project.project}`;
+      button.addEventListener("click", () => {
+        if (busy) return;
+        setBusy(true, "Resuming project…");
+        bridge.resumeProject(project.project);
+      });
+      group.append(button);
+    }
+    host.append(group);
+  }
+  host.classList.toggle("hidden", !host.children.length);
 }
 
 /**
@@ -166,6 +281,7 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   for (const file of children.files.sort()) {
     const row = document.createElement("label");
     row.className = "tree-file";
+    row.dataset.path = file;
     const check = document.createElement("input");
     check.type = "checkbox";
     check.checked = selection.has(file);
@@ -292,7 +408,7 @@ function compatibleChoices(role) {
 function refreshModelStatus() {
   const hasBoth = ["chat", "embedding"].every((role) =>
     compatibleChoices(role).some((choice) => cachedModels.has(choice.model_id)));
-  byId("models-hint").classList.toggle("hidden", hasBoth);
+  byId("models-hint").classList.add("hidden");
   byId("open-models").classList.toggle("models-needed", !hasBoth);
 }
 
@@ -304,7 +420,7 @@ function renderModelsPanel() {
   host.replaceChildren();
   const installed = installedBackends[activeBackend];
   byId("models-backend").textContent = installed
-    ? `Showing suggested ${activeBackend.toUpperCase()} models. Change the backend in Advanced settings to see its choices.`
+    ? `Showing suggested ${activeBackend.toUpperCase()} models. Change the backend in Settings to see its choices.`
     : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the QAChat folder first.`;
   for (const [role, title] of [["chat", "Language models"], ["embedding", "Embedding models"]]) {
     const group = document.createElement("section");
@@ -350,7 +466,7 @@ function renderModelsPanel() {
     if (group.children.length === 1) {
       const empty = document.createElement("p");
       empty.className = "hint";
-      empty.textContent = "No suggested models for this query format. Choose Qwen3 or enter a custom model in Advanced settings.";
+      empty.textContent = "No suggested models for this query format. Choose Qwen3 or enter a custom model in Settings.";
       group.append(empty);
     }
     host.append(group);
@@ -521,24 +637,38 @@ function renderWorkspace(paths) {
   for (const [name, node] of [...root.directories].sort()) {
     const item = branch(name, node, allFiles(node), selected);
     item.querySelectorAll("input").forEach((input) => input.remove());
+    item.querySelectorAll(".tree-file").forEach((line) => {
+      line.tabIndex = 0;
+      line.setAttribute("role", "button");
+      line.addEventListener("click", () => openWorkspaceFile(line.dataset.path));
+      line.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openWorkspaceFile(line.dataset.path);
+        }
+      });
+    });
     host.append(item);
   }
   for (const file of root.files) {
     const line = document.createElement("div");
     line.className = "tree-file";
     line.textContent = file;
+    line.tabIndex = 0;
+    line.setAttribute("role", "button");
+    line.addEventListener("click", () => openWorkspaceFile(file));
     host.append(line);
   }
 }
 
-/**
- * Display a failure, clear pending presentation work, and unlock controls.
- *
- * @param message Human-readable failure message.
- * @param tracePath Optional trace-file path displayed for diagnosis.
- */
+function openWorkspaceFile(path) {
+  if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
+  bridge.openWorkspaceFile(path);
+}
+
 function showError(message, tracePath = "") {
   stopPhaseAnimation();
+  resetAnswerStages();
   if (pendingTurn) {
     pendingTurn.answer.textContent = "Could not complete this answer.";
     pendingTurn.item.classList.add("failed");
@@ -552,6 +682,10 @@ function showError(message, tracePath = "") {
     downloadingModel = null;
   }
   setBusy(false);
+  if (!byId("first-run-setup").classList.contains("hidden")) {
+    byId("install-required").disabled = !readinessEnvironmentReady;
+  }
+  byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
 }
 
@@ -564,20 +698,23 @@ function showError(message, tracePath = "") {
  */
 function setBusy(value, message = "") {
   busy = value;
+  if (!value) activity.classList.remove("answer-progress");
   byId("open").disabled = value || !bridge;
-  byId("send").disabled = value || !ready;
+  byId("send").disabled = !ready;
+  byId("send").classList.toggle("stopping", value && ready);
+  byId("send").querySelector("span").textContent = value && ready ? "■" : "↑";
+  byId("send").setAttribute(
+    "aria-label", value && ready ? "Stop generation" : "Send message",
+  );
+  byId("send").title = byId("send").getAttribute("aria-label");
   byId("new-chat").disabled = value || !ready;
   byId("branch-chat").disabled = value || !ready;
-  byId("rename-chat").disabled = value || !ready;
-  byId("conversation-picker").disabled = value || !ready;
+  document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
   byId("change-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
   byId("activity-text").textContent = message;
-  byId("connection").textContent = value
-    ? (message.startsWith("Scanning") ? "Scanning sources…"
-      : chat.classList.contains("hidden") ? "Preparing project…" : "Answering…")
-    : (ready ? "Ready" : "Choose a project");
+  byId("connection").textContent = value ? "Busy" : (ready || bridge ? "Ready" : "Init");
   if (value) {
     byId("activity-percent").textContent = "Working…";
     byId("activity-detail").textContent = "";
@@ -629,6 +766,7 @@ function showProgress(data) {
  */
 function clearSourcePreview() {
   activeReference?.button?.classList.remove("active");
+  activeReference?.holder?.classList.remove("expanded");
   activeReference?.preview?.remove();
   activeReference = null;
 }
@@ -654,18 +792,17 @@ function makeSourcePreview() {
   preview.setAttribute("aria-label", "Cited source preview");
   const heading = document.createElement("header");
   heading.className = "source-preview-heading";
-  const title = document.createElement("strong");
+  const note = document.createElement("p");
+  note.className = "hint";
   const close = document.createElement("button");
   close.type = "button";
   close.className = "sidebar-toggle";
   close.textContent = "Close";
-  const note = document.createElement("p");
-  note.className = "hint";
   const lines = document.createElement("pre");
   lines.className = "source-preview-lines";
-  heading.append(title, close);
-  preview.append(heading, note, lines);
-  return { preview, title, close, note, lines };
+  heading.append(note, close);
+  preview.append(heading, lines);
+  return { preview, close, note, lines };
 }
 
 /**
@@ -686,12 +823,12 @@ function openReference(item, source, button, holder) {
   }
   clearSourcePreview();
   const nodes = makeSourcePreview();
-  nodes.title.textContent = source.path;
   nodes.note.textContent = "Loading nearby lines…";
   nodes.close.addEventListener("click", clearSourcePreview);
   holder.append(nodes.preview);
+  holder.classList.add("expanded");
   button.classList.add("active");
-  activeReference = { turnIndex, citation, button, ...nodes };
+  activeReference = { turnIndex, citation, button, holder, ...nodes };
   bridge?.previewReference(turnIndex, activeReference.citation);
   nodes.preview.scrollIntoView({ block: "nearest" });
 }
@@ -747,7 +884,6 @@ function selectTurn(item, turn, citation = null) {
 function renderSourcePreview(data) {
   if (!activeReference || data.turn_index !== activeReference.turnIndex
       || data.citation !== activeReference.citation) return;
-  activeReference.title.textContent = data.path;
   const location = data.page
     ? `Page ${data.page} · lines ${data.start_line}–${data.end_line}`
     : `Lines ${data.start_line}–${data.end_line}`;
@@ -841,7 +977,7 @@ function addTurn(turn) {
   item.append(question, answer);
   conversation.append(item);
   selectTurn(item, turn);
-  conversation.scrollTop = conversation.scrollHeight;
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
 /**
@@ -852,15 +988,111 @@ function addTurn(turn) {
  */
 function renderConversations(data) {
   activeConversationId = data.active_conversation_id || activeConversationId;
-  const picker = byId("conversation-picker");
-  picker.replaceChildren();
+  const list = byId("conversation-list");
+  list.replaceChildren();
+  let activeName = "";
+  let activeEmpty = false;
   for (const item of data.conversations || []) {
-    const option = document.createElement("option");
-    option.value = item.conversation_id;
-    option.textContent = item.name;
-    option.selected = item.conversation_id === activeConversationId;
-    picker.append(option);
+    if (item.conversation_id === activeConversationId) {
+      activeName = item.name;
+      activeEmpty = Boolean(item.empty);
+    }
+    if (item.empty) continue;
+    const row = document.createElement("div");
+    row.className = "conversation-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}`;
+    button.dataset.conversationId = item.conversation_id;
+    button.textContent = item.name;
+    button.title = item.name;
+    button.addEventListener("click", () => {
+      if (busy || item.conversation_id === activeConversationId) return;
+      setBusy(true, "Opening conversation…");
+      bridge.selectConversation(item.conversation_id);
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "conversation-delete";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Delete ${item.name}`);
+    remove.title = "Delete conversation";
+    remove.addEventListener("click", () => {
+      if (busy || !confirm(`Delete “${item.name}”?`)) return;
+      setBusy(true, "Deleting conversation…");
+      bridge.deleteConversation(item.conversation_id);
+    });
+    row.append(button, remove);
+    list.append(row);
   }
+  byId("conversation-name").textContent = activeEmpty ? "" : activeName;
+  byId("conversation-name").classList.toggle("hidden", activeEmpty);
+}
+
+function renderConversationEmpty() {
+  conversation.replaceChildren();
+  const content = emptyChatContent[activeProjectKind] || emptyChatContent.code;
+  let promptIndex = Math.floor(Math.random() * content.prompts.length);
+  if (content.prompts.length > 1 && promptIndex === lastEmptyPrompt[activeProjectKind]) {
+    promptIndex = (promptIndex + 1) % content.prompts.length;
+  }
+  lastEmptyPrompt[activeProjectKind] = promptIndex;
+  const landing = document.createElement("section");
+  landing.className = "conversation-empty";
+  const prompt = document.createElement("h2");
+  prompt.textContent = content.prompts[promptIndex];
+  const suggestions = document.createElement("div");
+  suggestions.className = "prompt-suggestions";
+  const choices = [...content.suggestions].sort(() => Math.random() - 0.5).slice(0, 3);
+  for (const text of choices) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.addEventListener("click", () => { byId("question").value = text; byId("question").focus(); });
+    suggestions.append(button);
+  }
+  landing.append(prompt, suggestions);
+  conversation.append(landing);
+  conversationScroll.scrollTop = 0;
+  updateFloatingHeader();
+}
+
+function renderAttachments() {
+  const host = byId("attachment-list");
+  host.replaceChildren();
+  for (const path of messageAttachments) {
+    const chip = document.createElement("span");
+    chip.className = "attachment-chip";
+    chip.textContent = path.split(/[\\/]/).pop() || path;
+    chip.title = path;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${chip.textContent}`);
+    remove.addEventListener("click", () => {
+      messageAttachments = messageAttachments.filter((item) => item !== path);
+      renderAttachments();
+    });
+    chip.append(remove);
+    host.append(chip);
+  }
+  host.classList.toggle("hidden", !messageAttachments.length);
+}
+
+function updateEffort(index) {
+  const level = effortLevels[Math.max(0, Math.min(effortLevels.length - 1, Number(index)))];
+  selectedEffort = level.key;
+  byId("effort-button").textContent = level.name;
+  byId("effort-name").textContent = level.name;
+  byId("effort-detail").textContent = level.detail;
+  byId("effort-range").value = String(effortLevels.indexOf(level));
+  byId("effort-range").style.setProperty(
+    "--effort-percent",
+    `${(effortLevels.indexOf(level) / (effortLevels.length - 1)) * 100}%`,
+  );
+  [...document.querySelectorAll(".effort-points i")].forEach((point, pointIndex) => {
+    point.classList.toggle("selected", pointIndex === effortLevels.indexOf(level));
+  });
 }
 
 /**
@@ -871,6 +1103,53 @@ function stopPhaseAnimation() {
   phaseTimer = null;
 }
 
+const ANSWER_STAGE_DURATION_MS = 1700;
+
+function resetAnswerStages() {
+  clearTimeout(answerStageTimer);
+  answerStageTimer = null;
+  answerStageKey = null;
+  answerStageQueue = [];
+  completedTurnWaiting = null;
+}
+
+function advanceAnswerStage() {
+  if (answerStageTimer) return;
+  const stage = answerStageQueue.shift();
+  if (!stage) {
+    answerStageKey = null;
+    if (completedTurnWaiting) {
+      const turn = completedTurnWaiting;
+      completedTurnWaiting = null;
+      completePendingTurn(turn);
+    }
+    return;
+  }
+  answerStageKey = stage.key;
+  showTurnPhase("Generating", stage.detail);
+  answerStageTimer = setTimeout(() => {
+    answerStageTimer = null;
+    answerStageKey = null;
+    advanceAnswerStage();
+  }, ANSWER_STAGE_DURATION_MS);
+}
+
+function queueAnswerStage(key, detail) {
+  if (!pendingTurn || answerStageKey === key) return;
+  const queued = answerStageQueue.find((stage) => stage.key === key);
+  if (queued) {
+    queued.detail = detail;
+  } else {
+    answerStageQueue.push({ key, detail });
+  }
+  advanceAnswerStage();
+}
+
+function completeAfterAnswerStages(turn) {
+  completedTurnWaiting = turn;
+  advanceAnswerStage();
+}
+
 /**
  * Animate a pending answer phase while no completed answer is available.
  *
@@ -879,17 +1158,21 @@ function stopPhaseAnimation() {
  */
 function showTurnPhase(label, detail = "") {
   if (!pendingTurn) return;
+  pendingTurn.detail.textContent = detail;
+  pendingTurn.detail.classList.toggle("hidden", !detail);
+  if (pendingTurn.label.textContent.startsWith(label)) return;
   stopPhaseAnimation();
   let dots = 1;
   const paint = () => {
     const suffix = ".".repeat(dots);
-    pendingTurn.answer.textContent = `${label}${suffix}${detail ? ` · ${detail}` : ""}`;
-    byId("activity-text").textContent = `${label}${suffix}`;
-    byId("activity-detail").textContent = detail;
-    dots = dots === 3 ? 1 : dots + 1;
+    pendingTurn.label.textContent = `${label}${suffix}`;
   };
   paint();
-  phaseTimer = setInterval(paint, 400);
+  phaseTimer = setInterval(() => {
+    dots += 1;
+    paint();
+    if (dots === 3) stopPhaseAnimation();
+  }, 400);
 }
 
 /**
@@ -898,6 +1181,9 @@ function showTurnPhase(label, detail = "") {
  * @param question Validated question text submitted by the user.
  */
 function addPendingTurn(question) {
+  resetAnswerStages();
+  activity.classList.add("answer-progress");
+  if (conversation.querySelector(".conversation-empty")) conversation.replaceChildren();
   const item = document.createElement("article");
   item.className = "turn pending";
   item.dataset.turnIndex = String(conversation.children.length);
@@ -906,11 +1192,16 @@ function addPendingTurn(question) {
   questionNode.textContent = question;
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
+  const phaseLabel = document.createElement("div");
+  phaseLabel.className = "answer-phase-label";
+  const phaseDetail = document.createElement("div");
+  phaseDetail.className = "answer-phase-detail";
+  answer.append(phaseLabel, phaseDetail);
   item.append(questionNode, answer);
   conversation.append(item);
-  pendingTurn = { item, answer };
-  showTurnPhase("Retrieving");
-  conversation.scrollTop = conversation.scrollHeight;
+  pendingTurn = { item, answer, label: phaseLabel, detail: phaseDetail };
+  queueAnswerStage("retrieving", "Retrieving project evidence");
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
 /**
@@ -944,6 +1235,8 @@ function bindAnswerSelection(answer, item, turn) {
  */
 function completePendingTurn(turn) {
   stopPhaseAnimation();
+  resetAnswerStages();
+  updateProjectSummary(currentTurnCount + 1);
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -959,9 +1252,9 @@ function completePendingTurn(turn) {
   let position = 0;
   clearInterval(answerTimer);
   answerTimer = setInterval(() => {
-    position += 1;
+    position += 3;
     current.answer.textContent = text.slice(0, position);
-    conversation.scrollTop = conversation.scrollHeight;
+    conversationScroll.scrollTop = conversationScroll.scrollHeight;
     if (position < text.length) return;
     clearInterval(answerTimer);
     answerTimer = null;
@@ -971,7 +1264,7 @@ function completePendingTurn(turn) {
     renderAnswer(current.answer, turn, current.item);
     selectTurn(current.item, turn);
     setBusy(false);
-  }, 25);
+  }, 12);
 }
 
 /**
@@ -984,18 +1277,65 @@ function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
+  } else if (data.event === "readiness") {
+    requiredModels = data.required_models || [];
+    readinessEnvironmentReady = Boolean(data.environment_ready);
+    cachedModels = new Set(data.cached_models || []);
+    const card = byId("first-run-setup");
+    const steps = byId("readiness-steps");
+    steps.replaceChildren();
+    const runtime = document.createElement("li");
+    runtime.textContent = data.environment_ready
+      ? `${String(data.backend).toUpperCase()} runtime is ready`
+      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run qachat --gui`;
+    runtime.classList.toggle("complete", data.environment_ready);
+    steps.append(runtime);
+    for (const modelId of requiredModels) {
+      const item = document.createElement("li");
+      const present = cachedModels.has(modelId);
+      item.textContent = `${present ? "Ready" : "Missing"}: ${modelId}`;
+      item.classList.toggle("complete", present);
+      steps.append(item);
+    }
+    card.classList.toggle("hidden", data.ready);
+    byId("readiness-summary").textContent = data.ready
+      ? "QAChat is ready."
+      : `${data.missing_models.length} required model${data.missing_models.length === 1 ? "" : "s"} need to be downloaded.`;
+    byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    refreshModelStatus();
+    if (!data.ready) {
+      byId("models-panel").classList.remove("hidden");
+      byId("close-models").focus();
+    }
+  } else if (data.event === "installation_started") {
+    setBusy(true, `Preparing ${data.total} required models…`);
+    byId("first-run-setup").classList.remove("hidden");
+    byId("install-required").disabled = true;
+    byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
+  } else if (data.event === "installation_progress") {
+    const elapsed = seconds(data.elapsed_seconds || 0);
+    byId("readiness-summary").textContent = `Downloading ${data.index} of ${data.total}`;
+    byId("readiness-time").textContent = `${elapsed} elapsed · downloading ${data.model_id}`;
+    byId("activity-percent").textContent = `Model ${data.index} of ${data.total}`;
+    byId("activity-text").textContent = `Downloading ${data.model_id}`;
+    byId("activity-detail").textContent = `${elapsed} elapsed`;
+  } else if (data.event === "installation_model_complete") {
+    cachedModels.add(data.model_id);
+    byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
+  } else if (data.event === "installation_complete") {
+    byId("readiness-summary").textContent = "Required models are installed.";
+    byId("readiness-time").textContent = `Setup completed in ${seconds(data.elapsed_seconds)}.`;
+    setBusy(false);
   } else if (data.event === "settings") {
     showSettings(data);
-  } else if (data.event === "saved_project") {
-    // Ignore a reply for a selection that the user has already changed.
-    if (data.kind !== byId("kind").value
-        || data.workspace !== byId("workspace-path").value.trim()) return;
-    const resume = byId("resume-recent");
-    resume.dataset.project = data.project || "";
-    if (data.project) {
-      resume.textContent = `Resume ${data.project.split(/[\\/]/).pop()}`;
-    }
-    byId("recent-project").classList.toggle("hidden", !data.project);
+  } else if (data.event === "projects") {
+    renderSavedProjects(data.projects || []);
+  } else if (data.event === "conversation_delete_started") {
+    const button = [...document.querySelectorAll(".conversation-item")]
+      .find((item) => item.dataset.conversationId === data.conversation_id);
+    button?.closest(".conversation-row")?.remove();
+    byId("activity-text").textContent = "Conversation removed. Preserving its trace and opening the next chat…";
+    byId("activity-detail").textContent = "The archived trace remains in logs/traces/deleted.";
   } else if (data.event === "preview") {
     data.roots.forEach((root, index) => {
       const original = selectedSources[index];
@@ -1021,18 +1361,48 @@ function onEvent(raw) {
   } else if (data.event === "status") {
     setBusy(true, data.message);
   } else if (data.event === "answer_phase") {
-    const count = Number(data.count ?? data.evidence_count ?? 0);
-    if (data.phase === ANSWER_PHASE_RETRIEVING) {
-      showTurnPhase("Retrieving");
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY) {
-      const detail = `${count} reference${count === 1 ? "" : "s"} found`;
-      showTurnPhase("Preparing evidence", detail);
-    } else if (data.phase === ANSWER_PHASE_GENERATING) {
-      showTurnPhase("Generating", count ? `${count} references` : "");
-    } else if (data.phase === ANSWER_PHASE_SAVING) {
-      showTurnPhase("Saving answer");
-    } else if (data.phase === ANSWER_PHASE_COMPLETED) {
+    activity.classList.add("answer-progress");
+    if (data.phase === "retrieving") {
+      const message = data.message || "Searching project evidence";
+      if (/expand/i.test(message)) {
+        queueAnswerStage("expanding", "Expanding related context");
+      } else if (/rank|combin/i.test(message)) {
+        queueAnswerStage("ranking", "Combining and ranking the evidence");
+      } else {
+        queueAnswerStage("retrieving", "Retrieving project evidence");
+      }
+      byId("activity-text").textContent = data.message || "Searching project evidence";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "evidence_ready") {
+      queueAnswerStage(
+        "preparing",
+        data.evidence_count == null
+          ? "Preparing retrieved evidence"
+          : `Preparing ${data.evidence_count} retrieved references`,
+      );
+      byId("activity-text").textContent = data.evidence_count == null
+        ? "Preparing retrieved evidence for the model"
+        : `Preparing ${data.evidence_count} retrieved references for the model`;
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "generating") {
+      queueAnswerStage(
+        "writing",
+        data.evidence_count == null
+          ? "Writing the answer"
+          : `Writing with ${data.evidence_count} retrieved references`,
+      );
+      byId("activity-text").textContent = data.evidence_count == null
+        ? "Writing the answer"
+        : `Writing the answer using ${data.evidence_count} retrieved references`;
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "saving") {
+      queueAnswerStage("saving", data.message || "Saving the answer");
+      byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "completed") {
       stopPhaseAnimation();
+      byId("activity-text").textContent = data.message || "Displaying the completed response";
+      byId("activity-detail").textContent = "";
     }
   } else if (data.event === "model_download_started") {
     byId("model-download-status").textContent = `Downloading ${data.model_id}…`;
@@ -1047,6 +1417,9 @@ function onEvent(raw) {
     showProgress(data);
   } else if (data.event === "opened") {
     ready = true;
+    activeProjectKind = data.kind;
+    messageAttachments = [];
+    renderAttachments();
     selectedSources.length = 0;
     previewRoots.clear();
     previewSkipped.clear();
@@ -1054,38 +1427,50 @@ function onEvent(raw) {
     renderPreview();
     setup.classList.add("hidden");
     chat.classList.remove("hidden");
+    shell.classList.add("chat-open");
+    byId("conversations-panel").classList.remove("hidden");
+    showConversations(true);
     conversation.replaceChildren();
     clearReferences();
     renderConversations(data);
     data.turns.forEach(addTurn);
+    if (!data.turns.length) renderConversationEmpty();
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
     renderWorkspace(data.workspace_files);
-    showWorkspace(true);
-    byId("retrieval-count").value = data.retrieval_count;
+    showWorkspace(Boolean(data.turns.length));
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
     byId("project-name").textContent = data.project.split(/[\\/]/).pop();
-    byId("project-detail").textContent = `${data.kind} · ${data.project} · index ${data.index_status} · ${data.turns.length} saved turns`;
+    updateProjectSummary(data.turns.length);
+    updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversation_opened") {
     stopPhaseAnimation();
+    resetAnswerStages();
     clearInterval(answerTimer);
     answerTimer = null;
     pendingTurn = null;
+    messageAttachments = [];
+    renderAttachments();
     conversation.replaceChildren();
     clearReferences();
     renderConversations(data);
     data.turns.forEach(addTurn);
-    byId("retrieval-count").value = data.retrieval_count;
+    if (!data.turns.length) {
+      renderConversationEmpty();
+      showWorkspace(false);
+    }
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    byId("project-detail").textContent = `${data.turns.length} saved turns · project indexes and models retained`;
+    updateProjectSummary(data.turns.length);
+    updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversations") {
     renderConversations(data);
+    setBusy(false);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
   } else if (data.event === "reference_error") {
@@ -1094,11 +1479,12 @@ function onEvent(raw) {
       activeReference.note.textContent = data.message;
     }
   } else if (data.event === "answered") {
-    completePendingTurn(data.turn);
+    completeAfterAnswerStages(data.turn);
   } else if (data.event === "reset") {
-    conversation.replaceChildren();
+    renderConversationEmpty();
     clearReferences();
-    byId("project-detail").textContent = "New conversation · index retained";
+    updateProjectSummary(0);
+    updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
     if (downloadingModel) {
@@ -1106,8 +1492,26 @@ function onEvent(raw) {
       downloadingModel = null;
       byId("cancel-model-download").classList.add("hidden");
     }
+    if (resumeAfterStop) {
+      resumeAfterStop = false;
+      stopPhaseAnimation();
+      resetAnswerStages();
+      pendingTurn?.item.remove();
+      pendingTurn = null;
+      ready = false;
+      setBusy(true, "Reopening project after interruption…");
+      bridge.resumeProjectConversation(
+        byId("workspace-path").value,
+        activeConversationId,
+      );
+      return;
+    }
     ready = false;
+    updateFloatingHeader();
     chat.classList.add("hidden");
+    shell.classList.remove("chat-open");
+    byId("conversations-panel").classList.add("hidden");
+    byId("toggle-conversations").classList.add("hidden");
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
@@ -1116,7 +1520,11 @@ function onEvent(raw) {
     bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
   } else if (data.event === "backend_failed") {
     ready = false;
+    updateFloatingHeader();
     chat.classList.add("hidden");
+    shell.classList.remove("chat-open");
+    byId("conversations-panel").classList.add("hidden");
+    byId("toggle-conversations").classList.add("hidden");
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
@@ -1144,15 +1552,22 @@ byId("stop").addEventListener("click", () => {
   byId("activity-text").textContent = "Stopping…";
   bridge.stopOperation();
 });
-byId("open-models").addEventListener("click", openModels);
-byId("resume-recent").addEventListener("click", () => {
-  const project = byId("resume-recent").dataset.project;
-  if (!project || busy) return;
-  setBusy(true, "Resuming your last project…");
-  bridge.resumeProject(project);
+byId("send").addEventListener("click", (event) => {
+  if (!busy || !ready || !bridge) return;
+  event.preventDefault();
+  resumeAfterStop = true;
+  byId("send").disabled = true;
+  byId("activity-text").textContent = "Stopping generation…";
+  bridge.stopOperation();
 });
+byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", () => byId("models-panel").classList.add("hidden"));
+byId("install-required").addEventListener("click", () => {
+  if (busy || !bridge) return;
+  setBusy(true, "Checking required models…");
+  bridge.installRequiredModels();
+});
 byId("cancel-model-download").addEventListener("click", () => {
   if (downloadingModel) bridge?.stopOperation();
 });
@@ -1168,7 +1583,7 @@ byId("project-form").addEventListener("submit", (event) => {
   for (const [field, role] of [["chat-model", "chat"], ["embedding-model", "embedding"]]) {
     const chosen = modelChoices.find((choice) => choice.model_id === byId(field).value.trim());
     if (chosen && !compatibleChoices(role).includes(chosen)) {
-      byId("advanced").open = true;
+      openModels();
       return showError(`The selected ${role} model does not match the backend or embedding query format.`);
     }
   }
@@ -1177,7 +1592,7 @@ byId("project-form").addEventListener("submit", (event) => {
   if (!byId("allow-download").checked
       && ![byId("chat-model").value.trim(), byId("embedding-model").value.trim()].every(localModel)) {
     openModels();
-    byId("model-download-status").textContent = "Download both selected models before preparing, or explicitly allow downloads in Advanced settings.";
+    byId("model-download-status").textContent = "Download both selected models before preparing, or allow downloads in Settings.";
     return;
   }
   const selected = Object.fromEntries(
@@ -1186,8 +1601,9 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  byId("advanced").open = false;
-  setBusy(true, "Opening project…");
+  const usingExample = included.length === 0;
+  byId("example-status").classList.toggle("hidden", !usingExample);
+  setBusy(true, usingExample ? "Loading example repository…" : "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
     JSON.stringify(included), byId("kind").value, byId("workspace-path").value.trim(),
@@ -1199,8 +1615,6 @@ byId("question-form").addEventListener("submit", (event) => {
   const question = byId("question").value.trim();
   if (!question || busy || !ready) return;
   error.classList.add("hidden");
-  const count = Number(byId("retrieval-count").value);
-  if (!Number.isInteger(count) || count < 1) return showError("Choose a positive evidence count.");
   const temperature = Number(byId("temperature").value);
   if (!byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0) {
     return showError("Choose a temperature of zero or higher.");
@@ -1213,8 +1627,14 @@ byId("question-form").addEventListener("submit", (event) => {
   byId("question").value = "";
   addPendingTurn(question);
   setBusy(true, "Finding evidence and answering…");
-  bridge.askQuestion(question, count, JSON.stringify({
+  const attachedContext = messageAttachments.length
+    ? `\n\nAttached paths to consider:\n${messageAttachments.map((path) => `- ${path}`).join("\n")}`
+    : "";
+  messageAttachments = [];
+  renderAttachments();
+  bridge.askQuestion(`${question}${attachedContext}`, selectedEffort, JSON.stringify({
     temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
+    _title_question: question,
   }));
 });
 byId("question").addEventListener("keydown", (event) => {
@@ -1223,8 +1643,13 @@ byId("question").addEventListener("keydown", (event) => {
     byId("question-form").requestSubmit();
   }
 });
+conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
+byId("project-name").addEventListener("input", () => {
+  byId("topbar-project-name").textContent = byId("project-name").textContent.trim();
+});
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
+  showWorkspace(false);
   setBusy(true, "Starting a new conversation…");
   bridge.newConversation();
 });
@@ -1233,24 +1658,33 @@ byId("branch-chat").addEventListener("click", () => {
   setBusy(true, "Branching this conversation…");
   bridge.branchConversation();
 });
-byId("rename-chat").addEventListener("click", () => {
-  if (busy || !activeConversationId) return;
-  const selected = byId("conversation-picker").selectedOptions[0];
-  const name = prompt("Conversation name", selected?.textContent || "");
-  if (name === null || !name.trim()) return;
-  bridge.renameConversation(activeConversationId, name.trim());
-});
-byId("conversation-picker").addEventListener("change", (event) => {
-  const conversationId = event.target.value;
-  if (busy || !conversationId || conversationId === activeConversationId) return;
-  setBusy(true, "Opening conversation…");
-  bridge.selectConversation(conversationId);
-});
+function commitConversationName() {
+  const name = byId("conversation-name").textContent.trim();
+  if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
+}
+function commitProjectName() {
+  const name = byId("project-name").textContent.trim();
+  const current = byId("workspace-path").value.split(/[\\/]/).pop();
+  if (!busy && ready && name && name !== current) {
+    setBusy(true, "Renaming project…");
+    bridge.renameProject(name);
+  }
+}
+for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName]]) {
+  byId(id).addEventListener("blur", commit);
+  byId(id).addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  });
+}
 byId("change-project").addEventListener("click", () => {
   if (busy) return;
   bridge.closeProject();
   ready = false;
+  updateFloatingHeader();
   chat.classList.add("hidden");
+  shell.classList.remove("chat-open");
+  byId("conversations-panel").classList.add("hidden");
+  byId("toggle-conversations").classList.add("hidden");
   setup.classList.remove("hidden");
   byId("workspace-path").value = "";
   selectedSources.length = 0;
@@ -1267,6 +1701,33 @@ byId("change-project").addEventListener("click", () => {
 byId("toggle-workspace").addEventListener("click", () => {
   showWorkspace(!shell.classList.contains("sidebar-open"));
 });
+byId("toggle-conversations").addEventListener("click", () => {
+  showConversations(shell.classList.contains("conversations-hidden"));
+});
+byId("effort-button").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = byId("effort-menu");
+  menu.classList.toggle("hidden");
+  byId("effort-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+});
+byId("effort-range").addEventListener("input", (event) => {
+  updateEffort(event.target.value);
+});
+byId("attach-button").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = byId("attach-menu");
+  menu.classList.toggle("hidden");
+  byId("attach-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+});
+byId("attach-files").addEventListener("click", () => {
+  byId("attach-menu").classList.add("hidden");
+  bridge?.chooseAttachmentFiles();
+});
+byId("attach-folder").addEventListener("click", () => {
+  byId("attach-menu").classList.add("hidden");
+  bridge?.chooseAttachmentFolder();
+});
+byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
 byId("kind").addEventListener("change", () => {
   hideResume();
   bridge?.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
@@ -1290,6 +1751,8 @@ for (const id of ["chat-model", "embedding-model"]) {
 }
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".model-picker")) closeModelMenus();
+  if (!event.target.closest(".effort-picker")) byId("effort-menu").classList.add("hidden");
+  if (!event.target.closest(".attach-picker")) byId("attach-menu").classList.add("hidden");
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeModelMenus();
@@ -1301,14 +1764,21 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge = channel.objects.qachat;
   bridge.event.connect(onEvent);
   bridge.pathsSelected.connect(addSources);
+  bridge.attachmentsSelected.connect((paths) => {
+    for (const path of paths) {
+      if (path && !messageAttachments.includes(path)) messageAttachments.push(path);
+    }
+    renderAttachments();
+  });
   bridge.workspaceSelected.connect((path) => {
     byId("workspace-path").value = path;
-    hideResume();
     bridge.requestSettings(byId("kind").value, path);
     refreshSavedProject();
   });
   bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+  bridge.requestReadiness();
   showWorkspace(false);
+  updateEffort(2);
   setBusy(false);
   refreshSavedProject();
 });
@@ -1320,3 +1790,4 @@ document.addEventListener("visibilitychange", () => {
 });
 // Also catch files removed while the project chooser stays in the foreground.
 window.setInterval(refreshSavedProject, 3000);
+applyAppearance(localStorage.getItem("qachat-appearance") || "system");

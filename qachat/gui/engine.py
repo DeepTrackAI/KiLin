@@ -74,13 +74,20 @@ from dataclasses import asdict
 from hashlib import sha256
 import json
 from pathlib import Path
+import re
 import sys
+from time import perf_counter
 from typing import Callable
 
 from qachat.gui.model_catalog import (
+    GUI_REQUIRED_MODEL_IDS,
     MODEL_CHOICES,
     installed_backends,
     model_choices,
+)
+from qachat.model_defaults import (
+    DEFAULT_CHAT_MODEL_MLX,
+    DEFAULT_CHAT_MODEL_TORCH,
 )
 from qachat import RAGSession, prepare_sources_workspace
 from qachat.conversations import ConversationInfo, ConversationStore
@@ -98,7 +105,7 @@ from qachat.repository import (
     SKIP_FILES,
     scan_repository,
 )
-from qachat.runtime import BACKEND_AUTO, choose_backend
+from qachat.runtime import BACKEND_AUTO, BACKEND_MLX, choose_backend
 from qachat.sources import read_repository_files
 from qachat.trace_logging import (
     FAILURE_POLICY_WARN,
@@ -313,6 +320,17 @@ class ChatEngine:
             self.project_trace.close()
         self.project_trace = NullTraceLogger()
 
+    def _detach_project_trace(self) -> None:
+        """Release the current trace without rewriting its persisted JSON.
+
+        GUI conversation deletion archives a trace whose accepted events and
+        resume state have already been written. Detaching avoids the otherwise
+        redundant full-document rewrite performed by ``close()`` immediately
+        before the file is moved into the recoverable ``deleted`` folder.
+        """
+
+        self.project_trace = NullTraceLogger()
+
     def _send(self, event: str, **data: object) -> None:
         """Pass one named event dictionary to the configured frontend sink.
 
@@ -386,6 +404,99 @@ class ChatEngine:
             self._send("startup", project=str(folder), kind=kind)
         else:
             self._send("startup", project=None)
+
+    def readiness(self) -> None:
+        """Report runtime packages and required GUI model availability."""
+
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            packages = installed_backends()
+            cached = {str(item["model_id"]) for item in available_models()}
+            required = list(GUI_REQUIRED_MODEL_IDS[backend])
+            missing = [
+                model_id for model_id in required if model_id not in cached
+            ]
+            self._send(
+                "readiness",
+                backend=backend,
+                environment_ready=packages.get(backend, False),
+                required_models=required,
+                cached_models=sorted(cached),
+                missing_models=missing,
+                ready=packages.get(backend, False) and not missing,
+            )
+        except Exception as error:
+            self._report_error("gui.readiness.failed", error, str(error))
+
+    def install_required_models(self) -> None:
+        """Download missing GUI models while reporting coarse progress."""
+
+        started = perf_counter()
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            if not installed_backends().get(backend, False):
+                raise RuntimeError(
+                    f"The {backend.upper()} runtime is not installed. Restart "
+                    "QAChat through "
+                    f"`uv run qachat --gui --backend {backend}`."
+                )
+            cached = {str(item["model_id"]) for item in available_models()}
+            missing = [
+                model_id
+                for model_id in GUI_REQUIRED_MODEL_IDS[backend]
+                if model_id not in cached
+            ]
+            total = len(missing)
+            if not missing:
+                self._send("installation_complete", elapsed_seconds=0.0)
+                self.readiness()
+                return
+            self._send("installation_started", total=total, backend=backend)
+            for index, model_id in enumerate(missing, start=1):
+                model_started = perf_counter()
+                self._send(
+                    "installation_progress",
+                    index=index,
+                    total=total,
+                    model_id=model_id,
+                    elapsed_seconds=perf_counter() - started,
+                )
+                download_model(model_id)
+                self._send(
+                    "installation_model_complete",
+                    index=index,
+                    total=total,
+                    model_id=model_id,
+                    model_seconds=perf_counter() - model_started,
+                    elapsed_seconds=perf_counter() - started,
+                )
+            self._send(
+                "installation_complete",
+                elapsed_seconds=perf_counter() - started,
+            )
+            self.readiness()
+        except Exception as error:
+            self._report_error(
+                "gui.installation.failed",
+                error,
+                f"Setup could not finish: {error}",
+            )
+
+    def list_saved_projects(self, workspace: str) -> None:
+        """Report valid code and literature projects, newest first."""
+
+        self._send(
+            "projects",
+            projects=[
+                {
+                    "project": str(folder),
+                    "name": folder.name,
+                    "kind": kind,
+                    "updated_at": updated_at,
+                }
+                for updated_at, folder, kind in self._saved_projects(workspace)
+            ],
+        )
 
     def find_saved_project(self, kind: str, workspace: str) -> None:
         """Refresh Resume for the selected type and workspace folder.
@@ -912,16 +1023,89 @@ class ChatEngine:
             max_new_tokens=session.chat_session.max_new_tokens,
             active_conversation_id=conversation.conversation_id,
             conversations=[
-                asdict(item)
+                {
+                    **asdict(item),
+                    "empty": self.conversation_store.is_empty(
+                        item.conversation_id
+                    ),
+                }
                 for item in self.conversation_store.conversations()
             ],
         )
+
+    def _name_active_conversation(
+        self, question: str, naming_model: str
+    ) -> None:
+        """Generate and persist a short title from the first question."""
+
+        if (
+            self.session is None
+            or self.conversation_store is None
+            or self.active_conversation is None
+        ):
+            return
+        self.session.use_chat_model(naming_model)
+        chat = self.session.chat_session
+        history = [dict(message) for message in chat.messages]
+        previous_thinking = chat.thinking
+        try:
+            chat.restore_history(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Create a concise conversation title. Use three "
+                            "to six words. Describe the topic, not the user's "
+                            "request. Do not use citations, brackets, labels, "
+                            "quotation marks, or punctuation. Return only "
+                            "the title."
+                        ),
+                    }
+                ]
+            )
+            chat.configure_generation({"thinking": False})
+            title = chat.reply(
+                f"Question: {question}\nTitle:", max_new_tokens=18
+            )
+        finally:
+            chat.restore_history(history)
+            chat.configure_generation({"thinking": previous_thinking})
+        title = re.sub(r"<think>.*?</think>", "", title, flags=re.S)
+        title = title.splitlines()[0] if title.splitlines() else ""
+        title = re.sub(r"^(?:title\s*:\s*)", "", title, flags=re.I)
+        title = re.sub(r"^\[[0-9, ]+\]\s*", "", title)
+        title = " ".join(title.strip().strip('"\'').split())
+        title = re.sub(
+            r"^help me understand\s+", "Understanding ", title, flags=re.I
+        )
+        fallback = " ".join(question.strip().rstrip("?.!").split())
+        fallback = re.sub(
+            r"^help me understand\s+",
+            "Understanding ",
+            fallback,
+            flags=re.I,
+        )
+        fallback = re.sub(
+            r"^what (?:is|are)\s+", "Understanding ", fallback, flags=re.I
+        )
+        if not title or re.search(r"\bunderstand(?:ing)? me\b", title, re.I):
+            title = fallback
+        title = " ".join(title.split()[:6])[:80]
+        if not title:
+            return
+        renamed = self.conversation_store.rename(
+            self.active_conversation.conversation_id, title
+        )
+        self.active_conversation = renamed
+        self.active_trace.update_conversation(asdict(renamed))
+        self._send_conversations("conversations")
 
     def ask(
         self,
         question: str,
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
+        effort: str | None = None,
     ) -> None:
         """Ask the loaded project and return its saved answer and evidence.
 
@@ -951,11 +1135,57 @@ class ChatEngine:
         try:
             if self.session is None:
                 raise RuntimeError("Open a project before asking a question.")
+            generation_settings = dict(generation_settings or {})
+            title_question = str(
+                generation_settings.pop("_title_question", question)
+            )
+            if self.session.chat_session.backend == BACKEND_MLX:
+                presets = {
+                    "light": ("Qwen/Qwen3-0.6B-MLX-4bit", 5),
+                    "instant": ("Qwen/Qwen3-0.6B-MLX-4bit", 20),
+                    "lagom": (DEFAULT_CHAT_MODEL_MLX, 20),
+                    "thorough": (DEFAULT_CHAT_MODEL_MLX, 50),
+                    "deep": (
+                        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+                        50,
+                    ),
+                }
+            else:
+                presets = {
+                    name: (DEFAULT_CHAT_MODEL_TORCH, count)
+                    for name, count in (
+                        ("light", 5),
+                        ("instant", 20),
+                        ("lagom", 20),
+                        ("thorough", 50),
+                        ("deep", 50),
+                    )
+                }
+            if effort is not None and effort not in presets:
+                raise ValueError(
+                    "Effort must be light, instant, lagom, thorough, or deep."
+                )
+            is_mlx = self.session.chat_session.backend == BACKEND_MLX
+            if (
+                effort is not None
+                and is_mlx
+                and not self.session.turns
+                and self.conversation_store is not None
+                and self.active_conversation is not None
+                and self.active_conversation.name.startswith("Conversation ")
+            ):
+                self._name_active_conversation(
+                    title_question, presets["light"][0]
+                )
+            if effort is not None:
+                model_id, retrieval_count = presets[effort]
+                if is_mlx:
+                    self.session.use_chat_model(model_id)
             self._send("status", message="Finding evidence and answering…")
             options: dict[str, object] = {}
             if retrieval_count is not None:
                 options["retrieval_count"] = retrieval_count
-            if generation_settings is not None:
+            if generation_settings:
                 options["generation_settings"] = generation_settings
             options["phase_callback"] = lambda phase, details: self._send(
                 "answer_phase",
@@ -1184,7 +1414,101 @@ class ChatEngine:
                 str(error),
             )
 
-    def _switch_conversation(self, conversation: ConversationInfo) -> None:
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Archive one conversation and select a remaining conversation.
+
+        The frontend is notified before trace cleanup so it can remove the
+        row immediately. An active forensic trace is already durable after
+        every accepted event, so deletion detaches it instead of appending a
+        closing event that would rewrite a potentially large JSON document.
+        """
+
+        try:
+            if (
+                self.session is None
+                or self.conversation_store is None
+                or self.active_conversation is None
+            ):
+                raise RuntimeError("Open a project first.")
+            deleting_active = (
+                conversation_id == self.active_conversation.conversation_id
+            )
+            self._send(
+                "conversation_delete_started",
+                conversation_id=conversation_id,
+            )
+            replacement, archived_path = self.conversation_store.archive(
+                conversation_id
+            )
+            if deleting_active:
+                self._detach_project_trace()
+                self._switch_conversation(
+                    replacement, close_current_trace=False
+                )
+            else:
+                self._send_conversations("conversations")
+            self.active_trace.emit(
+                "conversation.deleted",
+                component="gui_engine",
+                data={
+                    "conversation_id": conversation_id,
+                    "archived_path": str(archived_path),
+                },
+            )
+        except Exception as error:
+            if self.conversation_store is not None:
+                try:
+                    self._send_conversations("conversations")
+                except Exception:
+                    pass
+            self._report_error(
+                "gui.conversation_delete.failed", error, str(error)
+            )
+
+    def rename_project(self, name: str) -> None:
+        """Rename the active workspace folder, then reopen the same chat."""
+
+        try:
+            if self.session is None or self.active_conversation is None:
+                raise RuntimeError("Open a project first.")
+            clean = name.strip()
+            if (
+                not clean
+                or clean in {".", ".."}
+                or Path(clean).name != clean
+                or "/" in clean
+                or "\\" in clean
+            ):
+                raise ValueError("Use a single folder name without / or \\.")
+            source = self.session.project.root
+            destination = source.with_name(clean)
+            if destination == source:
+                return
+            if destination.exists():
+                raise ValueError(f"A folder named {clean!r} already exists.")
+            conversation_id = self.active_conversation.conversation_id
+            self.close()
+            source.rename(destination)
+            project = open_project(destination)
+            store = ConversationStore(project.root)
+            conversation = store.select(conversation_id)
+            self.conversation_store = store
+            self.active_conversation = conversation
+            self._start_project_trace(project.root, conversation)
+            self._activate_project(project, conversation)
+        except Exception as error:
+            self._report_error(
+                "gui.project.rename.failed",
+                error,
+                f"Could not rename the project: {error}",
+            )
+
+    def _switch_conversation(
+        self,
+        conversation: ConversationInfo,
+        *,
+        close_current_trace: bool = True,
+    ) -> None:
         """Move the live session and trace to one conversation file.
 
         Parameters
@@ -1192,6 +1516,11 @@ class ChatEngine:
         conversation: ConversationInfo
             Registered conversation metadata for the state to activate or
             trace.
+        close_current_trace: bool, optional
+            Whether to append a closing event to the current trace before
+            switching. Deletion passes ``False`` after archiving the already
+            durable trace to avoid a redundant full JSON rewrite. Defaults to
+            ``True``.
 
         Raises
         ------
@@ -1208,7 +1537,8 @@ class ChatEngine:
 
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
-        self._close_project_trace()
+        if close_current_trace:
+            self._close_project_trace()
         self._start_project_trace(self.session.project.root, conversation)
         turns = self.session.switch_conversation(
             self.conversation_store.state_path(conversation),
@@ -1259,7 +1589,12 @@ class ChatEngine:
             event,
             active_conversation_id=(self.active_conversation.conversation_id),
             conversations=[
-                asdict(item)
+                {
+                    **asdict(item),
+                    "empty": self.conversation_store.is_empty(
+                        item.conversation_id
+                    ),
+                }
                 for item in self.conversation_store.conversations()
             ],
             **data,
@@ -1635,10 +1970,16 @@ def main() -> None:
                         engine.download(command["model_id"])
                     elif action == "startup":
                         engine.startup()
+                    elif action == "readiness":
+                        engine.readiness()
+                    elif action == "install_required_models":
+                        engine.install_required_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
                             command["kind"], command["workspace"]
                         )
+                    elif action == "saved_projects":
+                        engine.list_saved_projects(command["workspace"])
                     elif action == "resume":
                         engine.resume_project(command["project"])
                     elif action == "close":
@@ -1660,6 +2001,7 @@ def main() -> None:
                             command["question"],
                             command.get("retrieval_count"),
                             command.get("generation_settings"),
+                            command.get("effort"),
                         )
                     elif action == "new_conversation":
                         engine.create_conversation()
@@ -1672,6 +2014,12 @@ def main() -> None:
                             command["conversation_id"],
                             command["name"],
                         )
+                    elif action == "delete_conversation":
+                        engine.delete_conversation(
+                            command["conversation_id"]
+                        )
+                    elif action == "rename_project":
+                        engine.rename_project(command["name"])
                     elif action == "reset":
                         engine.reset()
                     else:
