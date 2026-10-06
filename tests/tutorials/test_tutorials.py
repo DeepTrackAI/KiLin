@@ -26,6 +26,7 @@ TUTORIALS = (
     "120_retrieval_routing.ipynb",
     "130_project_chat.ipynb",
     "140_logging_trace.ipynb",
+    "150_create_custom_tool.ipynb",
 )
 
 
@@ -94,6 +95,9 @@ class TestTutorials(unittest.TestCase):
                 "from qachat import prepare_persistent_indexes"
             ),
             "110_hybrid_ranking.ipynb": ("from qachat import hybrid_search"),
+            "150_create_custom_tool.ipynb": (
+                "from qachat.tools import TOOL_REGISTRY"
+            ),
         }
 
         for name, required in expected.items():

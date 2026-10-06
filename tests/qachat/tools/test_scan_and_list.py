@@ -6,9 +6,10 @@ from pathlib import Path
 import unittest
 
 from qachat.chunking import Chunk
-from qachat.workflows import (
+from qachat.tools.scan_and_list import (
     mention_evidence,
     mention_report,
+    document_phrase,
     quoted_terms,
     scan_mentions,
     validated_document,
@@ -164,6 +165,16 @@ class TestTerms(unittest.TestCase):
             validated_document('{"document": "patil25deep.pdf"}', text)
         )
         self.assertIsNone(validated_document('{"document": null}', text))
+
+    def test_document_phrase_from_the_question(self) -> None:
+        self.assertEqual(
+            document_phrase("which MRI mentions in the Smith paper are new?"),
+            "the Smith paper",
+        )
+        self.assertEqual(
+            document_phrase("count MRI in the 2020 review"), "the 2020 review"
+        )
+        self.assertIsNone(document_phrase("count MRI in all papers"))
 
 
 if __name__ == "__main__":

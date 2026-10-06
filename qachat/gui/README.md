@@ -107,37 +107,78 @@ profile and the current GUI fields remain the effective configuration.
 
 ## Project types
 
-Project types live in `qachat/project_types.json`. Each entry sets the
-display name shown in the type menu, a one-line description (shown to the
-router), default file suffixes and size limit for new projects, the retrieval
-instruction added to Qwen3-format embedding queries, the base system prompt,
-the answer guidance the desktop app adds to each question (for example the
-150-300 word target), `capabilities.code_graph` (true, false, or "auto":
-only when selected files include Python or MATLAB), `history.recent_turns`,
-the `default_intent`, the `intents`, and the empty-chat headings and
-suggestions. Each intent has a description, a system prompt added to the
-base prompt, an optional answer guidance that replaces the type's (and always applies, also in notebooks), a
-`history.policy` (none, recent, or relevant), and `retrieval.mode` (search,
-document, reuse, or none) with `retrieval.strategy` (only "hybrid" exists).
-`document` reads one whole file or function in source order, up to
-`retrieval.max_tokens` estimated tokens (default 30,000); a longer file keeps
-its most relevant parts and the progress line says so ("Reading the 98 most
-relevant of 130 parts of …"). An intent may instead declare a `workflow`,
-which replaces retrieval and the answering model (its retrieval mode must be
-"none" and it needs no system prompt). The only workflow is
-`scan_and_list` (intent `mention_listing`): it lists and counts every exact
-mention of the terms in the question across the indexed text, or in the one
-file the question names or describes, and Python writes the answer with
-clickable matches and coverage. Its settings are `case_sensitive`,
-`whole_words`, `context_lines` (0-5), and `max_listed` (1-1000). An intent
-can also list `shortcuts`: case-insensitive regular expressions for whole
-messages that obviously have that intent (the default `small_talk` lists
-greetings, thanks, and "how are you"). A match skips the router model, so
-such messages are answered in about a second. The file
-is validated when QAChat starts; mistakes name the type and field. Add an
-entry to create a new type; `code` and `literature` must stay. Restart
-QAChat after editing; new answers use the edited prompts. Only `code` and
-`literature` have bundled example repositories, so other types need sources.
+Project types live in `qachat/project_types/`, one JSON file per type
+(`code.json`, `literature.json`); the file name is the type's ID and types
+are listed in file-name order. Each file sets the display name shown in the
+type menu, a one-line description (shown to the router), default file
+suffixes and size limit for new projects, the retrieval instruction added
+to Qwen3-format embedding queries, the base system prompt, the answer
+guidance the desktop app adds to each question (for example the 150-300
+word target), `capabilities.code_graph` (true, false, or "auto": only when
+selected files include Python or MATLAB), `history.recent_turns`, the
+`default_intent`, the `intents`, and the empty-chat headings and
+suggestions. The first suggestion is always shown with two others; a "…"
+in a suggestion is selected when it is clicked, ready to be replaced.
+
+Each intent has a description, a system prompt added to the base prompt, an
+optional answer guidance that replaces the type's (and always applies, also
+in notebooks), a `history.policy` (none, recent, or relevant), and
+`retrieval.mode` (search, document, reuse, or none) with
+`retrieval.strategy` (only "hybrid" exists). An intent can also list
+`shortcuts`: case-insensitive regular expressions for whole messages that
+obviously have that intent (the default `small_talk` lists greetings,
+thanks, and "how are you"). A match skips the router model, so such
+messages are answered in about a second.
+
+An intent may instead name a **tool** (`"tool": {"name": ..., settings}`),
+which replaces retrieval and the answering prompt for that intent; its
+retrieval mode must be "none" and it needs no system prompt. Tools live in
+`qachat/tools/`, one module each, and must be registered in
+`qachat/tools/registry.py`; each validates its own settings when the type
+is loaded, and unknown settings are rejected. The tools are:
+
+- `project_inventory` (intent `project_inventory`): exact counts and lists
+  of the project's files by type and folder, and which have no searchable
+  text, from the source manifest and index.
+- `scan_and_list` (intent `mention_listing`): every exact mention of the
+  question's terms, counted and listed with clickable lines, across all
+  files or the one file the question names or describes.
+- `batch_classify` (intent `mention_classification`): every exact mention
+  sorted into categories by the answering model in batches; Python
+  validates the labels and counts.
+- `batch_review` (intents `document_reading` and `file_reading`): reads one
+  whole document in parts, takes notes with passage numbers, and answers
+  from the notes; the answer streams and its citations are checked.
+- `generate_paper_summary` (intent `paper_summary`): turns one paper into a
+  one-page document that follows a report template in
+  `qachat/report_templates/`: `research_briefing` (the Research Briefing
+  format of Nature-family journals: a headline of at most 90 characters and
+  six sections with word limits, at most 750 words) or `research_summary`
+  (ten compact sections). The headline and each section are written
+  separately and checked in Python (word and item limits, the citation
+  against the paper's first page, suggested reading against its reference
+  list), with one targeted fix each; the result is saved as Markdown in the
+  project's `target/` folder and the answer says whether every check passed.
+- `qachat_help` (intent `qachat_usage`): answers questions about QAChat
+  itself from this README and the main README.
+
+Tools that call the model many times (`batch_classify`, `batch_review`,
+`generate_paper_summary`) first show a plan (scope, model calls, estimated
+time) with **Continue**, **Quick** (a smaller, non-exhaustive version), and
+**Cancel**, when the plan is larger than the tool's `large_batches`
+setting (`confirmation`: always, when_large, or never).
+
+A project folder has `sources/` (copied in, indexed, searched) and
+`target/` (never indexed). Put a paper you are working on in `target/`, or
+name any source paper; summaries and reports QAChat writes go to `target/`,
+so they can never come back as sources. Saving never overwrites a file:
+`-2`, `-3`, ... is added instead.
+
+Types are validated when QAChat starts; mistakes name the type and field.
+Add a JSON file to create a new type; `code` and `literature` must stay.
+Restart QAChat after editing. Only `code` and `literature` have bundled
+example repositories, so other types need sources. Tutorial 150 shows how to
+write and register a new tool.
 
 ## Models and generation settings
 

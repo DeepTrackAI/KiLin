@@ -1,16 +1,16 @@
-"""List every exact mention of a term, without language-model analysis.
+"""Tool ``scan_and_list``: every exact mention, without model analysis.
 
 ``scan_and_list`` answers questions such as "list all mentions of transfer
 learning" or "how many times does the Smith paper say MRI?" exhaustively.
 Ranked
-retrieval returns only the best matches; this workflow inspects every
+retrieval returns only the best matches; this tool inspects every
 indexed line instead, and Python, not a model, counts and lists the results.
 
 Indexed chunks overlap, so counting inside chunks would count mentions in
 the overlaps twice. Every chunk consists of whole source lines with their
 line numbers, and line numbers are unique within one natural unit: a file's
 section, a PDF page (numbering restarts on each page), or a notebook cell.
-The workflow therefore reassembles each unit's lines from its chunks once
+The tool therefore reassembles each unit's lines from its chunks once
 and scans the reassembled text, so a phrase broken across lines is found and
 nothing is counted twice.
 
@@ -36,6 +36,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``ScanSettings``
+- ``parse_settings``
+- ``run``
+- ``collect_mentions``
 - ``Mention``
 - ``MentionScan``
 - ``quoted_terms``
@@ -62,9 +66,24 @@ import re
 from typing import Final
 
 from qachat.chunking import Chunk
+from qachat.retrievals.document_reading import dominant_path, named_paths
+from qachat.tools.contract import (
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+    check_bool,
+    check_int,
+    reject_unknown,
+)
 
 __all__ = [
     "MAX_TERMS",
+    "SCAN_SETTING_NAMES",
+    "MentionCollection",
+    "ScanSettings",
+    "collect_mentions",
+    "parse_settings",
+    "run",
     "Mention",
     "MentionScan",
     "mention_evidence",
@@ -75,6 +94,7 @@ __all__ = [
     "scan_mentions",
     "short_names",
     "terms_prompt",
+    "document_phrase",
     "validated_document",
     "validated_terms",
 ]
@@ -84,6 +104,99 @@ MAX_TERMS: Final[int] = 5
 _QUOTED = re.compile(
     r'"([^"\n]{1,80})"|“([^”\n]{1,80})”|`([^`\n]{1,80})`'
 )
+
+
+# Settings shared by tools that collect mentions.
+SCAN_SETTING_NAMES: Final[tuple[str, ...]] = (
+    "case_sensitive",
+    "whole_words",
+    "context_lines",
+    "max_listed",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScanSettings:
+    """Settings of ``scan_and_list`` in a project type.
+
+    Attributes
+    ----------
+    case_sensitive: bool
+        Whether letter case must match.
+    whole_words: bool
+        Whether a term must not continue into adjacent letters or digits.
+    context_lines: int
+        Lines of context kept around each mention (0-5).
+    max_listed: int
+        Mentions listed with citations (1-1000); counts include all.
+
+    """
+
+    case_sensitive: bool = False
+    whole_words: bool = True
+    context_lines: int = 1
+    max_listed: int = 100
+
+
+def parse_settings(data: dict, where: str) -> ScanSettings:
+    """Validate ``scan_and_list`` settings from a project type.
+
+    Parameters
+    ----------
+    data: dict
+        Settings from the intent's ``tool`` object, without ``name``.
+    where: str
+        Location for errors.
+
+    Returns
+    -------
+    ScanSettings
+        Validated settings; absent ones take their defaults.
+
+    Raises
+    ------
+    ValueError
+        If a setting is unknown or out of range.
+
+    """
+
+    reject_unknown(where, data, SCAN_SETTING_NAMES)
+    return ScanSettings(**scan_fields(data, where))
+
+
+def scan_fields(data: dict, where: str) -> dict[str, object]:
+    """Validate the settings every mention-collecting tool shares.
+
+    Parameters
+    ----------
+    data: dict
+        Tool settings.
+    where: str
+        Location for errors.
+
+    Returns
+    -------
+    dict[str, object]
+        ``case_sensitive``, ``whole_words``, ``context_lines``, and
+        ``max_listed``.
+
+    """
+
+    defaults = ScanSettings()
+    return {
+        "case_sensitive": check_bool(
+            where, data, "case_sensitive", defaults.case_sensitive
+        ),
+        "whole_words": check_bool(
+            where, data, "whole_words", defaults.whole_words
+        ),
+        "context_lines": check_int(
+            where, data, "context_lines", defaults.context_lines, 0, 5
+        ),
+        "max_listed": check_int(
+            where, data, "max_listed", defaults.max_listed, 1, 1000
+        ),
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,7 +334,7 @@ def terms_prompt(
     tuple[str, str]
         System prompt and user prompt. The reply is checked with
         ``validated_terms``, ``validated_document``, and (for categories)
-        ``qachat.workflows.batch_classify.validated_categories``.
+        ``qachat.tools.batch_classify.validated_categories``.
 
     """
 
@@ -247,9 +360,9 @@ Examples:
 {{"terms": ["MRI"], "document": "the Smith paper"}}"""
     if categories:
         user += """
-"which uses of MRI are clinical and which are research?" -> \
-{"terms": ["MRI"], "document": null, "categories": ["clinical use", \
-"research use"]}"""
+"which uses of MRI in the Smith paper are clinical and which are research?" \
+-> {"terms": ["MRI"], "document": "the Smith paper", "categories": \
+["clinical use", "research use"]}"""
     return system, user
 
 
@@ -316,6 +429,36 @@ def validated_document(reply: str, text: str) -> str | None:
     phrase = " ".join(phrase.split()).strip(" '\"`“”?.,;:")
     source = " ".join(text.split()).casefold()
     return phrase if phrase and phrase.casefold() in source else None
+
+
+# "the Smith paper", "the 2020 review", "patil25deep.pdf" style references
+# to one document, used when the model names none.
+_DOCUMENT_PHRASE = re.compile(
+    r"\b(?:in|from|of|within|inside)\s+(the\s+(?:[\w.-]+\s+){1,4}?"
+    r"(?:paper|article|document|report|review|manuscript|thesis|book|"
+    r"chapter|tutorial|guide|file|readme|notebook|script))\b",
+    flags=re.I,
+)
+
+
+def document_phrase(text: str) -> str | None:
+    """Find words naming one document, such as "the Smith paper".
+
+    Parameters
+    ----------
+    text: str
+        The user's words.
+
+    Returns
+    -------
+    str | None
+        The first phrase like "in the Smith paper" (without "in"), or None.
+        Used when the model names no document.
+
+    """
+
+    match = _DOCUMENT_PHRASE.search(text)
+    return " ".join(match.group(1).split()) if match else None
 
 
 def _reply_json(reply: str) -> dict:
@@ -539,6 +682,239 @@ def mention_report(
         )
     lines += ["", coverage]
     return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class MentionCollection:
+    """Every mention a question asks about, and how they were found.
+
+    Attributes
+    ----------
+    scan: MentionScan
+        Every mention in scope.
+    scope_note: str | None
+        How the scanned files were chosen, when not all were scanned.
+    unsearchable: tuple[pathlib.Path, ...]
+        Source files without indexed text (only for a full scan).
+    summary: dict[str, object]
+        Terms, scope, and counts, saved with the turn.
+    reply: str
+        The router model's extraction reply (it may also carry
+        categories).
+
+    """
+
+    scan: MentionScan
+    scope_note: str | None
+    unsearchable: tuple[Path, ...]
+    summary: dict[str, object]
+    reply: str
+
+
+def collect_mentions(
+    settings: ScanSettings,
+    request: ToolRequest,
+    context: ToolContext,
+    *,
+    tool: str,
+    categories: bool = False,
+) -> MentionCollection | ToolResult:
+    """Find the terms and scope in the question, then every mention.
+
+    Parameters
+    ----------
+    settings: ScanSettings
+        Matching settings (``batch_classify`` settings work too).
+    request: ToolRequest
+        The question and the user's words.
+    context: ToolContext
+        QAChat's services.
+    tool: str
+        Name of the calling tool, for summaries and progress.
+    categories: bool, optional
+        Also ask the router model for categories. Defaults to ``False``.
+
+    Returns
+    -------
+    MentionCollection | ToolResult
+        The mentions, or a result that explains why nothing could be
+        scanned (no exact term found).
+
+    Notes
+    -----
+    One router-model call names the terms and any one document to
+    search. Quoted terms take precedence, and a term or document phrase is
+    used only when it occurs in the user's words. The scope is the files
+    the question names; otherwise the file that dominates a search for the
+    document phrase; otherwise every indexed file. A term that names a
+    file in the question becomes the scope when other terms remain.
+
+    """
+
+    trace = context.trace
+    context.progress("Finding the terms to scan")
+    system, prompt = terms_prompt(request.text, categories=categories)
+    try:
+        reply = context.ask_router(system, prompt, 160 if categories else 96)
+    except Exception as error:  # Explain instead of failing.
+        reply = f"failed: {error}"
+    quoted = quoted_terms(request.question)
+    terms = quoted or validated_terms(reply, request.text)
+    source = "quoted" if quoted else "router"
+    document = validated_document(reply, request.text) or document_phrase(
+        request.question
+    )
+    extracted: dict[str, object] = {
+        "terms": list(terms),
+        "from": source,
+        "document": document,
+    }
+    if trace.include_content:
+        extracted["raw"] = reply
+    trace.emit(
+        "tool.terms.extracted",
+        component="tool",
+        data=extracted,
+        turn_id=context.trace_turn_id,
+    )
+    summary: dict[str, object] = {
+        "name": tool,
+        "terms": list(terms),
+        "terms_from": source,
+    }
+    if not terms:
+        context.done("Nothing to scan for", evidence_count=0)
+        return ToolResult(
+            "I couldn't tell which exact words to look for. Put them in "
+            'double quotes, for example: list all mentions of "gradient '
+            'descent".',
+            (),
+            summary,
+        )
+
+    indexed = list(dict.fromkeys(chunk.path for chunk in context.chunks))
+    named = named_paths(request.question, indexed)
+
+    def names_file(term: str, path: Path) -> bool:
+        return term.casefold() in (path.name.casefold(), path.stem.casefold())
+
+    file_terms = [
+        term for term in terms if any(names_file(term, p) for p in named)
+    ]
+    if file_terms and len(file_terms) < len(terms):
+        # "MRI in smith2020": the file is the scope.
+        terms = tuple(term for term in terms if term not in file_terms)
+        summary["terms"] = list(terms)
+        summary["terms_as_scope"] = file_terms
+    # A file named by the only terms is something to find instead.
+    scope = [
+        path
+        for path in named
+        if not any(names_file(term, path) for term in terms)
+    ]
+    scope_note = None
+    if scope:
+        scope_note = (
+            f"Scanned only {', '.join(p.name for p in scope)}, named in "
+            "the question."
+        )
+    elif document:
+        # A described document ("the Smith paper") is the file that
+        # dominates a search for the description.
+        path = dominant_path(
+            context.rank(document)[: context.retrieval_count]
+        )
+        if path is not None:
+            scope = [path]
+            scope_note = (
+                f"Scanned only {path.name}, the best match for "
+                f"“{document}”. Name the file to scan a different one."
+            )
+    listed = " or ".join(f"“{term}”" for term in terms)
+    context.progress(
+        f"Scanning {scope[0].name} for {listed}"
+        if len(scope) == 1
+        else f"Scanning {len(scope) or len(indexed)} files for {listed}"
+    )
+    with trace.span(
+        "tool.scan",
+        component="tool",
+        data={"terms": list(terms), "scope_files": len(scope) or len(indexed)},
+        turn_id=context.trace_turn_id,
+    ):
+        scan = scan_mentions(
+            context.chunks,
+            terms,
+            case_sensitive=settings.case_sensitive,
+            whole_words=settings.whole_words,
+            context_lines=settings.context_lines,
+            paths=scope or None,
+        )
+    unsearchable = () if scope else tuple(context.unsearchable(indexed))
+    summary.update(
+        {
+            "total_mentions": len(scan.mentions),
+            "mentions_per_term": scan.term_counts(),
+            "files_with_mentions": len(scan.counts()),
+            "files_scanned": len(scan.files_scanned),
+            "scope": [path.as_posix() for path in scope],
+            "scope_document": document,
+            "unsearchable_files": [p.as_posix() for p in unsearchable],
+            "case_sensitive": scan.case_sensitive,
+            "whole_words": scan.whole_words,
+        }
+    )
+    return MentionCollection(scan, scope_note, unsearchable, summary, reply)
+
+
+def run(
+    settings: ScanSettings, request: ToolRequest, context: ToolContext
+) -> ToolResult:
+    """List and count every exact mention the question asks about.
+
+    Parameters
+    ----------
+    settings: ScanSettings
+        The intent's settings.
+    request: ToolRequest
+        The question and the user's words.
+    context: ToolContext
+        QAChat's services.
+
+    Returns
+    -------
+    ToolResult
+        Counts per file, listed mentions with exact-line evidence, and
+        coverage. No answering-model call is made.
+
+    """
+
+    found = collect_mentions(
+        settings, request, context, tool="scan_and_list"
+    )
+    if isinstance(found, ToolResult):
+        return found
+    scan, summary = found.scan, found.summary
+    evidence = mention_evidence(scan, settings.max_listed)
+    answer = mention_report(
+        scan,
+        limit=settings.max_listed,
+        unsearchable=found.unsearchable,
+        scope_note=found.scope_note,
+    )
+    summary["listed"] = len(evidence)
+    context.trace.emit(
+        "tool.scan_and_list.result",
+        component="tool",
+        data={key: value for key, value in summary.items() if key != "name"},
+        turn_id=context.trace_turn_id,
+    )
+    noun = "mention" if len(scan.mentions) == 1 else "mentions"
+    context.done(
+        f"Found {len(scan.mentions)} {noun} in {len(scan.counts())} files",
+        evidence_count=len(evidence),
+    )
+    return ToolResult(answer, evidence, summary)
 
 
 @dataclass(frozen=True, slots=True)

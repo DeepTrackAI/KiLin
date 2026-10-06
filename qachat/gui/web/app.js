@@ -26,10 +26,10 @@ const ANSWER_PHASE_GENERATING = "generating";
 const ANSWER_PHASE_SAVING = "saving";
 const ANSWER_PHASE_COMPLETED = "completed";
 const ANSWER_PHASE_PROCESSING = "processing";
-// Mirrors qachat.workflows.planning.WorkflowChoice.
-const WORKFLOW_CHOICE_CONTINUE = "continue";
-const WORKFLOW_CHOICE_QUICK = "quick";
-const WORKFLOW_CHOICE_CANCEL = "cancel";
+// Mirrors qachat.tools.planning.PlanChoice.
+const PLAN_CHOICE_CONTINUE = "continue";
+const PLAN_CHOICE_QUICK = "quick";
+const PLAN_CHOICE_CANCEL = "cancel";
 // Phase added by the GUI engine (qachat.gui.engine.ENGINE_PHASE_*).
 const ENGINE_PHASE_LOADING_MODEL = "loading_model";
 const setup = byId("setup");
@@ -970,11 +970,12 @@ function renderWorkspace(paths) {
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
     const item = branch(name, node, files, selected);
-    // Only sources starts open; indexes and logs stay folded until opened.
+    // Sources and target start open; indexes and logs stay folded.
     const key = `${name}|${files[0] || ""}`;
-    item.open = name === "sources" ? !collapsedWorkspaceFolders.has(key) : expandedFolders.has(key);
+    const startsOpen = name === "sources" || name === "target";
+    item.open = startsOpen ? !collapsedWorkspaceFolders.has(key) : expandedFolders.has(key);
     item.addEventListener("toggle", () => {
-      if (!item.isConnected || name !== "sources") return;
+      if (!item.isConnected || !startsOpen) return;
       item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
     });
     item.querySelectorAll("input").forEach((input) => input.remove());
@@ -1795,12 +1796,21 @@ function renderConversationEmpty() {
   prompt.textContent = content.prompts[promptIndex];
   const suggestions = document.createElement("div");
   suggestions.className = "prompt-suggestions";
-  const choices = [...content.suggestions].sort(() => Math.random() - 0.5).slice(0, 3);
+  // The type's first suggestion is always shown; two others vary.
+  const [first, ...rest] = content.suggestions;
+  const choices = [first, ...rest.sort(() => Math.random() - 0.5).slice(0, 2)].filter(Boolean);
   for (const text of choices) {
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = text;
-    button.addEventListener("click", () => { byId("question").value = text; byId("question").focus(); });
+    button.addEventListener("click", () => {
+      const question = byId("question");
+      question.value = text;
+      question.focus();
+      // Select the "…" so typing the missing part replaces it.
+      const gap = text.indexOf("…");
+      if (gap >= 0) question.setSelectionRange(gap, gap + 1);
+    });
     suggestions.append(button);
   }
   landing.append(prompt, suggestions);
@@ -2054,17 +2064,17 @@ function addPendingTurn(question) {
 }
 
 /**
- * Show a workflow plan with Continue, Quick, and Cancel under the pending
+ * Show a tool plan with Continue, Quick, and Cancel under the pending
  * answer. The backend waits for the choice; one click answers it.
  *
- * @param plan Plan fields from qachat.workflows.planning.WorkflowPlan.
+ * @param plan Plan fields from qachat.tools.planning.ToolPlan.
  */
-function showWorkflowPlan(plan) {
+function showToolPlan(plan) {
   if (!pendingTurn) return;
   const card = document.createElement("div");
-  card.className = "workflow-plan";
+  card.className = "tool-plan";
   const summary = document.createElement("p");
-  summary.className = "workflow-plan-summary";
+  summary.className = "tool-plan-summary";
   summary.textContent = plan.summary;
   const facts = document.createElement("ul");
   const calls = plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
@@ -2074,12 +2084,12 @@ function showWorkflowPlan(plan) {
     facts.append(item);
   }
   const actions = document.createElement("div");
-  actions.className = "workflow-plan-actions";
+  actions.className = "tool-plan-actions";
   const choices = [
-    [WORKFLOW_CHOICE_CONTINUE, "primary", "Continue"],
-    [WORKFLOW_CHOICE_QUICK, "secondary",
+    [PLAN_CHOICE_CONTINUE, "primary", "Continue"],
+    [PLAN_CHOICE_QUICK, "secondary",
       `Quick sample (${plan.quick_items}, about ${formatDuration(plan.quick_seconds * 1000)})`],
-    [WORKFLOW_CHOICE_CANCEL, "secondary", "Cancel"],
+    [PLAN_CHOICE_CANCEL, "secondary", "Cancel"],
   ];
   for (const [choice, style, label] of choices) {
     const button = document.createElement("button");
@@ -2088,8 +2098,8 @@ function showWorkflowPlan(plan) {
     button.textContent = label;
     button.addEventListener("click", () => {
       card.remove();
-      queueAnswerStage(`choice:${choice}`, choice === WORKFLOW_CHOICE_CANCEL ? "Cancelling" : "Starting");
-      bridge.chooseWorkflow(choice);
+      queueAnswerStage(`choice:${choice}`, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting");
+      bridge.choosePlan(choice);
     });
     actions.append(button);
   }
@@ -2406,9 +2416,9 @@ function onEvent(raw) {
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
-      // An expensive workflow waits for Continue, Quick, or Cancel.
+      // An expensive tool run waits for Continue, Quick, or Cancel.
       queueAnswerStage("plan", "Waiting for your choice");
-      showWorkflowPlan(data.plan);
+      showToolPlan(data.plan);
       byId("activity-text").textContent = "Waiting for your choice";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING) {
@@ -2419,9 +2429,9 @@ function onEvent(raw) {
       // No retrieval needed: no step to show.
     } else if (
       data.phase === ANSWER_PHASE_EVIDENCE_READY &&
-      (data.document !== undefined || data.workflow !== undefined)
+      (data.document !== undefined || data.tool !== undefined)
     ) {
-      // Document reading or a workflow describes its own result.
+      // Document reading or a tool describes its own result.
       queueAnswerStage("preparing", data.message || "Reading the document");
       byId("activity-text").textContent = data.message || "Reading the document";
       byId("activity-detail").textContent = "";
@@ -2573,6 +2583,7 @@ function onEvent(raw) {
     }
   } else if (data.event === "answered") {
     completeAfterAnswerStages(data.turn);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();

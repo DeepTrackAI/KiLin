@@ -1,18 +1,26 @@
-"""Load project types and their instructions from ``project_types.json``.
+"""Load project types from ``qachat/project_types/<type>.json``.
 
 A project type (for example a code repository or a literature collection)
-decides which files a new project reads by default and which instructions
-the models receive. Editing the JSON file changes those instructions without
-code changes; restart QAChat afterwards. Saved conversations keep the system
+decides which files a new project reads by default, which intents the
+router may choose, and for each intent the instructions, history,
+retrieval, or tool. Editing a JSON file changes behaviour without code
+changes; restart QAChat afterwards. Saved conversations keep the system
 prompt they were answered with.
 
 Key Features
 ------------
 
-- **One file per installation**
+- **One file per type**
 
-    ``qachat/project_types.json`` lists every type. The built-in ``code`` and
-    ``literature`` types must stay; more can be added.
+    ``code.json`` and ``literature.json`` sit next to this module; the file
+    name is the type's ID, and types are listed in file-name order. The
+    built-in ``code`` and ``literature`` types must stay; add a file to add
+    a type.
+
+- **Tools by name**
+
+    An intent may name a registered tool (``qachat.tools.registry``) with
+    its settings; the tool validates them.
 
 - **Validated on load**
 
@@ -43,23 +51,25 @@ Examples
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from functools import lru_cache
 import json
 from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
+from qachat.tools.registry import ToolUse, parse_tool
+
 __all__ = [
-    "PROJECT_TYPES_FILE",
+    "PROJECT_TYPES_DIR",
     "Intent",
-    "Workflow",
     "ProjectType",
     "load_project_types",
     "project_type",
 ]
 
-PROJECT_TYPES_FILE = Path(__file__).with_name("project_types.json")
+# One JSON file per project type; the file name is the type's ID.
+PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent
 _KIND_PATTERN = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 # Which earlier turns an intent includes as conversation history.
@@ -100,36 +110,6 @@ RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
 )
 
-# Optional workflow an intent can declare. It replaces retrieval and the
-# answering model for that intent; intents without one are unchanged.
-WorkflowKind: TypeAlias = Literal["scan_and_list", "batch_classify"]
-WORKFLOW_SCAN_AND_LIST: Final[WorkflowKind] = "scan_and_list"
-WORKFLOW_BATCH_CLASSIFY: Final[WorkflowKind] = "batch_classify"
-WORKFLOW_CHOICES: Final[tuple[WorkflowKind, ...]] = (
-    WORKFLOW_SCAN_AND_LIST,
-    WORKFLOW_BATCH_CLASSIFY,
-)
-
-# How a workflow collects the items it processes. Only exact mentions of
-# the question's terms exist; whole-chunk collection comes with batched
-# document review.
-CandidateSource: TypeAlias = Literal["mentions"]
-CANDIDATES_MENTIONS: Final[CandidateSource] = "mentions"
-CANDIDATE_CHOICES: Final[tuple[CandidateSource, ...]] = (CANDIDATES_MENTIONS,)
-
-# When a workflow that calls the model asks the user before running:
-# always, only when its plan has more batches than ``large_batches``, or
-# never.
-ConfirmationPolicy: TypeAlias = Literal["always", "when_large", "never"]
-CONFIRMATION_ALWAYS: Final[ConfirmationPolicy] = "always"
-CONFIRMATION_WHEN_LARGE: Final[ConfirmationPolicy] = "when_large"
-CONFIRMATION_NEVER: Final[ConfirmationPolicy] = "never"
-CONFIRMATION_CHOICES: Final[tuple[ConfirmationPolicy, ...]] = (
-    CONFIRMATION_ALWAYS,
-    CONFIRMATION_WHEN_LARGE,
-    CONFIRMATION_NEVER,
-)
-
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
 CODE_GRAPH_AUTO: Final[Literal["auto"]] = "auto"
@@ -138,57 +118,6 @@ CODE_GRAPH_CHOICES: Final[tuple[CodeGraphSetting, ...]] = (
     False,
     CODE_GRAPH_AUTO,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class Workflow:
-    """Settings of an intent's workflow.
-
-    Attributes
-    ----------
-    kind: WorkflowKind
-        ``scan_and_list`` (exact mentions, no model) or ``batch_classify``
-        (exact mentions, each classified by the answering model).
-    case_sensitive: bool
-        Whether letter case must match.
-    whole_words: bool
-        Whether a term must not continue into adjacent letters or digits.
-    context_lines: int
-        Lines of context kept around each mention (0-5); for
-        ``batch_classify`` this is also what the model sees.
-    max_listed: int
-        Mentions listed with citations (1-1000); counts include all.
-    candidates: CandidateSource
-        ``batch_classify`` only: how items are collected; only
-        ``mentions`` (every exact mention of the question's terms).
-    categories: tuple[str, ...]
-        ``batch_classify`` only: fixed categories; empty lets the router
-        model propose them from the question (shown before running).
-    batch_tokens: int
-        ``batch_classify`` only: estimated tokens of mentions per model
-        call (500-8000).
-    max_model_calls: int
-        ``batch_classify`` only: most model calls one answer may make
-        (1-200); mentions beyond them are reported as not classified.
-    confirmation: ConfirmationPolicy
-        ``batch_classify`` only: when to ask before running.
-    large_batches: int
-        ``batch_classify`` only: with ``when_large``, plans with more
-        batches than this ask first (0-100).
-
-    """
-
-    kind: WorkflowKind
-    case_sensitive: bool = False
-    whole_words: bool = True
-    context_lines: int = 1
-    max_listed: int = 100
-    candidates: CandidateSource = CANDIDATES_MENTIONS
-    categories: tuple[str, ...] = ()
-    batch_tokens: int = 2500
-    max_model_calls: int = 30
-    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
-    large_batches: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,8 +150,9 @@ class Intent:
     max_tokens: int
         Evidence budget in estimated tokens for ``document`` reading; a
         longer document keeps its parts most relevant to the question.
-    workflow: Workflow | None
-        Workflow that replaces retrieval and the answering model, if any.
+    tool: ToolUse | None
+        Tool that replaces retrieval and the answering model, if any (see
+        ``qachat.tools``).
 
     """
 
@@ -236,12 +166,12 @@ class Intent:
     shortcuts: tuple[re.Pattern[str], ...] = ()
     include_related_evidence: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
-    workflow: Workflow | None = None
+    tool: ToolUse | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ProjectType:
-    """One project type from ``project_types.json``.
+    """One project type from ``qachat/project_types/<type>.json``.
 
     Attributes
     ----------
@@ -346,15 +276,15 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
             f"Intent {where!r} history policy must be one of: "
             f"{', '.join(HISTORY_POLICY_CHOICES)}."
         )
-    workflow = _parse_workflow(where, data.get("workflow"))
+    tool = parse_tool(where, data["tool"]) if "tool" in data else None
     mode = retrieval.get(
         "mode",
-        RETRIEVAL_MODE_NONE if workflow is not None else RETRIEVAL_MODE_SEARCH,
+        RETRIEVAL_MODE_NONE if tool is not None else RETRIEVAL_MODE_SEARCH,
     )
-    if workflow is not None and mode != RETRIEVAL_MODE_NONE:
+    if tool is not None and mode != RETRIEVAL_MODE_NONE:
         raise ValueError(
-            f"Intent {where!r} has a workflow, which replaces retrieval; "
-            'its retrieval mode must be "none".'
+            f"Intent {where!r} has a tool, which replaces retrieval; its "
+            'retrieval mode must be "none".'
         )
     if mode not in RETRIEVAL_MODE_CHOICES:
         raise ValueError(
@@ -394,9 +324,9 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
     return Intent(
         intent_id=intent_id,
         description=_text(where, data, "description"),
-        # A workflow writes its own answer, so no instruction is needed.
+        # A tool writes its own answer, so no instruction is needed.
         system_prompt=_text(
-            where, data, "system_prompt", required=workflow is None
+            where, data, "system_prompt", required=tool is None
         ),
         answer_guidance=guidance.strip() if guidance is not None else None,
         history_policy=policy,
@@ -405,92 +335,7 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
         shortcuts=tuple(shortcuts),
         include_related_evidence=related,
         max_tokens=max_tokens,
-        workflow=workflow,
-    )
-
-
-def _parse_workflow(where: str, data: object) -> Workflow | None:
-    if data is None:
-        return None
-    if not isinstance(data, dict):
-        raise ValueError(f"Intent {where!r} workflow must be an object.")
-    kind = data.get("kind")
-    if kind not in WORKFLOW_CHOICES:
-        raise ValueError(
-            f"Intent {where!r} workflow kind must be one of: "
-            f"{', '.join(WORKFLOW_CHOICES)}."
-        )
-    known = {"kind", "case_sensitive", "whole_words"}
-    known |= {"context_lines", "max_listed"}
-    if kind == WORKFLOW_BATCH_CLASSIFY:
-        known |= {"candidates", "categories", "batch_tokens"}
-        known |= {"max_model_calls"}
-        known |= {"confirmation", "large_batches"}
-    unknown = sorted(set(data) - known)
-    if unknown:
-        raise ValueError(
-            f"Intent {where!r} workflow has unknown settings: "
-            f"{', '.join(unknown)}."
-        )
-    defaults = {field.name: field.default for field in fields(Workflow)}
-    flags = {}
-    for name in ("case_sensitive", "whole_words"):
-        value = data.get(name, defaults[name])
-        if type(value) is not bool:
-            raise ValueError(
-                f"Intent {where!r} workflow.{name} must be true or false."
-            )
-        flags[name] = value
-    numbers = {}
-    for name, low, high in (
-        ("context_lines", 0, 5),
-        ("max_listed", 1, 1000),
-        ("batch_tokens", 500, 8000),
-        ("max_model_calls", 1, 200),
-        ("large_batches", 0, 100),
-    ):
-        value = data.get(name, defaults[name])
-        if type(value) is not int or not low <= value <= high:
-            raise ValueError(
-                f"Intent {where!r} workflow.{name} must be a whole number "
-                f"from {low} to {high}."
-            )
-        numbers[name] = value
-    candidates = data.get("candidates", defaults["candidates"])
-    if candidates not in CANDIDATE_CHOICES:
-        raise ValueError(
-            f"Intent {where!r} workflow.candidates must be one of: "
-            f"{', '.join(CANDIDATE_CHOICES)}."
-        )
-    confirmation = data.get("confirmation", defaults["confirmation"])
-    if confirmation not in CONFIRMATION_CHOICES:
-        raise ValueError(
-            f"Intent {where!r} workflow.confirmation must be one of: "
-            f"{', '.join(CONFIRMATION_CHOICES)}."
-        )
-    categories = data.get("categories", [])
-    if (
-        not isinstance(categories, list)
-        or len(categories) == 1
-        or len(categories) > 8
-        or not all(
-            isinstance(item, str) and 0 < len(item.strip()) <= 40
-            for item in categories
-        )
-        or len({item.strip().casefold() for item in categories})
-        < len(categories)
-    ):
-        raise ValueError(
-            f"Intent {where!r} workflow.categories must be 2-8 distinct "
-            "labels of at most 40 characters, or empty."
-        )
-    return Workflow(
-        kind=kind,
-        **flags,
-        **numbers,
-        candidates=candidates,
-        categories=tuple(item.strip() for item in categories),
-        confirmation=confirmation,
+        tool=tool,
     )
 
 
@@ -574,38 +419,47 @@ def _unique_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
 @lru_cache(maxsize=None)
 def load_project_types(
-    path: Path = PROJECT_TYPES_FILE,
+    directory: Path = PROJECT_TYPES_DIR,
 ) -> dict[str, ProjectType]:
-    """Read and validate every project type, in file order.
+    """Read and validate every project type in a folder.
 
     Parameters
     ----------
-    path: pathlib.Path, optional
-        JSON file to read. Defaults to the packaged ``project_types.json``.
+    directory: pathlib.Path, optional
+        Folder with one ``<type>.json`` per project type. Defaults to the
+        packaged ``qachat/project_types``.
 
     Returns
     -------
     dict[str, ProjectType]
-        Types keyed by ID. The result is cached for the process.
+        Types keyed by ID (the file name without ``.json``), in file-name
+        order. The result is cached for the process.
 
     Raises
     ------
     ValueError
-        If the file is not valid JSON or a type is malformed. The built-in
-        project kinds are checked by ``qachat.project``, which owns them.
+        If the folder has no project types, a file is not valid JSON, or a
+        type is malformed. The built-in project kinds are checked by
+        ``qachat.project``, which owns them.
 
     """
 
-    try:
-        value = json.loads(
-            Path(path).read_text(encoding="utf-8"),
-            object_pairs_hook=_unique_keys,
-        )
-    except json.JSONDecodeError as error:
-        raise ValueError(f"{path} is not valid JSON: {error}") from error
-    if not isinstance(value, dict):
-        raise ValueError(f"{path} must contain an object of project types.")
-    return {kind: _parse(kind, data) for kind, data in value.items()}
+    files = sorted(Path(directory).glob("*.json"))
+    if not files:
+        raise ValueError(f"{directory} has no project type files.")
+    types: dict[str, ProjectType] = {}
+    for path in files:
+        try:
+            value = json.loads(
+                path.read_text(encoding="utf-8"),
+                object_pairs_hook=_unique_keys,
+            )
+        except json.JSONDecodeError as error:
+            raise ValueError(f"{path} is not valid JSON: {error}") from error
+        if not isinstance(value, dict):
+            raise ValueError(f"{path} must contain one project type object.")
+        types[path.stem] = _parse(path.stem, value)
+    return types
 
 
 def project_type(kind: str) -> ProjectType:

@@ -1,0 +1,222 @@
+{
+  "display_name": "Literature collection",
+  "description": "A collection of scientific literature and related documents.",
+  "extensions": [
+    ".pdf",
+    ".md",
+    ".txt"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Given a question about academic literature, retrieve relevant research papers, abstracts, and citations that help answer the question.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "answer_guidance": "Keep the answer concise: about 150-300 words, unless the question asks for more detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+  "capabilities": {
+    "code_graph": "auto"
+  },
+  "history": {
+    "recent_turns": 2
+  },
+  "default_intent": "question_answering",
+  "intents": {
+    "question_answering": {
+      "description": "Answer a question about the documents' content, methods, or findings.",
+      "system_prompt": "Answer the question directly and support each claim with the evidence.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "compare_sources": {
+      "description": "Compare papers, methods, findings, or claims across sources.",
+      "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "document_reading": {
+      "description": "Read one whole paper, document, or file to answer from all of it, only when the user asks to check, read, or go through an entire source ('read the whole Smith 2020 paper', 'go through the entire user guide', 'check the paper from start to end to find which software it uses').",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_review",
+        "part_tokens": 6000,
+        "note_tokens": 400,
+        "answer_tokens": 1024,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "paper_summary": {
+      "description": "Turn one paper into a structured one-page document and save it as a file: a research briefing (the default; title, summary of, background, discovery, figure, future, related reading) or a research summary ('turn the Smith paper into a research briefing', 'write a research summary of smith2020.pdf', 'summarize my paper in target with the template'). The paper may be in the target folder or among the sources. Not for answering a specific question about a paper.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "research_briefing",
+        "templates": [
+          "research_briefing",
+          "research_summary"
+        ],
+        "part_tokens": 6000,
+        "note_tokens": 500,
+        "section_tokens": 600,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "project_inventory": {
+      "description": "Questions about the project's files themselves rather than their content: how many papers or files it has, which files or types are included, which could not be read ('how many papers are in this project?', 'list the PDFs in the reviews folder', 'which files have no searchable text?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_inventory",
+        "max_listed": 200,
+        "max_folders": 20
+      }
+    },
+    "mention_listing": {
+      "description": "List or count every place an exact word, name, or phrase appears in the sources ('list all mentions of transfer learning', 'where is the Mann-Whitney test mentioned?', 'how many times does the Smith paper say MRI?'). Exhaustive and exact; not for explaining what something is or sorting mentions into groups.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "scan_and_list",
+        "case_sensitive": false,
+        "whole_words": true,
+        "context_lines": 1,
+        "max_listed": 100
+      }
+    },
+    "mention_classification": {
+      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; judges each mention.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_classify",
+        "candidates": "mentions",
+        "case_sensitive": false,
+        "whole_words": true,
+        "context_lines": 2,
+        "max_listed": 100,
+        "batch_tokens": 2500,
+        "max_model_calls": 30,
+        "confirmation": "when_large",
+        "large_batches": 2
+      }
+    },
+    "report_generation": {
+      "description": "Write a structured report or overview of a topic across the documents.",
+      "system_prompt": "Write a structured report with short headings, based only on the evidence.",
+      "answer_guidance": "Use short headings and up to about 600 words unless the question asks for a different length.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "qachat_usage": {
+      "description": "Questions about the QAChat application itself rather than the project's content: how to add or remove files, what happens when a file is dropped in, whether something re-indexes, where conversations, indexes, or summaries are stored, how settings, effort levels, models, or tools work ('how do I add a paper?', 'will adding a file re-index everything?', 'where are my conversations saved?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "qachat_help",
+        "max_sections": 6,
+        "answer_tokens": 700
+      }
+    },
+    "conversation_followup": {
+      "description": "A follow-up about earlier answers, including ones several turns back: their details, or the terms and names they used (for example 'why is it called X?'), or the conversation itself (an opinion, a recap, 'what do you think so far?'), that the evidence already found for those turns can answer.",
+      "system_prompt": "Answer the follow-up using the earlier answers and their evidence, and connect it to what was already discussed.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "rephrase_previous": {
+      "description": "Rephrase, simplify, shorten, expand, summarize, or translate the previous answer without needing new information.",
+      "system_prompt": "Rework the previous answer as the user asks. Keep its meaning and its source numbers; do not add claims that its evidence does not support.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "small_talk": {
+      "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
+      "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
+      "answer_guidance": "Reply in one short sentence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "shortcuts": [
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| qachat)?",
+        "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
+        "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
+        "how (are|r) (you|u)( doing)?( today)?",
+        "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
+        "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "What would you like to understand from your literature?",
+    "Which concept should we explore across these sources?",
+    "What evidence are you looking for?",
+    "What would you like to compare in the literature?",
+    "Which finding should we investigate?"
+  ],
+  "suggestions": [
+    "Turn the … paper into a research briefing",
+    "What methods do these papers use for …?",
+    "Compare how the papers evaluate …",
+    "Read the … paper in full: which software and data does it use?",
+    "Write an overview of what these papers say about …",
+    "How many papers are in this project?",
+    "List every mention of …",
+    "Which mentions of … are the authors' own work and which are citations?"
+  ]
+}

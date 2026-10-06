@@ -1,0 +1,198 @@
+{
+  "display_name": "Code repository",
+  "description": "A software repository with source code and documentation.",
+  "extensions": [
+    ".py",
+    ".ipynb",
+    ".m",
+    ".md"
+  ],
+  "max_file_bytes": 1048576,
+  "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "answer_guidance": "Keep the answer concise: about 150-300 words, unless the question asks for more detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+  "capabilities": {
+    "code_graph": true
+  },
+  "history": {
+    "recent_turns": 2
+  },
+  "default_intent": "code_explanation",
+  "intents": {
+    "code_explanation": {
+      "description": "Explain existing code, or how parts of the repository work and connect.",
+      "system_prompt": "Explain the code clearly, including its role and how it relates to other parts of the repository.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "code_generation": {
+      "description": "Write new code or change existing code, such as a function, script, or fix.",
+      "system_prompt": "Write code that follows the repository's style and uses the functions and APIs shown in the evidence. Then explain briefly what it does.",
+      "answer_guidance": "Keep the explanation short; the code can be as long as it needs to be.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "debugging": {
+      "description": "Find the cause of an error or unexpected behavior and suggest a fix.",
+      "system_prompt": "Identify the most likely cause from the evidence, say how to confirm it, and suggest a fix.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "file_reading": {
+      "description": "Read one whole file, script, or function to answer from all of it: the user asks to check, read, review, or go through an entire file or function ('go through train.py', 'review the whole fit function').",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_review",
+        "part_tokens": 6000,
+        "note_tokens": 400,
+        "answer_tokens": 1024,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "project_inventory": {
+      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_inventory",
+        "max_listed": 200,
+        "max_folders": 20
+      }
+    },
+    "mention_listing": {
+      "description": "List or count every place an exact name or text appears in the code ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does or sorting occurrences into groups.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "scan_and_list",
+        "case_sensitive": true,
+        "whole_words": true,
+        "context_lines": 1,
+        "max_listed": 100
+      }
+    },
+    "mention_classification": {
+      "description": "Sort every occurrence of an exact name or text in the code into groups the user names, then count each group ('which uses of load_data are in tests and which in library code?', 'which TODO comments are about performance and which about features?'). Exhaustive; judges each occurrence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_classify",
+        "candidates": "mentions",
+        "case_sensitive": true,
+        "whole_words": true,
+        "context_lines": 2,
+        "max_listed": 100,
+        "batch_tokens": 2500,
+        "max_model_calls": 30,
+        "confirmation": "when_large",
+        "large_batches": 2
+      }
+    },
+    "qachat_usage": {
+      "description": "Questions about the QAChat application itself rather than the project's content: how to add or remove files, what happens when a file is dropped in, whether something re-indexes, where conversations, indexes, or summaries are stored, how settings, effort levels, models, or tools work ('how do I add a paper?', 'will adding a file re-index everything?', 'where are my conversations saved?').",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "qachat_help",
+        "max_sections": 6,
+        "answer_tokens": 700
+      }
+    },
+    "conversation_followup": {
+      "description": "A follow-up about earlier answers, including ones several turns back: their details, or the terms and names they used (for example 'why is it called X?'), or the conversation itself (an opinion, a recap, 'what do you think so far?'), that the evidence already found for those turns can answer.",
+      "system_prompt": "Answer the follow-up using the earlier answers and their evidence, and connect it to what was already discussed.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "rephrase_previous": {
+      "description": "Rephrase, simplify, shorten, expand, summarize, or translate the previous answer without needing new information.",
+      "system_prompt": "Rework the previous answer as the user asks. Keep its meaning and its source numbers; do not add claims that its evidence does not support.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "small_talk": {
+      "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
+      "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
+      "answer_guidance": "Reply in one short sentence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "shortcuts": [
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| qachat)?",
+        "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
+        "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
+        "how (are|r) (you|u)( doing)?( today)?",
+        "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
+        "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "What would you like to understand about this codebase?",
+    "Which part of your project should we explore?",
+    "What do you want to trace through the code?",
+    "What behavior would you like to investigate?",
+    "Where should we start in this repository?"
+  ],
+  "suggestions": [
+    "Explain how … works",
+    "Review the whole … file",
+    "Write a function that …",
+    "Why does … fail with this error: …",
+    "How many Python files are in this repository?",
+    "Find every use of …",
+    "Which uses of … are in tests and which in library code?"
+  ]
+}

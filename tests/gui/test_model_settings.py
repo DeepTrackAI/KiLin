@@ -494,57 +494,46 @@ class TestModelSettings(unittest.TestCase):
         self.assertEqual(parameters["retrieval_mode"], "none")
         self.assertEqual(list(self.events[-1]["turn"]["evidence"]), [])
 
-    def test_document_intent_reads_the_whole_file(self):
+    def test_document_intent_reads_in_parts_and_streams(self):
         from qachat.chunking import Chunk
-        from qachat.retrievals import DocumentSelection
 
         session = self.engine.session
         session.turns = []
         kind = session.project.profile.kind
         intent = "file_reading" if kind == "code" else "document_reading"
-        parts = tuple(
-            Chunk(f"p:{n}", Path("paper.pdf"), f"Part {n}.", n, n, "text",
-                  None, None)
+        session.chunks = [
+            Chunk(f"p:{n}", Path("paper.pdf"), f"Part {n} " + "x" * 9000,
+                  n, n, "text", None, None)
             for n in (1, 2, 3)
-        )
-        selection = DocumentSelection(
-            path=Path("paper.pdf"),
-            functions=(),
-            reason="search",
-            chunks=parts,
-            total_chunks=3,
-            estimated_tokens=6,
-            complete=True,
-        )
-        with (
-            patch.object(session, "_retrieve") as retrieve,
-            patch.object(
-                session, "_read_document", return_value=selection
-            ) as read,
-            patch.object(session, "_save_conversation"),
-            patch.object(session.chat_session, "reply", return_value="M [2]."),
-            patch(
-                "qachat.answering.side_reply",
-                return_value=f'{{"intent": "{intent}", "standalone": true}}',
-            ),
-        ):
-            self.engine.ask("check the paper entirely for its language")
-        retrieve.assert_not_called()
-        self.assertEqual(read.call_args.args[1], 30_000)
-        turn = self.events[-1]["turn"]
-        self.assertEqual(
-            [(e["citation"], e["text"]) for e in turn["evidence"]],
-            [(1, "Part 1."), (2, "Part 2."), (3, "Part 3.")],
-        )
-        document = turn["parameters"]["document"]
-        self.assertEqual(document["path"], "paper.pdf")
-        self.assertTrue(document["complete"])
-        ready = [
-            e for e in self.events if e.get("phase") == "evidence_ready"
         ]
-        self.assertEqual(
-            ready[-1]["message"], "Reading all 3 parts of paper.pdf"
-        )
+        def model(chat, system, prompt, **options):
+            if "route questions" in system:
+                return f'{{"intent": "{intent}", "standalone": true}}'
+            if "take notes" in system:
+                return "- Written in Python [2]" if "[2]" in prompt else (
+                    "NOTHING"
+                )
+            options["token_callback"]("Python [2].")
+            return "Python [2]."
+
+        with (
+            patch.object(session, "_save_conversation"),
+            patch.object(session, "_rank_everything", return_value=[]),
+            patch.object(session.chat_session, "reply") as reply,
+            patch("qachat.answering.side_reply", side_effect=model),
+            patch("qachat.rag.side_reply", side_effect=model),
+        ):
+            self.engine.ask("read paper.pdf: which language?")
+        reply.assert_not_called()
+        turn = self.events[-1]["turn"]
+        self.assertEqual(turn["answer"], "Python [2].")
+        self.assertEqual(len(turn["evidence"]), 3)
+        tool = turn["parameters"]["tool"]
+        self.assertEqual(tool["name"], "batch_review")
+        self.assertEqual(tool["parts_read"], 2)
+        self.assertEqual(tool["reason"], "named_file")
+        deltas = [e for e in self.events if e["event"] == "answer_delta"]
+        self.assertEqual("".join(e["text"] for e in deltas), "Python [2].")
 
     def test_mention_listing_scans_without_the_answering_model(self):
         from qachat.chunking import Chunk
@@ -585,12 +574,12 @@ class TestModelSettings(unittest.TestCase):
             [(e["citation"], e["start_line"]) for e in turn["evidence"]],
             [(1, 1), (2, 1)],
         )
-        workflow = turn["parameters"]["workflow"]
-        self.assertEqual(workflow["terms"], ["BRAPH 2"])
-        self.assertEqual(workflow["terms_from"], "router")
-        self.assertEqual(workflow["total_mentions"], 2)
-        self.assertEqual(workflow["files_scanned"], 2)
-        self.assertIn("workflow_scan_and_list_result", self.trace_text())
+        tool = turn["parameters"]["tool"]
+        self.assertEqual(tool["terms"], ["BRAPH 2"])
+        self.assertEqual(tool["terms_from"], "router")
+        self.assertEqual(tool["total_mentions"], 2)
+        self.assertEqual(tool["files_scanned"], 2)
+        self.assertIn("tool_scan_and_list_result", self.trace_text())
 
         # A term that names a file in the question becomes the scope.
         replies = iter(
@@ -618,11 +607,11 @@ class TestModelSettings(unittest.TestCase):
         ):
             self.engine.ask("where is BRAPH 2 mentioned in other")
         reply.assert_not_called()
-        workflow = self.events[-1]["turn"]["parameters"]["workflow"]
-        self.assertEqual(workflow["terms"], ["BRAPH 2"])
-        self.assertEqual(workflow["terms_as_scope"], ["other"])
-        self.assertEqual(workflow["scope"], ["other.md"])
-        self.assertEqual(workflow["total_mentions"], 1)
+        tool = self.events[-1]["turn"]["parameters"]["tool"]
+        self.assertEqual(tool["terms"], ["BRAPH 2"])
+        self.assertEqual(tool["terms_as_scope"], ["other"])
+        self.assertEqual(tool["scope"], ["other.md"])
+        self.assertEqual(tool["total_mentions"], 1)
 
     def _classify(self, choice, label_reply):
         """Ask a classification question; the user answers the plan."""
@@ -635,7 +624,7 @@ class TestModelSettings(unittest.TestCase):
             Chunk("c1", Path("a.md"), "Our Python code.\nPython [3].\n",
                   1, 2, "text", None, None),
         ]
-        commands = [{"action": "preview"}, {"action": "workflow_choice",
+        commands = [{"action": "preview"}, {"action": "plan_choice",
                                             "choice": choice}]
         self.engine.read_command = lambda: commands.pop(0)
         prompts = []
@@ -657,7 +646,10 @@ class TestModelSettings(unittest.TestCase):
             patch.object(session.chat_session, "reply") as reply,
             patch("qachat.answering.side_reply", side_effect=router),
             patch("qachat.rag.side_reply", side_effect=router),
-            patch("qachat.rag.needs_confirmation", return_value=True),
+            patch(
+                "qachat.tools.planning.needs_confirmation",
+                return_value=True,
+            ),
         ):
             self.engine.ask("which Python mentions are own code or citations?")
         reply.assert_not_called()
@@ -682,32 +674,32 @@ class TestModelSettings(unittest.TestCase):
         self.assertEqual(len(prompts), 2)
         self.assertIn("[2] a.md, line 2", prompts[1])
         self.assertNotIn("[1] a.md", prompts[1])
-        workflow = turn["parameters"]["workflow"]
-        self.assertEqual(workflow["choice"], "continue")
-        self.assertEqual(workflow["counts"],
+        tool = turn["parameters"]["tool"]
+        self.assertEqual(tool["choice"], "continue")
+        self.assertEqual(tool["counts"],
                          {"own code": 1, "citation": 1, "unclear": 0})
-        self.assertEqual(workflow["not_classified"], 0)
-        self.assertEqual(workflow["model_calls"], 2)
+        self.assertEqual(tool["not_classified"], 0)
+        self.assertEqual(tool["model_calls"], 2)
         self.assertIn("Classified **2 of 2 mentions**", turn["answer"])
         self.assertEqual(len(turn["evidence"]), 2)
         trace = self.trace_text()
-        for name in ("workflow_plan_proposed", "workflow_plan_decided",
-                     "workflow_batch_result",
-                     "workflow_batch_classify_result"):
+        for name in ("tool_plan_proposed", "tool_plan_decided",
+                     "tool_batch_result",
+                     "tool_batch_classify_result"):
             self.assertIn(name, trace)
 
     def test_classification_cancel_makes_no_model_calls(self):
         turn, prompts = self._classify("cancel", lambda call: "[]")
         self.assertEqual(prompts, [])
         self.assertIn("Cancelled before classifying", turn["answer"])
-        self.assertEqual(turn["parameters"]["workflow"]["choice"], "cancel")
+        self.assertEqual(turn["parameters"]["tool"]["choice"], "cancel")
         self.assertFalse(turn["evidence"])
 
     def test_classification_failed_labels_are_reported(self):
         turn, prompts = self._classify("quick", lambda call: "nonsense")
-        workflow = turn["parameters"]["workflow"]
-        self.assertEqual(workflow["choice"], "quick")
-        self.assertEqual(workflow["not_classified"], 2)
+        tool = turn["parameters"]["tool"]
+        self.assertEqual(tool["choice"], "quick")
+        self.assertEqual(tool["not_classified"], 2)
         self.assertIn("Quick sample", turn["answer"])
         self.assertIn("- not classified: 2", turn["answer"])
 

@@ -63,6 +63,7 @@ class TestChatEngine(unittest.TestCase):
             answer_guidance=project_type("code").answer_guidance,
             token_callback=ANY,
             phase_callback=ANY,
+            pdf_writer=ANY,
             **options,
         )
         options = session.ask.call_args.kwargs

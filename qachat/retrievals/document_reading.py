@@ -220,7 +220,9 @@ def read_document(
     )
 
 
-def named_paths(question: str, paths: Sequence[Path]) -> list[Path]:
+def named_paths(
+    question: str, paths: Sequence[Path], *, authors: bool = False
+) -> list[Path]:
     """Return the files a question names.
 
     Parameters
@@ -229,12 +231,17 @@ def named_paths(question: str, paths: Sequence[Path]) -> list[Path]:
         The question.
     paths: Sequence[pathlib.Path]
         Candidate files.
+    authors: bool, optional
+        Also match author names that start file stems, for requests about
+        one document ("summarize Smith's paper"). Defaults to ``False``.
 
     Returns
     -------
     list[pathlib.Path]
         Files named by full path; otherwise by file name; otherwise by
-        file stem of at least four characters ("smith2020"). Matching
+        file stem of at least four characters ("smith2020"); otherwise,
+        with ``authors``, by a name that starts an author-year file stem
+        ("smith" or "Smith's paper" for ``smith2020.pdf``). Matching
         ignores case and needs a boundary on both sides.
 
     """
@@ -246,12 +253,28 @@ def named_paths(question: str, paths: Sequence[Path]) -> list[Path]:
     names = [path for path in paths if _mentions(text, path.name.casefold())]
     if names:
         return names
-    return [
+    stems = [
         path
         for path in paths
         if len(path.stem) >= _MIN_STEM_LENGTH
         and _mentions(text, path.stem.casefold())
     ]
+    if stems or not authors:
+        return stems
+    words = set(re.findall(r"[a-z]{4,}", text))
+    return [path for path in paths if _starts_stem(path.stem, words)]
+
+
+def _starts_stem(stem: str, words: set[str]) -> bool:
+    """Whether a word starts an author-year stem: "smith" in smith2020."""
+
+    stem = stem.casefold()
+    for word in words:
+        if stem.startswith(word):
+            rest = stem[len(word) :]
+            if not rest or rest[0].isdigit() or rest[0] in "_-":
+                return True
+    return False
 
 
 def _mentions(text: str, name: str) -> bool:

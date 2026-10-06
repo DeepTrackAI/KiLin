@@ -424,8 +424,8 @@ class ChatBridge(QObject):
         )
 
     @Slot(str)
-    def chooseWorkflow(self, choice: str) -> None:
-        """Answer a workflow plan that waits for the user's choice.
+    def choosePlan(self, choice: str) -> None:
+        """Answer a tool plan that waits for the user's choice.
 
         Parameters
         ----------
@@ -441,7 +441,7 @@ class ChatBridge(QObject):
         """
 
         self.commandRequested.emit(
-            {"action": "workflow_choice", "choice": choice}
+            {"action": "plan_choice", "choice": choice}
         )
 
     @Slot(int, int)
@@ -835,6 +835,7 @@ class ChatWindow(QMainWindow):
         """Show the light or dark logo in the window and Dock.
 
         Missing icon files leave Qt's default icon in place.
+
         """
 
         dark = self._appearance == "dark" or (

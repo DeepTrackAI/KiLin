@@ -9,7 +9,7 @@ import unittest
 
 from qachat.project import default_project_profile
 from qachat.project_types import (
-    PROJECT_TYPES_FILE,
+    PROJECT_TYPES_DIR,
     load_project_types,
     project_type,
 )
@@ -43,14 +43,22 @@ class TestProjectTypes(unittest.TestCase):
             default_project_profile("literature").max_file_bytes, 20 * 2**20
         )
 
-    def _write(self, folder: str, name: str, value: object) -> Path:
-        # Loading is cached per path, so each case uses its own file.
-        path = Path(folder) / name
-        path.write_text(json.dumps(value), encoding="utf-8")
+    def _write(self, folder: str, name: str, value: dict) -> Path:
+        # Loading is cached per folder, so each case uses its own folder,
+        # with one <type>.json per project type.
+        path = Path(folder) / name.removesuffix(".json")
+        path.mkdir()
+        for kind, data in value.items():
+            (path / f"{kind}.json").write_text(
+                json.dumps(data), encoding="utf-8"
+            )
         return path
 
     def test_added_type_loads_and_bad_files_explain_the_problem(self) -> None:
-        packaged = json.loads(PROJECT_TYPES_FILE.read_text(encoding="utf-8"))
+        packaged = {
+            path.stem: json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(PROJECT_TYPES_DIR.glob("*.json"))
+        }
         with TemporaryDirectory() as folder:
             added = {
                 **packaged,
@@ -72,7 +80,8 @@ class TestProjectTypes(unittest.TestCase):
             types = load_project_types(
                 self._write(folder, "added.json", added)
             )
-            self.assertEqual(list(types)[-1], "protocols")
+            # Types are listed in file-name order.
+            self.assertEqual(list(types), ["code", "literature", "protocols"])
             self.assertEqual(types["protocols"].answer_guidance, "")
 
             # qachat.project owns the built-in kinds and requires them.
@@ -92,30 +101,29 @@ class TestProjectTypes(unittest.TestCase):
                 )
 
             budget = json.loads(json.dumps(packaged))
-            reading = budget["code"]["intents"]["file_reading"]
-            self.assertEqual(reading["retrieval"]["mode"], "document")
-            reading["retrieval"]["max_tokens"] = 50
+            reading = budget["code"]["intents"]["code_explanation"]
+            reading["retrieval"] = {"mode": "document", "max_tokens": 50}
             with self.assertRaisesRegex(ValueError, "max_tokens"):
                 load_project_types(self._write(folder, "budget.json", budget))
 
             listing = packaged["literature"]["intents"]["mention_listing"]
-            self.assertEqual(listing["workflow"]["kind"], "scan_and_list")
+            self.assertEqual(listing["tool"]["name"], "scan_and_list")
             for change, message in (
-                ({"kind": "summarize"}, "workflow kind"),
+                ({"name": "summarize"}, "tool name"),
                 ({"max_model_calls": 3}, "unknown settings"),
                 ({"context_lines": 9}, "context_lines"),
                 ({"whole_words": "yes"}, "whole_words"),
             ):
                 bad = json.loads(json.dumps(packaged))
                 bad["literature"]["intents"]["mention_listing"][
-                    "workflow"
+                    "tool"
                 ].update(change)
                 with self.assertRaisesRegex(ValueError, message):
                     load_project_types(
                         self._write(folder, f"{message}.json", bad)
                     )
             sorting = packaged["code"]["intents"]["mention_classification"]
-            self.assertEqual(sorting["workflow"]["kind"], "batch_classify")
+            self.assertEqual(sorting["tool"]["name"], "batch_classify")
             for intent, change, message in (
                 # Batch settings belong to batch_classify only.
                 ("mention_listing", {"batch_tokens": 900}, "unknown"),
@@ -128,13 +136,13 @@ class TestProjectTypes(unittest.TestCase):
                  "max_model_calls"),
             ):
                 bad = json.loads(json.dumps(packaged))
-                bad["code"]["intents"][intent]["workflow"].update(change)
+                bad["code"]["intents"][intent]["tool"].update(change)
                 with self.assertRaisesRegex(ValueError, message):
                     load_project_types(
                         self._write(folder, f"c-{message}.json", bad)
                     )
             fixed = json.loads(json.dumps(packaged))
-            fixed["code"]["intents"]["mention_classification"]["workflow"][
+            fixed["code"]["intents"]["mention_classification"]["tool"][
                 "categories"
             ] = ["tests", "library"]
             loaded = load_project_types(
@@ -143,7 +151,7 @@ class TestProjectTypes(unittest.TestCase):
             self.assertEqual(
                 loaded["code"]
                 .intents["mention_classification"]
-                .workflow.categories,
+                .tool.settings.categories,
                 ("tests", "library"),
             )
 

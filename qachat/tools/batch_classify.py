@@ -1,4 +1,4 @@
-"""Classify every exact mention with the model, in batches.
+"""Tool ``batch_classify``: label every exact mention, in batches.
 
 ``batch_classify`` answers questions such as "which Python mentions in the
 Smith paper are the authors' own code, and which are citations?". It
@@ -32,6 +32,9 @@ Key Features
 Module Structure
 ----------------
 
+- ``ClassifySettings``
+- ``parse_settings``
+- ``run``
 - ``UNCLEAR``
 - ``Label``
 - ``validated_categories``
@@ -52,19 +55,46 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import json
 import re
-from typing import Final
+from time import perf_counter
+from typing import Final, Literal, TypeAlias
 
 from qachat.retrievals.document_reading import estimate_tokens
-from qachat.workflows.scan_and_list import (
+from qachat.tools.contract import (
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+    check_choice,
+    check_int,
+    reject_unknown,
+)
+from qachat.tools.planning import (
+    CONFIRMATION_CHOICES,
+    CONFIRMATION_WHEN_LARGE,
+    PLAN_CHOICE_CANCEL,
+    PLAN_CHOICE_QUICK,
+    ConfirmationPolicy,
+    ToolPlan,
+    confirm_plan,
+)
+from qachat.tools.scan_and_list import (
+    SCAN_SETTING_NAMES,
     Mention,
     MentionScan,
+    collect_mentions,
     mention_location,
     mention_snippet,
+    scan_fields,
     short_names,
 )
 
 __all__ = [
+    "CANDIDATES_MENTIONS",
+    "CANDIDATE_CHOICES",
     "UNCLEAR",
+    "CandidateSource",
+    "ClassifySettings",
+    "parse_settings",
+    "run",
     "Label",
     "classification_evidence",
     "classification_report",
@@ -84,6 +114,386 @@ _PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
 _REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
 _REPLY_TOKENS_PER_ITEM: Final[int] = 25
 _PROMPT_OVERHEAD_TOKENS: Final[int] = 350
+# Room for one label object per item; reasons are asked to stay short.
+_REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = 60
+# Missing labels are retried in groups of at most this many items.
+_RETRY_GROUP: Final[int] = 8
+
+
+# How the tool collects the items it labels. Only exact mentions of the
+# question's terms exist; whole-chunk collection comes with batched
+# document review.
+CandidateSource: TypeAlias = Literal["mentions"]
+CANDIDATES_MENTIONS: Final[CandidateSource] = "mentions"
+CANDIDATE_CHOICES: Final[tuple[CandidateSource, ...]] = (CANDIDATES_MENTIONS,)
+
+
+@dataclass(frozen=True, slots=True)
+class ClassifySettings:
+    """Settings of ``batch_classify`` in a project type.
+
+    Attributes
+    ----------
+    case_sensitive: bool
+        Whether letter case must match.
+    whole_words: bool
+        Whether a term must not continue into adjacent letters or digits.
+    context_lines: int
+        Lines around each mention that the model sees (0-5).
+    max_listed: int
+        Mentions listed with citations (1-1000); counts include all.
+    candidates: CandidateSource
+        How items are collected; only ``mentions``.
+    categories: tuple[str, ...]
+        Fixed categories; empty lets the router model propose them from
+        the question (shown in the plan before running).
+    batch_tokens: int
+        Estimated tokens of mentions per model call (500-8000).
+    max_model_calls: int
+        Most model calls one answer may make (1-200); mentions beyond them
+        are reported as not classified.
+    confirmation: ConfirmationPolicy
+        When to ask before running.
+    large_batches: int
+        With ``when_large``, plans with more calls than this ask first
+        (0-100).
+
+    """
+
+    case_sensitive: bool = False
+    whole_words: bool = True
+    context_lines: int = 2
+    max_listed: int = 100
+    candidates: CandidateSource = CANDIDATES_MENTIONS
+    categories: tuple[str, ...] = ()
+    batch_tokens: int = 2500
+    max_model_calls: int = 30
+    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
+    large_batches: int = 2
+
+
+def parse_settings(data: dict, where: str) -> ClassifySettings:
+    """Validate ``batch_classify`` settings from a project type.
+
+    Parameters
+    ----------
+    data: dict
+        Settings from the intent's ``tool`` object, without ``name``.
+    where: str
+        Location for errors.
+
+    Returns
+    -------
+    ClassifySettings
+        Validated settings; absent ones take their defaults.
+
+    Raises
+    ------
+    ValueError
+        If a setting is unknown, out of range, or categories are not 2-8
+        distinct labels of at most 40 characters.
+
+    """
+
+    reject_unknown(
+        where,
+        data,
+        (
+            *SCAN_SETTING_NAMES,
+            "candidates",
+            "categories",
+            "batch_tokens",
+            "max_model_calls",
+            "confirmation",
+            "large_batches",
+        ),
+    )
+    defaults = ClassifySettings()
+    fields = scan_fields(
+        {"context_lines": defaults.context_lines, **data}, where
+    )
+    categories = data.get("categories", [])
+    if (
+        not isinstance(categories, list)
+        or len(categories) == 1
+        or len(categories) > 8
+        or not all(
+            isinstance(item, str) and 0 < len(item.strip()) <= 40
+            for item in categories
+        )
+        or len({item.strip().casefold() for item in categories})
+        < len(categories)
+    ):
+        raise ValueError(
+            f"{where!r} categories must be 2-8 distinct labels of at most "
+            "40 characters, or empty."
+        )
+    return ClassifySettings(
+        **fields,
+        candidates=check_choice(
+            where, data, "candidates", defaults.candidates, CANDIDATE_CHOICES
+        ),
+        categories=tuple(item.strip() for item in categories),
+        batch_tokens=check_int(
+            where, data, "batch_tokens", defaults.batch_tokens, 500, 8000
+        ),
+        max_model_calls=check_int(
+            where, data, "max_model_calls", defaults.max_model_calls, 1, 200
+        ),
+        confirmation=check_choice(
+            where,
+            data,
+            "confirmation",
+            defaults.confirmation,
+            CONFIRMATION_CHOICES,
+        ),
+        large_batches=check_int(
+            where, data, "large_batches", defaults.large_batches, 0, 100
+        ),
+    )
+
+
+def run(
+    settings: ClassifySettings, request: ToolRequest, context: ToolContext
+) -> ToolResult:
+    """Classify every mention the question asks about.
+
+    Parameters
+    ----------
+    settings: ClassifySettings
+        The intent's settings.
+    request: ToolRequest
+        The question and the user's words.
+    context: ToolContext
+        QAChat's services.
+
+    Returns
+    -------
+    ToolResult
+        Counts per category, listed mentions with reasons, and coverage.
+
+    Notes
+    -----
+    Mentions are collected exhaustively first (see
+    ``scan_and_list.collect_mentions``). The plan (items, batches, calls,
+    approximate time, categories) is traced and, when the confirmation
+    policy asks, offered through ``context.confirm``. Batches use the
+    answering model with thinking off and greedy decoding. A batch's
+    missing or invalid labels are retried once, in groups of at most eight
+    mentions; mentions still without a label are reported as not
+    classified. Calls beyond ``max_model_calls`` are not made, and the
+    answer says how many mentions were left out.
+
+    """
+
+    trace = context.trace
+    found = collect_mentions(
+        settings,
+        request,
+        context,
+        tool="batch_classify",
+        categories=not settings.categories,
+    )
+    if isinstance(found, ToolResult):
+        return found
+    scan, summary = found.scan, found.summary
+    categories = settings.categories or validated_categories(found.reply)
+    summary["categories"] = list(categories)
+    summary["categories_from"] = (
+        "configuration" if settings.categories else "router"
+    )
+    if not categories:
+        context.done("No categories to sort into", evidence_count=0)
+        return ToolResult(
+            "I couldn't tell which groups to sort the mentions into. Name "
+            "them in the question, for example: which mentions of "
+            '"Python" are the authors\' own code and which are citations?',
+            (),
+            summary,
+        )
+
+    names = short_names(scan.files_scanned)
+    texts = [
+        item_text(index + 1, mention, names[mention.path])
+        for index, mention in enumerate(scan.mentions)
+    ]
+    batches = plan_batches(texts, settings.batch_tokens)
+    to_run = batches[: settings.max_model_calls]
+    quick = quick_sample(scan.mentions, texts, settings.batch_tokens)
+    listed = " or ".join(f"“{term}”" for term in scan.terms)
+    details = [
+        "Categories: " + ", ".join([*categories, UNCLEAR]),
+        f"Model: {context.model_id}",
+    ]
+    if len(to_run) < len(batches):
+        left = len(scan.mentions) - sum(len(batch) for batch in to_run)
+        details.append(
+            f"The model-call limit ({settings.max_model_calls}) leaves "
+            f"{left} mentions unclassified."
+        )
+    plan = ToolPlan(
+        tool="batch_classify",
+        summary=(
+            f"Classify {len(scan.mentions)} mentions of {listed} into "
+            f"{len(categories)} categories with the answering model."
+        ),
+        scope=found.scope_note
+        or f"All {len(scan.files_scanned)} indexed files.",
+        items=len(scan.mentions),
+        batches=len(batches),
+        batches_to_run=len(to_run),
+        estimated_seconds=round(estimate_seconds(to_run, texts), 1),
+        quick_items=len(quick),
+        quick_seconds=round(estimate_seconds([quick], texts), 1),
+        details=tuple(details),
+    )
+    choice, asked = confirm_plan(
+        plan, settings.confirmation, settings.large_batches, context
+    )
+    summary.update({"plan": plan.to_dict(), "choice": choice, "asked": asked})
+    if choice == PLAN_CHOICE_CANCEL:
+        context.done("Cancelled before classifying", evidence_count=0)
+        return ToolResult(
+            "Cancelled before classifying; no model calls were made. The "
+            f"plan was to classify {plan.items} mentions of {listed} in "
+            f"{plan.batches_to_run} model calls (about "
+            f"{_duration(plan.estimated_seconds)}).",
+            (),
+            summary,
+        )
+
+    runs = [quick] if choice == PLAN_CHOICE_QUICK else to_run
+    labels: dict[int, Label] = {}
+    failed: list[int] = []
+    calls = 0
+    started = perf_counter()
+    for number, batch in enumerate(runs, start=1):
+        message = f"Classifying batch {number} of {len(runs)}"
+        if number > 1:
+            pace = (perf_counter() - started) / (number - 1)
+            message += (
+                f" (about {_duration(pace * (len(runs) - number + 1))} "
+                "left)"
+            )
+        context.progress(message, current=number, total=len(runs))
+        batch_started = perf_counter()
+        found_labels = _label_batch(
+            request.question, scan.terms, categories, texts, batch, context
+        )
+        calls += 1
+        missing = [index for index in batch if index not in found_labels]
+        # Retry missing labels once, in groups small enough to finish.
+        for start in range(0, len(missing), _RETRY_GROUP):
+            found_labels.update(
+                _label_batch(
+                    request.question,
+                    scan.terms,
+                    categories,
+                    texts,
+                    missing[start : start + _RETRY_GROUP],
+                    context,
+                )
+            )
+            calls += 1
+        labels.update(found_labels)
+        failed += [index for index in batch if index not in found_labels]
+        trace.emit(
+            "tool.batch.result",
+            component="tool",
+            data={
+                "batch": number,
+                "items": len(batch),
+                "labelled": len(found_labels),
+                "retried": len(missing),
+                "seconds": round(perf_counter() - batch_started, 2),
+            },
+            turn_id=context.trace_turn_id,
+        )
+    classified = sorted(index for batch in runs for index in batch)
+    evidence = classification_evidence(
+        scan, labels, categories, settings.max_listed
+    )
+    answer = classification_report(
+        scan,
+        labels,
+        categories,
+        limit=settings.max_listed,
+        classified=classified,
+        not_classified=failed,
+        quick=choice == PLAN_CHOICE_QUICK,
+        scope_note=found.scope_note,
+    )
+    counts = {category: 0 for category in [*categories, UNCLEAR]}
+    for label in labels.values():
+        counts[label.category] += 1
+    summary.update(
+        {
+            "classified": len(classified),
+            "labelled": len(labels),
+            "not_classified": len(failed),
+            "not_sent": len(scan.mentions) - len(classified),
+            "counts": counts,
+            "model_calls": calls,
+            "model": context.model_id,
+            "seconds": round(perf_counter() - started, 1),
+            "listed": len(evidence),
+        }
+    )
+    trace.emit(
+        "tool.batch_classify.result",
+        component="tool",
+        data={
+            key: value
+            for key, value in summary.items()
+            if key not in ("name", "plan")
+        },
+        turn_id=context.trace_turn_id,
+    )
+    context.done(
+        f"Classified {len(labels)} of {len(scan.mentions)} mentions",
+        evidence_count=len(evidence),
+    )
+    return ToolResult(answer, evidence, summary)
+
+
+def _label_batch(
+    question: str,
+    terms: Sequence[str],
+    categories: Sequence[str],
+    texts: Sequence[str],
+    indices: Sequence[int],
+    context: ToolContext,
+) -> dict[int, Label]:
+    """Label one batch of mentions; returns labels by mention index."""
+
+    system, prompt = classify_prompt(
+        question, terms, categories, [texts[index] for index in indices]
+    )
+    try:
+        reply = context.ask_model(
+            system, prompt, _REPLY_TOKEN_LIMIT_PER_ITEM * len(indices) + 64
+        )
+    except Exception as error:  # A failed batch is reported, not fatal.
+        reply = f"failed: {error}"
+    if context.trace.include_content:
+        context.trace.emit(
+            "tool.batch.reply",
+            component="tool",
+            data={"items": [index + 1 for index in indices], "raw": reply},
+            turn_id=context.trace_turn_id,
+        )
+    labelled = parse_labels(
+        reply, [index + 1 for index in indices], categories
+    )
+    return {number - 1: label for number, label in labelled.items()}
+
+
+def _duration(seconds: float) -> str:
+    """Write an approximate duration such as "40 s" or "3 min"."""
+
+    if seconds < 90:
+        return f"{max(1, round(seconds))} s"
+    return f"{round(seconds / 60)} min"
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,7 +752,9 @@ def parse_labels(
     -------
     dict[int, Label]
         Valid labels by passage number. Unknown numbers, other categories,
-        and repeated numbers (after the first) are ignored.
+        and repeated numbers (after the first) are ignored. When the reply
+        is not one JSON array (for example cut off by the length limit),
+        every complete object in it is used.
 
     """
 
@@ -353,9 +765,17 @@ def parse_labels(
         value = json.loads(reply[start : end + 1]) if start >= 0 else None
     except ValueError:
         value = None
+    if not isinstance(value, list):
+        # A reply cut off by the length limit still has complete objects.
+        value = []
+        for match in re.finditer(r"\{[^{}]*\}", reply):
+            try:
+                value.append(json.loads(match.group(0)))
+            except ValueError:
+                continue
     wanted = set(numbers)
     labels: dict[int, Label] = {}
-    for item in value if isinstance(value, list) else []:
+    for item in value:
         if not isinstance(item, dict):
             continue
         number, category = item.get("id"), item.get("category")

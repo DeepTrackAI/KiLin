@@ -6,20 +6,19 @@ from pathlib import Path
 import unittest
 
 from qachat.chunking import Chunk
-from qachat.project_types import Workflow
-from qachat.workflows import (
+from qachat.tools.batch_classify import (
+    ClassifySettings,
     Label,
-    WorkflowPlan,
     classification_evidence,
     classification_report,
     item_text,
-    needs_confirmation,
     parse_labels,
     plan_batches,
     quick_sample,
-    scan_mentions,
     validated_categories,
 )
+from qachat.tools.planning import ToolPlan, needs_confirmation
+from qachat.tools.scan_and_list import scan_mentions
 
 
 def _chunk(path: str, lines: list[str]) -> Chunk:
@@ -87,6 +86,14 @@ class TestBatchClassify(unittest.TestCase):
             {1: Label("own code", "ours"), 3: Label("citation", "")},
         )
         self.assertEqual(parse_labels("not json", [1], self.categories), {})
+        cut_off = (
+            '[{"id": 1, "category": "citation", "reason": "ref"}, '
+            '{"id": 2, "category": "own c'
+        )
+        self.assertEqual(
+            parse_labels(cut_off, [1, 2], self.categories),
+            {1: Label("citation", "ref")},
+        )
 
     def test_report_counts_validated_labels_and_coverage(self) -> None:
         labels = {0: Label("own code", "we wrote"), 1: Label("citation", "")}
@@ -131,14 +138,14 @@ class TestBatchClassify(unittest.TestCase):
         self.assertNotIn("not sent", quick)
 
     def test_confirmation_policy(self) -> None:
-        plan = WorkflowPlan("batch_classify", "s", "all", 10, 3, 3, 9, 4, 3)
+        plan = ToolPlan("batch_classify", "s", "all", 10, 3, 3, 9, 4, 3)
         self.assertTrue(needs_confirmation("when_large", plan, 2))
         self.assertFalse(needs_confirmation("when_large", plan, 3))
         self.assertTrue(needs_confirmation("always", plan, 99))
         self.assertFalse(needs_confirmation("never", plan, 0))
-        empty = WorkflowPlan("batch_classify", "s", "all", 0, 0, 0, 0, 0, 0)
+        empty = ToolPlan("batch_classify", "s", "all", 0, 0, 0, 0, 0, 0)
         self.assertFalse(needs_confirmation("always", empty, 0))
-        self.assertEqual(Workflow("batch_classify").confirmation, "when_large")
+        self.assertEqual(ClassifySettings().confirmation, "when_large")
 
 
 if __name__ == "__main__":

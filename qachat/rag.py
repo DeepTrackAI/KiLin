@@ -107,7 +107,7 @@ The workspace and model dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -144,9 +144,6 @@ from qachat.project_types import (
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
-    WORKFLOW_BATCH_CLASSIFY,
-    WORKFLOW_CHOICES,
-    Workflow,
     project_type,
 )
 from qachat.query_formats import (
@@ -177,8 +174,6 @@ from qachat.retrievals import (
 )
 from qachat.retrievals.document_reading import (
     DocumentSelection,
-    dominant_path,
-    named_paths,
     read_document,
 )
 from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
@@ -194,33 +189,13 @@ from qachat.trace_logging import (
     create_trace_logger,
     trace_text_preview,
 )
-from qachat.workflows import (
-    UNCLEAR,
-    WORKFLOW_CHOICE_CANCEL,
-    WORKFLOW_CHOICE_CHOICES,
-    WORKFLOW_CHOICE_CONTINUE,
-    WORKFLOW_CHOICE_QUICK,
-    Label,
-    MentionScan,
-    WorkflowPlan,
-    classification_evidence,
-    classification_report,
-    classify_prompt,
-    estimate_seconds,
-    item_text,
-    mention_evidence,
-    mention_report,
-    needs_confirmation,
-    parse_labels,
-    plan_batches,
-    quick_sample,
-    quoted_terms,
-    scan_mentions,
-    short_names,
-    terms_prompt,
-    validated_categories,
-    validated_document,
-    validated_terms,
+from qachat.tools import (
+    ToolContext,
+    ToolPlan,
+    ToolRequest,
+    ToolResult,
+    ToolUse,
+    run_tool,
 )
 
 __all__ = [
@@ -255,7 +230,7 @@ ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
 ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
 ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
 ANSWER_PHASE_COMPLETED: Final[AnswerPhase] = "completed"
-# A workflow's own steps, such as "Classifying batch 3 of 12".
+# A tool's own steps, such as "Classifying batch 3 of 12".
 ANSWER_PHASE_PROCESSING: Final[AnswerPhase] = "processing"
 ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
     ANSWER_PHASE_ROUTING,
@@ -993,7 +968,8 @@ class RAGSession:
         retrieval_query: str | None = None,
         reuse_evidence: bool = False,
         use_router: bool = True,
-        confirm_callback: Callable[[WorkflowPlan], str] | None = None,
+        confirm_callback: Callable[[ToolPlan], str] | None = None,
+        pdf_writer: Callable[..., int] | None = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -1035,12 +1011,17 @@ class RAGSession:
         use_router: bool, optional
             Classify the question's intent with the router model. When False,
             the project type's default intent is used. Defaults to ``True``.
-        confirm_callback: Callable[[WorkflowPlan], str] | None, optional
-            Receives the plan of an expensive workflow (such as
+        confirm_callback: Callable[[ToolPlan], str] | None, optional
+            Receives the plan of an expensive tool run (such as
             ``batch_classify``) when its confirmation policy asks, and
-            returns a ``WorkflowChoice``: ``"continue"``, ``"quick"``, or
+            returns a ``PlanChoice``: ``"continue"``, ``"quick"``, or
             ``"cancel"``. None runs every plan without asking. Defaults to
             ``None``.
+        pdf_writer: Callable[..., int] | None, optional
+            ``pdf_writer(markdown, path, label=...)`` writes a report as a
+            PDF and returns its page count; tools that save reports also
+            save a PDF when it is given (the desktop app passes a Qt
+            writer). Defaults to ``None``.
 
         Returns
         -------
@@ -1397,18 +1378,23 @@ class RAGSession:
                 turn_id=turn_id,
             )
 
-            if intent.workflow is not None:
-                # The workflow, not the answering model, writes the answer.
-                answer, evidence = self._run_workflow(
-                    intent.workflow,
+            if intent.tool is not None:
+                # The tool, not the answering model, writes the answer.
+                result = self._run_tool(
+                    intent.tool,
                     question,
                     decision,
-                    effective,
                     trace_turn_id=turn_id,
                     report_phase=report_phase,
                     confirm_callback=confirm_callback,
+                    pdf_writer=pdf_writer,
+                    token_callback=token_callback,
+                    answer_guidance=intent.answer_guidance or answer_guidance,
                 )
-                if token_callback is not None:
+                answer = result.answer
+                evidence = tuple(Evidence(**item) for item in result.evidence)
+                effective["tool"] = result.summary
+                if token_callback is not None and not result.streamed:
                     token_callback(answer)
             else:
                 # An intent's own guidance is part of its configuration: it
@@ -2442,542 +2428,120 @@ class RAGSession:
         )
         return evidence
 
-    def _run_workflow(
+    def _run_tool(
         self: RAGSession,
-        workflow: Workflow,
+        use: ToolUse,
         question: str,
         decision: RouteDecision,
-        effective: dict[str, object],
         *,
         trace_turn_id: str | None,
         report_phase: Callable[..., None],
-        confirm_callback: Callable[[WorkflowPlan], str] | None = None,
-    ) -> tuple[str, tuple[Evidence, ...]]:
-        """Produce an answer with an intent's workflow instead of a model.
+        confirm_callback: Callable[[ToolPlan], str] | None = None,
+        pdf_writer: Callable[..., int] | None = None,
+        token_callback: Callable[[str], None] | None = None,
+        answer_guidance: str | None = None,
+    ) -> ToolResult:
+        """Run an intent's tool with this session's services.
 
         Parameters
         ----------
-        workflow: Workflow
-            The intent's workflow settings.
+        use: ToolUse
+            The intent's tool and settings.
         question: str
             The question.
         decision: RouteDecision
             The checked routing decision; a question that points back also
-            looks for terms in its related turns' questions.
-        effective: dict[str, object]
-            Turn parameters; the workflow's summary is added under
-            ``"workflow"``.
+            gives the tool its related turns' questions as user words.
         trace_turn_id: str | None
             Turn identifier for trace events.
         report_phase: Callable[..., None]
-            Progress reporter for the interface.
-        confirm_callback: Callable[[WorkflowPlan], str] | None, optional
-            Asked to confirm an expensive plan; returns a
-            ``WorkflowChoice``. None runs the full plan. Defaults to
-            ``None``.
+            Progress reporter; tool steps become ``processing`` phases and
+            the tool's result an ``evidence_ready`` phase.
+        confirm_callback: Callable[[ToolPlan], str] | None, optional
+            Asked to confirm an expensive plan. Defaults to ``None``.
+        pdf_writer: Callable[..., int] | None, optional
+            Writes reports as PDF. Defaults to ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives an answer the tool writes with the model, as it is
+            generated. Defaults to ``None``.
+        answer_guidance: str | None, optional
+            Answer guidance for model-written answers. Defaults to ``None``.
 
         Returns
         -------
-        tuple[str, tuple[Evidence, ...]]
-            The answer and the evidence it cites.
-
-        Notes
-        -----
-        Both workflows collect every exact mention first. The router model
-        names the terms (quoted terms take precedence), any one document
-        to search, and for ``batch_classify`` without configured
-        categories the categories; terms and the document phrase must
-        occur in the user's text. ``scan_and_list`` then reports the
-        mentions; ``batch_classify`` plans batches, asks for confirmation
-        when the policy requires it, labels the mentions with the
-        answering model, and counts the validated labels in Python. See
-        ``qachat.workflows``.
-
-        """
-
-        if workflow.kind not in WORKFLOW_CHOICES:
-            raise ValueError(f"Unknown workflow {workflow.kind!r}.")
-        trace = getattr(self, "trace", NullTraceLogger())
-        classify = workflow.kind == WORKFLOW_BATCH_CLASSIFY
-        want_categories = classify and not workflow.categories
-        text = answering_search_text(question, self.turns, decision)
-        report_phase(
-            ANSWER_PHASE_RETRIEVING, message="Finding the terms to scan"
-        )
-        system, prompt = terms_prompt(text, categories=want_categories)
-        try:
-            raw = side_reply(
-                self._router_chat(),
-                system,
-                prompt,
-                max_new_tokens=160 if want_categories else 96,
-            )
-        except Exception as error:  # Explain instead of failing.
-            raw = f"failed: {error}"
-        quoted = quoted_terms(question)
-        terms = quoted or validated_terms(raw, text)
-        source = "quoted" if quoted else "router"
-        document = validated_document(raw, text)
-        categories = workflow.categories or (
-            validated_categories(raw) if classify else ()
-        )
-        terms_data: dict[str, object] = {
-            "terms": list(terms),
-            "from": source,
-            "document": document,
-        }
-        if classify:
-            terms_data["categories"] = list(categories)
-            terms_data["categories_from"] = (
-                "configuration" if workflow.categories else "router"
-            )
-        if trace.include_content:
-            terms_data["raw"] = raw
-        trace.emit(
-            "workflow.terms.extracted",
-            component="workflow",
-            data=terms_data,
-            turn_id=trace_turn_id,
-        )
-        summary: dict[str, object] = {
-            "kind": workflow.kind,
-            "terms": list(terms),
-            "terms_from": source,
-        }
-        if classify:
-            summary["categories"] = list(categories)
-        effective["workflow"] = summary
-        problem = None
-        if not terms:
-            problem = (
-                "I couldn't tell which exact words to look for. Put them in "
-                'double quotes, for example: list all mentions of "gradient '
-                'descent".'
-            )
-        elif classify and not categories:
-            problem = (
-                "I couldn't tell which groups to sort the mentions into. Name "
-                "them in the question, for example: which mentions of "
-                '"Python" are the authors\' own code and which are citations?'
-            )
-        if problem is not None:
-            report_phase(
-                ANSWER_PHASE_EVIDENCE_READY,
-                message="Nothing to scan for",
-                evidence_count=0,
-                workflow=workflow.kind,
-            )
-            return problem, ()
-
-        indexed = list(dict.fromkeys(chunk.path for chunk in self.chunks))
-        named = named_paths(question, indexed)
-
-        def names_file(term: str, path: Path) -> bool:
-            return term.casefold() in (
-                path.name.casefold(),
-                path.stem.casefold(),
-            )
-
-        file_terms = [
-            term
-            for term in terms
-            if any(names_file(term, path) for path in named)
-        ]
-        if file_terms and len(file_terms) < len(terms):
-            # "MRI in smith2020": the file is the scope.
-            terms = tuple(term for term in terms if term not in file_terms)
-            summary["terms"] = list(terms)
-            summary["terms_as_scope"] = file_terms
-        # A file named by the only terms is something to find instead.
-        scope = [
-            path
-            for path in named
-            if not any(names_file(term, path) for term in terms)
-        ]
-        scope_note = None
-        if scope:
-            scope_note = (
-                f"Scanned only {', '.join(p.name for p in scope)}, named in "
-                "the question."
-            )
-        elif document:
-            # A described document ("the Smith paper") is the file that
-            # dominates a search for the description.
-            path = dominant_path(
-                self._rank_everything(document, trace_turn_id)[
-                    : self.project.profile.retrieval_count
-                ]
-            )
-            if path is not None:
-                scope = [path]
-                scope_note = (
-                    f"Scanned only {path.name}, the best match for "
-                    f"“{document}”. Name the file to scan a different one."
-                )
-        listed = " or ".join(f"“{term}”" for term in terms)
-        count = len(scope) or len(indexed)
-        report_phase(
-            ANSWER_PHASE_RETRIEVING,
-            message=(
-                f"Scanning {scope[0].name} for {listed}"
-                if len(scope) == 1
-                else f"Scanning {count} files for {listed}"
-            ),
-        )
-        with trace.span(
-            "workflow.scan_and_list",
-            component="workflow",
-            data={"terms": list(terms), "scope_files": count},
-            turn_id=trace_turn_id,
-        ):
-            scan = scan_mentions(
-                self.chunks,
-                terms,
-                case_sensitive=workflow.case_sensitive,
-                whole_words=workflow.whole_words,
-                context_lines=workflow.context_lines,
-                paths=scope or None,
-            )
-        unsearchable = [] if scope else self._unsearchable_sources(indexed)
-        counts = scan.counts()
-        summary.update(
-            {
-                "total_mentions": len(scan.mentions),
-                "mentions_per_term": scan.term_counts(),
-                "files_with_mentions": len(counts),
-                "files_scanned": len(scan.files_scanned),
-                "scope": [path.as_posix() for path in scope],
-                "scope_document": document,
-                "unsearchable_files": [p.as_posix() for p in unsearchable],
-                "case_sensitive": scan.case_sensitive,
-                "whole_words": scan.whole_words,
-            }
-        )
-        if classify:
-            return self._classify_mentions(
-                workflow,
-                question,
-                scan,
-                categories,
-                summary,
-                scope_note=scope_note,
-                trace_turn_id=trace_turn_id,
-                report_phase=report_phase,
-                confirm_callback=confirm_callback,
-            )
-        evidence = tuple(
-            Evidence(**item)
-            for item in mention_evidence(scan, workflow.max_listed)
-        )
-        answer = mention_report(
-            scan,
-            limit=workflow.max_listed,
-            unsearchable=unsearchable,
-            scope_note=scope_note,
-        )
-        summary["listed"] = len(evidence)
-        trace.emit(
-            "workflow.scan_and_list.result",
-            component="workflow",
-            data={
-                key: value for key, value in summary.items() if key != "kind"
-            },
-            turn_id=trace_turn_id,
-        )
-        noun = "mention" if len(scan.mentions) == 1 else "mentions"
-        report_phase(
-            ANSWER_PHASE_EVIDENCE_READY,
-            message=(
-                f"Found {len(scan.mentions)} {noun} in {len(counts)} files"
-            ),
-            evidence_count=len(evidence),
-            workflow=workflow.kind,
-        )
-        return answer, evidence
-
-    def _classify_mentions(
-        self: RAGSession,
-        workflow: Workflow,
-        question: str,
-        scan: MentionScan,
-        categories: tuple[str, ...],
-        summary: dict[str, object],
-        *,
-        scope_note: str | None,
-        trace_turn_id: str | None,
-        report_phase: Callable[..., None],
-        confirm_callback: Callable[[WorkflowPlan], str] | None,
-    ) -> tuple[str, tuple[Evidence, ...]]:
-        """Plan, confirm, and run batched classification of mentions.
-
-        Parameters
-        ----------
-        workflow: Workflow
-            ``batch_classify`` settings.
-        question: str
-            The question, shown to the model with each batch.
-        scan: MentionScan
-            Every candidate mention.
-        categories: tuple[str, ...]
-            Allowed categories (``unclear`` is always added).
-        summary: dict[str, object]
-            The turn's workflow summary, updated in place.
-        scope_note: str | None
-            How the scanned files were chosen.
-        trace_turn_id: str | None
-            Turn identifier for trace events.
-        report_phase: Callable[..., None]
-            Progress reporter for the interface.
-        confirm_callback: Callable[[WorkflowPlan], str] | None
-            Asked when the plan needs confirmation; None runs the plan.
-
-        Returns
-        -------
-        tuple[str, tuple[Evidence, ...]]
-            The answer and the evidence it cites.
-
-        Notes
-        -----
-        Batches use the answering model with thinking off and greedy
-        decoding. A batch's missing or invalid labels are retried once in
-        one smaller call; mentions still without a label are reported as
-        not classified. Calls beyond ``max_model_calls`` are not made, and
-        the answer says how many mentions were left out.
+        ToolResult
+            The tool's answer, evidence fields, and summary.
 
         """
 
         trace = getattr(self, "trace", NullTraceLogger())
-        names = short_names(scan.files_scanned)
-        texts = [
-            item_text(index + 1, mention, names[mention.path])
-            for index, mention in enumerate(scan.mentions)
-        ]
-        batches = plan_batches(texts, workflow.batch_tokens)
-        to_run = batches[: workflow.max_model_calls]
-        quick = quick_sample(scan.mentions, texts, workflow.batch_tokens)
-        listed = " or ".join(f"“{term}”" for term in scan.terms)
-        details = [
-            "Categories: " + ", ".join([*categories, UNCLEAR]),
-            f"Model: {self.chat_session.model_id}",
-        ]
-        if len(to_run) < len(batches):
-            left = len(scan.mentions) - sum(len(b) for b in to_run)
-            details.append(
-                f"The model-call limit ({workflow.max_model_calls}) leaves "
-                f"{left} mentions unclassified."
+
+        def ask(chat: object) -> Callable[[str, str, int], str]:
+            return lambda system, prompt, tokens: side_reply(
+                chat, system, prompt, max_new_tokens=tokens
             )
-        plan = WorkflowPlan(
-            kind=workflow.kind,
-            summary=(
-                f"Classify {len(scan.mentions)} mentions of {listed} into "
-                f"{len(categories)} categories with the answering model."
+
+        context = ToolContext(
+            project_root=Path(self.project.root),
+            chunks=self.chunks,
+            graph=self.indexes.code_graph,
+            rank=lambda text: self._rank_everything(text, trace_turn_id),
+            retrieval_count=self.project.profile.retrieval_count,
+            unsearchable=self._unsearchable_sources,
+            source_files=self._source_files,
+            ask_router=lambda system, prompt, tokens: side_reply(
+                self._router_chat(), system, prompt, max_new_tokens=tokens
             ),
-            scope=scope_note
-            or f"All {len(scan.files_scanned)} indexed files.",
-            items=len(scan.mentions),
-            batches=len(batches),
-            batches_to_run=len(to_run),
-            estimated_seconds=round(estimate_seconds(to_run, texts), 1),
-            quick_items=len(quick),
-            quick_seconds=round(estimate_seconds([quick], texts), 1),
-            details=tuple(details),
-        )
-        trace.emit(
-            "workflow.plan.proposed",
-            component="workflow",
-            data=plan.to_dict(),
-            turn_id=trace_turn_id,
-        )
-        asked = confirm_callback is not None and needs_confirmation(
-            workflow.confirmation, plan, workflow.large_batches
-        )
-        choice = WORKFLOW_CHOICE_CONTINUE
-        if asked:
-            report_phase(
-                ANSWER_PHASE_PROCESSING,
-                message="Waiting for your choice",
-                plan=plan.to_dict(),
-            )
-            choice = confirm_callback(plan)
-            if choice not in WORKFLOW_CHOICE_CHOICES:
-                choice = WORKFLOW_CHOICE_CANCEL
-        trace.emit(
-            "workflow.plan.decided",
-            component="workflow",
-            data={
-                "choice": choice,
-                "asked": asked,
-                "policy": workflow.confirmation,
-            },
-            turn_id=trace_turn_id,
-        )
-        summary.update(
-            {"plan": plan.to_dict(), "choice": choice, "asked": asked}
-        )
-        if choice == WORKFLOW_CHOICE_CANCEL:
-            report_phase(
-                ANSWER_PHASE_EVIDENCE_READY,
-                message="Cancelled before classifying",
-                evidence_count=0,
-                workflow=workflow.kind,
-            )
-            return (
-                "Cancelled before classifying; no model calls were made. "
-                f"The plan was to classify {plan.items} mentions of "
-                f"{listed} in {plan.batches_to_run} model calls (about "
-                f"{_duration(plan.estimated_seconds)}).",
-                (),
-            )
-
-        runs = [quick] if choice == WORKFLOW_CHOICE_QUICK else to_run
-        labels: dict[int, Label] = {}
-        failed: list[int] = []
-        calls = 0
-        started = perf_counter()
-        for number, batch in enumerate(runs, start=1):
-            message = f"Classifying batch {number} of {len(runs)}"
-            if number > 1:
-                pace = (perf_counter() - started) / (number - 1)
-                left = pace * (len(runs) - number + 1)
-                message += f" (about {_duration(left)} left)"
-            report_phase(
-                ANSWER_PHASE_PROCESSING,
-                message=message,
-                current=number,
-                total=len(runs),
-            )
-            batch_started = perf_counter()
-            found = self._classify_batch(
-                question, scan.terms, categories, texts, batch, trace_turn_id
-            )
-            calls += 1
-            missing = [index for index in batch if index not in found]
-            if missing:
-                found.update(
-                    self._classify_batch(
-                        question,
-                        scan.terms,
-                        categories,
-                        texts,
-                        missing,
-                        trace_turn_id,
-                    )
-                )
-                calls += 1
-            labels.update(found)
-            failed += [index for index in batch if index not in found]
-            trace.emit(
-                "workflow.batch.result",
-                component="workflow",
-                data={
-                    "batch": number,
-                    "items": len(batch),
-                    "labelled": len(found),
-                    "retried": len(missing),
-                    "seconds": round(perf_counter() - batch_started, 2),
-                },
-                turn_id=trace_turn_id,
-            )
-        classified = sorted(index for batch in runs for index in batch)
-        evidence = tuple(
-            Evidence(**item)
-            for item in classification_evidence(
-                scan, labels, categories, workflow.max_listed
-            )
-        )
-        answer = classification_report(
-            scan,
-            labels,
-            categories,
-            limit=workflow.max_listed,
-            classified=classified,
-            not_classified=failed,
-            quick=choice == WORKFLOW_CHOICE_QUICK,
-            scope_note=scope_note,
-        )
-        per_category = {category: 0 for category in [*categories, UNCLEAR]}
-        for label in labels.values():
-            per_category[label.category] += 1
-        summary.update(
-            {
-                "classified": len(classified),
-                "labelled": len(labels),
-                "not_classified": len(failed),
-                "not_sent": len(scan.mentions) - len(classified),
-                "counts": per_category,
-                "model_calls": calls,
-                "model": self.chat_session.model_id,
-                "seconds": round(perf_counter() - started, 1),
-                "listed": len(evidence),
-            }
-        )
-        trace.emit(
-            "workflow.batch_classify.result",
-            component="workflow",
-            data={
-                key: value
-                for key, value in summary.items()
-                if key not in ("kind", "plan")
-            },
-            turn_id=trace_turn_id,
-        )
-        report_phase(
-            ANSWER_PHASE_EVIDENCE_READY,
-            message=f"Classified {len(labels)} of {len(scan.mentions)} "
-            "mentions",
-            evidence_count=len(evidence),
-            workflow=workflow.kind,
-        )
-        return answer, evidence
-
-    def _classify_batch(
-        self: RAGSession,
-        question: str,
-        terms: Sequence[str],
-        categories: Sequence[str],
-        texts: Sequence[str],
-        indices: Sequence[int],
-        trace_turn_id: str | None,
-    ) -> dict[int, Label]:
-        """Label one batch of mentions; returns labels by mention index."""
-
-        system, prompt = classify_prompt(
-            question, terms, categories, [texts[index] for index in indices]
-        )
-        try:
-            reply = side_reply(
+            ask_model=ask(self.chat_session),
+            write=lambda system, prompt, tokens: side_reply(
                 self.chat_session,
                 system,
                 prompt,
-                max_new_tokens=40 * len(indices) + 64,
-            )
-        except Exception as error:  # A failed batch is reported, not fatal.
-            reply = f"failed: {error}"
-        trace = getattr(self, "trace", NullTraceLogger())
-        if trace.include_content:
-            trace.emit(
-                "workflow.batch.reply",
-                component="workflow",
-                data={"items": [index + 1 for index in indices], "raw": reply},
-                turn_id=trace_turn_id,
-            )
-        found = parse_labels(
-            reply, [index + 1 for index in indices], categories
+                max_new_tokens=tokens,
+                token_callback=token_callback,
+            ),
+            model_id=str(getattr(self.chat_session, "model_id", "")),
+            progress=lambda message, **details: report_phase(
+                ANSWER_PHASE_PROCESSING, message=message, **details
+            ),
+            done=lambda message, **details: report_phase(
+                ANSWER_PHASE_EVIDENCE_READY,
+                message=message,
+                tool=use.name,
+                **details,
+            ),
+            confirm=confirm_callback,
+            trace=trace,
+            trace_turn_id=trace_turn_id,
+            write_pdf=pdf_writer,
         )
-        return {number - 1: label for number, label in found.items()}
+        request = ToolRequest(
+            question=question,
+            text=answering_search_text(question, self.turns, decision),
+            guidance=answer_guidance,
+        )
+        return run_tool(use, request, context)
+
+    def _source_files(self: RAGSession) -> dict[Path, int]:
+        """Return selected source files and sizes from the source manifest."""
+
+        manifest = self.project.indexes / "source_manifest.json"
+        try:
+            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+            return {
+                Path(name): int(entry.get("size_bytes", 0))
+                for name, entry in files.items()
+            }
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            return {}
 
     def _unsearchable_sources(
         self: RAGSession, indexed: list[Path]
     ) -> list[Path]:
         """Return selected source files that have no indexed text."""
 
-        manifest = self.project.indexes / "source_manifest.json"
-        try:
-            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
-        except (OSError, ValueError, KeyError, TypeError):
-            return []
         known = set(indexed)
-        return [Path(name) for name in files if Path(name) not in known]
+        return [path for path in self._source_files() if path not in known]
 
     def _rank_everything(
         self: RAGSession, text: str, trace_turn_id: str | None = None
@@ -3704,14 +3268,6 @@ _MAX_REUSED_EVIDENCE = 40
 
 
 _MAX_RELATED_EVIDENCE = 10
-
-
-def _duration(seconds: float) -> str:
-    """Write an approximate duration such as "40 s" or "3 min"."""
-
-    if seconds < 90:
-        return f"{max(1, round(seconds))} s"
-    return f"{round(seconds / 60)} min"
 
 
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:

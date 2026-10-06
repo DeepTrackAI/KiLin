@@ -81,6 +81,13 @@ from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
 
+from qachat.gui.report_pdf import write_report_pdf
+from qachat.report_templates import (
+    GUIDE_MARKER,
+    load_template,
+    template_guide,
+)
+from qachat.tools.load_target import target_folder
 from qachat.gui.model_settings import (
     DEFAULT_LEVEL,
     LEVEL_COUNT,
@@ -125,11 +132,11 @@ from qachat.runtime import (
     choose_backend,
 )
 from qachat.sources import read_repository_files
-from qachat.workflows import (
-    WORKFLOW_CHOICE_CANCEL,
-    WORKFLOW_CHOICE_CHOICES,
-    WorkflowChoice,
-    WorkflowPlan,
+from qachat.tools import (
+    PLAN_CHOICE_CANCEL,
+    PLAN_CHOICE_CHOICES,
+    PlanChoice,
+    ToolPlan,
 )
 from qachat.trace_logging import (
     FAILURE_POLICY_WARN,
@@ -188,7 +195,7 @@ class ChatEngine:
         point passes True even though the constructor default is False.
     read_command: Callable[[], dict | None] | None, optional
         Reads the next frontend command while an answer waits for the user
-        to confirm a workflow plan; None runs plans without asking.
+        to confirm a tool plan; None runs plans without asking.
 
     Attributes
     ----------
@@ -266,7 +273,7 @@ class ChatEngine:
             Defaults to ``False``.
         read_command: Callable[[], dict | None] | None, optional
             Returns the next frontend command, or None when input ended.
-            Used only while a workflow plan waits for the user's choice.
+            Used only while a tool plan waits for the user's choice.
             Defaults to ``None`` (plans run without asking).
 
         Raises
@@ -1410,6 +1417,7 @@ class ChatEngine:
         )
         self.session = session
         self._upgrade_answer_budget()
+        self._write_template_guides(project.root, project.profile.kind)
         self._send(
             "opened",
             project=str(project.root),
@@ -1755,7 +1763,9 @@ class ChatEngine:
                 **details,
             )
             if self.read_command is not None:
-                options["confirm_callback"] = self._confirm_workflow
+                options["confirm_callback"] = self._confirm_plan
+            # Reports such as research briefings also get a one-page PDF.
+            options["pdf_writer"] = write_report_pdf
             self.session.ask(question, **options)
             stream.flush()
             if (
@@ -1768,7 +1778,15 @@ class ChatEngine:
                 self.active_trace.update_conversation(
                     asdict(self.active_conversation)
                 )
-            self._send("answered", turn=asdict(self.session.turns[-1]))
+            turn = self.session.turns[-1]
+            event: dict[str, object] = {"turn": asdict(turn)}
+            # A tool that saved a file (for example a research briefing in
+            # target/) refreshes the workspace tree.
+            if (turn.parameters.get("tool") or {}).get("saved"):
+                event["workspace_files"] = _workspace_files(
+                    self.session.project.root
+                )
+            self._send("answered", **event)
         except Exception as error:
             self._report_error(
                 "gui.question.failed",
@@ -1789,20 +1807,75 @@ class ChatEngine:
                     data={"error": str(error)},
                 )
 
-    def _confirm_workflow(self, plan: WorkflowPlan) -> WorkflowChoice:
-        """Wait for the user's choice on a workflow plan.
-
-        The page shows the plan from the ``processing`` answer phase that
-        precedes this call and answers with a ``workflow_choice`` command.
+    def _write_template_guides(self, root: Path, kind: str) -> None:
+        """Keep a readable guide to each report template in the project.
 
         Parameters
         ----------
-        plan: WorkflowPlan
+        root: pathlib.Path
+            Project folder; guides go to ``target/templates``.
+        kind: str
+            Project type; guides are written for the templates its tools
+            use (none for types without report tools).
+
+        Notes
+        -----
+        Each guide is Markdown generated from its template, plus a PDF. A
+        guide is rewritten only when it still starts with QAChat's marker
+        and its text changed, so a user's own file of the same name is
+        kept. Failures are traced and never stop the project opening.
+
+        """
+
+        try:
+            names = _report_templates(kind)
+            if not names:
+                return
+            folder = target_folder(root) / "templates"
+            folder.mkdir(parents=True, exist_ok=True)
+            for name in names:
+                template = load_template(name)
+                text = template_guide(template)
+                guide = folder / f"{name}_template.md"
+                if guide.exists():
+                    current = guide.read_text(encoding="utf-8")
+                    if not current.startswith(GUIDE_MARKER) or (
+                        current == text
+                    ):
+                        continue
+                guide.write_text(text, encoding="utf-8")
+                readable = "\n".join(
+                    line
+                    for line in text.splitlines()
+                    if not line.startswith("<!--")
+                )
+                write_report_pdf(
+                    readable,
+                    folder / f"{name}_template.pdf",
+                    max_pages=3,
+                    label="QAChat template",
+                )
+        except Exception as error:  # Guides are a convenience.
+            self.active_trace.emit(
+                "gui.template_guides.failed",
+                component="gui_engine",
+                data={"error": str(error)},
+            )
+
+    def _confirm_plan(self, plan: ToolPlan) -> PlanChoice:
+        """Wait for the user's choice on a tool plan.
+
+        The page shows the plan from the ``processing`` answer phase that
+        precedes this call and answers with a ``plan_choice`` command.
+
+        Parameters
+        ----------
+        plan: ToolPlan
             The plan the page is showing.
 
         Returns
         -------
-        WorkflowChoice
+        PlanChoice
             ``continue``, ``quick``, or ``cancel``. Ended input cancels.
 
         Notes
@@ -1815,12 +1888,12 @@ class ChatEngine:
         while True:
             command = self.read_command()
             if command is None:
-                return WORKFLOW_CHOICE_CANCEL
-            if command.get("action") == "workflow_choice":
+                return PLAN_CHOICE_CANCEL
+            if command.get("action") == "plan_choice":
                 choice = command.get("choice")
-                if choice in WORKFLOW_CHOICE_CHOICES:
+                if choice in PLAN_CHOICE_CHOICES:
                     return choice
-                return WORKFLOW_CHOICE_CANCEL
+                return PLAN_CHOICE_CANCEL
             self._send(
                 "error",
                 message="Choose Continue, Quick, or Cancel for the plan "
@@ -2470,13 +2543,29 @@ def _saved_reference_context(
     }
 
 
+def _report_templates(kind: str) -> list[str]:
+    """Return the report templates a project type's tools use."""
+
+    names: list[str] = []
+    for intent in project_type(kind).intents.values():
+        settings = getattr(intent.tool, "settings", None)
+        for name in (
+            getattr(settings, "template", None),
+            *getattr(settings, "templates", ()),
+        ):
+            if isinstance(name, str) and name not in names:
+                names.append(name)
+    return names
+
+
 def _workspace_files(root: Path) -> list[str]:
     """List saved workspace files for the sidebar.
 
     Parameters
     ----------
     root: pathlib.Path
-        Managed project directory whose sources, indexes, and logs are listed.
+        Managed project directory whose sources, target, indexes, and logs
+        are listed.
 
     Returns
     -------
@@ -2493,7 +2582,8 @@ def _workspace_files(root: Path) -> list[str]:
     files = ["profile.ini"]
     if (root / "model_choices.json").is_file():
         files.append("model_choices.json")
-    for folder in (root / "sources", root / "indexes", root / "logs"):
+    folders = ("sources", "target", "indexes", "logs")
+    for folder in (root / name for name in folders):
         if folder.is_dir():
             files.extend(
                 path.relative_to(root).as_posix()
@@ -2628,7 +2718,7 @@ def main() -> None:
             protocol_output.flush()
 
     sandbox = ROOT / "sandbox"
-    # One iterator over stdin, so a workflow waiting for the user's choice
+    # One iterator over stdin, so a tool plan waiting for the user's choice
     # reads the next command from the same stream.
     lines = iter(sys.stdin)
 
@@ -2737,7 +2827,7 @@ def main() -> None:
                         engine.rename_project(command["name"])
                     elif action == "reset":
                         engine.reset()
-                    elif action == "workflow_choice":
+                    elif action == "plan_choice":
                         # Only meaningful while a plan waits; ignore late
                         # clicks after the answer finished.
                         pass

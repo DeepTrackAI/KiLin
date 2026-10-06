@@ -58,6 +58,7 @@ Module Structure
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import re
@@ -271,7 +272,12 @@ def _representation_line(representation: dict[str, object]) -> str:
 
 
 def side_reply(
-    chat: _Chat, system: str, prompt: str, *, max_new_tokens: int
+    chat: _Chat,
+    system: str,
+    prompt: str,
+    *,
+    max_new_tokens: int,
+    token_callback: Callable[[str], None] | None = None,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -285,6 +291,9 @@ def side_reply(
         The side question.
     max_new_tokens: int
         Maximum length of the reply.
+    token_callback: Callable[[str], None] | None, optional
+        Receives the reply as it is generated, for a side answer shown to
+        the user. Defaults to ``None``.
 
     Returns
     -------
@@ -302,7 +311,10 @@ def side_reply(
     try:
         chat.restore_history([{"role": SYSTEM_ROLE, "content": system}])
         chat.configure_generation({"thinking": False, "temperature": 0.0})
-        reply = chat.reply(prompt, max_new_tokens=max_new_tokens)
+        options: dict[str, object] = {"max_new_tokens": max_new_tokens}
+        if token_callback is not None:
+            options["token_callback"] = token_callback
+        reply = chat.reply(prompt, **options)
     finally:
         chat.restore_history(history)
         chat.configure_generation(previous)
@@ -578,7 +590,7 @@ def _ignores_conversation(turn: object, project: object) -> bool:
     intent = project.intents.get(parameters.get("intent"))
     return (
         intent is not None
-        and intent.workflow is None
+        and intent.tool is None
         and intent.history_policy == HISTORY_POLICY_NONE
         and intent.retrieval_mode == RETRIEVAL_MODE_NONE
     )
