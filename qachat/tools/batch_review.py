@@ -490,7 +490,20 @@ def run(
     runs = [quick] if choice == PLAN_CHOICE_QUICK else to_read
     started = perf_counter()
     notes = take_notes(
-        request.question, name, texts, runs, settings.note_tokens, context
+        request.question,
+        name,
+        texts,
+        runs,
+        settings.note_tokens,
+        context,
+        what=(
+            "function"
+            if selection.functions
+            else "paper"
+            if selection.path.suffix.lower() == ".pdf"
+            else "file"
+        ),
+        whole=choice != PLAN_CHOICE_QUICK,
     )
     read = sorted(index for part in runs for index in part)
     context.done(
@@ -557,6 +570,9 @@ def take_notes(
     parts: Sequence[Sequence[int]],
     note_tokens: int,
     context: ToolContext,
+    *,
+    what: str = "document",
+    whole: bool = True,
 ) -> list[tuple[int, list[str]]]:
     """Take checked notes on each part of a document with the model.
 
@@ -575,6 +591,12 @@ def take_notes(
         Longest notes for one part, in tokens.
     context: ToolContext
         QAChat's services (``ask_model``, ``progress``, ``trace``).
+    what: str, optional
+        What is read, for progress messages: "paper", "file",
+        "function", ... Defaults to ``"document"``.
+    whole: bool, optional
+        True when the parts cover the whole document; False for a quick
+        reading of its most relevant passages. Defaults to ``True``.
 
     Returns
     -------
@@ -586,11 +608,16 @@ def take_notes(
 
     notes: list[tuple[int, list[str]]] = []
     for number, part in enumerate(parts, start=1):
-        context.progress(
-            f"Reading part {number} of {len(parts)} of {name}",
-            current=number,
-            total=len(parts),
-        )
+        if not whole:
+            message = f"Reading the most relevant passages: {name}"
+        elif len(parts) == 1:
+            message = f"Reading the whole {what}: {name}"
+        else:
+            message = (
+                f"Reading the whole {what} (part {number} of "
+                f"{len(parts)}): {name}"
+            )
+        context.progress(message, current=number, total=len(parts))
         started = perf_counter()
         system, prompt = notes_prompt(
             task,

@@ -6,175 +6,61 @@ steps, each the number of passages retrieved for an answer. The composer
 picks an effort level and a search-depth step independently. The file is
 written only when a project differs from the defaults.
 
+The defaults themselves, and the validation shared with the app-wide
+preferences, live in ``qachat.gui.preferences`` (``defaults.json``); they
+are imported here so existing imports keep working.
+
 """
 
 import json
 from pathlib import Path
 
-from huggingface_hub.utils import validate_repo_id
-
-from qachat.gui.model_catalog import (
-    DEEP_CHAT_MODEL_MLX,
-    LIGHT_CHAT_MODEL_MLX,
-)
-from qachat.model_defaults import (
-    DEFAULT_CHAT_MODEL_MLX,
-    DEFAULT_CHAT_MODEL_TORCH,
+from qachat.gui.preferences import (
+    LEVEL_COUNT,
+    MAX_LEVEL_NAME,
+    MAX_SEARCH_DEPTH,
+    default_effort_levels,
+    default_router_model,
+    default_search_depth,
+    validate_effort_levels,
+    validate_model_id,
+    validate_search_depth,
 )
 from qachat.runtime import BACKEND_MLX
+
+__all__ = [
+    "DEFAULT_LEVEL",
+    "EFFORT_FILE",
+    "LEVEL_COUNT",
+    "MAX_LEVEL_NAME",
+    "MAX_SEARCH_DEPTH",
+    "ROUTER_KEY",
+    "SEARCH_DEPTH_KEY",
+    "default_effort_levels",
+    "default_router_model",
+    "default_search_depth",
+    "read_effort_levels",
+    "read_router_model",
+    "read_search_depth",
+    "validate_effort_levels",
+    "validate_model_id",
+    "validate_search_depth",
+    "write_effort_levels",
+    "write_router_model",
+    "write_search_depth",
+]
 
 EFFORT_FILE = "effort_levels.json"
 # The same file keeps a customized intent router model per backend.
 ROUTER_KEY = "router"
 # Earlier GUI versions stored per-preset model replacements here.
 LEGACY_FILE = "model_choices.json"
-LEVEL_COUNT = 5
 # The level whose model is also the project's default chat model.
 DEFAULT_LEVEL = 2
-MAX_LEVEL_NAME = 24
 # Search depth: passages retrieved at each of five steps, project-wide.
 SEARCH_DEPTH_KEY = "search_depth"
-DEFAULT_SEARCH_DEPTH = (5, 5, 10, 10, 15)
-MAX_SEARCH_DEPTH = 200
-
-_NAMES = ("Light", "Instant", "Lagom", "Thorough", "Deep")
 # Per-level reference counts of earlier versions, before search depth.
 _LEGACY_RETRIEVAL = (5, 20, 20, 50, 50)
-
-
-def validate_model_id(value: str) -> str:
-    """Check a Hugging Face model ID or an existing local model folder.
-
-    Parameters
-    ----------
-    value: str
-        Model ID such as ``Qwen/Qwen3-8B-MLX-4bit`` or a local path.
-
-    Returns
-    -------
-    str
-        The value without surrounding space.
-
-    Raises
-    ------
-    ValueError
-        If the value is empty or not a valid repository ID.
-
-    """
-
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("Enter a Hugging Face model ID.")
-    value = value.strip()
-    if not Path(value).expanduser().is_dir():
-        validate_repo_id(value)
-    return value
-
-
-def default_effort_levels(backend: str) -> list[dict[str, object]]:
-    """Return the built-in levels for a backend.
-
-    Parameters
-    ----------
-    backend: str
-        Computation backend, ``mlx`` or ``torch``.
-
-    Returns
-    -------
-    list[dict[str, object]]
-        Five levels of ``name`` and ``model``.
-
-    """
-
-    if backend == BACKEND_MLX:
-        models = (
-            LIGHT_CHAT_MODEL_MLX,
-            LIGHT_CHAT_MODEL_MLX,
-            DEFAULT_CHAT_MODEL_MLX,
-            DEFAULT_CHAT_MODEL_MLX,
-            DEEP_CHAT_MODEL_MLX,
-        )
-    else:
-        # Other backends cannot switch chat models per question.
-        models = (DEFAULT_CHAT_MODEL_TORCH,) * LEVEL_COUNT
-    return [
-        {"name": name, "model": model} for name, model in zip(_NAMES, models)
-    ]
-
-
-def validate_effort_levels(value: object) -> list[dict[str, object]]:
-    """Check five levels of name and model ID.
-
-    Parameters
-    ----------
-    value: object
-        Levels as received from the page or read from the file.
-
-    Returns
-    -------
-    list[dict[str, object]]
-        Levels with names collapsed to single spaces. A ``retrieval``
-        count saved by earlier versions is ignored here; see
-        ``read_search_depth``.
-
-    Raises
-    ------
-    ValueError
-        If there are not five levels or a field is invalid.
-
-    """
-
-    if not isinstance(value, list) or len(value) != LEVEL_COUNT:
-        raise ValueError(f"Expected {LEVEL_COUNT} effort levels.")
-    levels = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise ValueError("Invalid effort level.")
-        name = item.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("Give every effort level a name.")
-        name = " ".join(name.split())
-        if len(name) > MAX_LEVEL_NAME:
-            raise ValueError(
-                f"Effort level names can have at most {MAX_LEVEL_NAME} "
-                "characters."
-            )
-        levels.append(
-            {"name": name, "model": validate_model_id(item.get("model"))}
-        )
-    return levels
-
-
-def validate_search_depth(value: object) -> list[int]:
-    """Check five search-depth steps.
-
-    Parameters
-    ----------
-    value: object
-        Steps as received from the page or read from the file.
-
-    Returns
-    -------
-    list[int]
-        Five whole numbers of passages, each from 1 to
-        ``MAX_SEARCH_DEPTH``.
-
-    Raises
-    ------
-    ValueError
-        If there are not five steps or a step is out of range.
-
-    """
-
-    if not isinstance(value, list) or len(value) != LEVEL_COUNT:
-        raise ValueError(f"Expected {LEVEL_COUNT} search-depth steps.")
-    if not all(
-        type(step) is int and 1 <= step <= MAX_SEARCH_DEPTH for step in value
-    ):
-        raise ValueError(
-            "Search depth steps must be whole numbers from 1 to "
-            f"{MAX_SEARCH_DEPTH}."
-        )
-    return list(value)
 
 
 def read_search_depth(root: Path | None) -> list[int]:
@@ -198,7 +84,7 @@ def read_search_depth(root: Path | None) -> list[int]:
     saved = saved if isinstance(saved, dict) else {}
     if SEARCH_DEPTH_KEY in saved:
         return validate_search_depth(saved[SEARCH_DEPTH_KEY])
-    return _legacy_depth(saved) or list(DEFAULT_SEARCH_DEPTH)
+    return _legacy_depth(saved) or default_search_depth()
 
 
 def write_search_depth(root: Path, steps: list[int]) -> None:
@@ -217,7 +103,7 @@ def write_search_depth(root: Path, steps: list[int]) -> None:
     path = root / EFFORT_FILE
     saved = _read_json(path)
     saved = dict(saved) if isinstance(saved, dict) else {}
-    if steps == list(DEFAULT_SEARCH_DEPTH):
+    if steps == default_search_depth():
         saved.pop(SEARCH_DEPTH_KEY, None)
     else:
         saved[SEARCH_DEPTH_KEY] = steps
@@ -244,26 +130,6 @@ def _legacy_depth(saved: dict) -> list[int] | None:
         ):
             return counts
     return None
-
-
-def default_router_model(backend: str) -> str:
-    """Return the built-in intent router model for a backend.
-
-    Parameters
-    ----------
-    backend: str
-        Computation backend, ``mlx`` or ``torch``.
-
-    Returns
-    -------
-    str
-        The 8B default chat model of that backend.
-
-    """
-
-    if backend == BACKEND_MLX:
-        return DEFAULT_CHAT_MODEL_MLX
-    return DEFAULT_CHAT_MODEL_TORCH
 
 
 def read_router_model(root: Path | None, backend: str) -> str:

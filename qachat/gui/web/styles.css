@@ -120,7 +120,8 @@ button, input, select, textarea { font: inherit; }
 .readiness-card > h3 { margin-top: 0; }
 .readiness-steps { margin: 10px 0 14px; padding-left: 22px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 .readiness-steps .complete { color: var(--text); }
-.readiness-card .primary { width: 100%; }
+.readiness-actions { display: grid; gap: 8px; }
+.readiness-card .primary, .readiness-card .readiness-actions .secondary { width: 100%; }
 .download-meter { position: relative; height: 7px; margin: 12px 0 8px; overflow: hidden; border-radius: 999px; background: var(--line); }
 .download-meter > span { display: block; width: 0; height: 100%; border-radius: inherit; background: var(--accent); transition: width 180ms ease; }
 .download-meter.indeterminate > span { width: 36%; animation: download-meter-moving 1.1s ease-in-out infinite; }

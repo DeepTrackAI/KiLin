@@ -90,9 +90,15 @@ class TestBatchReview(unittest.TestCase):
             ("done", "Read 5 of 5 passages of smith2020.pdf"),
             [event[:2] for event in events],
         )
+        # Progress says the whole paper is read, part by part.
+        self.assertIn(
+            ("progress", "Reading the whole paper (part 2 of 2): "
+             "smith2020.pdf"),
+            [event[:2] for event in events],
+        )
 
     def test_quick_reads_the_most_relevant_part_only(self) -> None:
-        built, _ = context(
+        built, events = context(
             self.paper,
             model=lambda system, prompt, tokens: "NOTHING",
             write=lambda system, prompt, tokens: "Not stated.",
@@ -102,6 +108,10 @@ class TestBatchReview(unittest.TestCase):
         settings = ReviewSettings(part_tokens=600, large_batches=0)
         result = run(settings, ToolRequest("q", "q"), built)
         self.assertEqual(result.summary["choice"], "quick")
+        self.assertIn(
+            "Reading the most relevant passages: smith2020.pdf",
+            [message for _, message, _ in events],
+        )
         self.assertEqual(result.summary["passages_read"], 2)
         self.assertIn("Read 2 of 5 passages", result.answer)
 

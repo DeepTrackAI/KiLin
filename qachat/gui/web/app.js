@@ -57,6 +57,7 @@ let modelChoices = [];
 let savedLevels = {};
 let defaultLevels = {};
 let draftLevels = [];
+let defaultEmbeddings = {};
 // Search depth: passages retrieved at each of five steps (project-wide).
 let savedDepth = null;
 let defaultDepth = [5, 5, 10, 10, 15];
@@ -708,7 +709,9 @@ function refreshRestoreButtons() {
  * Return the built-in embedding model for the active backend.
  */
 function defaultEmbeddingModel() {
-  return compatibleChoices("embedding")[0]?.model_id
+  // From defaults.json (sent by the engine); the catalog is a fallback.
+  return defaultEmbeddings[activeBackend]
+    || compatibleChoices("embedding")[0]?.model_id
     || backendChoices("embedding")[0]?.model_id || "";
 }
 
@@ -782,6 +785,7 @@ function currentModelSettings() {
     chat_model: draftLevels[DEFAULT_LEVEL]?.model || byId("chat-model").value.trim(),
     embedding_model: byId("embedding-model").value.trim(),
     query_format: byId("query-format").value,
+    backend: activeBackend,
     effort_levels: cloneLevels(draftLevels),
     search_depth: [...draftDepth],
     router_model: draftRouter,
@@ -947,8 +951,14 @@ function showSettings(data) {
   defaultLevels = data.default_effort_levels || defaultLevels;
   savedRouters = data.router_models || {};
   defaultRouters = data.default_router_models || defaultRouters;
+  defaultEmbeddings = data.default_embedding_models || defaultEmbeddings;
   savedDepth = data.search_depth || null;
   defaultDepth = data.default_search_depth || defaultDepth;
+  // The appearance is an app-wide preference; a choice from before
+  // preferences existed (kept by the page) is carried over once.
+  const remembered = localStorage.getItem("qachat-appearance");
+  if (data.appearance && data.appearance !== "system") applyAppearance(data.appearance);
+  else if (remembered && remembered !== "system") applyAppearance(remembered);
   renderProjectTypes(data.project_types);
   modelRoles = data.model_roles || modelRoles;
   automaticBackend = data.backend;
@@ -2293,7 +2303,7 @@ function appendAnswerText(text) {
   if (!current.streaming) {
     current.streaming = true;
     resetAnswerStages();
-    markTimelineStep("Writing the answer");
+    markTimelineStep("Generating the answer");
     // Live elapsed time above the answer; it becomes "Took …" at the end.
     current.durationLine = document.createElement("div");
     current.durationLine.className = "answer-duration";
@@ -2352,23 +2362,44 @@ function onEvent(raw) {
       : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run qachat --gui`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
+    const replacements = data.replacements || {};
     for (const modelId of requiredModels) {
       const item = document.createElement("li");
       const present = cachedModels.has(modelId);
-      item.textContent = `${present ? "Ready" : "Missing"}: ${modelId}`;
+      item.textContent = present
+        ? `Ready: ${modelId}`
+        : replacements[modelId]
+          ? `Missing: ${modelId} (installed alternative: ${replacements[modelId]})`
+          : `Missing: ${modelId}`;
       item.classList.toggle("complete", present);
       steps.append(item);
     }
     card.classList.toggle("hidden", data.ready && !setupCompletionVisible);
     byId("readiness-summary").textContent = data.ready
       ? "QAChat is ready."
-      : `${data.missing_models.length} required model${data.missing_models.length === 1 ? "" : "s"} need to be downloaded.`;
+      : data.missing_models.length === 1
+        ? "1 required model needs to be downloaded."
+        : `${data.missing_models.length} required models need to be downloaded.`;
     byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    // Compatible models already on this computer can be used instead.
+    byId("use-installed").classList.toggle("hidden", !data.can_use_installed);
+    byId("use-installed").disabled = !data.environment_ready;
     refreshModelStatus();
     if (!data.ready) {
       byId("models-panel").classList.remove("hidden");
       byId("close-models").focus();
     }
+  } else if (data.event === "installed_models_used") {
+    savedLevels = data.effort_levels || savedLevels;
+    savedRouters = data.router_models || savedRouters;
+    savedDepth = data.search_depth || savedDepth;
+    if (profile && data.embedding_models) {
+      for (const [backend, model] of Object.entries(data.embedding_models)) profile[`embedding_${backend}`] = model;
+    }
+    showModelFields();
+    setBusy(false);
+    const used = Object.entries(data.replacements || {}).map(([from, to]) => `${to} for ${from}`);
+    byId("readiness-time").textContent = used.length ? `Using ${used.join("; ")}.` : "";
   } else if (data.event === "installation_started") {
     setupCompletionVisible = false;
     setBusy(true, `Preparing ${data.total} required models…`);
@@ -2742,6 +2773,11 @@ byId("install-required").addEventListener("click", () => {
   if (busy || !bridge) return;
   setBusy(true, "Checking required models…");
   bridge.installRequiredModels();
+});
+byId("use-installed").addEventListener("click", () => {
+  if (busy || !bridge) return;
+  setBusy(true, "Switching to installed models…");
+  bridge.useInstalledModels();
 });
 byId("cancel-model-download").addEventListener("click", () => {
   if (downloadingModel) bridge?.stopOperation();

@@ -930,7 +930,14 @@ def run(
         )
     )
     notes = take_notes(
-        task, path.name, texts, runs, settings.note_tokens, context
+        task,
+        path.name,
+        texts,
+        runs,
+        settings.note_tokens,
+        context,
+        what="paper",
+        whole=choice != PLAN_CHOICE_QUICK,
     )
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.

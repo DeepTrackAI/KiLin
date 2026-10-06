@@ -190,9 +190,9 @@
     "Explain how … works",
     "Review the whole … file",
     "Write a function that …",
-    "Why does … fail with this error: …",
-    "How many Python files are in this repository?",
+    "Why does … fail?",
+    "How many Python files are there?",
     "Find every use of …",
-    "Which uses of … are in tests and which in library code?"
+    "Classify uses of …"
   ]
 }

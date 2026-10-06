@@ -226,6 +226,26 @@ that classifies each question's intent and writes chat titles (default: the
 released and the new one loads when first needed. It is saved per backend in
 effort_levels.json under "router", only when it differs from the default.
 
+**All default settings are in one file, `qachat/gui/defaults.json`:** the
+appearance, the five effort levels (names and models) per backend, the
+search depth, the intent and embedding models per backend, the query
+format, and the answer settings (temperature, thinking, longest answer).
+Edit it to change what everyone starts with, then restart QAChat; a
+mistake is reported with the setting's name. (Notebooks use the core
+library's defaults in `qachat/model_defaults.py`.)
+
+Each user's own changes are kept in `qachat/gui/preferences.json` (ignored
+by git; `QACHAT_PREFERENCES_FILE` points elsewhere, as the tests do): the
+appearance, and the effort levels, router model, embedding model, query
+format, and search depth that new projects start from. Settings edited with
+no project open are saved there; with a project open they apply to that
+project. Only values that differ from the built-in defaults are written,
+so restoring defaults removes them. The first-run check asks for the models
+these preferences use. When some are missing but installed models of the
+same role exist, **Use installed models** switches to the closest installed
+size (for example a missing 8B model is replaced by an installed 14B
+rather than a 4B) and saves that choice.
+
 Selecting a cached model is not a completeness check. Offline loading,
 backend compatibility, model architecture, tokenizer behavior, and pooling
 assumptions are enforced or encountered later in the model-loading path.
@@ -290,7 +310,7 @@ what happens: identifying intent, the identified intent, the included
 conversation history, the retrieval steps (skipped when not needed), and
 reading the references before the answer streams. A finished answer shows only "Took Ns"; expanding it lists every step it
 went through (intent, history, retrieval steps including the search text
-when earlier questions were added, reading, and writing) with how long each took, measured when the
+when earlier questions were added, reading, and generating) with how long each took, measured when the
 steps happened. Chat titles are written by
 the router model too, so naming never switches models.
 

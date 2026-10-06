@@ -82,6 +82,8 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
+from qachat.gui.preferences import preferred_appearance, write_preferences
+
 ROOT = Path(__file__).resolve().parents[2]
 ICONS = Path(__file__).resolve().parent / "icons"
 
@@ -422,6 +424,12 @@ class ChatBridge(QObject):
                 "generation_settings": json.loads(settings_json),
             }
         )
+
+    @Slot()
+    def useInstalledModels(self) -> None:
+        """Use installed models in place of missing preferred ones."""
+
+        self.commandRequested.emit({"action": "use_installed_models"})
 
     @Slot(str)
     def choosePlan(self, choice: str) -> None:
@@ -788,8 +796,9 @@ class ChatWindow(QMainWindow):
         self.bridge.commandRequested.connect(self._send_command)
         self.bridge.stopRequested.connect(self._stop_operation)
 
-        # The page owns the appearance choice; "system" follows the OS.
-        self._appearance = "system"
+        # The saved appearance until the page reports its choice; "system"
+        # follows the OS.
+        self._appearance = preferred_appearance()
         self.bridge.appearanceChanged.connect(self._set_appearance)
         QGuiApplication.styleHints().colorSchemeChanged.connect(
             lambda _scheme: self._update_icon()
@@ -824,11 +833,19 @@ class ChatWindow(QMainWindow):
         self.view.load(QUrl.fromLocalFile(str(page)))
 
     def _set_appearance(self, mode: str) -> None:
-        """Remember the page's color mode and refresh the app icon."""
+        """Remember the page's color mode and refresh the app icon.
+
+        The choice is saved in the app-wide preferences.
+
+        """
 
         self._appearance = (
             mode if mode in ("system", "light", "dark") else "system"
         )
+        try:
+            write_preferences({"appearance": self._appearance})
+        except OSError:
+            pass  # An unwritable preferences file keeps today's choice.
         self._update_icon()
 
     def _update_icon(self) -> None:

@@ -210,13 +210,13 @@
     "Which finding should we investigate?"
   ],
   "suggestions": [
-    "Turn the … paper into a research briefing",
-    "What methods do these papers use for …?",
+    "Turn … into a Nature research briefing",
+    "What methods do these papers use?",
     "Compare how the papers evaluate …",
-    "Read the … paper in full: which software and data does it use?",
-    "Write an overview of what these papers say about …",
-    "How many papers are in this project?",
+    "Read … in full",
+    "Summarize what the papers say about …",
+    "How many papers are here?",
     "List every mention of …",
-    "Which mentions of … are the authors' own work and which are citations?"
+    "Classify mentions of …"
   ]
 }

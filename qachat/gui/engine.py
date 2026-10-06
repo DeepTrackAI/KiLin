@@ -74,6 +74,7 @@ from dataclasses import asdict, replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import math
 import re
 import shutil
 import sys
@@ -81,6 +82,19 @@ from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
 
+from qachat.gui.preferences import (
+    default_answer_settings,
+    default_embedding_model,
+    default_search_depth,
+    preferred_appearance,
+    preferred_effort_levels,
+    preferred_embedding_model,
+    preferred_query_format,
+    preferred_router_model,
+    preferred_search_depth,
+    required_models,
+    write_preferences,
+)
 from qachat.gui.report_pdf import write_report_pdf
 from qachat.report_templates import (
     GUIDE_MARKER,
@@ -93,7 +107,6 @@ from qachat.gui.model_settings import (
     LEVEL_COUNT,
     default_effort_levels,
     default_router_model,
-    DEFAULT_SEARCH_DEPTH,
     read_effort_levels,
     read_search_depth,
     read_router_model,
@@ -105,7 +118,7 @@ from qachat.gui.model_settings import (
     write_router_model,
 )
 from qachat.gui.model_catalog import (
-    GUI_REQUIRED_MODEL_IDS,
+    MODEL_CHOICES,
     cached_model_roles,
     installed_backends,
     model_choices,
@@ -156,8 +169,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # The engine adds this phase to RAGSession's answer phases while it switches
 # the chat model before a question; the page shows it as its own step.
 ENGINE_PHASE_LOADING_MODEL: Final[str] = "loading_model"
-# GUI answers get more room than the backend's 256-token default.
-_GUI_MAX_NEW_TOKENS = 2048
 EventSink = Callable[[dict[str, object]], None]
 
 
@@ -473,16 +484,29 @@ class ChatEngine:
             self._send("startup", project=None)
 
     def readiness(self) -> None:
-        """Report runtime packages and required GUI model availability."""
+        """Report runtime packages and the preferred models' availability.
+
+        Notes
+        -----
+        The required models are those the app-wide preferences use (see
+        ``qachat.gui.preferences``). For each missing one, the closest
+        installed model of the same role is offered as a replacement;
+        ``can_use_installed`` is true when every missing model has one.
+
+        """
 
         try:
             backend = choose_backend(BACKEND_AUTO)
             packages = installed_backends()
-            cached = {str(item["model_id"]) for item in available_models()}
-            required = list(GUI_REQUIRED_MODEL_IDS[backend])
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
+            required = required_models(backend)
             missing = [
                 model_id for model_id in required if model_id not in cached
             ]
+            replacements = _installed_replacements(
+                missing, cached_model_roles(entries), backend
+            )
             self._send(
                 "readiness",
                 backend=backend,
@@ -490,10 +514,72 @@ class ChatEngine:
                 required_models=required,
                 cached_models=sorted(cached),
                 missing_models=missing,
+                replacements=replacements,
+                can_use_installed=bool(missing)
+                and len(replacements) == len(missing),
                 ready=packages.get(backend, False) and not missing,
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))
+
+    def use_installed_models(self) -> None:
+        """Use installed models in place of missing preferred ones.
+
+        Notes
+        -----
+        Each missing model is replaced by the installed model of the same
+        role (language or embedding) and backend whose size is closest,
+        in the effort levels, router, and embedding preferences. The
+        change is saved in the app-wide preferences and reported with
+        ``installed_models_used``; readiness is then checked again.
+
+        """
+
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
+            missing = [
+                model_id
+                for model_id in required_models(backend)
+                if model_id not in cached
+            ]
+            chosen = _installed_replacements(
+                missing, cached_model_roles(entries), backend
+            )
+            levels = [
+                {**level, "model": chosen.get(level["model"], level["model"])}
+                for level in preferred_effort_levels(backend)
+            ]
+            router = preferred_router_model(backend)
+            embedding = preferred_embedding_model(backend)
+            saved = write_preferences(
+                {
+                    "effort_levels": {backend: levels},
+                    "router_models": {backend: chosen.get(router, router)},
+                    "embedding_models": {
+                        backend: chosen.get(embedding, embedding)
+                    },
+                }
+            )
+            self.active_trace.emit(
+                "gui.preferences.installed_models_used",
+                component="gui_engine",
+                data={"replacements": chosen},
+            )
+            self._send(
+                "installed_models_used",
+                replacements=chosen,
+                preferences=saved,
+                **_preference_payload(),
+            )
+            self.readiness()
+        except Exception as error:
+            self._report_error(
+                "gui.preferences.failed",
+                error,
+                f"Could not switch to installed models: {error}",
+            )
 
     def install_required_models(self) -> None:
         """Download missing GUI models with live byte progress and timing."""
@@ -510,7 +596,7 @@ class ChatEngine:
             cached = {str(item["model_id"]) for item in available_models()}
             missing = [
                 model_id
-                for model_id in GUI_REQUIRED_MODEL_IDS[backend]
+                for model_id in required_models(backend)
                 if model_id not in cached
             ]
             total = len(missing)
@@ -804,7 +890,26 @@ class ChatEngine:
                 if workspace.strip() and profile_path.is_file()
                 else replace(
                     default_project_profile(kind),
-                    max_new_tokens=_GUI_MAX_NEW_TOKENS,
+                    # New projects start from defaults.json and the
+                    # app-wide preferences.
+                    max_new_tokens=default_answer_settings()[
+                        "max_new_tokens"
+                    ],
+                    temperature=default_answer_settings()["temperature"],
+                    thinking=default_answer_settings()["thinking"],
+                    chat_mlx=str(
+                        preferred_effort_levels(BACKEND_MLX)[DEFAULT_LEVEL][
+                            "model"
+                        ]
+                    ),
+                    chat_torch=str(
+                        preferred_effort_levels(BACKEND_TORCH)[
+                            DEFAULT_LEVEL
+                        ]["model"]
+                    ),
+                    embedding_mlx=preferred_embedding_model(BACKEND_MLX),
+                    embedding_torch=preferred_embedding_model(BACKEND_TORCH),
+                    query_format=preferred_query_format(),
                 )
             )
             entries = available_models()
@@ -820,13 +925,20 @@ class ChatEngine:
                     backend: default_effort_levels(backend)
                     for backend in (BACKEND_MLX, BACKEND_TORCH)
                 },
-                search_depth=read_search_depth(
-                    profile_path.parent if profile_path.is_file() else None
+                search_depth=(
+                    read_search_depth(profile_path.parent)
+                    if profile_path.is_file()
+                    else preferred_search_depth()
                 ),
-                default_search_depth=list(DEFAULT_SEARCH_DEPTH),
+                appearance=preferred_appearance(),
+                default_search_depth=default_search_depth(),
                 router_models=_router_models_by_backend(
                     profile_path.parent if profile_path.is_file() else None
                 ),
+                default_embedding_models={
+                    backend: default_embedding_model(backend)
+                    for backend in (BACKEND_MLX, BACKEND_TORCH)
+                },
                 default_router_models={
                     backend: default_router_model(backend)
                     for backend in (BACKEND_MLX, BACKEND_TORCH)
@@ -1004,6 +1116,23 @@ class ChatEngine:
                     model_id=model_id,
                     elapsed_seconds=elapsed,
                 )
+            if root is None:
+                # No project is open: these become the app-wide
+                # preferences that new projects start from.
+                backend = request.get("backend")
+                if backend not in (BACKEND_MLX, BACKEND_TORCH):
+                    backend = choose_backend(BACKEND_AUTO)
+                changes: dict[str, object] = {
+                    "embedding_models": {backend: embedding_model},
+                    "query_format": query_format,
+                }
+                if levels is not None:
+                    changes["effort_levels"] = {backend: levels}
+                if depth is not None:
+                    changes["search_depth"] = depth
+                if router_model is not None:
+                    changes["router_models"] = {backend: router_model}
+                write_preferences(changes)
             rebuilt = False
             if root is not None:
                 backend = self.session.backend
@@ -1489,7 +1618,11 @@ class ChatEngine:
 
         if self.session.chat_session.max_new_tokens == 256:
             self.session.chat_session.configure_generation(
-                {"max_new_tokens": _GUI_MAX_NEW_TOKENS}
+                {
+                    "max_new_tokens": default_answer_settings()[
+                        "max_new_tokens"
+                    ]
+                }
             )
 
     def add_project_sources(self, sources: list[str]) -> None:
@@ -2576,6 +2709,64 @@ def _saved_reference_context(
     }
 
 
+def _model_size(model_id: str) -> float:
+    """Parameter count in billions from a name such as "Qwen3-8B" (or 8)."""
+
+    match = re.search(r"(\d+(?:\.\d+)?)B\b", model_id)
+    return float(match.group(1)) if match else 8.0
+
+
+def _installed_replacements(
+    missing: list[str], roles: dict[str, str], backend: str
+) -> dict[str, str]:
+    """Pick, for each missing model, the closest installed model.
+
+    The replacement has the same role (language or embedding), suits the
+    backend (MLX models have "mlx" in their name), and is closest in size.
+    Missing models without such a replacement are left out.
+
+    """
+
+    presets = {choice.model_id: choice.role for choice in MODEL_CHOICES}
+    chosen: dict[str, str] = {}
+    for model_id in missing:
+        role = presets.get(model_id) or (
+            "embedding" if "embed" in model_id.lower() else "chat"
+        )
+        candidates = [
+            candidate
+            for candidate, candidate_role in roles.items()
+            if candidate_role == role
+            and ("mlx" in candidate.lower()) == (backend == BACKEND_MLX)
+        ]
+        if candidates:
+            size = _model_size(model_id)
+            chosen[model_id] = min(
+                candidates,
+                key=lambda candidate: (
+                    abs(math.log(_model_size(candidate) / size)),
+                    candidate,
+                ),
+            )
+    return chosen
+
+
+def _preference_payload() -> dict[str, object]:
+    """App-wide preferences for the page, by backend."""
+
+    backends = (BACKEND_MLX, BACKEND_TORCH)
+    return {
+        "effort_levels": {b: preferred_effort_levels(b) for b in backends},
+        "router_models": {b: preferred_router_model(b) for b in backends},
+        "embedding_models": {
+            b: preferred_embedding_model(b) for b in backends
+        },
+        "search_depth": preferred_search_depth(),
+        "query_format": preferred_query_format(),
+        "appearance": preferred_appearance(),
+    }
+
+
 def _report_templates(kind: str) -> list[str]:
     """Return the report templates a project type's tools use."""
 
@@ -2638,8 +2829,10 @@ def _answer_excerpt(answer: str, limit: int) -> str:
 
 
 def _router_models_by_backend(root: Path | None) -> dict[str, str]:
-    """Return a project's intent router model for both backends."""
+    """Return a project's router model (or the preferences) by backend."""
 
+    if root is None:
+        return _preference_payload()["router_models"]
     return {
         backend: read_router_model(root, backend)
         for backend in (BACKEND_MLX, BACKEND_TORCH)
@@ -2649,8 +2842,10 @@ def _router_models_by_backend(root: Path | None) -> dict[str, str]:
 def _effort_levels_by_backend(
     root: Path | None, profile: object
 ) -> dict[str, list[dict[str, object]]]:
-    """Return a project's effort levels for both backends."""
+    """Return a project's effort levels (or the preferences) by backend."""
 
+    if root is None:
+        return _preference_payload()["effort_levels"]
     return {
         backend: read_effort_levels(root, backend, profile.chat_model(backend))
         for backend in (BACKEND_MLX, BACKEND_TORCH)
@@ -2812,6 +3007,8 @@ def main() -> None:
                         engine.readiness()
                     elif action == "install_required_models":
                         engine.install_required_models()
+                    elif action == "use_installed_models":
+                        engine.use_installed_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
                             command["kind"], command["workspace"]

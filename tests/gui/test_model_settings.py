@@ -269,7 +269,7 @@ class TestModelSettings(unittest.TestCase):
         import json
 
         from qachat.gui.model_settings import (
-            DEFAULT_SEARCH_DEPTH,
+            default_search_depth,
             EFFORT_FILE,
             read_search_depth,
             validate_search_depth,
@@ -278,12 +278,12 @@ class TestModelSettings(unittest.TestCase):
 
         root = self.project.root
         self.assertEqual(read_search_depth(None), [5, 5, 10, 10, 15])
-        self.assertEqual(read_search_depth(root), list(DEFAULT_SEARCH_DEPTH))
+        self.assertEqual(read_search_depth(root), default_search_depth())
         with self.assertRaisesRegex(ValueError, "Search depth"):
             validate_search_depth([5, 5, 0, 10, 15])
         write_search_depth(root, [1, 2, 3, 4, 5])
         self.assertEqual(read_search_depth(root), [1, 2, 3, 4, 5])
-        write_search_depth(root, list(DEFAULT_SEARCH_DEPTH))
+        write_search_depth(root, default_search_depth())
         self.assertFalse((root / EFFORT_FILE).exists())
 
         def old_file(counts):
