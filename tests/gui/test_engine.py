@@ -9,12 +9,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from qachat.gui.engine import ChatEngine, _reference_context
 from qachat.gui.model_catalog import MODEL_CHOICES
 from qachat.project import open_project
 from qachat.rag import Evidence
+from qachat.project_types import project_type
+from qachat.workspace import prepare_sources_workspace
 
 
 @dataclass
@@ -30,8 +32,45 @@ class SavedTurn:
 class TestChatEngine(unittest.TestCase):
     """The child process delegates each operation to QAChat."""
 
+    def setUp(self) -> None:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+
+    def model_session(self):
+        """Provide real profile values without loading model weights."""
+
+        source = self.root / "source.py"
+        source.write_text("def example():\n    return 1\n")
+        project = prepare_sources_workspace(
+            [source], "code", self.root / "project"
+        )
+        session = MagicMock()
+        session.project = project
+        session.backend = "mlx"
+        session.index_status = "reused"
+        session.turns = []
+        session.chat_session.backend = "mlx"
+        session.chat_session.temperature = 0.0
+        session.chat_session.thinking = False
+        session.chat_session.max_new_tokens = 2048
+        session.switch_conversation.return_value = []
+        return session
+
+    def assert_question_forwarded(self, session, question, **options):
+        session.ask.assert_called_once_with(
+            question,
+            answer_guidance=project_type("code").answer_guidance,
+            token_callback=ANY,
+            phase_callback=ANY,
+            **options,
+        )
+        options = session.ask.call_args.kwargs
+        self.assertTrue(callable(options["token_callback"]))
+        self.assertTrue(callable(options["phase_callback"]))
+
     @patch("qachat.gui.engine.download_model")
-    def test_download_requires_an_explicit_suggested_model(
+    def test_download_accepts_explicit_catalog_and_custom_models(
         self, download
     ) -> None:
         events: list[dict[str, object]] = []
@@ -39,42 +78,58 @@ class TestChatEngine(unittest.TestCase):
 
         engine.download(MODEL_CHOICES[0].model_id)
 
-        download.assert_called_once_with(MODEL_CHOICES[0].model_id)
+        download.assert_called_once_with(
+            MODEL_CHOICES[0].model_id, progress_callback=ANY
+        )
+        self.assertTrue(
+            callable(download.call_args.kwargs["progress_callback"])
+        )
         self.assertEqual(events[0]["event"], "model_download_started")
-        self.assertEqual(events[1]["event"], "model_downloaded")
+        self.assertEqual(events[-1]["event"], "model_downloaded")
+        self.assertIn(
+            "model_download_progress", [event["event"] for event in events]
+        )
 
-        with patch("qachat.gui.engine.traceback.print_exc"):
-            engine.download("someone/unknown-model")
-        download.assert_called_once()
+        engine.download("someone/custom-model")
+        self.assertEqual(download.call_count, 2)
+        self.assertEqual(download.call_args.args, ("someone/custom-model",))
+
+        engine.download("invalid model id")
+        self.assertEqual(download.call_count, 2)
         self.assertEqual(events[-1]["event"], "error")
 
     @patch("qachat.gui.engine.RAGSession")
     @patch("qachat.gui.engine.prepare_sources_workspace")
     def test_open_ask_and_reset(self, prepare, rag_session) -> None:
-        prepare.return_value.root = Path("/sandbox/example")
-        prepare.return_value.source = Path("/sandbox/example/repository")
-        session = MagicMock()
-        session.index_status = "reused"
+        session = self.model_session()
+        prepare.return_value = session.project
         session.turns = [SavedTurn("Old question", "Old answer")]
         rag_session.return_value = session
         events: list[dict[str, object]] = []
-        engine = ChatEngine(Path("/sandbox"), events.append)
+        engine = ChatEngine(self.root, events.append)
 
-        engine.open_project(["/original"], "code", "/sandbox/example")
+        engine.open_project(["/original"], "code", str(session.project.root))
+        old_conversation = engine.active_conversation
         session.turns.append(SavedTurn("New question", "New answer"))
         engine.ask("New question")
         engine.reset()
         engine.close()
 
         prepare.assert_called_once_with(
-            ["/original"], "code", "/sandbox/example"
+            ["/original"], "code", str(session.project.root)
         )
-        session.ask.assert_called_once_with("New question")
-        session.reset.assert_called_once_with()
+        self.assert_question_forwarded(session, "New question")
+        session.reset.assert_not_called()
+        session.switch_conversation.assert_called_once()
+        self.assertNotEqual(
+            engine.active_conversation, old_conversation
+        )
         session.close.assert_called_once_with()
-        self.assertEqual(events[1]["event"], "opened")
-        self.assertEqual(events[2]["event"], "status")
-        self.assertEqual(events[3]["turn"]["answer"], "New answer")
+        self.assertIn("opened", [event["event"] for event in events])
+        answered = next(
+            event for event in events if event["event"] == "answered"
+        )
+        self.assertEqual(answered["turn"]["answer"], "New answer")
         self.assertEqual(events[-1]["event"], "reset")
 
     @patch("qachat.gui.engine.RAGSession")
@@ -221,13 +276,13 @@ class TestChatEngine(unittest.TestCase):
     def test_evidence_count_is_passed_for_one_question(self) -> None:
         events: list[dict[str, object]] = []
         engine = ChatEngine(Path("/sandbox"), events.append)
-        session = MagicMock()
+        session = self.model_session()
         session.turns = [SavedTurn("Question", "Answer")]
         engine.session = session
 
         engine.ask("Question", retrieval_count=8)
 
-        session.ask.assert_called_once_with("Question", retrieval_count=8)
+        self.assert_question_forwarded(session, "Question", retrieval_count=8)
         self.assertEqual(events[-1]["event"], "answered")
 
     def test_generation_settings_are_passed_with_the_question(self) -> None:
@@ -235,7 +290,7 @@ class TestChatEngine(unittest.TestCase):
 
         events: list[dict[str, object]] = []
         engine = ChatEngine(Path("/sandbox"), events.append)
-        session = MagicMock()
+        session = self.model_session()
         session.turns = [SavedTurn("Question", "Answer")]
         engine.session = session
         settings = {
@@ -246,7 +301,8 @@ class TestChatEngine(unittest.TestCase):
 
         engine.ask("Question", 6, settings)
 
-        session.ask.assert_called_once_with(
+        self.assert_question_forwarded(
+            session,
             "Question", retrieval_count=6, generation_settings=settings
         )
 
@@ -304,6 +360,32 @@ class TestChatEngine(unittest.TestCase):
             engine.find_saved_project("literature", "")
             self.assertIsNone(events[-1]["project"])
 
+    def test_saved_projects_are_newest_first(self) -> None:
+        """The project-list refresh shares startup's discovery rules."""
+
+        with TemporaryDirectory() as temporary:
+            sandbox = Path(temporary)
+            for index, (name, kind) in enumerate(
+                (("older", "code"), ("newer", "literature"))
+            ):
+                folder = sandbox / name
+                (folder / "sources").mkdir(parents=True)
+                profile = folder / "profile.ini"
+                profile.write_text(
+                    f"[project]\nkind = {kind}\nsource = sources\n"
+                )
+                os.utime(profile, (100 + index, 100 + index))
+            events: list[dict[str, object]] = []
+            engine = ChatEngine(sandbox, events.append)
+
+            engine.list_saved_projects("")
+
+            self.assertEqual(events[-1]["event"], "projects")
+            self.assertEqual(
+                [project["name"] for project in events[-1]["projects"]],
+                ["newer", "older"],
+            )
+
     def test_saved_project_checks_custom_workspace(self) -> None:
         """A chosen workspace takes precedence over sandbox suggestions."""
 
@@ -342,20 +424,58 @@ class TestChatEngine(unittest.TestCase):
     ) -> None:
         """Startup restores the existing project without source preparation."""
 
-        project = open_saved.return_value
-        project.root = Path("/sandbox/saved")
-        project.source = project.root / "sources"
-        project.profile.kind = "code"
-        rag_session.return_value.turns = []
-        rag_session.return_value.index_status = "reused"
+        session = self.model_session()
+        project = session.project
+        open_saved.return_value = project
+        rag_session.return_value = session
         events: list[dict[str, object]] = []
-        engine = ChatEngine(Path("/sandbox"), events.append)
+        engine = ChatEngine(self.root, events.append)
 
         engine.resume_project(str(project.root))
 
         open_saved.assert_called_once_with(str(project.root))
         rag_session.assert_called_once()
         self.assertEqual(events[-1]["event"], "opened")
+
+    @patch("qachat.gui.engine.RAGSession")
+    def test_deleting_active_chat_preserves_trace_and_switches(self, rag):
+        """Deletion archives durable content without a closing rewrite."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append, trace_enabled=True)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        old = engine.active_conversation
+        path = engine.conversation_store.state_path(old)
+        engine.active_trace.emit(
+            "turn.started", component="rag", turn_id="retained",
+            data={"question": "Keep this historical trace"},
+        )
+        before = path.read_bytes()
+        events.clear()
+
+        engine.delete_conversation(old.conversation_id)
+
+        self.assertEqual(events[0]["event"], "conversation_delete_started")
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        # The last chat's replacement may reuse a timestamped filename;
+        # its identity and content must still be entirely new.
+        if path.exists():
+            self.assertNotIn("Keep this historical trace", path.read_text())
+        archived = list((path.parent / "deleted").glob("*.json"))
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].read_bytes(), before)
+        self.assertNotEqual(
+            engine.active_conversation.conversation_id, old.conversation_id
+        )
+        session.switch_conversation.assert_called_once()
+        session.close.assert_not_called()
+        self.assertTrue(
+            any(event["event"] == "conversation_opened" for event in events)
+        )
 
 
 class TestReferencePreview(unittest.TestCase):

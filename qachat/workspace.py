@@ -103,7 +103,7 @@ def prepare_sources_workspace(
         although the annotation is Sequence. Entries are resolved,
         deduplicated, and checked against the destination workspace.
     kind: ProjectKind
-        Project category, exactly code or literature.
+        Project type ID from ``qachat/project_types.json``.
     workspace_directory: str | pathlib.Path
         Destination managed workspace, new/empty or already containing a
         compatible profile.ini. Relative paths use the current working
@@ -161,7 +161,9 @@ def prepare_sources_workspace(
         status="started",
     )
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(
+            f"kind must be one of: {', '.join(PROJECT_KIND_CHOICES)}."
+        )
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
     if not str(workspace_directory).strip():

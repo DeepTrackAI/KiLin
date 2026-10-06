@@ -117,6 +117,10 @@ Module Structure
 
     Detect exact repository context requested by one question.
 
+- ``read_document``
+
+    Choose one whole document or function and fit it to a token budget.
+
 - ``resolve_code_entities``
 
     Return entities explicitly named by a query.
@@ -181,8 +185,26 @@ from qachat.retrievals.routing import (
     expand_retrieval_context,
     plan_retrieval,
 )
+from qachat.retrievals.document_reading import (
+    DOCUMENT_REASON_CHOICES,
+    DOCUMENT_REASON_NAMED_FILE,
+    DOCUMENT_REASON_NAMED_FUNCTION,
+    DOCUMENT_REASON_SEARCH,
+    DocumentReason,
+    DocumentSelection,
+    dominant_path,
+    estimate_tokens,
+    named_paths,
+    read_document,
+)
 
 __all__ = [
+    "DOCUMENT_REASON_CHOICES",
+    "DOCUMENT_REASON_NAMED_FILE",
+    "DOCUMENT_REASON_NAMED_FUNCTION",
+    "DOCUMENT_REASON_SEARCH",
+    "DocumentReason",
+    "DocumentSelection",
     "CodeEntity",
     "CodeGraph",
     "CodeRelation",
@@ -198,6 +220,8 @@ __all__ = [
     "build_lexical_index",
     "build_semantic_index",
     "code_search",
+    "dominant_path",
+    "estimate_tokens",
     "expand_retrieval_context",
     "hybrid_search",
     "indexes_are_current",
@@ -205,7 +229,9 @@ __all__ = [
     "lexical_terms",
     "load_indexes",
     "prepare_persistent_indexes",
+    "named_paths",
     "plan_retrieval",
+    "read_document",
     "resolve_code_entities",
     "save_indexes",
     "semantic_matrix",

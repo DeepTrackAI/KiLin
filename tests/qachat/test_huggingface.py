@@ -12,8 +12,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from huggingface_hub.errors import IncompleteSnapshotError
-
 from qachat import huggingface
 
 
@@ -64,12 +62,9 @@ class TestHuggingFace(unittest.TestCase):
         with TemporaryDirectory() as directory:
             snapshot = Path(directory)
             (snapshot / "config.json").write_text("{}")
-            incomplete = IncompleteSnapshotError(
-                "Repository documents are missing.", str(snapshot)
-            )
             with patch(
                 "qachat.huggingface.snapshot_download",
-                side_effect=incomplete,
+                return_value=str(snapshot),
             ) as lookup:
                 result = huggingface.cached_model_snapshot(
                     "group/model", revision="main"
@@ -84,10 +79,32 @@ class TestHuggingFace(unittest.TestCase):
             (snapshot / "config.json").unlink()
             with patch(
                 "qachat.huggingface.snapshot_download",
-                side_effect=incomplete,
+                return_value=str(snapshot),
             ):
-                with self.assertRaises(IncompleteSnapshotError):
+                with self.assertRaisesRegex(FileNotFoundError, "config.json"):
                     huggingface.cached_model_snapshot("group/model")
+
+    def test_legacy_partial_snapshot_uses_same_validation(self) -> None:
+        """Old Hub exceptions and new return values obey the same contract."""
+
+        class PartialSnapshotError(Exception):
+            def __init__(self, snapshot_path):
+                self.snapshot_path = snapshot_path
+
+        with TemporaryDirectory() as directory:
+            snapshot = Path(directory)
+            error = PartialSnapshotError(str(snapshot))
+            with patch.object(
+                huggingface, "_IncompleteSnapshotError", PartialSnapshotError
+            ), patch.object(
+                huggingface, "snapshot_download", side_effect=error
+            ):
+                with self.assertRaisesRegex(FileNotFoundError, "config.json"):
+                    huggingface.cached_model_snapshot("group/model")
+                (snapshot / "config.json").write_text("{}")
+                self.assertEqual(
+                    huggingface.cached_model_snapshot("group/model"), snapshot
+                )
 
     def test_download_model(self) -> None:
         expected = Path("/cache/snapshot")

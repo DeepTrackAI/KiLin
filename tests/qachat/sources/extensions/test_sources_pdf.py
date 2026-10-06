@@ -79,6 +79,31 @@ class TestPdfSource(unittest.TestCase):
             source_file.text,
         )
 
+    def test_layout_extraction_keeps_spaced_out_words_together(self) -> None:
+        # pypdf's plain mode extracted this paper's method as "DIV A".
+        root = Path(__file__).resolve().parents[4]
+        relative = Path("example_repos/literature_repo/papers/patil25deep.pdf")
+        source_file = sources_pdf.read_source_file(root / relative, relative)
+        self.assertIn("we introduce DIVA", " ".join(source_file.text.split()))
+        self.assertNotIn("DIV A ", source_file.text)
+        self.assertNotIn("(cid:", source_file.text)
+        self.assertEqual(source_file.text.count(sources_pdf.PAGE_BREAK), 77)
+
+    def test_unparsable_layout_falls_back_to_plain_text(self) -> None:
+        reader = SimpleNamespace(
+            is_encrypted=False, pages=[_page("Plain text (cid:12)page.")]
+        )
+        with (
+            patch.object(sources_pdf, "PdfReader", return_value=reader),
+            patch.object(
+                sources_pdf, "_pdfminer_text", side_effect=ValueError("bad")
+            ),
+        ):
+            source_file = sources_pdf.read_source_file(
+                Path("paper.pdf"), Path("paper.pdf")
+            )
+        self.assertEqual(source_file.text, "Plain text page.")
+
     def test_encrypted_pdf_is_rejected(self) -> None:
         reader = SimpleNamespace(is_encrypted=True, pages=[])
         with patch.object(

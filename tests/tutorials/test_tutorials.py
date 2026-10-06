@@ -23,6 +23,9 @@ TUTORIALS = (
     "90_code_aware_retrieval.ipynb",
     "100_persistent_indexes.ipynb",
     "110_hybrid_ranking.ipynb",
+    "120_retrieval_routing.ipynb",
+    "130_project_chat.ipynb",
+    "140_logging_trace.ipynb",
 )
 
 
@@ -106,7 +109,19 @@ class TestTutorials(unittest.TestCase):
                     "from setup.notebook import prepare_notebook",
                     source,
                 )
-                self.assertIn(required, source)
+                # Tutorials may import the function or use the qachat
+                # namespace (``import qachat`` then ``qachat.name``).
+                module, name_ = required.removeprefix("from ").split(
+                    " import "
+                )
+                self.assertTrue(
+                    required in source
+                    or (
+                        f"import {module}" in source
+                        and f"{module}.{name_}" in source
+                    ),
+                    f"{name} does not use {module}.{name_}",
+                )
 
 
 if __name__ == "__main__":

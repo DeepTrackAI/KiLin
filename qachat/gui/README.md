@@ -47,12 +47,15 @@ entry or an installed distribution is not proof that a model can load or run.
 reference panels, activity display, and model dialog. Its identifiers are the
 contract used by `web/app.js`. `web/styles.css` defines layout, interaction
 states, and responsive breakpoints. JavaScript function comments describe
-state changes and bridge calls. HTML and CSS were retained byte for byte.
+state changes and bridge calls.
 
 The page's local-content access to remote URLs is disabled in the Qt view.
 That setting does not prevent the Python engine from downloading models.
 Answers and source excerpts are inserted as text rather than executed as
-HTML. Numeric citations are made clickable only when they refer to evidence
+HTML. Answers are rendered as Markdown (headings, lists, quotes, code, bold,
+italics) by building DOM nodes, never by parsing HTML, so model output cannot
+inject markup; plain answers simply become paragraphs. Markdown is rendered
+while the answer streams, and citation links are added when it completes. Numeric citations are made clickable only when they refer to evidence
 records supplied with that answer.
 
 ## Source selection and workspace preparation
@@ -62,13 +65,33 @@ native dialog or drag-and-drop. The engine previews directory selections
 using repository scanning. The tree shows selected and skipped entries;
 protected entries remain unavailable. Oversized eligible files can be checked
 explicitly, which increases the submitted size limit to accommodate them.
-Additional UTF-8 suffixes can be entered in Advanced settings.
+Additional UTF-8 suffixes can be entered in Settings.
 
 The selected sources are copied into the workspace's `sources/` directory.
 This multi-source route is cumulative: re-adding a source updates matching
 files, but deletion or deselection at the origin does not automatically remove
 old workspace copies. It differs from the single-source synchronization API
 in `qachat.project`. The original source is not intentionally modified.
+
+In an open project, only the sidebar's `sources` tree accepts dropped files
+or folders. It highlights during a native file drag; other workspace areas
+reject drops. A confirmation explains the copy and index update before any
+import command is sent. Confirmed imports use the saved project filters,
+update the source manifest and indexes, and restore the active conversation.
+Right-clicking a file or folder inside `sources` (not `sources` itself or any
+other workspace item) offers deletion. After confirmation the workspace copy
+is deleted and the project is reopened, so the index drops the removed files;
+originals outside the workspace and saved chats are untouched. Drops are disabled during a running operation. The dashed target and dimmed
+surroundings appear only during dragging. During indexing, the composer,
+Ask, attachment, effort, and Branch controls are disabled; the progress area
+provides a separate Stop button. Existing draft text is retained.
+
+When indexing settings and embedding-model snapshot match, added or modified
+files alone are chunked and embedded. Unchanged chunks and vectors are reused;
+removed files are excluded. Lexical statistics and the global code graph are
+rebuilt so retrieval behavior matches a full rebuild. Changed embedding or
+chunking settings, or an unusable cache, trigger a full rebuild. Older indexes
+without embedding-snapshot metadata require one full rebuild.
 
 A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
 selected explicitly or chosen through the engine's default workspace route.
@@ -77,23 +100,91 @@ example-source route requires an example repository that is not included in
 this attached archive. A workspace is a directory organization convention,
 not an execution sandbox or a protection boundary for hostile inputs.
 
-Advanced settings configure the profile before indexing and model loading.
-New GUI projects leave preparation downloads disabled unless explicitly
-allowed. Literature defaults permit larger files than code defaults; the
+Settings configure the profile before indexing and model loading.
+GUI projects never download models while preparing; missing models are
+downloaded from Settings with their Download buttons. Literature defaults permit larger files than code defaults; the
 profile and the current GUI fields remain the effective configuration.
+
+## Project types
+
+Project types live in `qachat/project_types.json`. Each entry sets the
+display name shown in the type menu, a one-line description (shown to the
+router), default file suffixes and size limit for new projects, the retrieval
+instruction added to Qwen3-format embedding queries, the base system prompt,
+the answer guidance the desktop app adds to each question (for example the
+150-300 word target), `capabilities.code_graph` (true, false, or "auto":
+only when selected files include Python or MATLAB), `history.recent_turns`,
+the `default_intent`, the `intents`, and the empty-chat headings and
+suggestions. Each intent has a description, a system prompt added to the
+base prompt, an optional answer guidance that replaces the type's (and always applies, also in notebooks), a
+`history.policy` (none, recent, or relevant), and `retrieval.mode` (search,
+document, reuse, or none) with `retrieval.strategy` (only "hybrid" exists).
+`document` reads one whole file or function in source order, up to
+`retrieval.max_tokens` estimated tokens (default 30,000); a longer file keeps
+its most relevant parts and the progress line says so ("Reading the 98 most
+relevant of 130 parts of …"). An intent may instead declare a `workflow`,
+which replaces retrieval and the answering model (its retrieval mode must be
+"none" and it needs no system prompt). The only workflow is
+`scan_and_list` (intent `mention_listing`): it lists and counts every exact
+mention of the terms in the question across the indexed text, or in the one
+file the question names or describes, and Python writes the answer with
+clickable matches and coverage. Its settings are `case_sensitive`,
+`whole_words`, `context_lines` (0-5), and `max_listed` (1-1000). An intent
+can also list `shortcuts`: case-insensitive regular expressions for whole
+messages that obviously have that intent (the default `small_talk` lists
+greetings, thanks, and "how are you"). A match skips the router model, so
+such messages are answered in about a second. The file
+is validated when QAChat starts; mistakes name the type and field. Add an
+entry to create a new type; `code` and `literature` must stay. Restart
+QAChat after editing; new answers use the edited prompts. Only `code` and
+`literature` have bundled example repositories, so other types need sources.
 
 ## Models and generation settings
 
-The Models panel shows suggested chat and embedding models compatible with
-the selected backend and any required embedding-query format. Explicit
-Download actions request missing suggested models. Other cached model IDs
-are listed separately. The chat dropdown offers cached IDs without proving
-their role; the embedding dropdown filters known compatible embedding presets.
-A custom model ID or local path can still be entered and is checked when used.
+The window and Dock icon follow the Appearance setting: `icons/qachat-light.png`
+for light, `icons/qachat-dark.png` for dark, and the operating system's color
+scheme for System. Missing icon files leave Qt's default icon.
+
+Settings are ordered Appearance, Effort levels and Embedding model, Answers,
+then Project. Clicking
+the backdrop or Close applies model edits, with confirmation for downloads and
+embedding changes; cancelling keeps the panel open.
+
+Effort levels lists five levels. Each has an editable name, a language
+model chosen from a dropdown of cached language models, and a reference
+count (1-200). The composer's effort picker shows the effort name (the model level's name)
+once at the top and has two sliders: one chooses the level whose model
+answers, the other the level whose reference count is retrieved, so a small model can be paired with many references or the
+reverse. The middle level's model is also the project's chat model. Cached
+models are classified as language or embedding models by preset, by an
+"embed" name or sentence-transformers configuration, then by architecture.
+A selected model that is not downloaded shows a Download button. On PyTorch
+every level uses one chat model; levels still set reference counts.
+
+Levels that differ from the defaults are saved per backend in
+effort_levels.json; with defaults, no file is kept. An older
+model_choices.json is migrated on first read and removed on the next save.
+Changing a language model does not rebuild the index; changing the embedding
+model (also a dropdown of cached embedding models) or query format requires
+confirmation and rebuilds it. A note above the levels appears only when the
+selected backend's packages are not installed.
+
+The Intent model section, after Embedding model, chooses the router model
+that classifies each question's intent and writes chat titles (default: the
+8B chat model). A change applies at once: a separately loaded router model is
+released and the new one loads when first needed. It is saved per backend in
+effort_levels.json under "router", only when it differs from the default.
 
 Selecting a cached model is not a completeness check. Offline loading,
 backend compatibility, model architecture, tokenizer behavior, and pooling
 assumptions are enforced or encountered later in the model-loading path.
+
+The GUI allows up to 2,048 generated tokens; the backend profile default
+stays 256, and GUI sessions using 256 are raised to 2,048 when opened. The
+token cap is a safety limit, not a requested answer length. Model-reported
+length stops are
+saved with the turn and shown as an incomplete-answer notice. Old answers are
+not regenerated automatically.
 
 Answer-time controls set retrieval count, temperature, thinking, and maximum
 new tokens without rebuilding the index or reloading models. A blank answer
@@ -108,7 +199,10 @@ New chat creates a separate conversation record while retaining earlier
 conversations in the picker. It does not archive and delete the previous GUI
 conversation. Branch copies resumable parent state and records parent and
 checkpoint identifiers; it does not copy the entire parent event history.
-Rename updates display metadata. Changing conversation retains already loaded
+Renaming a conversation updates display metadata. The project name can be edited in the heading or floating top bar.
+Renaming a project moves
+its workspace folder, reloads the conversation registry, and restores the
+selected chat. If reopening fails, QAChat attempts to restore the old folder. Changing conversation retains already loaded
 models and indexes where the engine implements that reuse.
 
 Select an answer to inspect its evidence. A citation requests a preview of
@@ -116,10 +210,38 @@ that evidence's source location through the bridge. Reference responses are
 matched to the currently selected turn and citation before being displayed,
 so a late response does not overwrite a newer selection.
 
-The interface displays backend phases and progress while work is running.
-Once a complete answer arrives, JavaScript reveals it one character at a time.
-This is a presentation animation, not streamed model generation. It can keep
-the interface busy after generation has already completed.
+The interface displays backend phases as they happen: loading a model,
+identifying intent, retrieving or reusing references, and reading the
+references before the first word streams. Reading time grows with the
+references and the selected history; earlier turns enter as question and
+answer text only. Each label
+stays at least 0.6 seconds and a newer phase replaces queued ones, so the
+display is at most one short step behind. A timer runs from Ask.
+
+Answers stream as they are generated: the engine forwards text a few times
+per second and the page appends it. On MLX this is token by token; PyTorch
+delivers the whole reply at once. With thinking enabled, the model's thinking
+shows live in a grey box that folds into "Thought for Ns" when the answer
+starts; saved answers keep a collapsed "Show thinking". Citation links are
+added when the answer completes, under a short "Took Ns" line.
+
+Routing: each question first goes to the 8B router model (see
+`qachat/answering.py`), which picks one of the project type's intents and
+says whether the question stands alone and which earlier turns it refers to.
+Those turns are kept only when the question points back to them ("it",
+"the second one", "you said", "so far") or shares a distinctive term with
+them; small talk is never a related turn. The search always uses the
+question as typed; when it points back, the related turns' questions are
+added, never model-written text. The intent's configuration then selects history (question and answer text
+only, never earlier evidence) and retrieval (search, reuse an earlier turn's
+references, or none). A shimmering line under the pending answer steps through
+what happens: identifying intent, the identified intent, the included
+conversation history, the retrieval steps (skipped when not needed), and
+reading the references before the answer streams. A finished answer shows only "Took Ns"; expanding it lists every step it
+went through (intent, history, retrieval steps including the search text
+when earlier questions were added, reading, and writing) with how long each took, measured when the
+steps happened. Chat titles are written by
+the router model too, so naming never switches models.
 
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen
@@ -134,7 +256,8 @@ settings, token identifiers, and diagnostic output. Standard trace mode is
 not a content-redaction policy: resumable conversation state may still contain
 full text. Treat the entire workspace, especially `logs/`, as sensitive data.
 
-The separate documentation review records existing persistence, path-trust,
-and context-budget issues. They were not fixed as part of documentation.
-The interface was reviewed from source, but not launched in the documentation
-runtime because its Qt dependencies were unavailable.
+Model changes emit gui.models.change.requested/confirmed/applied events;
+downloads emit start/completion events. Source imports record the request
+and copied files. index.incremental.plan records reused and embedded chunk
+counts plus added, modified, and removed paths. Conversation turns retain the
+model and generation settings actually used.

@@ -1,7 +1,13 @@
 """Extract selectable PDF text and expose page-scoped source units.
 
-The specialized reader uses ``pypdf`` to extract page text, cleans problematic
-surrogate characters, and joins pages with form-feed separators. Extraction
+The specialized reader extracts page text with ``pdfminer.six`` layout
+analysis, which builds words from glyph boxes and real font metrics, so word
+spacing follows the printed page (``pypdf``'s plain mode split some
+letter-spaced words, such as acronyms, in two). ``pypdf`` still checks
+encryption and
+counts pages, and supplies the text when ``pdfminer.six`` cannot parse a
+file. The reader cleans problematic characters and joins pages with
+form-feed separators. Extraction
 turns nonblank pages into units labeled ``Page N``. Line numbers refer to the
 extracted text within a page, not to a stable visual layout in the PDF.
 
@@ -52,8 +58,13 @@ The PDF hook requires its optional reader dependency when imported.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+import re
+from typing import Final
 
+from pdfminer.high_level import extract_text as _pdfminer_text
+from pdfminer.layout import LAParams
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -70,6 +81,12 @@ __all__ = [
 ]
 
 PAGE_BREAK = "\f"
+# Identifies the text extractor in index metadata; changing it re-indexes
+# projects that read PDFs, because their extracted text changes.
+PDF_TEXT_EXTRACTOR: Final[str] = "pdfminer.six layout v1"
+# Glyphs without a Unicode mapping, such as some bullets and math symbols.
+_UNMAPPED_GLYPH = re.compile(r"\(cid:\d+\)")
+_BLANK_LINES = re.compile(r"\n[ \t]*(?:\n[ \t]*){2,}")
 
 
 def read_source_file(target: Path, relative_path: Path) -> SourceFile:
@@ -106,11 +123,11 @@ def read_source_file(target: Path, relative_path: Path) -> SourceFile:
             f"Encrypted PDF is not supported: {relative_path.as_posix()}"
         )
 
+    pages = _layout_pages(target, len(reader.pages))
     try:
-        pages = [
-            _clean_extracted_text(page.extract_text() or "")
-            for page in reader.pages
-        ]
+        if pages is None:
+            pages = [page.extract_text() or "" for page in reader.pages]
+        pages = [_clean_extracted_text(page) for page in pages]
     except (KeyError, PdfReadError) as error:
         raise ValueError(
             f"Cannot extract PDF text: {relative_path.as_posix()}"
@@ -123,6 +140,40 @@ def read_source_file(target: Path, relative_path: Path) -> SourceFile:
         )
 
     return SourceFile(relative_path, PAGE_BREAK.join(pages))
+
+
+def _layout_pages(target: Path, page_count: int) -> list[str] | None:
+    """Extract each page's text with ``pdfminer.six`` layout analysis.
+
+    Parameters
+    ----------
+    target: pathlib.Path
+        PDF to read.
+    page_count: int
+        Number of pages ``pypdf`` found; the result must match it so page
+        numbers stay exact.
+
+    Returns
+    -------
+    list[str] | None
+        One text per page, or None when ``pdfminer.six`` cannot parse the
+        file or finds a different number of pages; the caller then uses
+        ``pypdf``'s plain extraction.
+
+    """
+
+    try:
+        logging.getLogger("pdfminer").setLevel(logging.ERROR)
+        text = _pdfminer_text(str(target), laparams=LAParams())
+    except Exception:  # Any parser failure falls back to pypdf.
+        return None
+    pages = text.split(PAGE_BREAK)
+    # pdfminer ends every page, including the last, with a form feed.
+    if pages and not pages[-1].strip():
+        pages = pages[:-1]
+    if len(pages) != page_count:
+        return None
+    return pages
 
 
 def _clean_extracted_text(text: str) -> str:
@@ -146,7 +197,10 @@ def _clean_extracted_text(text: str) -> str:
 
     """
 
-    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    text = text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
+    text = _UNMAPPED_GLYPH.sub("", text)
+    text = "\n".join(line.rstrip() for line in text.split("\n"))
+    return _BLANK_LINES.sub("\n\n", text)
 
 
 def extract_source_units(source_file: SourceFile) -> list[SourceUnit]:

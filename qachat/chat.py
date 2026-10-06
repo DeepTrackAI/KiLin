@@ -85,6 +85,7 @@ The path is illustrative and must identify an available compatible model.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import gc
 from importlib import import_module
 from pathlib import Path
@@ -521,6 +522,7 @@ class ChatSession:
         *,
         max_new_tokens: int | None = None,
         trace_turn_id: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -541,6 +543,10 @@ class ChatSession:
         trace_turn_id: str | None, optional
             Optional trace identifier associating emitted events and artifacts
             with the current conversation turn. Defaults to ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives decoded text pieces as they are generated, for live
+            display. MLX streams; PyTorch calls it once with the whole reply.
+            Its exceptions propagate. Defaults to ``None``.
 
         Returns
         -------
@@ -573,6 +579,8 @@ class ChatSession:
 
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
+        if token_callback is not None and not callable(token_callback):
+            raise ValueError("token_callback must be callable or None.")
 
         reply_started_at = perf_counter()
         token_override = _check_max_new_tokens(max_new_tokens)
@@ -653,6 +661,7 @@ class ChatSession:
 
         self._last_generation_output_token_count = None
         self._last_generation_token_count_source = None
+        self.last_finish_reason = None
         generation_started_at = perf_counter()
         with self.trace.span(
             "llm.call",
@@ -673,17 +682,26 @@ class ChatSession:
                         tokens,
                         token_budget,
                         trace_turn_id=trace_turn_id,
+                        token_callback=token_callback,
+                    )
+                elif token_callback is not None:
+                    answer = self._mlx_reply(
+                        tokens, token_budget, token_callback=token_callback
                     )
                 else:
                     answer = self._mlx_reply(tokens, token_budget)
-            elif self.trace.enabled:
-                answer = self._torch_reply(
-                    tokens,
-                    token_budget,
-                    trace_turn_id=trace_turn_id,
-                )
             else:
-                answer = self._torch_reply(tokens, token_budget)
+                if self.trace.enabled:
+                    answer = self._torch_reply(
+                        tokens,
+                        token_budget,
+                        trace_turn_id=trace_turn_id,
+                    )
+                else:
+                    answer = self._torch_reply(tokens, token_budget)
+                if token_callback is not None and isinstance(answer, str):
+                    # PyTorch generation is not streamed here.
+                    token_callback(answer)
         generation_duration_ms = (
             perf_counter() - generation_started_at
         ) * 1000
@@ -718,6 +736,7 @@ class ChatSession:
             "output_token_count_source": (
                 self._last_generation_token_count_source
             ),
+            "finish_reason": self.last_finish_reason,
             "character_count": len(answer),
             "generation_duration_ms": round(generation_duration_ms, 3),
             "reply_duration_ms": round(
@@ -799,6 +818,7 @@ class ChatSession:
         token_budget: int,
         *,
         trace_turn_id: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate one decoded reply through MLX.
 
@@ -812,6 +832,9 @@ class ChatSession:
             Reserved trace identifier for parity with backend generation
             helpers. The current MLX generation path does not use it directly.
             Defaults to ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives each decoded text piece as it is generated. Defaults to
+            ``None``.
 
         Returns
         -------
@@ -823,14 +846,19 @@ class ChatSession:
         mlx_lm = import_module("mlx_lm")
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
-        return mlx_lm.generate(
+        parts = []
+        for response in mlx_lm.stream_generate(
             self._model,
             self._tokenizer,
             prompt=tokens,
             max_tokens=token_budget,
             sampler=sampler,
-            verbose=False,
-        )
+        ):
+            parts.append(response.text)
+            self.last_finish_reason = response.finish_reason
+            if token_callback is not None and response.text:
+                token_callback(response.text)
+        return "".join(parts)
 
     def _torch_reply(
         self: ChatSession,
@@ -878,6 +906,17 @@ class ChatSession:
         with torch.inference_mode():
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
+        eos = getattr(
+            getattr(model, "generation_config", None), "eos_token_id", None
+        )
+        if eos is None:
+            eos = tokenizer.eos_token_id
+        eos_ids = set(eos if isinstance(eos, (list, tuple)) else [eos])
+        self.last_finish_reason = (
+            "stop"
+            if generated and generated[-1] in eos_ids
+            else "length" if len(generated) >= token_budget else "stop"
+        )
         self._last_generation_output_token_count = len(generated)
         self._last_generation_token_count_source = "generated_token_ids"
         data: dict[str, object] = {

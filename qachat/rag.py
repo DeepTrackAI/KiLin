@@ -107,12 +107,14 @@ The workspace and model dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+from math import isfinite
 from pathlib import Path
+import re
 import platform
 import sys
 from time import perf_counter
@@ -126,11 +128,29 @@ from qachat.chat import (
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
 from qachat.conversation_format import conversation_state
-from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
+from qachat.project import QAProject, open_project
+from qachat.answering import (
+    MACHINE_STATE_ANSWERING,
+    RouteDecision,
+    history_messages,
+    route_question,
+    select_history,
+    side_reply,
+    turn_representation,
+)
+from qachat.answering import search_text as answering_search_text
+from qachat.project_types import (
+    HISTORY_POLICY_RECENT,
+    RETRIEVAL_MODE_DOCUMENT,
+    RETRIEVAL_MODE_REUSE,
+    RETRIEVAL_MODE_SEARCH,
+    WORKFLOW_BATCH_CLASSIFY,
+    WORKFLOW_CHOICES,
+    Workflow,
+    project_type,
+)
 from qachat.query_formats import (
-    LITERATURE_REPOSITORY_INSTRUCTION,
     QUERY_FORMAT_PLAIN,
-    SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
 from qachat.repository import (
@@ -140,6 +160,7 @@ from qachat.repository import (
 )
 from qachat.retrievals import (
     CodeGraph,
+    HybridResult,
     PersistentIndexes,
     build_code_graph,
     build_lexical_index,
@@ -154,8 +175,16 @@ from qachat.retrievals import (
     save_indexes,
     semantic_search,
 )
-from qachat.runtime import SelectedBackend, choose_backend
+from qachat.retrievals.document_reading import (
+    DocumentSelection,
+    dominant_path,
+    named_paths,
+    read_document,
+)
+from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
+from qachat.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
+from qachat.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from qachat.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
     TRACE_MODE_FORENSIC,
@@ -164,6 +193,34 @@ from qachat.trace_logging import (
     TraceSink,
     create_trace_logger,
     trace_text_preview,
+)
+from qachat.workflows import (
+    UNCLEAR,
+    WORKFLOW_CHOICE_CANCEL,
+    WORKFLOW_CHOICE_CHOICES,
+    WORKFLOW_CHOICE_CONTINUE,
+    WORKFLOW_CHOICE_QUICK,
+    Label,
+    MentionScan,
+    WorkflowPlan,
+    classification_evidence,
+    classification_report,
+    classify_prompt,
+    estimate_seconds,
+    item_text,
+    mention_evidence,
+    mention_report,
+    needs_confirmation,
+    parse_labels,
+    plan_batches,
+    quick_sample,
+    quoted_terms,
+    scan_mentions,
+    short_names,
+    terms_prompt,
+    validated_categories,
+    validated_document,
+    validated_terms,
 )
 
 __all__ = [
@@ -182,23 +239,33 @@ __all__ = [
 ]
 
 AnswerPhase: TypeAlias = Literal[
+    "routing",
+    "routed",
     "retrieving",
     "evidence_ready",
     "generating",
     "saving",
     "completed",
+    "processing",
 ]
+ANSWER_PHASE_ROUTING: Final[AnswerPhase] = "routing"
+ANSWER_PHASE_ROUTED: Final[AnswerPhase] = "routed"
 ANSWER_PHASE_RETRIEVING: Final[AnswerPhase] = "retrieving"
 ANSWER_PHASE_EVIDENCE_READY: Final[AnswerPhase] = "evidence_ready"
 ANSWER_PHASE_GENERATING: Final[AnswerPhase] = "generating"
 ANSWER_PHASE_SAVING: Final[AnswerPhase] = "saving"
 ANSWER_PHASE_COMPLETED: Final[AnswerPhase] = "completed"
+# A workflow's own steps, such as "Classifying batch 3 of 12".
+ANSWER_PHASE_PROCESSING: Final[AnswerPhase] = "processing"
 ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
+    ANSWER_PHASE_ROUTING,
+    ANSWER_PHASE_ROUTED,
     ANSWER_PHASE_RETRIEVING,
     ANSWER_PHASE_EVIDENCE_READY,
     ANSWER_PHASE_GENERATING,
     ANSWER_PHASE_SAVING,
     ANSWER_PHASE_COMPLETED,
+    ANSWER_PHASE_PROCESSING,
 )
 
 _INDEX_METADATA_VERSION = 1
@@ -488,6 +555,7 @@ class RAGSession:
         progress_callback: ProgressCallback | None = None,
         trace: TraceConfig | TraceSink | None = None,
         conversation_path: str | Path | None = None,
+        router_model: str | None = None,
     ) -> None:
         """Open a project, its models, indexes, and saved conversation.
 
@@ -510,6 +578,11 @@ class RAGSession:
             paths start at the project root; ``None`` chooses a new path under
             ``logs/traces``. This path is authoritative for resumable state and
             enabled RAG tracing. Defaults to ``None``.
+        router_model: str | None, optional
+            Chat model that classifies each question's intent. It stays
+            loaded beside the answering model, or is shared with it when
+            both are the same model. Defaults to ``None``, which uses the
+            profile's chat model.
 
         Raises
         ------
@@ -609,7 +682,7 @@ class RAGSession:
                 thinking=profile.thinking,
                 temperature=profile.temperature,
                 max_new_tokens=profile.max_new_tokens,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=project_type(profile.kind).system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
             )
@@ -667,6 +740,8 @@ class RAGSession:
         self.index_status = status
         self.source_changes = source_changes
         self.turns = turns
+        self.router_model = router_model or profile.chat_model(self.backend)
+        self._router_session: ChatSession | None = None
         self._closed = False
         self.trace.emit(
             "session.ready",
@@ -838,6 +913,74 @@ class RAGSession:
             eta_seconds=eta,
         )
 
+    def use_chat_model(self: RAGSession, model_id: str) -> None:
+        """Switch the generation model while preserving conversation state.
+
+        The embedding model and retrieval indexes are left unchanged. The old
+        model is released before the replacement is loaded, except the router
+        model, which stays loaded for routing and is reused when it becomes
+        the answering model again.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if self.backend != BACKEND_MLX:
+            raise RuntimeError("GUI effort presets currently require MLX.")
+        if self.chat_session.model_id == model_id:
+            return
+        old = self.chat_session
+        old_model_id = old.model_id
+        messages = [dict(message) for message in old.messages]
+        settings = {
+            "thinking": old.thinking,
+            "temperature": old.temperature,
+            "max_new_tokens": old.max_new_tokens,
+        }
+        keep_old = old_model_id == getattr(self, "router_model", None)
+        if not keep_old:
+            old.close()
+        router = getattr(self, "_router_session", None)
+        try:
+            if router is not None and router.model_id == model_id:
+                replacement = router
+                replacement.configure_generation(settings)
+            else:
+                replacement = ChatSession(
+                    model_id,
+                    backend=self.backend,
+                    system_prompt=self._system_prompt(),
+                    allow_download=self.project.profile.allow_download,
+                    trace=self.trace,
+                    **settings,
+                )
+        except Exception:
+            if keep_old:
+                self.chat_session = old
+            else:
+                self.chat_session = ChatSession(
+                    old_model_id,
+                    backend=self.backend,
+                    system_prompt=self._system_prompt(),
+                    allow_download=self.project.profile.allow_download,
+                    trace=self.trace,
+                    **settings,
+                )
+                self.chat_session.restore_history(messages)
+            raise
+        if replacement is router:
+            self._router_session = None
+        if keep_old:
+            # The router model stays loaded for the next question.
+            self._router_session = old
+        replacement.restore_history(messages)
+        self.chat_session = replacement
+        self.trace.emit(
+            "chat.model.switched",
+            component="rag",
+            data={"from": old_model_id, "to": model_id},
+        )
+
     def ask(
         self: RAGSession,
         question: str,
@@ -845,6 +988,12 @@ class RAGSession:
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
         phase_callback: AnswerPhaseCallback | None = None,
+        answer_guidance: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
+        retrieval_query: str | None = None,
+        reuse_evidence: bool = False,
+        use_router: bool = True,
+        confirm_callback: Callable[[WorkflowPlan], str] | None = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -867,6 +1016,31 @@ class RAGSession:
             Optional callback receiving (phase_name, details_dict) for answer
             phases. Its exceptions propagate; it is not an asynchronous
             notification queue. Defaults to ``None``.
+        answer_guidance: str | None, optional
+            Extra answer instruction appended to this question's prompt, such
+            as a length target. An intent with its own ``answer_guidance``
+            uses that instead. It is saved with the turn. Defaults to
+            ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives answer text pieces as they are generated, for live
+            display; see ``ChatSession.reply``. Defaults to ``None``.
+        retrieval_query: str | None, optional
+            Text to search with instead of the question, such as a follow-up
+            rewritten to stand alone. The question itself is still answered.
+            Saved with the turn. Defaults to ``None``.
+        reuse_evidence: bool, optional
+            Answer from the previous turn's evidence without searching, for a
+            follow-up about the same sources. Saved with the turn. Defaults to
+            ``False``.
+        use_router: bool, optional
+            Classify the question's intent with the router model. When False,
+            the project type's default intent is used. Defaults to ``True``.
+        confirm_callback: Callable[[WorkflowPlan], str] | None, optional
+            Receives the plan of an expensive workflow (such as
+            ``batch_classify``) when its confirmation policy asks, and
+            returns a ``WorkflowChoice``: ``"continue"``, ``"quick"``, or
+            ``"cancel"``. None runs every plan without asking. Defaults to
+            ``None``.
 
         Returns
         -------
@@ -895,14 +1069,28 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Enter a non-empty question.")
+        if answer_guidance is not None and not isinstance(
+            answer_guidance, str
+        ):
+            raise ValueError("answer_guidance must be text or None.")
         if retrieval_count is not None and (
             type(retrieval_count) is not int or retrieval_count < 1
         ):
             raise ValueError(
                 "retrieval_count must be a positive whole number."
             )
+        if confirm_callback is not None and not callable(confirm_callback):
+            raise ValueError("confirm_callback must be callable or None.")
         if phase_callback is not None and not callable(phase_callback):
             raise ValueError("phase_callback must be callable or None.")
+        if retrieval_query is not None and (
+            not isinstance(retrieval_query, str) or not retrieval_query.strip()
+        ):
+            raise ValueError("retrieval_query must be non-empty text or None.")
+        if type(reuse_evidence) is not bool:
+            raise ValueError("reuse_evidence must be True or False.")
+        if reuse_evidence and not self.turns:
+            raise ValueError("There is no previous answer to reuse.")
 
         def report_phase(phase: AnswerPhase, **details: object) -> None:
             """Notify an interface without coupling retrieval to GUI code.
@@ -1004,36 +1192,286 @@ class RAGSession:
                 data=effective,
                 turn_id=turn_id,
             )
+            # Machine state "answering": route, select history, retrieve,
+            # then answer. Configuration, not the router, decides behavior.
+            kind = project_type(self.project.profile.kind)
+            decision = self._route(
+                question, kind, use_router, turn_id, report_phase
+            )
+            intent = kind.intents[decision.intent]
+            mode = intent.retrieval_mode
+            if reuse_evidence:
+                mode = RETRIEVAL_MODE_REUSE
+            with trace.span(
+                "history.selection",
+                component="rag",
+                data={
+                    "policy": intent.history_policy,
+                    "recent_turns": kind.recent_turns,
+                },
+                turn_id=turn_id,
+            ):
+                history_ids = select_history(
+                    len(self.turns),
+                    intent.history_policy,
+                    kind.recent_turns,
+                    decision,
+                )
+            recent_ids = select_history(
+                len(self.turns),
+                HISTORY_POLICY_RECENT,
+                kind.recent_turns,
+                decision,
+            )
+            trace.emit(
+                "history.selection.result",
+                component="rag",
+                data={
+                    "recent_turn_ids": [
+                        i for i in recent_ids if i in history_ids
+                    ],
+                    "related_turn_ids": list(decision.related_turn_ids),
+                    "final_turn_ids": history_ids,
+                },
+                turn_id=turn_id,
+            )
+
+            evidence: tuple[Evidence, ...] = ()
+            source_turns: list[int] = []
+            if mode == RETRIEVAL_MODE_REUSE:
+                candidates = list(decision.related_turn_ids) or [
+                    len(self.turns)
+                ]
+                source_turns = [
+                    number
+                    for number in candidates
+                    if 0 < number <= len(self.turns)
+                    and self.turns[number - 1].evidence
+                ]
+                if not source_turns:
+                    mode = RETRIEVAL_MODE_SEARCH  # Nothing to reuse.
+            search_text = None
+            if mode in (RETRIEVAL_MODE_SEARCH, RETRIEVAL_MODE_DOCUMENT):
+                search_text = question
+                if retrieval_query is not None:
+                    search_text = retrieval_query.strip()
+                else:
+                    # The user's own words; a question that points back
+                    # also carries its related turns' questions.
+                    search_text = answering_search_text(
+                        question, self.turns, decision
+                    )
+            effective.update(
+                {
+                    "machine_state": MACHINE_STATE_ANSWERING,
+                    "intent": intent.intent_id,
+                    "standalone": decision.standalone,
+                    "related_turn_ids": list(decision.related_turn_ids),
+                    "history_turn_ids": history_ids,
+                    "retrieval_mode": mode,
+                }
+            )
             report_phase(
-                ANSWER_PHASE_RETRIEVING,
-                message="Retrieving evidence",
+                ANSWER_PHASE_ROUTED,
+                intent=intent.intent_id,
+                history_turn_ids=history_ids,
+                related_turn_ids=list(decision.related_turn_ids),
+                retrieval_mode=mode,
             )
-            evidence = self._retrieve(
-                question,
-                retrieval_count,
-                trace_turn_id=turn_id,
+            trace.emit(
+                "retrieval.plan",
+                component="rag",
+                data={
+                    "mode": mode,
+                    "strategy": intent.retrieval_strategy,
+                    "intent": intent.intent_id,
+                    "query_extended": search_text not in (None, question),
+                },
+                turn_id=turn_id,
             )
-            report_phase(
-                ANSWER_PHASE_EVIDENCE_READY,
-                message=f"{len(evidence)} references found",
-                evidence_count=len(evidence),
+            retrieval_started = perf_counter()
+            if mode == RETRIEVAL_MODE_REUSE:
+                evidence = _merge_evidence(
+                    [
+                        self.turns[number - 1].evidence
+                        for number in source_turns
+                    ]
+                )
+                effective["evidence_reused"] = True
+                effective["evidence_from_turns"] = source_turns
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message=f"Reusing {len(evidence)} previous references",
+                    evidence_count=len(evidence),
+                    reused=True,
+                )
+            elif mode == RETRIEVAL_MODE_SEARCH:
+                if search_text != question:
+                    effective["retrieval_query"] = search_text
+                report_phase(
+                    ANSWER_PHASE_RETRIEVING,
+                    message="Retrieving evidence",
+                )
+                evidence = self._retrieve(
+                    search_text,
+                    retrieval_count,
+                    trace_turn_id=turn_id,
+                    status_callback=lambda message: report_phase(
+                        ANSWER_PHASE_RETRIEVING, message=message
+                    ),
+                )
+                found = len(evidence)
+                related_turns = [
+                    number
+                    for number in decision.related_turn_ids
+                    if 0 < number <= len(self.turns)
+                ]
+                if intent.include_related_evidence and related_turns:
+                    # Follow-ups keep the sources their earlier answers
+                    # cited, whatever intent the router chose.
+                    evidence = _add_related_evidence(
+                        evidence,
+                        [self.turns[number - 1] for number in related_turns],
+                    )
+                    effective["related_evidence_count"] = (
+                        len(evidence) - found
+                    )
+                    effective["evidence_from_turns"] = related_turns
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message=f"{found} references found",
+                    evidence_count=len(evidence),
+                    related_count=len(evidence) - found,
+                )
+            elif mode == RETRIEVAL_MODE_DOCUMENT:
+                if search_text != question:
+                    effective["retrieval_query"] = search_text
+                report_phase(
+                    ANSWER_PHASE_RETRIEVING,
+                    message="Finding the document to read",
+                )
+                selection = self._read_document(
+                    search_text,
+                    intent.max_tokens,
+                    retrieval_count,
+                    trace_turn_id=turn_id,
+                )
+                if selection is None:
+                    evidence = ()
+                else:
+                    evidence = _document_evidence(selection)
+                    effective["document"] = {
+                        "path": selection.path.as_posix(),
+                        "functions": list(selection.functions),
+                        "reason": selection.reason,
+                        "total_chunks": selection.total_chunks,
+                        "selected_chunks": len(selection.chunks),
+                        "estimated_tokens": selection.estimated_tokens,
+                        "complete": selection.complete,
+                        "max_tokens": intent.max_tokens,
+                    }
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message=_document_message(selection),
+                    evidence_count=len(evidence),
+                    document=effective.get("document"),
+                )
+            else:
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message="No retrieval needed",
+                    evidence_count=0,
+                    skipped=True,
+                )
+            trace.emit(
+                "retrieval.result",
+                component="rag",
+                data={
+                    "mode": mode,
+                    "strategy": intent.retrieval_strategy,
+                    "evidence_count": len(evidence),
+                    "duration_ms": round(
+                        (perf_counter() - retrieval_started) * 1000, 3
+                    ),
+                },
+                turn_id=turn_id,
             )
-            prompt = _answer_prompt(question, evidence)
-            report_phase(
-                ANSWER_PHASE_GENERATING,
-                message="Generating answer",
-                evidence_count=len(evidence),
-            )
-            answer = self.chat_session.reply(
-                prompt,
-                trace_turn_id=turn_id,
-            )
+
+            if intent.workflow is not None:
+                # The workflow, not the answering model, writes the answer.
+                answer, evidence = self._run_workflow(
+                    intent.workflow,
+                    question,
+                    decision,
+                    effective,
+                    trace_turn_id=turn_id,
+                    report_phase=report_phase,
+                    confirm_callback=confirm_callback,
+                )
+                if token_callback is not None:
+                    token_callback(answer)
+            else:
+                # An intent's own guidance is part of its configuration: it
+                # applies always and replaces the caller's general guidance.
+                if intent.answer_guidance:
+                    answer_guidance = intent.answer_guidance
+                if answer_guidance:
+                    effective["answer_guidance"] = answer_guidance
+                system_prompt = (
+                    f"{kind.system_prompt}\n\n{intent.system_prompt}"
+                )
+                self.chat_session.restore_history(
+                    [
+                        {"role": SYSTEM_ROLE, "content": system_prompt},
+                        *history_messages(self.turns, history_ids),
+                    ]
+                )
+                prompt = _answer_prompt(question, evidence, answer_guidance)
+                trace.emit(
+                    "generation.input.prepared",
+                    component="rag",
+                    data={
+                        "machine_state": MACHINE_STATE_ANSWERING,
+                        "project_type": kind.kind,
+                        "intent": intent.intent_id,
+                        "history_turn_ids": history_ids,
+                        "history_message_count": 2 * len(history_ids),
+                        "retrieval_mode": mode,
+                        "retrieval_strategy": intent.retrieval_strategy,
+                        "evidence_count": len(evidence),
+                        "prompt_characters": len(prompt) + len(system_prompt),
+                    },
+                    turn_id=turn_id,
+                )
+                report_phase(
+                    ANSWER_PHASE_GENERATING,
+                    message="Generating answer",
+                    evidence_count=len(evidence),
+                )
+                reply_options: dict[str, object] = {"trace_turn_id": turn_id}
+                if token_callback is not None:
+                    reply_options["token_callback"] = token_callback
+                answer = self.chat_session.reply(prompt, **reply_options)
+                finish_reason = getattr(
+                    self.chat_session, "last_finish_reason", None
+                )
+                if finish_reason in ("length", "stop"):
+                    effective["finish_reason"] = finish_reason
             turn = ConversationTurn(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 question=question,
                 answer=answer,
                 evidence=evidence,
                 parameters=effective,
+            )
+            # A compact summary lets the router find this turn later.
+            representation = turn_representation(turn, len(self.turns) + 1)
+            effective["representation"] = representation
+            trace.emit(
+                "conversation.turn.representation",
+                component="rag",
+                data=representation,
+                turn_id=turn_id,
             )
             self.turns.append(turn)
             report_phase(
@@ -1199,6 +1637,9 @@ class RAGSession:
         trace = getattr(self, "trace", NullTraceLogger())
         try:
             self.chat_session.close()
+            if getattr(self, "_router_session", None) is not None:
+                self._router_session.close()
+                self._router_session = None
             self.embedding_session.close()
             trace.emit("session.closed", component="rag")
         finally:
@@ -1210,6 +1651,7 @@ class RAGSession:
         self: RAGSession,
         embedding_session: EmbeddingSession,
         report: dict[str, object] | None = None,
+        cached_chunks: dict[Path, list[Chunk]] | None = None,
     ) -> tuple[list[Chunk], CodeGraph]:
         """Read configured source and produce chunks and its code graph.
 
@@ -1322,8 +1764,12 @@ class RAGSession:
                 ),
             )
 
+        cached_chunks = cached_chunks or {}
+        changed_units = [
+            unit for unit in units if unit.path not in cached_chunks
+        ]
         chunking_started = perf_counter()
-        unit_count = len(units)
+        unit_count = len(changed_units)
         self._emit_count_progress(
             "chunking_source",
             50.0,
@@ -1344,7 +1790,7 @@ class RAGSession:
             data={"unit_count": unit_count, **chunk_settings},
         ):
             chunks = chunk_source_units(
-                units,
+                changed_units,
                 count_tokens=embedding_session.count_tokens,
                 target_tokens=profile.target_tokens,
                 max_tokens=profile.max_tokens,
@@ -1361,12 +1807,24 @@ class RAGSession:
                     )
                 ),
             )
+        fresh_by_path: dict[Path, list[Chunk]] = {}
+        for chunk in chunks:
+            fresh_by_path.setdefault(chunk.path, []).append(chunk)
+        chunks = [
+            chunk
+            for source in source_files
+            for chunk in cached_chunks.get(
+                source.path, fresh_by_path.get(source.path, [])
+            )
+        ]
         self.trace.emit(
             "source.chunk.summary",
             component="rag",
             data={
                 "chunk_count": len(chunks),
                 "settings": chunk_settings,
+                "reused_file_count": len(cached_chunks),
+                "chunked_unit_count": unit_count,
             },
         )
         self._emit_progress(
@@ -1381,7 +1839,10 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            code_graph = build_code_graph(source_files, units)
+            if project_type(profile.kind).code_graph is False:
+                code_graph = CodeGraph((), ())
+            else:
+                code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
 
     def _prepare_retrieval(
@@ -1452,6 +1913,9 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
+        model_source = getattr(embedding_session, "model_source", None)
+        if isinstance(model_source, str):
+            expected_metadata["embedding_model_source"] = model_source
 
         saved_manifest: dict[str, object] | None = None
         saved_metadata: dict[str, object] | None = None
@@ -1559,12 +2023,63 @@ class RAGSession:
                     data={"index_path": str(index_path)},
                 )
 
+        previous = None
+        cached_chunks: dict[Path, list[Chunk]] = {}
+        cached_vectors = {}
+        if not configuration_changed and saved_manifest is not None:
+            try:
+                previous = load_indexes(index_path)
+                vectors = previous.semantic.embeddings
+                old_chunks = previous.semantic.chunks
+                dimensions = {len(vector) for vector in vectors}
+                if (
+                    len(vectors) != len(old_chunks)
+                    or len(dimensions) != 1
+                    or 0 in dimensions
+                    or any(
+                        not isfinite(value)
+                        for vector in vectors
+                        for value in vector
+                    )
+                ):
+                    raise ValueError("Saved embedding vectors are invalid.")
+                changed_paths = set(changes["added"]) | set(
+                    changes["modified"]
+                )
+                unchanged = set(report["selected_files"]) - changed_paths
+                cached_chunks = {Path(path): [] for path in unchanged}
+                for chunk, vector in zip(old_chunks, vectors):
+                    if chunk.path in cached_chunks:
+                        cached_chunks[chunk.path].append(chunk)
+                        cached_vectors[chunk.identifier] = (chunk, vector)
+            except (OSError, ValueError, TypeError, KeyError):
+                previous = None
+                cached_chunks = {}
+                cached_vectors = {}
         chunks, code_graph = self._prepare_source(
             embedding_session,
             report=report,
+            cached_chunks=cached_chunks,
         )
+        pending_chunks = [
+            chunk
+            for chunk in chunks
+            if cached_vectors.get(chunk.identifier, (None,))[0] != chunk
+        ]
         embedding_started = perf_counter()
-        chunk_count = len(chunks)
+        chunk_count = len(pending_chunks)
+        self.trace.emit(
+            "index.incremental.plan",
+            component="rag",
+            data={
+                "reused_chunks": len(chunks) - chunk_count,
+                "embedded_chunks": chunk_count,
+                "added": changes["added"],
+                "modified": changes["modified"],
+                "removed": changes["removed"],
+                "configuration_changed": configuration_changed,
+            },
+        )
         self._emit_count_progress(
             "building_semantic_index",
             58.0,
@@ -1582,22 +2097,44 @@ class RAGSession:
                 "batch_size": _EMBEDDING_PROGRESS_BATCH_SIZE,
             },
         ):
-            semantic = build_semantic_index(
-                chunks,
-                embedding_session,
-                batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
-                progress_callback=(
-                    lambda current, total: self._emit_count_progress(
-                        "building_semantic_index",
-                        58.0,
-                        74.0,
-                        "Embedding chunks",
-                        current,
-                        total,
-                        embedding_started,
-                    )
-                ),
+            fresh_semantic = (
+                build_semantic_index(
+                    pending_chunks,
+                    embedding_session,
+                    batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
+                    progress_callback=(
+                        lambda current, total: self._emit_count_progress(
+                            "building_semantic_index",
+                            58.0,
+                            74.0,
+                            "Embedding chunks",
+                            current,
+                            total,
+                            embedding_started,
+                        )
+                    ),
+                )
+                if pending_chunks
+                else SemanticIndex((), ())
             )
+        fresh_vectors = {
+            chunk.identifier: vector
+            for chunk, vector in zip(
+                fresh_semantic.chunks, fresh_semantic.embeddings
+            )
+        }
+        semantic = SemanticIndex(
+            tuple(chunks),
+            tuple(
+                (
+                    fresh_vectors[chunk.identifier]
+                    if chunk.identifier in fresh_vectors
+                    else cached_vectors[chunk.identifier][1]
+                )
+                for chunk in chunks
+            ),
+        )
+
         self._emit_progress(
             "building_lexical_index",
             75.0,
@@ -1661,6 +2198,7 @@ class RAGSession:
         retrieval_count: int | None = None,
         *,
         trace_turn_id: str | None = None,
+        status_callback: Callable[[str], None] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -1691,7 +2229,12 @@ class RAGSession:
 
         """
 
+        def report(message: str) -> None:
+            if status_callback is not None:
+                status_callback(message)
+
         count = retrieval_count or self.project.profile.retrieval_count
+        report("Formatting the search query")
         query_text = self._format_query(question)
         trace = getattr(self, "trace", NullTraceLogger())
         query_data: dict[str, object] = {
@@ -1713,6 +2256,7 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            report("Embedding the query and running semantic search")
             semantic = semantic_search(
                 self.indexes.semantic,
                 query_text,
@@ -1729,11 +2273,13 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Semantic search ranked {len(semantic)} results")
         with trace.span(
             "retrieval.lexical",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            report("Running lexical search")
             lexical = lexical_search(
                 self.indexes.lexical,
                 question,
@@ -1748,16 +2294,27 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Lexical search ranked {len(lexical)} results")
         with trace.span(
             "retrieval.code",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
-            code = code_search(
-                self.indexes.code_graph,
-                self.chunks,
-                question,
-                count=count,
+            report(
+                "Searching the code graph"
+                if self.project.profile.kind == "code"
+                else "Checking structured relationships"
+            )
+            # Without code the graph is empty; skip the search.
+            code = (
+                code_search(
+                    self.indexes.code_graph,
+                    self.chunks,
+                    question,
+                    count=count,
+                )
+                if self.indexes.code_graph.entities
+                else []
             )
         trace.emit(
             "retrieval.code.ranked",
@@ -1768,6 +2325,12 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(
+            f"Code graph search ranked {len(code)} results"
+            if self.project.profile.kind == "code"
+            else f"Structured relationship search found {len(code)} results"
+        )
+        report("Combining and ranking search results")
         combined = hybrid_search(
             semantic=semantic,
             lexical=lexical,
@@ -1783,6 +2346,7 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
+        report(f"Hybrid ranking kept {len(combined)} results")
         plan = plan_retrieval(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
@@ -1814,6 +2378,7 @@ class RAGSession:
             },
             turn_id=trace_turn_id,
         )
+        report("Expanding related context")
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
@@ -1877,6 +2442,662 @@ class RAGSession:
         )
         return evidence
 
+    def _run_workflow(
+        self: RAGSession,
+        workflow: Workflow,
+        question: str,
+        decision: RouteDecision,
+        effective: dict[str, object],
+        *,
+        trace_turn_id: str | None,
+        report_phase: Callable[..., None],
+        confirm_callback: Callable[[WorkflowPlan], str] | None = None,
+    ) -> tuple[str, tuple[Evidence, ...]]:
+        """Produce an answer with an intent's workflow instead of a model.
+
+        Parameters
+        ----------
+        workflow: Workflow
+            The intent's workflow settings.
+        question: str
+            The question.
+        decision: RouteDecision
+            The checked routing decision; a question that points back also
+            looks for terms in its related turns' questions.
+        effective: dict[str, object]
+            Turn parameters; the workflow's summary is added under
+            ``"workflow"``.
+        trace_turn_id: str | None
+            Turn identifier for trace events.
+        report_phase: Callable[..., None]
+            Progress reporter for the interface.
+        confirm_callback: Callable[[WorkflowPlan], str] | None, optional
+            Asked to confirm an expensive plan; returns a
+            ``WorkflowChoice``. None runs the full plan. Defaults to
+            ``None``.
+
+        Returns
+        -------
+        tuple[str, tuple[Evidence, ...]]
+            The answer and the evidence it cites.
+
+        Notes
+        -----
+        Both workflows collect every exact mention first. The router model
+        names the terms (quoted terms take precedence), any one document
+        to search, and for ``batch_classify`` without configured
+        categories the categories; terms and the document phrase must
+        occur in the user's text. ``scan_and_list`` then reports the
+        mentions; ``batch_classify`` plans batches, asks for confirmation
+        when the policy requires it, labels the mentions with the
+        answering model, and counts the validated labels in Python. See
+        ``qachat.workflows``.
+
+        """
+
+        if workflow.kind not in WORKFLOW_CHOICES:
+            raise ValueError(f"Unknown workflow {workflow.kind!r}.")
+        trace = getattr(self, "trace", NullTraceLogger())
+        classify = workflow.kind == WORKFLOW_BATCH_CLASSIFY
+        want_categories = classify and not workflow.categories
+        text = answering_search_text(question, self.turns, decision)
+        report_phase(
+            ANSWER_PHASE_RETRIEVING, message="Finding the terms to scan"
+        )
+        system, prompt = terms_prompt(text, categories=want_categories)
+        try:
+            raw = side_reply(
+                self._router_chat(),
+                system,
+                prompt,
+                max_new_tokens=160 if want_categories else 96,
+            )
+        except Exception as error:  # Explain instead of failing.
+            raw = f"failed: {error}"
+        quoted = quoted_terms(question)
+        terms = quoted or validated_terms(raw, text)
+        source = "quoted" if quoted else "router"
+        document = validated_document(raw, text)
+        categories = workflow.categories or (
+            validated_categories(raw) if classify else ()
+        )
+        terms_data: dict[str, object] = {
+            "terms": list(terms),
+            "from": source,
+            "document": document,
+        }
+        if classify:
+            terms_data["categories"] = list(categories)
+            terms_data["categories_from"] = (
+                "configuration" if workflow.categories else "router"
+            )
+        if trace.include_content:
+            terms_data["raw"] = raw
+        trace.emit(
+            "workflow.terms.extracted",
+            component="workflow",
+            data=terms_data,
+            turn_id=trace_turn_id,
+        )
+        summary: dict[str, object] = {
+            "kind": workflow.kind,
+            "terms": list(terms),
+            "terms_from": source,
+        }
+        if classify:
+            summary["categories"] = list(categories)
+        effective["workflow"] = summary
+        problem = None
+        if not terms:
+            problem = (
+                "I couldn't tell which exact words to look for. Put them in "
+                'double quotes, for example: list all mentions of "gradient '
+                'descent".'
+            )
+        elif classify and not categories:
+            problem = (
+                "I couldn't tell which groups to sort the mentions into. Name "
+                "them in the question, for example: which mentions of "
+                '"Python" are the authors\' own code and which are citations?'
+            )
+        if problem is not None:
+            report_phase(
+                ANSWER_PHASE_EVIDENCE_READY,
+                message="Nothing to scan for",
+                evidence_count=0,
+                workflow=workflow.kind,
+            )
+            return problem, ()
+
+        indexed = list(dict.fromkeys(chunk.path for chunk in self.chunks))
+        named = named_paths(question, indexed)
+
+        def names_file(term: str, path: Path) -> bool:
+            return term.casefold() in (
+                path.name.casefold(),
+                path.stem.casefold(),
+            )
+
+        file_terms = [
+            term
+            for term in terms
+            if any(names_file(term, path) for path in named)
+        ]
+        if file_terms and len(file_terms) < len(terms):
+            # "MRI in smith2020": the file is the scope.
+            terms = tuple(term for term in terms if term not in file_terms)
+            summary["terms"] = list(terms)
+            summary["terms_as_scope"] = file_terms
+        # A file named by the only terms is something to find instead.
+        scope = [
+            path
+            for path in named
+            if not any(names_file(term, path) for term in terms)
+        ]
+        scope_note = None
+        if scope:
+            scope_note = (
+                f"Scanned only {', '.join(p.name for p in scope)}, named in "
+                "the question."
+            )
+        elif document:
+            # A described document ("the Smith paper") is the file that
+            # dominates a search for the description.
+            path = dominant_path(
+                self._rank_everything(document, trace_turn_id)[
+                    : self.project.profile.retrieval_count
+                ]
+            )
+            if path is not None:
+                scope = [path]
+                scope_note = (
+                    f"Scanned only {path.name}, the best match for "
+                    f"“{document}”. Name the file to scan a different one."
+                )
+        listed = " or ".join(f"“{term}”" for term in terms)
+        count = len(scope) or len(indexed)
+        report_phase(
+            ANSWER_PHASE_RETRIEVING,
+            message=(
+                f"Scanning {scope[0].name} for {listed}"
+                if len(scope) == 1
+                else f"Scanning {count} files for {listed}"
+            ),
+        )
+        with trace.span(
+            "workflow.scan_and_list",
+            component="workflow",
+            data={"terms": list(terms), "scope_files": count},
+            turn_id=trace_turn_id,
+        ):
+            scan = scan_mentions(
+                self.chunks,
+                terms,
+                case_sensitive=workflow.case_sensitive,
+                whole_words=workflow.whole_words,
+                context_lines=workflow.context_lines,
+                paths=scope or None,
+            )
+        unsearchable = [] if scope else self._unsearchable_sources(indexed)
+        counts = scan.counts()
+        summary.update(
+            {
+                "total_mentions": len(scan.mentions),
+                "mentions_per_term": scan.term_counts(),
+                "files_with_mentions": len(counts),
+                "files_scanned": len(scan.files_scanned),
+                "scope": [path.as_posix() for path in scope],
+                "scope_document": document,
+                "unsearchable_files": [p.as_posix() for p in unsearchable],
+                "case_sensitive": scan.case_sensitive,
+                "whole_words": scan.whole_words,
+            }
+        )
+        if classify:
+            return self._classify_mentions(
+                workflow,
+                question,
+                scan,
+                categories,
+                summary,
+                scope_note=scope_note,
+                trace_turn_id=trace_turn_id,
+                report_phase=report_phase,
+                confirm_callback=confirm_callback,
+            )
+        evidence = tuple(
+            Evidence(**item)
+            for item in mention_evidence(scan, workflow.max_listed)
+        )
+        answer = mention_report(
+            scan,
+            limit=workflow.max_listed,
+            unsearchable=unsearchable,
+            scope_note=scope_note,
+        )
+        summary["listed"] = len(evidence)
+        trace.emit(
+            "workflow.scan_and_list.result",
+            component="workflow",
+            data={
+                key: value for key, value in summary.items() if key != "kind"
+            },
+            turn_id=trace_turn_id,
+        )
+        noun = "mention" if len(scan.mentions) == 1 else "mentions"
+        report_phase(
+            ANSWER_PHASE_EVIDENCE_READY,
+            message=(
+                f"Found {len(scan.mentions)} {noun} in {len(counts)} files"
+            ),
+            evidence_count=len(evidence),
+            workflow=workflow.kind,
+        )
+        return answer, evidence
+
+    def _classify_mentions(
+        self: RAGSession,
+        workflow: Workflow,
+        question: str,
+        scan: MentionScan,
+        categories: tuple[str, ...],
+        summary: dict[str, object],
+        *,
+        scope_note: str | None,
+        trace_turn_id: str | None,
+        report_phase: Callable[..., None],
+        confirm_callback: Callable[[WorkflowPlan], str] | None,
+    ) -> tuple[str, tuple[Evidence, ...]]:
+        """Plan, confirm, and run batched classification of mentions.
+
+        Parameters
+        ----------
+        workflow: Workflow
+            ``batch_classify`` settings.
+        question: str
+            The question, shown to the model with each batch.
+        scan: MentionScan
+            Every candidate mention.
+        categories: tuple[str, ...]
+            Allowed categories (``unclear`` is always added).
+        summary: dict[str, object]
+            The turn's workflow summary, updated in place.
+        scope_note: str | None
+            How the scanned files were chosen.
+        trace_turn_id: str | None
+            Turn identifier for trace events.
+        report_phase: Callable[..., None]
+            Progress reporter for the interface.
+        confirm_callback: Callable[[WorkflowPlan], str] | None
+            Asked when the plan needs confirmation; None runs the plan.
+
+        Returns
+        -------
+        tuple[str, tuple[Evidence, ...]]
+            The answer and the evidence it cites.
+
+        Notes
+        -----
+        Batches use the answering model with thinking off and greedy
+        decoding. A batch's missing or invalid labels are retried once in
+        one smaller call; mentions still without a label are reported as
+        not classified. Calls beyond ``max_model_calls`` are not made, and
+        the answer says how many mentions were left out.
+
+        """
+
+        trace = getattr(self, "trace", NullTraceLogger())
+        names = short_names(scan.files_scanned)
+        texts = [
+            item_text(index + 1, mention, names[mention.path])
+            for index, mention in enumerate(scan.mentions)
+        ]
+        batches = plan_batches(texts, workflow.batch_tokens)
+        to_run = batches[: workflow.max_model_calls]
+        quick = quick_sample(scan.mentions, texts, workflow.batch_tokens)
+        listed = " or ".join(f"“{term}”" for term in scan.terms)
+        details = [
+            "Categories: " + ", ".join([*categories, UNCLEAR]),
+            f"Model: {self.chat_session.model_id}",
+        ]
+        if len(to_run) < len(batches):
+            left = len(scan.mentions) - sum(len(b) for b in to_run)
+            details.append(
+                f"The model-call limit ({workflow.max_model_calls}) leaves "
+                f"{left} mentions unclassified."
+            )
+        plan = WorkflowPlan(
+            kind=workflow.kind,
+            summary=(
+                f"Classify {len(scan.mentions)} mentions of {listed} into "
+                f"{len(categories)} categories with the answering model."
+            ),
+            scope=scope_note
+            or f"All {len(scan.files_scanned)} indexed files.",
+            items=len(scan.mentions),
+            batches=len(batches),
+            batches_to_run=len(to_run),
+            estimated_seconds=round(estimate_seconds(to_run, texts), 1),
+            quick_items=len(quick),
+            quick_seconds=round(estimate_seconds([quick], texts), 1),
+            details=tuple(details),
+        )
+        trace.emit(
+            "workflow.plan.proposed",
+            component="workflow",
+            data=plan.to_dict(),
+            turn_id=trace_turn_id,
+        )
+        asked = confirm_callback is not None and needs_confirmation(
+            workflow.confirmation, plan, workflow.large_batches
+        )
+        choice = WORKFLOW_CHOICE_CONTINUE
+        if asked:
+            report_phase(
+                ANSWER_PHASE_PROCESSING,
+                message="Waiting for your choice",
+                plan=plan.to_dict(),
+            )
+            choice = confirm_callback(plan)
+            if choice not in WORKFLOW_CHOICE_CHOICES:
+                choice = WORKFLOW_CHOICE_CANCEL
+        trace.emit(
+            "workflow.plan.decided",
+            component="workflow",
+            data={
+                "choice": choice,
+                "asked": asked,
+                "policy": workflow.confirmation,
+            },
+            turn_id=trace_turn_id,
+        )
+        summary.update(
+            {"plan": plan.to_dict(), "choice": choice, "asked": asked}
+        )
+        if choice == WORKFLOW_CHOICE_CANCEL:
+            report_phase(
+                ANSWER_PHASE_EVIDENCE_READY,
+                message="Cancelled before classifying",
+                evidence_count=0,
+                workflow=workflow.kind,
+            )
+            return (
+                "Cancelled before classifying; no model calls were made. "
+                f"The plan was to classify {plan.items} mentions of "
+                f"{listed} in {plan.batches_to_run} model calls (about "
+                f"{_duration(plan.estimated_seconds)}).",
+                (),
+            )
+
+        runs = [quick] if choice == WORKFLOW_CHOICE_QUICK else to_run
+        labels: dict[int, Label] = {}
+        failed: list[int] = []
+        calls = 0
+        started = perf_counter()
+        for number, batch in enumerate(runs, start=1):
+            message = f"Classifying batch {number} of {len(runs)}"
+            if number > 1:
+                pace = (perf_counter() - started) / (number - 1)
+                left = pace * (len(runs) - number + 1)
+                message += f" (about {_duration(left)} left)"
+            report_phase(
+                ANSWER_PHASE_PROCESSING,
+                message=message,
+                current=number,
+                total=len(runs),
+            )
+            batch_started = perf_counter()
+            found = self._classify_batch(
+                question, scan.terms, categories, texts, batch, trace_turn_id
+            )
+            calls += 1
+            missing = [index for index in batch if index not in found]
+            if missing:
+                found.update(
+                    self._classify_batch(
+                        question,
+                        scan.terms,
+                        categories,
+                        texts,
+                        missing,
+                        trace_turn_id,
+                    )
+                )
+                calls += 1
+            labels.update(found)
+            failed += [index for index in batch if index not in found]
+            trace.emit(
+                "workflow.batch.result",
+                component="workflow",
+                data={
+                    "batch": number,
+                    "items": len(batch),
+                    "labelled": len(found),
+                    "retried": len(missing),
+                    "seconds": round(perf_counter() - batch_started, 2),
+                },
+                turn_id=trace_turn_id,
+            )
+        classified = sorted(index for batch in runs for index in batch)
+        evidence = tuple(
+            Evidence(**item)
+            for item in classification_evidence(
+                scan, labels, categories, workflow.max_listed
+            )
+        )
+        answer = classification_report(
+            scan,
+            labels,
+            categories,
+            limit=workflow.max_listed,
+            classified=classified,
+            not_classified=failed,
+            quick=choice == WORKFLOW_CHOICE_QUICK,
+            scope_note=scope_note,
+        )
+        per_category = {category: 0 for category in [*categories, UNCLEAR]}
+        for label in labels.values():
+            per_category[label.category] += 1
+        summary.update(
+            {
+                "classified": len(classified),
+                "labelled": len(labels),
+                "not_classified": len(failed),
+                "not_sent": len(scan.mentions) - len(classified),
+                "counts": per_category,
+                "model_calls": calls,
+                "model": self.chat_session.model_id,
+                "seconds": round(perf_counter() - started, 1),
+                "listed": len(evidence),
+            }
+        )
+        trace.emit(
+            "workflow.batch_classify.result",
+            component="workflow",
+            data={
+                key: value
+                for key, value in summary.items()
+                if key not in ("kind", "plan")
+            },
+            turn_id=trace_turn_id,
+        )
+        report_phase(
+            ANSWER_PHASE_EVIDENCE_READY,
+            message=f"Classified {len(labels)} of {len(scan.mentions)} "
+            "mentions",
+            evidence_count=len(evidence),
+            workflow=workflow.kind,
+        )
+        return answer, evidence
+
+    def _classify_batch(
+        self: RAGSession,
+        question: str,
+        terms: Sequence[str],
+        categories: Sequence[str],
+        texts: Sequence[str],
+        indices: Sequence[int],
+        trace_turn_id: str | None,
+    ) -> dict[int, Label]:
+        """Label one batch of mentions; returns labels by mention index."""
+
+        system, prompt = classify_prompt(
+            question, terms, categories, [texts[index] for index in indices]
+        )
+        try:
+            reply = side_reply(
+                self.chat_session,
+                system,
+                prompt,
+                max_new_tokens=40 * len(indices) + 64,
+            )
+        except Exception as error:  # A failed batch is reported, not fatal.
+            reply = f"failed: {error}"
+        trace = getattr(self, "trace", NullTraceLogger())
+        if trace.include_content:
+            trace.emit(
+                "workflow.batch.reply",
+                component="workflow",
+                data={"items": [index + 1 for index in indices], "raw": reply},
+                turn_id=trace_turn_id,
+            )
+        found = parse_labels(
+            reply, [index + 1 for index in indices], categories
+        )
+        return {number - 1: label for number, label in found.items()}
+
+    def _unsearchable_sources(
+        self: RAGSession, indexed: list[Path]
+    ) -> list[Path]:
+        """Return selected source files that have no indexed text."""
+
+        manifest = self.project.indexes / "source_manifest.json"
+        try:
+            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+        except (OSError, ValueError, KeyError, TypeError):
+            return []
+        known = set(indexed)
+        return [Path(name) for name in files if Path(name) not in known]
+
+    def _rank_everything(
+        self: RAGSession, text: str, trace_turn_id: str | None = None
+    ) -> list[HybridResult]:
+        """Rank every chunk for a text with the fused search channels.
+
+        Parameters
+        ----------
+        text: str
+            Text to rank chunks against.
+        trace_turn_id: str | None, optional
+            Turn identifier for trace events. Defaults to ``None``.
+
+        Returns
+        -------
+        list[HybridResult]
+            All chunks, best first, fused from semantic, lexical, and (when
+            the graph has entities) code-graph rankings.
+
+        """
+
+        everything = len(self.chunks)
+        semantic = semantic_search(
+            self.indexes.semantic,
+            self._format_query(text),
+            self.embedding_session,
+            count=everything,
+            trace_turn_id=trace_turn_id,
+        )
+        lexical = lexical_search(self.indexes.lexical, text, count=everything)
+        code = (
+            code_search(
+                self.indexes.code_graph,
+                self.chunks,
+                text,
+                count=everything,
+            )
+            if self.indexes.code_graph.entities
+            else []
+        )
+        return hybrid_search(
+            semantic=semantic, lexical=lexical, code=code, count=everything
+        )
+
+    def _read_document(
+        self: RAGSession,
+        question: str,
+        max_tokens: int,
+        retrieval_count: int | None = None,
+        *,
+        trace_turn_id: str | None = None,
+    ) -> DocumentSelection | None:
+        """Choose one document for a question and select its chunks.
+
+        Parameters
+        ----------
+        question: str
+            Search text: the question, with earlier questions it refers to.
+        max_tokens: int
+            Evidence budget in estimated tokens.
+        retrieval_count: int | None, optional
+            How many leading search results decide the dominant file when
+            the question names none; None uses the project profile.
+            Defaults to ``None``.
+        trace_turn_id: str | None, optional
+            Turn identifier for trace events. Defaults to ``None``.
+
+        Returns
+        -------
+        DocumentSelection | None
+            The document read and its selected chunks, or None when the
+            index is empty.
+
+        Notes
+        -----
+        Every chunk is ranked (semantic, lexical, and code graph, fused),
+        so a document longer than the budget keeps its parts most relevant
+        to the question. See ``qachat.retrievals.document_reading``.
+
+        """
+
+        trace = getattr(self, "trace", NullTraceLogger())
+        everything = len(self.chunks)
+        if not everything:
+            return None
+        with trace.span(
+            "retrieval.document",
+            component="retrieval",
+            data={"max_tokens": max_tokens},
+            turn_id=trace_turn_id,
+        ):
+            ranked = self._rank_everything(question, trace_turn_id)
+            selection = read_document(
+                question,
+                self.chunks,
+                self.indexes.code_graph,
+                ranked,
+                max_tokens=max_tokens,
+                top=retrieval_count or self.project.profile.retrieval_count,
+            )
+        trace.emit(
+            "retrieval.document.selected",
+            component="retrieval",
+            data=(
+                {"path": None}
+                if selection is None
+                else {
+                    "path": selection.path.as_posix(),
+                    "functions": list(selection.functions),
+                    "reason": selection.reason,
+                    "total_chunks": selection.total_chunks,
+                    "selected_chunks": len(selection.chunks),
+                    "estimated_tokens": selection.estimated_tokens,
+                    "complete": selection.complete,
+                }
+            ),
+            turn_id=trace_turn_id,
+        )
+        return selection
+
     def _format_query(self: RAGSession, question: str) -> str:
         """Apply the embedding model's configured query format.
 
@@ -1900,12 +3121,158 @@ class RAGSession:
         profile = self.project.profile
         if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
-        instruction = (
-            SOFTWARE_REPOSITORY_INSTRUCTION
-            if profile.kind == PROJECT_KIND_CODE
-            else LITERATURE_REPOSITORY_INSTRUCTION
-        )
+        instruction = project_type(profile.kind).retrieval_instruction
         return format_qwen3_query(question, instruction)
+
+    def _system_prompt(self: RAGSession) -> str:
+        """Return the project type's base system prompt.
+
+        Each answer adds its intent's instruction to this prompt.
+
+        """
+
+        return project_type(self.project.profile.kind).system_prompt
+
+    def _route(
+        self: RAGSession,
+        question: str,
+        kind: object,
+        use_router: bool,
+        turn_id: str,
+        report_phase: Callable[..., None],
+    ) -> RouteDecision:
+        """Classify a question's intent and trace the decision."""
+
+        trace = getattr(self, "trace", NullTraceLogger())
+        started = perf_counter()
+        if not use_router:
+            decision = RouteDecision(
+                intent=kind.default_intent,
+                standalone=not self.turns,
+                fallback="routing off",
+            )
+        else:
+            report_phase(ANSWER_PHASE_ROUTING, message="Identifying intent")
+            trace.emit(
+                "intent.input.prepared",
+                component="rag",
+                data={
+                    "machine_state": MACHINE_STATE_ANSWERING,
+                    "project_type": kind.kind,
+                    "intents": list(kind.intents),
+                    "turn_count": len(self.turns),
+                    "router_model": self.router_model,
+                },
+                turn_id=turn_id,
+            )
+            with trace.span(
+                "intent.classification",
+                component="rag",
+                data={"router_model": self.router_model},
+                turn_id=turn_id,
+            ):
+                decision = route_question(
+                    self._router_chat(), kind, self.turns, question
+                )
+        intent = kind.intents[decision.intent]
+        data: dict[str, object] = {
+            "classification": {
+                "intent": decision.intent,
+                "standalone": decision.standalone,
+                "related_turn_ids": list(decision.related_turn_ids),
+                "refers_back": decision.refers_back,
+            },
+            "dropped_turns": [
+                {"turn_id": number, "reason": reason}
+                for number, reason in decision.dropped_turns
+            ],
+            "resolved": {
+                "history_policy": intent.history_policy,
+                "retrieval_mode": intent.retrieval_mode,
+                "retrieval_strategy": intent.retrieval_strategy,
+            },
+            "fallback": decision.fallback,
+            "shortcut": decision.shortcut,
+            "duration_ms": round((perf_counter() - started) * 1000, 3),
+        }
+        if trace.include_content:
+            data["raw"] = decision.raw
+        trace.emit(
+            "intent.classification.decided",
+            component="rag",
+            data=data,
+            turn_id=turn_id,
+        )
+        return decision
+
+    def router_reply(
+        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int
+    ) -> str:
+        """Ask the router model a side question, such as a chat title.
+
+        Parameters
+        ----------
+        system: str
+            System instruction for the side question only.
+        prompt: str
+            The side question.
+        max_new_tokens: int
+            Maximum length of the reply.
+
+        Returns
+        -------
+        str
+            The reply. The answering model's conversation is not changed.
+
+        """
+
+        return side_reply(
+            self._router_chat(),
+            system,
+            prompt,
+            max_new_tokens=max_new_tokens,
+        )
+
+    def use_router_model(self: RAGSession, model_id: str) -> None:
+        """Change the router model, releasing the previous one if separate.
+
+        Parameters
+        ----------
+        model_id: str
+            Chat model that classifies intents from the next question on.
+            It is loaded when first needed, or shared with the answering
+            model when both are the same.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if model_id == self.router_model:
+            return
+        if self._router_session is not None:
+            self._router_session.close()
+            self._router_session = None
+        self.trace.emit(
+            "router.model.changed",
+            component="rag",
+            data={"from": self.router_model, "to": model_id},
+        )
+        self.router_model = model_id
+
+    def _router_chat(self: RAGSession) -> ChatSession:
+        """Return the router model's session, loading it once if needed."""
+
+        if self.chat_session.model_id == self.router_model:
+            return self.chat_session
+        if self._router_session is None:
+            self._router_session = ChatSession(
+                self.router_model,
+                backend=self.backend,
+                system_prompt=self._system_prompt(),
+                allow_download=self.project.profile.allow_download,
+                trace=self.trace,
+            )
+        return self._router_session
 
     def _index_metadata(self: RAGSession) -> dict[str, object]:
         """Return settings that determine reusable index compatibility.
@@ -1924,7 +3291,7 @@ class RAGSession:
         """
 
         profile = self.project.profile
-        return {
+        metadata: dict[str, object] = {
             "format_version": _INDEX_METADATA_VERSION,
             "project_kind": profile.kind,
             "backend": self.backend,
@@ -1936,6 +3303,14 @@ class RAGSession:
             "max_tokens": profile.max_tokens,
             "overlap_tokens": profile.overlap_tokens,
         }
+        # Recorded only when off, so existing indexes stay valid by default.
+        if project_type(profile.kind).code_graph is False:
+            metadata["code_graph"] = False
+        # Projects that read PDFs re-index when the PDF text extractor
+        # changes; other projects are unaffected.
+        if ".pdf" in profile.extensions:
+            metadata["pdf_text_extractor"] = PDF_TEXT_EXTRACTOR
+        return metadata
 
     def _parameters(
         self: RAGSession, retrieval_count: int | None = None
@@ -1974,7 +3349,7 @@ class RAGSession:
             "thinking": self.chat_session.thinking,
             "temperature": self.chat_session.temperature,
             "max_new_tokens": self.chat_session.max_new_tokens,
-            "system_prompt": _SYSTEM_PROMPT,
+            "system_prompt": self._system_prompt(),
         }
 
     def _load_conversation(
@@ -2026,19 +3401,10 @@ class RAGSession:
                     conversation.get("system_prompt", _SYSTEM_PROMPT)
                 )
                 messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
-                for turn in turns:
-                    messages.extend(
-                        (
-                            {
-                                "role": USER_ROLE,
-                                "content": _answer_prompt(
-                                    turn.question,
-                                    turn.evidence,
-                                ),
-                            },
-                            {"role": ASSISTANT_ROLE, "content": turn.answer},
-                        )
-                    )
+                # Earlier evidence stays with its turn; history is Q/A only.
+                messages.extend(
+                    history_messages(turns, list(range(1, len(turns) + 1)))
+                )
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("The saved conversation is invalid.") from error
         checkpoint_id = conversation.get("checkpoint_id")
@@ -2070,7 +3436,7 @@ class RAGSession:
         """
 
         conversation = {
-            "system_prompt": _SYSTEM_PROMPT,
+            "system_prompt": self._system_prompt(),
             "turns": [_turn_to_data(turn) for turn in self.turns],
         }
         parent_checkpoint_id = getattr(self, "_checkpoint_id", None)
@@ -2334,9 +3700,131 @@ def _check_conversation_trace(
         )
 
 
+_MAX_REUSED_EVIDENCE = 40
+
+
+_MAX_RELATED_EVIDENCE = 10
+
+
+def _duration(seconds: float) -> str:
+    """Write an approximate duration such as "40 s" or "3 min"."""
+
+    if seconds < 90:
+        return f"{max(1, round(seconds))} s"
+    return f"{round(seconds / 60)} min"
+
+
+def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
+    """Number a document's selected chunks in source order."""
+
+    return tuple(
+        Evidence(
+            citation=number,
+            path=chunk.path,
+            start_line=chunk.start_line,
+            end_line=chunk.end_line,
+            symbol=chunk.symbol,
+            text=chunk.text,
+            cell=chunk.cell,
+        )
+        for number, chunk in enumerate(selection.chunks, start=1)
+    )
+
+
+def _document_message(selection: DocumentSelection | None) -> str:
+    """Describe a document selection for the progress display."""
+
+    if selection is None:
+        return "No document found to read"
+    name = selection.path.name
+    if selection.functions:
+        name = f"{', '.join(selection.functions)} in {name}"
+    if selection.complete:
+        return f"Reading all {selection.total_chunks} parts of {name}"
+    return (
+        f"Reading the {len(selection.chunks)} most relevant of "
+        f"{selection.total_chunks} parts of {name}"
+    )
+
+
+def _add_related_evidence(
+    fresh: tuple[Evidence, ...],
+    turns: list[ConversationTurn],
+) -> tuple[Evidence, ...]:
+    """Append the evidence earlier related turns relied on.
+
+    Parameters
+    ----------
+    fresh: tuple[Evidence, ...]
+        Evidence just retrieved for the new question; it keeps its numbers.
+    turns: list[ConversationTurn]
+        Earlier turns the router marked as related, oldest first.
+
+    Returns
+    -------
+    tuple[Evidence, ...]
+        Fresh evidence followed by up to ``_MAX_RELATED_EVIDENCE`` related
+        items, renumbered after it. Items a related answer cited come
+        first, newest turn first; an answer without citations contributes
+        its first three items. Chunks already present are skipped.
+
+    """
+
+    seen = {(str(item.path), item.start_line, item.end_line) for item in fresh}
+    extra: list[Evidence] = []
+    for turn in reversed(turns):
+        cited = {
+            int(number)
+            for group in re.findall(
+                r"\[(\d+(?:\s*,\s*\d+)*)\]", str(turn.answer)
+            )
+            for number in re.split(r"\s*,\s*", group)
+        }
+        chosen = [item for item in turn.evidence if item.citation in cited]
+        if not cited:
+            chosen = list(turn.evidence[:3])
+        for item in chosen:
+            key = (str(item.path), item.start_line, item.end_line)
+            if key not in seen and len(extra) < _MAX_RELATED_EVIDENCE:
+                seen.add(key)
+                extra.append(item)
+    start = len(fresh) + 1
+    return fresh + tuple(
+        replace(item, citation=number)
+        for number, item in enumerate(extra, start)
+    )
+
+
+def _merge_evidence(
+    groups: list[tuple[Evidence, ...]],
+) -> tuple[Evidence, ...]:
+    """Combine earlier turns' evidence and renumber the citations.
+
+    Each turn numbered its evidence from 1, so the combined list is
+    renumbered in conversation order; a repeated chunk keeps its first
+    position. At most ``_MAX_REUSED_EVIDENCE`` items are kept, dropping the
+    oldest.
+
+    """
+
+    seen: set[tuple[str, int, int]] = set()
+    ordered: list[Evidence] = []
+    for group in groups:
+        for item in group:
+            key = (str(item.path), item.start_line, item.end_line)
+            if key not in seen:
+                seen.add(key)
+                ordered.append(item)
+    kept = ordered[-_MAX_REUSED_EVIDENCE:]
+    return tuple(
+        replace(item, citation=number) for number, item in enumerate(kept, 1)
+    )
+
+
 def _answer_prompt(
     question: str,
     evidence: tuple[Evidence, ...],
+    guidance: object = None,
 ) -> str:
     """Combine one question with numbered, traceable evidence.
 
@@ -2346,6 +3834,9 @@ def _answer_prompt(
         User question supplied to query formatting or evidence retrieval.
     evidence: tuple[Evidence, ...]
         Ordered retrieved chunks with citation numbers and source provenance.
+    guidance: object, optional
+        Extra answer instruction; only a nonempty string is appended.
+        Defaults to ``None``.
 
     Returns
     -------
@@ -2362,6 +3853,12 @@ def _answer_prompt(
 
     """
 
+    if not evidence:
+        # Without evidence (for example small talk) the message is sent as
+        # written; an instruction here was echoed back by the model.
+        if isinstance(guidance, str) and guidance.strip():
+            return f"{question}\n\n{guidance.strip()}"
+        return question
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
         location = f"{item.path}:{item.start_line}-{item.end_line}"
@@ -2372,6 +3869,8 @@ def _answer_prompt(
         "after the claims they support. Do not repeat the source text or "
         "write a bibliography."
     )
+    if isinstance(guidance, str) and guidance.strip():
+        sections[-1] += " " + guidance.strip()
     return "\n\n".join(sections)
 
 

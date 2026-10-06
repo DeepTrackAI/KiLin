@@ -67,9 +67,11 @@ The identifier is illustrative. Request downloads explicitly with
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
+from huggingface_hub.utils import tqdm as _HubTqdm
 
 try:
     from huggingface_hub.errors import (
@@ -265,6 +267,7 @@ def download_model(
     model_id: str,
     *,
     revision: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Download or reuse a model snapshot in Hugging Face's shared cache.
 
@@ -279,6 +282,11 @@ def download_model(
     revision: str | None, optional
         Branch, tag, or commit to download. Defaults to ``None``, which uses
         the repository's default revision.
+    progress_callback: collections.abc.Callable[[int, int], None] | None,
+        optional
+        Callback receiving completed and expected snapshot byte counts. The
+        expected total can initially be zero while Hugging Face discovers
+        repository files. Defaults to ``None``.
 
     Returns
     -------
@@ -308,16 +316,58 @@ def download_model(
     """
 
     _check_model_id(model_id)
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
+    options: dict[str, object] = {}
+    if progress_callback is not None:
+        options["tqdm_class"] = _progress_tqdm(progress_callback)
 
     path = snapshot_download(
         repo_id=model_id,
         revision=revision,
+        **options,
     )
 
     if not isinstance(path, str):
         raise RuntimeError("Hugging Face did not return a model path.")
 
     return Path(path)
+
+
+def _progress_tqdm(
+    callback: Callable[[int, int], None],
+) -> type[_HubTqdm]:
+    """Build a silent Hub progress class that reports aggregate bytes."""
+
+    class DownloadProgress(_HubTqdm):
+        """Forward aggregate snapshot completion without terminal output."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self._qachat_reports_bytes = (
+                str(kwargs.get("desc", "")).startswith("Reconstructing")
+                and kwargs.get("unit") == "B"
+            )
+            kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+            self._qachat_report()
+
+        def update(self, n: int | float | None = 1) -> bool | None:
+            # tqdm skips its counter entirely while disabled. Keep the counter
+            # ourselves so GUI downloads stay silent but still expose bytes.
+            if self.disable:
+                self.n += n or 0
+                self._qachat_report()
+                return True
+            result = super().update(n)
+            self._qachat_report()
+            return result
+
+        def _qachat_report(self) -> None:
+            if self._qachat_reports_bytes:
+                callback(int(self.n), int(self.total or 0))
+
+    return DownloadProgress
 
 
 def _check_model_id(model_id: str) -> None:

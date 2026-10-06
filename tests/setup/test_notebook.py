@@ -104,6 +104,8 @@ class TestNotebookSetup(unittest.TestCase):
                     "mlx",
                     "--extra",
                     "torch",
+                    "--extra",
+                    "bench",
                 ],
                 cwd=Path("/project"),
                 check=True,
