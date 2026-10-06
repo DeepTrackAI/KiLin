@@ -31,75 +31,76 @@ const previewRoots = new Map();
 const previewSkipped = new Map();
 const checkedFiles = new Map();
 const expandedFolders = new Set();
+// Workspace folders that start open but the user has folded.
+const collapsedWorkspaceFolders = new Set();
 let profile = null;
 let cachedModels = new Set();
 let modelChoices = [];
+// Effort levels per backend: saved for the project, built-in defaults, and
+// the Settings panel's unsaved copy for the active backend.
+let savedLevels = {};
+let defaultLevels = {};
+let draftLevels = [];
+let modelRoles = {};
+let modelsBaseline = null;
+let applyingModels = false;
+let closeAfterModelsApply = false;
 let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
+let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
 let resumeRefreshTimer = null;
 let activeTracePath = "";
 let activeConversationId = "";
+// Last conversation registry, and the empty chat whose first question is
+// being answered; that chat is listed before it has saved turns.
+let lastConversationData = null;
+let askingConversation = null;
 let pendingTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
 let answerStageTimer = null;
 let answerStageKey = null;
 let answerStageQueue = [];
-let completedTurnWaiting = null;
-let selectedEffort = "lagom";
+let selectedModelLevel = 2;
+let selectedRetrievalLevel = 2;
 let resumeAfterStop = false;
 let activeProjectKind = "code";
 let lastEmptyPrompt = { code: -1, literature: -1 };
 let messageAttachments = [];
 let currentTurnCount = 0;
-const effortLevels = [
-  { key: "light", name: "Light", detail: "0.6B model · 5 references" },
-  { key: "instant", name: "Instant", detail: "0.6B model · 20 references" },
-  { key: "lagom", name: "Lagom", detail: "8B model · 20 references" },
-  { key: "thorough", name: "Thorough", detail: "8B model · 50 references" },
-  { key: "deep", name: "Deep", detail: "27B model · 50 references" },
-];
-const emptyChatContent = {
-  code: {
-    prompts: [
-      "What would you like to understand about this codebase?",
-      "Which part of your project should we explore?",
-      "What do you want to trace through the code?",
-      "What behavior would you like to investigate?",
-      "Where should we start in this repository?",
-    ],
-    suggestions: [
-      "Explain a concept", "Find where a feature is implemented",
-      "Trace a function through the code", "Compare two approaches",
-      "Find evidence across my files", "Explain how modules connect",
-      "Identify code related to an error", "Summarize an architecture decision",
-      "Find tests for a behavior",
-    ],
-  },
-  literature: {
-    prompts: [
-      "What would you like to understand from your literature?",
-      "Which concept should we explore across these sources?",
-      "What evidence are you looking for?",
-      "What would you like to compare in the literature?",
-      "Which finding should we investigate?",
-    ],
-    suggestions: [
-      "Explain a concept", "Find evidence across my files",
-      "Compare two approaches", "Summarize findings on a topic",
-      "Find supporting and conflicting evidence", "Trace a claim to its sources",
-      "Compare methods across papers", "Identify gaps in the evidence",
-      "Find how a term is defined",
-    ],
-  },
+// Project types from qachat/project_types.json, keyed by ID.
+let projectTypes = {};
+// Used only if a type lists no welcome prompts or suggestions.
+const genericEmptyChat = {
+  welcome_prompts: ["What would you like to explore in these sources?"],
+  suggestions: ["Explain a concept", "Find evidence across my files", "Compare two approaches"],
 };
+
+/**
+ * Rebuild the project type dropdown, keeping the current choice.
+ *
+ * @param types Project types sent by the engine.
+ */
+function renderProjectTypes(types) {
+  if (!Array.isArray(types) || !types.length) return;
+  projectTypes = Object.fromEntries(types.map((item) => [item.kind, item]));
+  const select = byId("kind");
+  const current = select.value;
+  select.replaceChildren(...types.map((item) => {
+    const option = document.createElement("option");
+    option.value = item.kind;
+    option.textContent = item.label;
+    return option;
+  }));
+  select.value = projectTypes[current] ? current : types[0].kind;
+}
 
 function turnCountLabel(count) {
   return `${count} ${count === 1 ? "turn" : "turns"}`;
@@ -170,6 +171,7 @@ function applyAppearance(value) {
   document.documentElement.dataset.appearance = selected;
   localStorage.setItem("qachat-appearance", selected);
   if (byId("appearance")) byId("appearance").value = selected;
+  bridge?.setAppearance(selected);
 }
 
 function renderSavedProjects(projects) {
@@ -210,6 +212,15 @@ function renderSavedProjects(projects) {
  * @param paths Local paths provided by a native dialog or drag-and-drop.
  */
 function addSources(paths) {
+  if (busy || !paths.length) return;
+  if (ready) {
+    const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
+    if (!confirm(`Add these sources to this project?\n\n${names}\n\nQAChat will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
+    error.classList.add("hidden");
+    setBusy(true, "Adding sources and updating the index…");
+    bridge.addProjectSources(JSON.stringify(paths));
+    return;
+  }
   for (const path of paths) {
     const clean = String(path).trim();
     if (clean && !selectedSources.includes(clean)) selectedSources.push(clean);
@@ -259,6 +270,8 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
     if (!details.isConnected) return;
     details.open ? expandedFolders.add(key) : expandedFolders.delete(key);
   });
+  // Root-relative trees (the workspace) can recover the folder's own path.
+  if (paths[0]) details.dataset.path = paths[0].split("/").slice(0, depth + 1).join("/");
   const summary = document.createElement("summary");
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
@@ -412,67 +425,269 @@ function refreshModelStatus() {
   byId("open-models").classList.toggle("models-needed", !hasBoth);
 }
 
+// Rendered between the language and embedding groups.
+const otherModels = document.querySelector(".other-models");
+const DEFAULT_LEVEL = 2;
+const MAX_RETRIEVAL = 200;
+
+const cloneLevels = (levels) => (levels || []).map((level) => ({ ...level }));
+
 /**
- * Build suggested-model controls and the unclassified cache listing.
+ * Return the saved effort levels for the active backend.
+ *
+ * @returns Five {name, model, retrieval} records, or none before settings load.
+ */
+function currentLevels() {
+  return savedLevels[activeBackend] || defaultLevels[activeBackend] || [];
+}
+
+/**
+ * Report a cached model's role: chat, embedding, or other.
+ *
+ * @param id Model ID.
+ * @returns Role from the cache scan, the preset catalog, or the name.
+ */
+function modelRole(id) {
+  if (modelRoles[id]) return modelRoles[id];
+  const preset = modelChoices.find((choice) => choice.model_id === id);
+  if (preset) return preset.role;
+  return /embed/i.test(id) ? "embedding" : "other";
+}
+
+/**
+ * List dropdown choices: cached models of a role plus the current value.
+ *
+ * @param role chat or embedding.
+ * @param current Model already chosen, kept even when not downloaded.
+ * @returns Sorted model IDs.
+ */
+function roleModelIds(role, current) {
+  const ids = [...cachedModels].filter((id) => modelRole(id) === role);
+  if (current && !ids.includes(current)) ids.push(current);
+  return ids.sort((left, right) => left.localeCompare(right));
+}
+
+/**
+ * Build a model dropdown; models that are not downloaded are marked.
+ */
+function modelSelect(ids, value, label) {
+  const select = document.createElement("select");
+  select.className = "model-select";
+  select.setAttribute("aria-label", label);
+  for (const id of ids) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = cachedModels.has(id) ? id : `${id} (not downloaded)`;
+    select.append(option);
+  }
+  select.value = value;
+  select.disabled = busy;
+  return select;
+}
+
+/**
+ * Show a Download button under a row whose model is not cached.
+ */
+function downloadNotice(id, installed) {
+  if (!id || cachedModels.has(id) || id.startsWith("/") || id.startsWith(".")) return null;
+  const notice = document.createElement("div");
+  notice.className = "model-missing";
+  const text = document.createElement("small");
+  text.textContent = "Not downloaded";
+  const download = document.createElement("button");
+  download.type = "button";
+  download.className = "primary";
+  download.textContent = "Download";
+  download.disabled = busy || !installed;
+  // An explicit Download click authorizes this download.
+  download.addEventListener("click", () => applyModelEdits(false, id));
+  notice.append(text, download);
+  return notice;
+}
+
+/**
+ * Build a model group heading with its Restore defaults button.
+ */
+function modelGroupHeader(role, title) {
+  const header = document.createElement("div");
+  header.className = "model-group-header";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const restore = document.createElement("button");
+  restore.type = "button";
+  restore.className = "secondary restore-defaults";
+  restore.textContent = "Restore defaults";
+  restore.setAttribute("aria-label", `Restore default ${title.toLowerCase()}`);
+  restore.disabled = busy || !hasModelChanges(role);
+  restore.addEventListener("click", () => restoreDefaultModels(role));
+  header.append(heading, restore);
+  return header;
+}
+
+/**
+ * Build the effort-level rows, the embedding choice, and the cache listing.
  */
 function renderModelsPanel() {
   const host = byId("model-list");
+  const focused = document.activeElement?.closest?.("[data-focus-key]")?.dataset.focusKey;
   host.replaceChildren();
   const installed = installedBackends[activeBackend];
+  const mlx = activeBackend === "mlx";
   byId("models-backend").textContent = installed
-    ? `Showing suggested ${activeBackend.toUpperCase()} models. Change the backend in Settings to see its choices.`
+    ? `Showing ${activeBackend.toUpperCase()} models. Change the backend in Settings to see its choices.`
     : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the QAChat folder first.`;
-  for (const [role, title] of [["chat", "Language models"], ["embedding", "Embedding models"]]) {
-    const group = document.createElement("section");
-    group.className = "model-group";
-    const heading = document.createElement("h3");
-    heading.textContent = title;
-    group.append(heading);
-    for (const choice of compatibleChoices(role)) {
-      const row = document.createElement("div");
-      row.className = "model-row";
-      const description = document.createElement("div");
-      const name = document.createElement("div");
-      name.textContent = choice.model_id;
-      const state = document.createElement("small");
-      state.textContent = cachedModels.has(choice.model_id)
-        ? "Cached locally · checked when the project opens"
-        : "Not cached · download only if you choose to";
-      description.append(name, state);
-      const action = document.createElement("button");
-      action.className = cachedModels.has(choice.model_id) ? "secondary" : "primary";
-      action.type = "button";
-      action.textContent = cachedModels.has(choice.model_id)
-        ? (ready ? "Ready" : "Use") : "Download";
-      action.disabled = busy || !installed || (ready && cachedModels.has(choice.model_id));
-      action.addEventListener("click", () => {
-        if (cachedModels.has(choice.model_id)) {
-          const field = role === "chat" ? "chat-model" : "embedding-model";
-          byId(field).value = choice.model_id;
-          byId(field).dispatchEvent(new Event("input"));
-          saveModelFields();
-          byId("model-download-status").textContent = `${choice.model_id} selected for this project.`;
-        } else {
-          downloadingModel = choice.model_id;
-          byId("model-download-status").textContent = `Downloading ${choice.model_id}…`;
-          byId("cancel-model-download").classList.remove("hidden");
-          setBusy(true, `Downloading ${choice.model_id}…`);
-          bridge.downloadModel(choice.model_id);
-        }
-      });
-      row.append(description, action);
-      group.append(row);
-    }
-    if (group.children.length === 1) {
-      const empty = document.createElement("p");
-      empty.className = "hint";
-      empty.textContent = "No suggested models for this query format. Choose Qwen3 or enter a custom model in Settings.";
-      group.append(empty);
-    }
-    host.append(group);
+
+  const chat = document.createElement("section");
+  chat.className = "model-group";
+  chat.append(modelGroupHeader("chat", "Effort levels"));
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = mlx
+    ? "The composer picks a level for the model and a level for references separately. Rename levels as you like."
+    : "PyTorch answers every level with one model; levels still set the number of references.";
+  chat.append(hint);
+  const columns = document.createElement("div");
+  columns.className = "level-row level-columns";
+  columns.setAttribute("aria-hidden", "true");
+  for (const label of ["Level", "Language model", "References"]) {
+    const cell = document.createElement("span");
+    cell.textContent = label;
+    columns.append(cell);
   }
-  const other = [...cachedModels].filter((id) =>
-    !modelChoices.some((choice) => choice.model_id === id)).sort();
+  chat.append(columns);
+  draftLevels.forEach((level, index) => {
+    const row = document.createElement("div");
+    row.className = "level-row";
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "level-name";
+    name.maxLength = 24;
+    name.value = level.name;
+    name.disabled = busy;
+    name.dataset.focusKey = `name-${index}`;
+    name.setAttribute("aria-label", `Name of effort level ${index + 1}`);
+    name.addEventListener("input", () => {
+      level.name = name.value;
+      refreshRestoreButtons();
+    });
+    const select = modelSelect(roleModelIds("chat", level.model), level.model,
+      `Language model for ${level.name || `level ${index + 1}`}`);
+    select.dataset.focusKey = `model-${index}`;
+    select.addEventListener("change", () => {
+      // Other backends cannot switch models per level: one model for all.
+      for (const target of mlx ? [level] : draftLevels) target.model = select.value;
+      byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
+      renderModelsPanel();
+    });
+    const count = document.createElement("input");
+    count.type = "number";
+    count.className = "level-retrieval";
+    count.min = "1";
+    count.max = String(MAX_RETRIEVAL);
+    count.step = "1";
+    count.value = String(level.retrieval);
+    count.disabled = busy;
+    count.dataset.focusKey = `refs-${index}`;
+    count.setAttribute("aria-label", `References for ${level.name || `level ${index + 1}`}`);
+    count.addEventListener("input", () => {
+      level.retrieval = Number(count.value);
+      refreshRestoreButtons();
+    });
+    row.append(name, select, count);
+    chat.append(row);
+    const notice = downloadNotice(level.model, installed);
+    if (notice) chat.append(notice);
+  });
+  host.append(chat, otherModels);
+
+  const embedding = document.createElement("section");
+  embedding.className = "model-group";
+  embedding.append(modelGroupHeader("embedding", "Embedding model"));
+  const current = byId("embedding-model").value.trim();
+  const row = document.createElement("div");
+  row.className = "model-row";
+  const select = modelSelect(roleModelIds("embedding", current), current, "Embedding model");
+  select.dataset.focusKey = "embedding";
+  select.addEventListener("change", () => {
+    byId("embedding-model").value = select.value;
+    renderModelsPanel();
+  });
+  row.append(select);
+  embedding.append(row);
+  const notice = downloadNotice(current, installed);
+  if (notice) embedding.append(notice);
+  host.append(embedding);
+  renderOtherModels();
+  if (focused) host.querySelector(`[data-focus-key="${focused}"]`)?.focus();
+}
+
+/**
+ * Enable each Restore defaults button only when it would change something.
+ */
+function refreshRestoreButtons() {
+  const buttons = byId("model-list").querySelectorAll(".restore-defaults");
+  if (buttons[0]) buttons[0].disabled = busy || !hasModelChanges("chat");
+  if (buttons[1]) buttons[1].disabled = busy || !hasModelChanges("embedding");
+}
+
+/**
+ * Return the built-in embedding model for the active backend.
+ */
+function defaultEmbeddingModel() {
+  return compatibleChoices("embedding")[0]?.model_id
+    || backendChoices("embedding")[0]?.model_id || "";
+}
+
+/**
+ * Report whether a group differs from its built-in defaults.
+ *
+ * @param role chat (effort levels) or embedding.
+ * @returns True when restoring defaults would change something.
+ */
+function hasModelChanges(role) {
+  if (role === "chat") {
+    return JSON.stringify(draftLevels) !== JSON.stringify(defaultLevels[activeBackend] || []);
+  }
+  return byId("embedding-model").value.trim() !== defaultEmbeddingModel()
+    || byId("query-format").value !== "qwen3";
+}
+
+/**
+ * Return a role's presets for the active backend, ignoring query format.
+ *
+ * @param role Model role: chat or embedding.
+ * @returns Matching model-preset records.
+ */
+function backendChoices(role) {
+  return modelChoices.filter((choice) =>
+    choice.role === role && choice.backend === activeBackend);
+}
+
+/**
+ * Reset a group to its built-in values; Close applies the change.
+ *
+ * @param role chat (effort levels) or embedding.
+ */
+function restoreDefaultModels(role) {
+  if (busy) return;
+  if (role === "chat") {
+    draftLevels = cloneLevels(defaultLevels[activeBackend]);
+    if (draftLevels.length) byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
+  } else {
+    byId("query-format").value = "qwen3";
+    byId("embedding-model").value = defaultEmbeddingModel();
+  }
+  refreshModelStatus();
+  renderModelsPanel();
+}
+
+/**
+ * List cached models that no level or the embedding choice uses.
+ */
+function renderOtherModels() {
+  const shown = new Set([...draftLevels.map((level) => level.model),
+    byId("embedding-model").value.trim()]);
+  const other = [...cachedModels].filter((id) => !shown.has(id)).sort();
   byId("other-model-list").replaceChildren(...other.map((id) => {
     const item = document.createElement("div");
     item.className = "other-model-id";
@@ -486,9 +701,80 @@ function renderModelsPanel() {
  * Render and open the models panel, then focus its close control.
  */
 function openModels() {
+  if (byId("models-panel").classList.contains("hidden")) {
+    draftLevels = cloneLevels(currentLevels());
+    modelsBaseline = currentModelSettings();
+  }
   renderModelsPanel();
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
+}
+
+function currentModelSettings() {
+  return {
+    chat_model: draftLevels[DEFAULT_LEVEL]?.model || byId("chat-model").value.trim(),
+    embedding_model: byId("embedding-model").value.trim(),
+    query_format: byId("query-format").value,
+    effort_levels: cloneLevels(draftLevels),
+  };
+}
+function hideModels() {
+  setupCompletionVisible = false;
+  byId("models-panel").classList.add("hidden");
+  syncSourceDropTarget();
+}
+
+/**
+ * Explain the first invalid effort level, or return an empty string.
+ */
+function levelProblem(levels) {
+  for (const [index, level] of levels.entries()) {
+    if (!level.name.trim()) return `Give effort level ${index + 1} a name.`;
+    if (!Number.isInteger(level.retrieval) || level.retrieval < 1 || level.retrieval > MAX_RETRIEVAL) {
+      return `References for ${level.name.trim()} must be a whole number from 1 to ${MAX_RETRIEVAL}.`;
+    }
+  }
+  return "";
+}
+
+function applyModelEdits(closeAfter = false, explicitDownload = null) {
+  if (busy || !bridge) return;
+  const settings = currentModelSettings();
+  const before = modelsBaseline || settings;
+  const changed = JSON.stringify(settings.effort_levels) !== JSON.stringify(before.effort_levels)
+    || settings.embedding_model !== before.embedding_model || settings.query_format !== before.query_format;
+  if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return; }
+  const problem = levelProblem(settings.effort_levels);
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  for (const level of settings.effort_levels) level.name = level.name.trim();
+  if (!settings.chat_model || !settings.embedding_model) {
+    byId("model-download-status").textContent = "Choose language and embedding models.";
+    return;
+  }
+  const requested = [...new Set([settings.embedding_model,
+    ...settings.effort_levels.map((level) => level.model)])];
+  const missing = requested.filter((id) => !cachedModels.has(id)
+    && !id.startsWith("/") && !id.startsWith("."));
+  const reindex = ready && (settings.embedding_model !== before.embedding_model
+    || settings.query_format !== before.query_format);
+  const warnings = [];
+  if (missing.some((id) => id !== explicitDownload)) warnings.push(`These models need to download, which may take a while:\n${missing.join("\n")}`);
+  if (reindex) warnings.push("Changing the embedding model or query format will rebuild this project's index. Your saved chats will be kept.");
+  if (warnings.length && !confirm(`${warnings.join("\n\n")}\n\nProceed?`)) return;
+  applyingModels = true;
+  closeAfterModelsApply = closeAfter;
+  error.classList.add("hidden");
+  byId("model-download-status").textContent = reindex ? "Applying models and rebuilding the index…" : "Applying model settings…";
+  setBusy(true, byId("model-download-status").textContent);
+  bridge.applyModelSettings(JSON.stringify({ ...settings, download: missing.length > 0 }));
+}
+function closeModels() {
+  if (busy) return;
+  if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+  applyModelEdits(true);
 }
 
 /**
@@ -567,6 +853,8 @@ function showModelFields() {
   activeBackend = byId("backend").value === "auto" ? automaticBackend : byId("backend").value;
   byId("chat-model").value = profile[`chat_${activeBackend}`];
   byId("embedding-model").value = profile[`embedding_${activeBackend}`];
+  draftLevels = cloneLevels(currentLevels());
+  renderEffortPicker();
   refreshModelStatus();
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
 }
@@ -579,6 +867,10 @@ function showModelFields() {
  */
 function showSettings(data) {
   profile = data.profile;
+  savedLevels = data.effort_levels || {};
+  defaultLevels = data.default_effort_levels || defaultLevels;
+  renderProjectTypes(data.project_types);
+  modelRoles = data.model_roles || modelRoles;
   automaticBackend = data.backend;
   cachedModels = new Set(data.cached_models);
   modelChoices = data.model_choices || [];
@@ -589,11 +881,12 @@ function showSettings(data) {
   byId("query-format").value = profile.query_format;
   byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
   for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens", "temperature", "max_new_tokens"]) {
+    if (ready && ["temperature", "max_new_tokens"].includes(key)) continue;
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
   // A new GUI project does not silently download model weights.
   byId("allow-download").checked = Boolean(data.workspace && profile.allow_download);
-  byId("thinking").checked = profile.thinking;
+  if (!ready) byId("thinking").checked = profile.thinking;
   showModelFields();
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
@@ -612,6 +905,7 @@ function collectSettings() {
   saveModelFields();
   return {
     backend: byId("backend").value,
+    _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
@@ -635,7 +929,15 @@ function renderWorkspace(paths) {
   const root = fileTree(paths);
   const selected = new Set(paths);
   for (const [name, node] of [...root.directories].sort()) {
-    const item = branch(name, node, allFiles(node), selected);
+    const files = allFiles(node);
+    const item = branch(name, node, files, selected);
+    // Only sources starts open; indexes and logs stay folded until opened.
+    const key = `${name}|${files[0] || ""}`;
+    item.open = name === "sources" ? !collapsedWorkspaceFolders.has(key) : expandedFolders.has(key);
+    item.addEventListener("toggle", () => {
+      if (!item.isConnected || name !== "sources") return;
+      item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
+    });
     item.querySelectorAll("input").forEach((input) => input.remove());
     item.querySelectorAll(".tree-file").forEach((line) => {
       line.tabIndex = 0;
@@ -648,6 +950,37 @@ function renderWorkspace(paths) {
         }
       });
     });
+    if (name === "sources") {
+      item.id = "workspace-source-drop";
+      item.classList.add("source-drop-target");
+      const hint = document.createElement("p");
+      hint.className = "source-drop-hint";
+      hint.textContent = "Drop files or folders here to add sources";
+      item.querySelector("summary").append(hint);
+      item.addEventListener("dragover", (event) => {
+        if (busy || !ready) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        showNativeSourceDrag(true);
+      });
+      item.addEventListener("dragleave", (event) => {
+        if (!item.contains(event.relatedTarget)) showNativeSourceDrag(false);
+      });
+      item.addEventListener("drop", (event) => {
+        event.preventDefault();
+        showNativeSourceDrag(false);
+        addSources(Array.from(event.dataTransfer.files, (file) => file.path).filter(Boolean));
+      });
+      item.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(".tree-file, .tree-folder > summary");
+        const path = row?.classList.contains("tree-file")
+          ? row.dataset.path : row?.parentElement.dataset.path;
+        // The sources folder itself is not deletable; only its contents are.
+        if (!path || !path.startsWith("sources/")) return;
+        event.preventDefault();
+        showSourceMenu(event.clientX, event.clientY, path, row.classList.contains("tree-file"));
+      });
+    }
     host.append(item);
   }
   for (const file of root.files) {
@@ -661,12 +994,148 @@ function renderWorkspace(paths) {
   }
 }
 
+// Send the visible drop rectangle to Qt; all other workspace rows reject drops.
+let sourceDragActive = false;
+const sourceDropSpotlight = document.createElement("div");
+sourceDropSpotlight.className = "source-drop-spotlight hidden";
+sourceDropSpotlight.setAttribute("aria-hidden", "true");
+document.body.append(sourceDropSpotlight);
+let lastSourceDropBounds = "";
+function syncSourceDropTarget() {
+  if (!bridge?.setSourceDropTarget) return;
+  const target = ready ? byId("workspace-source-drop") : byId("drop-zone");
+  const rect = target?.getBoundingClientRect();
+  const visible = !busy && rect?.width && rect?.height && target.getClientRects().length
+    && !target.closest(".hidden") && byId("models-panel").classList.contains("hidden");
+  if (!visible) return sendSourceDropBounds("{}");
+  let left = Math.max(0, rect.left), top = Math.max(0, rect.top);
+  let right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom);
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+    const style = getComputedStyle(parent);
+    const bounds = parent.getBoundingClientRect();
+    if (/(auto|scroll|hidden)/.test(style.overflowY)) {
+      top = Math.max(top, bounds.top); bottom = Math.min(bottom, bounds.bottom);
+    }
+    if (/(auto|scroll|hidden)/.test(style.overflowX)) {
+      left = Math.max(left, bounds.left); right = Math.min(right, bounds.right);
+    }
+  }
+  sendSourceDropBounds(JSON.stringify({x: left, y: top, width: Math.max(0, right-left), height: Math.max(0, bottom-top)}));
+}
+function sendSourceDropBounds(bounds) {
+  const region = JSON.parse(bounds);
+  const visible = sourceDragActive && region.width > 0 && region.height > 0;
+  sourceDropSpotlight.classList.toggle("hidden", !visible);
+  if (visible) {
+    Object.assign(sourceDropSpotlight.style, {
+      left: `${region.x}px`, top: `${region.y}px`,
+      width: `${region.width}px`, height: `${region.height}px`,
+    });
+  }
+  if (bounds === lastSourceDropBounds) return;
+  lastSourceDropBounds = bounds;
+  bridge.setSourceDropTarget(bounds);
+}
+function showNativeSourceDrag(active) {
+  sourceDragActive = Boolean(active && !busy);
+  const target = ready ? byId("workspace-source-drop") : byId("drop-zone");
+  target?.classList.toggle("drag-over", sourceDragActive);
+  syncSourceDropTarget();
+}
+window.addEventListener("resize", syncSourceDropTarget);
+document.addEventListener("scroll", syncSourceDropTarget, true);
+document.addEventListener("toggle", syncSourceDropTarget, true);
+new ResizeObserver(syncSourceDropTarget).observe(shell);
+new MutationObserver(() => requestAnimationFrame(syncSourceDropTarget)).observe(shell, {
+  subtree: true, childList: true, attributes: true, attributeFilter: ["class", "open"],
+});
+// Never let a file drop navigate the page or write to indexes/profile areas.
+document.addEventListener("dragover", (event) => {
+  if (!event.target.closest("#workspace-source-drop, #drop-zone")) {
+    event.preventDefault(); event.dataTransfer.dropEffect = "none";
+  }
+});
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  showNativeSourceDrag(false);
+});
+window.addEventListener("blur", () => showNativeSourceDrag(false));
+
+// One shared right-click menu for items inside the workspace sources folder.
+const sourceMenu = document.createElement("div");
+sourceMenu.className = "context-menu hidden";
+sourceMenu.setAttribute("role", "menu");
+document.body.append(sourceMenu);
+
+/**
+ * Offer deletion for one workspace source file or folder at the pointer.
+ *
+ * @param x Viewport x coordinate of the right-click.
+ * @param y Viewport y coordinate of the right-click.
+ * @param path Workspace-relative path beginning with sources/.
+ * @param isFile Whether the path is a file rather than a folder.
+ */
+function showSourceMenu(x, y, path, isFile) {
+  if (busy || !ready) return;
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.setAttribute("role", "menuitem");
+  remove.textContent = isFile ? "Delete file from project…" : "Delete folder from project…";
+  remove.addEventListener("click", () => {
+    hideSourceMenu();
+    removeSource(path, isFile);
+  });
+  sourceMenu.replaceChildren(remove);
+  sourceMenu.classList.remove("hidden");
+  const { width, height } = sourceMenu.getBoundingClientRect();
+  sourceMenu.style.left = `${Math.min(x, window.innerWidth - width - 8)}px`;
+  sourceMenu.style.top = `${Math.min(y, window.innerHeight - height - 8)}px`;
+  remove.focus();
+}
+
+function hideSourceMenu() {
+  sourceMenu.classList.add("hidden");
+}
+
+/**
+ * Confirm, then delete a workspace source copy and update the index.
+ *
+ * @param path Workspace-relative path beginning with sources/.
+ * @param isFile Whether the path is a file rather than a folder.
+ */
+function removeSource(path, isFile) {
+  if (busy || !bridge) return;
+  const name = path.split("/").pop();
+  const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
+  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nThe copy in the workspace is deleted and the index is updated. Your original files outside the workspace are not changed. Saved chats are kept. Continue?`)) return;
+  error.classList.add("hidden");
+  setBusy(true, "Removing sources and updating the index…");
+  bridge.removeProjectSources(JSON.stringify([path]));
+}
+
+document.addEventListener("click", (event) => {
+  if (!sourceMenu.contains(event.target)) hideSourceMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") hideSourceMenu();
+});
+window.addEventListener("blur", hideSourceMenu);
+document.addEventListener("scroll", hideSourceMenu, true);
+
 function openWorkspaceFile(path) {
   if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
   bridge.openWorkspaceFile(path);
 }
 
 function showError(message, tracePath = "") {
+  clearAskingConversation();
+  applyingModels = false;
+  closeAfterModelsApply = false;
+  byId("model-download-status").textContent = message;
+  if (ready) {
+    byId("project-name").textContent = byId("workspace-path").value.split(/[\\/]/).pop();
+    updateProjectSummary();
+  }
   stopPhaseAnimation();
   resetAnswerStages();
   if (pendingTurn) {
@@ -676,6 +1145,9 @@ function showError(message, tracePath = "") {
   }
   error.textContent = tracePath ? `${message} Trace: ${tracePath}` : message;
   error.classList.remove("hidden");
+  setupCompletionVisible = false;
+  byId("readiness-meter").classList.add("hidden");
+  byId("readiness-meter").classList.remove("indeterminate");
   if (downloadingModel) {
     byId("model-download-status").textContent = error.textContent;
     byId("cancel-model-download").classList.add("hidden");
@@ -698,15 +1170,32 @@ function showError(message, tracePath = "") {
  */
 function setBusy(value, message = "") {
   busy = value;
+  byId("project-name").contentEditable = String(!value);
+  byId("topbar-project-name").contentEditable = String(!value);
+  byId("backend").disabled = ready || value;
+  for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
+  byId("close-models").disabled = value;
+  byId("conversation-name").contentEditable = String(!value);
+  syncSourceDropTarget();
   if (!value) activity.classList.remove("answer-progress");
   byId("open").disabled = value || !bridge;
-  byId("send").disabled = !ready;
-  byId("send").classList.toggle("stopping", value && ready);
-  byId("send").querySelector("span").textContent = value && ready ? "■" : "↑";
-  byId("send").setAttribute(
-    "aria-label", value && ready ? "Stop generation" : "Send message",
-  );
+  const answering = value && ready && activity.classList.contains("answer-progress");
+  byId("question-form").classList.toggle("composer-disabled", value && !answering);
+  byId("question-form").setAttribute("aria-busy", String(value));
+  for (const id of ["question", "attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-retrieval-range"]) {
+    byId(id).disabled = value || !ready;
+  }
+  if (value) {
+    showNativeSourceDrag(false);
+    byId("attach-menu").classList.add("hidden");
+    byId("effort-menu").classList.add("hidden");
+  }
+  byId("send").disabled = !ready || (value && !answering);
+  byId("send").classList.toggle("stopping", answering);
+  byId("send").querySelector("span").textContent = answering ? "■" : "↑";
+  byId("send").setAttribute("aria-label", answering ? "Stop generation" : "Send message");
   byId("send").title = byId("send").getAttribute("aria-label");
+  byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
   byId("branch-chat").disabled = value || !ready;
   document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
@@ -733,6 +1222,53 @@ function seconds(value) {
   const minutes = Math.floor(rounded / 60);
   const remainder = rounded % 60;
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+}
+
+/** Format a byte count using compact binary units. */
+function bytes(value) {
+  const amount = Math.max(0, Number(value) || 0);
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let size = amount;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  const digits = unit === 0 || size >= 100 ? 0 : (size >= 10 ? 1 : 2);
+  return `${size.toFixed(digits)} ${units[unit]}`;
+}
+
+/** Return presentation details for a backend model-download heartbeat. */
+function downloadProgress(data) {
+  const downloaded = Math.max(0, Number(data.completed_bytes) || 0);
+  const total = Math.max(0, Number(data.total_bytes) || 0);
+  const rate = Math.max(0, Number(data.bytes_per_second) || 0);
+  const elapsed = Math.max(0, Number(data.elapsed_seconds) || 0);
+  const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
+  const parts = [`${seconds(elapsed)} elapsed`];
+  if (total) parts.push(`${bytes(downloaded)} of ${bytes(total)}`);
+  if (rate) parts.push(`${bytes(rate)}/s`);
+  if (data.eta_seconds != null && Number.isFinite(Number(data.eta_seconds))) {
+    parts.push(Number(data.eta_seconds) <= 0 ? "finishing…" : `about ${seconds(data.eta_seconds)} left`);
+  } else {
+    parts.push("estimating time remaining…");
+  }
+  return { percent, text: parts.join(" · ") };
+}
+
+/** Update the setup card's determinate or animated download meter. */
+function updateDownloadMeter(percent) {
+  const meter = byId("readiness-meter");
+  meter.classList.remove("hidden");
+  meter.classList.toggle("indeterminate", percent == null);
+  if (percent == null) {
+    meter.removeAttribute("aria-valuenow");
+    meter.querySelector("span").style.width = "";
+  } else {
+    const value = Math.min(100, Math.max(0, percent));
+    meter.setAttribute("aria-valuenow", value.toFixed(1));
+    meter.querySelector("span").style.width = `${value}%`;
+  }
 }
 
 /**
@@ -914,10 +1450,15 @@ function renderSourcePreview(data) {
  * @param turn Answer text and its evidence records.
  * @param item Conversation article used when selecting a linked citation.
  */
-function renderAnswer(answer, turn, item) {
+function renderAnswer(answer, turn, item, thinkingMs = null) {
   // Keep the model's text as text nodes. Only evidence numbers become links.
   const citations = new Set((turn.evidence || []).map((source) => Number(source.citation)));
-  const source = String(turn.answer || "");
+  const parts = splitThinking(turn.answer);
+  if (parts.thinking) {
+    answer.append(thoughtsBlock(parts.thinking,
+      thinkingMs == null ? "Show thinking" : `Thought for ${formatDuration(thinkingMs)}`));
+  }
+  const source = parts.answer;
   const markers = /\[(\d+(?:\s*,\s*\d+)*)\]/g;
   let start = 0;
   for (const match of source.matchAll(markers)) {
@@ -943,6 +1484,13 @@ function renderAnswer(answer, turn, item) {
     start = match.index + match[0].length;
   }
   answer.append(document.createTextNode(source.slice(start)));
+  if (turn.parameters?.finish_reason === "length") {
+    const notice = document.createElement("p");
+    notice.className = "answer-limit-notice";
+    notice.setAttribute("role", "status");
+    notice.textContent = "This answer reached the token limit and may be incomplete. Ask for a shorter answer, or raise Maximum answer tokens in Settings and retry.";
+    answer.append(notice);
+  }
 }
 
 /**
@@ -987,6 +1535,7 @@ function addTurn(turn) {
  *   identifier.
  */
 function renderConversations(data) {
+  lastConversationData = data;
   activeConversationId = data.active_conversation_id || activeConversationId;
   const list = byId("conversation-list");
   list.replaceChildren();
@@ -997,15 +1546,19 @@ function renderConversations(data) {
       activeName = item.name;
       activeEmpty = Boolean(item.empty);
     }
-    if (item.empty) continue;
+    const asking = askingConversation?.id === item.conversation_id;
+    if (item.empty && !asking) continue;
+    // Until the generated title arrives, label the chat with its question.
+    const provisional = asking && /^Conversation \d+$/.test(item.name);
+    const name = provisional ? provisionalTitle(askingConversation.question) : item.name;
     const row = document.createElement("div");
     row.className = "conversation-row";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}`;
+    button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}${provisional ? " provisional" : ""}`;
     button.dataset.conversationId = item.conversation_id;
-    button.textContent = item.name;
-    button.title = item.name;
+    button.textContent = name;
+    button.title = name;
     button.addEventListener("click", () => {
       if (busy || item.conversation_id === activeConversationId) return;
       setBusy(true, "Opening conversation…");
@@ -1029,9 +1582,46 @@ function renderConversations(data) {
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
 }
 
+/**
+ * Shorten a first question into a temporary sidebar label.
+ *
+ * @param question The question as typed.
+ * @returns Up to six words, without trailing punctuation.
+ */
+function provisionalTitle(question) {
+  const words = question.trim().replace(/[?.!]+$/, "").split(/\s+/);
+  return words.slice(0, 6).join(" ").slice(0, 80) + (words.length > 6 ? "…" : "");
+}
+
+/**
+ * List the active empty chat as soon as its first question is sent.
+ *
+ * @param question The question as typed.
+ */
+function showAskingConversation(question) {
+  const active = lastConversationData?.conversations?.find(
+    (item) => item.conversation_id === activeConversationId);
+  if (!active?.empty) return;
+  askingConversation = { id: activeConversationId, question };
+  renderConversations(lastConversationData);
+}
+
+/**
+ * Stop listing an unsaved chat, for example after a failed first answer.
+ */
+function clearAskingConversation() {
+  if (!askingConversation) return;
+  askingConversation = null;
+  if (lastConversationData) renderConversations(lastConversationData);
+}
+
 function renderConversationEmpty() {
   conversation.replaceChildren();
-  const content = emptyChatContent[activeProjectKind] || emptyChatContent.code;
+  const type = projectTypes[activeProjectKind] || {};
+  const content = {
+    prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
+    suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
+  };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
   if (content.prompts.length > 1 && promptIndex === lastEmptyPrompt[activeProjectKind]) {
     promptIndex = (promptIndex + 1) % content.prompts.length;
@@ -1079,20 +1669,42 @@ function renderAttachments() {
   host.classList.toggle("hidden", !messageAttachments.length);
 }
 
-function updateEffort(index) {
-  const level = effortLevels[Math.max(0, Math.min(effortLevels.length - 1, Number(index)))];
-  selectedEffort = level.key;
-  byId("effort-button").textContent = level.name;
-  byId("effort-name").textContent = level.name;
-  byId("effort-detail").textContent = level.detail;
-  byId("effort-range").value = String(effortLevels.indexOf(level));
-  byId("effort-range").style.setProperty(
-    "--effort-percent",
-    `${(effortLevels.indexOf(level) / (effortLevels.length - 1)) * 100}%`,
-  );
-  [...document.querySelectorAll(".effort-points i")].forEach((point, pointIndex) => {
-    point.classList.toggle("selected", pointIndex === effortLevels.indexOf(level));
-  });
+/**
+ * Choose the model level or the reference level for the next answers.
+ *
+ * @param kind "model" or "retrieval".
+ * @param index Zero-based effort level.
+ */
+function setEffortLevel(kind, index) {
+  const level = Math.max(0, Math.min(4, Number(index)));
+  if (kind === "model") selectedModelLevel = level;
+  else selectedRetrievalLevel = level;
+  renderEffortPicker();
+}
+
+/**
+ * Show the chosen levels on both sliders and on the composer button.
+ */
+function renderEffortPicker() {
+  const levels = currentLevels();
+  if (levels.length !== 5) return;
+  for (const [kind, index] of [["model", selectedModelLevel], ["retrieval", selectedRetrievalLevel]]) {
+    const level = levels[index];
+    byId(`effort-${kind}-name`).textContent = level.name;
+    byId(`effort-${kind}-detail`).textContent = kind === "model"
+      ? level.model.split("/").pop()
+      : `${level.retrieval} references`;
+    const range = byId(`effort-${kind}-range`);
+    range.value = String(index);
+    range.style.setProperty("--effort-percent", `${(index / (levels.length - 1)) * 100}%`);
+    range.parentElement.querySelectorAll(".effort-points i").forEach((point, pointIndex) => {
+      point.classList.toggle("selected", pointIndex === index);
+    });
+  }
+  byId("effort-button").textContent =
+    `${levels[selectedModelLevel].name} · ${levels[selectedRetrievalLevel].retrieval}`;
+  byId("effort-button").title =
+    `Model: ${levels[selectedModelLevel].name} · References: ${levels[selectedRetrievalLevel].retrieval}`;
 }
 
 /**
@@ -1103,14 +1715,15 @@ function stopPhaseAnimation() {
   phaseTimer = null;
 }
 
-const ANSWER_STAGE_DURATION_MS = 1700;
+// Each stage stays readable briefly; newer stages replace older queued ones,
+// so the label is never more than one short step behind the backend.
+const ANSWER_STAGE_DURATION_MS = 600;
 
 function resetAnswerStages() {
   clearTimeout(answerStageTimer);
   answerStageTimer = null;
   answerStageKey = null;
   answerStageQueue = [];
-  completedTurnWaiting = null;
 }
 
 function advanceAnswerStage() {
@@ -1118,11 +1731,6 @@ function advanceAnswerStage() {
   const stage = answerStageQueue.shift();
   if (!stage) {
     answerStageKey = null;
-    if (completedTurnWaiting) {
-      const turn = completedTurnWaiting;
-      completedTurnWaiting = null;
-      completePendingTurn(turn);
-    }
     return;
   }
   answerStageKey = stage.key;
@@ -1136,43 +1744,56 @@ function advanceAnswerStage() {
 
 function queueAnswerStage(key, detail) {
   if (!pendingTurn || answerStageKey === key) return;
-  const queued = answerStageQueue.find((stage) => stage.key === key);
-  if (queued) {
-    queued.detail = detail;
-  } else {
-    answerStageQueue.push({ key, detail });
-  }
+  answerStageQueue = [{ key, detail }];
   advanceAnswerStage();
 }
 
 function completeAfterAnswerStages(turn) {
-  completedTurnWaiting = turn;
-  advanceAnswerStage();
+  // Freeze the timer when the answer arrives, not after the stage animation.
+  if (pendingTurn && pendingTurn.elapsedMs === null) {
+    pendingTurn.elapsedMs = performance.now() - pendingTurn.started;
+  }
+  // Show the answer as soon as it arrives; queued stage labels are dropped.
+  resetAnswerStages();
+  completePendingTurn(turn);
 }
 
 /**
- * Animate a pending answer phase while no completed answer is available.
+ * Show the current backend phase under the pending answer's label.
  *
  * @param label Current backend phase label.
  * @param detail Optional supporting status text.
  */
 function showTurnPhase(label, detail = "") {
   if (!pendingTurn) return;
+  pendingTurn.phase = label;
   pendingTurn.detail.textContent = detail;
   pendingTurn.detail.classList.toggle("hidden", !detail);
-  if (pendingTurn.label.textContent.startsWith(label)) return;
-  stopPhaseAnimation();
-  let dots = 1;
-  const paint = () => {
-    const suffix = ".".repeat(dots);
-    pendingTurn.label.textContent = `${label}${suffix}`;
-  };
-  paint();
-  phaseTimer = setInterval(() => {
-    dots += 1;
-    paint();
-    if (dots === 3) stopPhaseAnimation();
-  }, 400);
+  paintPendingTurn();
+}
+
+/**
+ * Format a duration compactly: 8s, 42s, 1m 05s.
+ *
+ * @param ms Duration in milliseconds.
+ * @returns Short human-readable duration.
+ */
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * Repaint the pending label (cycling dots) and its elapsed-time counter.
+ */
+function paintPendingTurn() {
+  if (!pendingTurn) return;
+  const dots = Math.floor(performance.now() / 400) % 4;
+  pendingTurn.label.textContent = `${pendingTurn.phase}${".".repeat(dots)}`;
+  pendingTurn.timer.textContent = formatDuration(
+    pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started);
+  if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
 }
 
 /**
@@ -1192,15 +1813,27 @@ function addPendingTurn(question) {
   questionNode.textContent = question;
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
-  const phaseLabel = document.createElement("div");
+  const phaseHeader = document.createElement("div");
+  phaseHeader.className = "answer-phase-header";
+  const phaseLabel = document.createElement("span");
   phaseLabel.className = "answer-phase-label";
+  const phaseTimerLabel = document.createElement("span");
+  phaseTimerLabel.className = "answer-phase-timer";
+  phaseHeader.append(phaseLabel, phaseTimerLabel);
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
-  answer.append(phaseLabel, phaseDetail);
+  answer.append(phaseHeader, phaseDetail);
   item.append(questionNode, answer);
   conversation.append(item);
-  pendingTurn = { item, answer, label: phaseLabel, detail: phaseDetail };
-  queueAnswerStage("retrieving", "Retrieving project evidence");
+  pendingTurn = {
+    item, answer, label: phaseLabel, timer: phaseTimerLabel, detail: phaseDetail,
+    phase: "Generating", started: performance.now(), elapsedMs: null,
+  };
+  // One ticker drives both the cycling dots and the elapsed time.
+  stopPhaseAnimation();
+  paintPendingTurn();
+  phaseTimer = setInterval(paintPendingTurn, 200);
+  queueAnswerStage("starting", "Starting");
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
@@ -1245,26 +1878,126 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
-  current.answer.classList.remove("answer-phase");
-  current.answer.classList.add("typing");
-  current.answer.textContent = "";
-  const text = String(turn.answer || "");
-  let position = 0;
-  clearInterval(answerTimer);
-  answerTimer = setInterval(() => {
-    position += 3;
-    current.answer.textContent = text.slice(0, position);
-    conversationScroll.scrollTop = conversationScroll.scrollHeight;
-    if (position < text.length) return;
-    clearInterval(answerTimer);
-    answerTimer = null;
-    current.answer.classList.remove("typing");
+  if (!current.durationLine) {
+    current.durationLine = document.createElement("div");
+    current.durationLine.className = "answer-duration";
+    current.item.insertBefore(current.durationLine, current.answer);
+  }
+  current.durationLine.textContent = `Took ${formatDuration(
+    current.elapsedMs ?? performance.now() - current.started)}`;
+  // Say briefly how references were found for a follow-up.
+  if (turn.parameters?.evidence_reused) {
+    current.durationLine.textContent += " · reused references";
+  } else if (turn.parameters?.retrieval_query) {
+    current.durationLine.textContent += " · searched again";
+    current.durationLine.title = `Searched for: ${turn.parameters.retrieval_query}`;
+  }
+  // The text was shown live as it was generated; now add citation links.
+  current.answer.classList.remove("answer-phase", "streaming");
+  current.answer.replaceChildren();
+  bindAnswerSelection(current.answer, current.item, turn);
+  renderAnswer(current.answer, turn, current.item, current.thinkingMs);
+  selectTurn(current.item, turn);
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  setBusy(false);
+}
+
+/**
+ * Split model output into its thinking and its answer.
+ *
+ * Thinking appears inside <think>…</think>; a chat template may open the
+ * block in the prompt, leaving only the closing tag in the output.
+ *
+ * @param raw Model output so far.
+ * @returns Thinking text, answer text, and whether thinking is still open.
+ */
+function splitThinking(raw) {
+  let thinking = "";
+  let text = String(raw || "").replace(/<think>([\s\S]*?)<\/think>/g, (_, inner) => {
+    thinking += inner;
+    return "";
+  });
+  const close = text.indexOf("</think>");
+  if (close !== -1) {
+    thinking = text.slice(0, close) + thinking;
+    text = text.slice(close + "</think>".length);
+  }
+  const open = text.indexOf("<think>");
+  if (open !== -1) {
+    thinking += text.slice(open + "<think>".length);
+    text = text.slice(0, open);
+  }
+  return { thinking: thinking.trim(), answer: text.replace(/^\s+/, ""), thinkingOpen: open !== -1 };
+}
+
+/**
+ * Build the collapsible box that shows the model's thinking.
+ *
+ * @param text Thinking text.
+ * @param label Summary line, such as "Thought for 12s".
+ * @param open Whether the box starts expanded.
+ */
+function thoughtsBlock(text, label, open = false) {
+  const details = document.createElement("details");
+  details.className = "answer-thoughts";
+  details.open = open;
+  const summary = document.createElement("summary");
+  summary.textContent = label;
+  // Expanding the thoughts should not also select the answer.
+  summary.addEventListener("click", (event) => event.stopPropagation());
+  const body = document.createElement("div");
+  body.className = "answer-thoughts-text";
+  body.textContent = text;
+  details.append(summary, body);
+  return details;
+}
+
+/**
+ * Show generated text live in the pending answer.
+ *
+ * @param text Newly generated text.
+ */
+function appendAnswerText(text) {
+  const current = pendingTurn;
+  if (!current || !text) return;
+  current.raw = (current.raw || "") + text;
+  const parts = splitThinking(current.raw);
+  const thinkingStarted = parts.thinking || parts.thinkingOpen;
+  if (!current.streaming && !thinkingStarted && !parts.answer) return;
+  if (!current.streaming) {
+    current.streaming = true;
+    resetAnswerStages();
+    // Live elapsed time above the answer; it becomes "Took …" at the end.
+    current.durationLine = document.createElement("div");
+    current.durationLine.className = "answer-duration";
+    current.item.insertBefore(current.durationLine, current.answer);
+    current.answer.classList.remove("answer-phase");
+    current.answer.classList.add("streaming");
     current.answer.replaceChildren();
-    bindAnswerSelection(current.answer, current.item, turn);
-    renderAnswer(current.answer, turn, current.item);
-    selectTurn(current.item, turn);
-    setBusy(false);
-  }, 12);
+    current.text = document.createTextNode("");
+    current.answer.append(current.text);
+    paintPendingTurn();
+  }
+  if (thinkingStarted) {
+    if (!current.thoughts) {
+      current.thinkingStarted = performance.now();
+      current.thoughts = thoughtsBlock("", "Thinking…", true);
+      current.answer.prepend(current.thoughts);
+    }
+    const body = current.thoughts.querySelector(".answer-thoughts-text");
+    body.textContent = parts.thinking;
+    body.scrollTop = body.scrollHeight;
+    if (!parts.thinkingOpen && current.thinkingMs == null) {
+      current.thinkingMs = performance.now() - current.thinkingStarted;
+      current.thoughts.open = false;
+      current.thoughts.querySelector("summary").textContent =
+        `Thought for ${formatDuration(current.thinkingMs)}`;
+    }
+  }
+  current.text.textContent = parts.answer;
+  const nearBottom = conversationScroll.scrollHeight - conversationScroll.scrollTop
+    - conversationScroll.clientHeight < 120;
+  if (nearBottom) conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
 /**
@@ -1297,7 +2030,7 @@ function onEvent(raw) {
       item.classList.toggle("complete", present);
       steps.append(item);
     }
-    card.classList.toggle("hidden", data.ready);
+    card.classList.toggle("hidden", data.ready && !setupCompletionVisible);
     byId("readiness-summary").textContent = data.ready
       ? "QAChat is ready."
       : `${data.missing_models.length} required model${data.missing_models.length === 1 ? "" : "s"} need to be downloaded.`;
@@ -1308,23 +2041,31 @@ function onEvent(raw) {
       byId("close-models").focus();
     }
   } else if (data.event === "installation_started") {
+    setupCompletionVisible = false;
     setBusy(true, `Preparing ${data.total} required models…`);
     byId("first-run-setup").classList.remove("hidden");
     byId("install-required").disabled = true;
     byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
+    updateDownloadMeter(null);
   } else if (data.event === "installation_progress") {
-    const elapsed = seconds(data.elapsed_seconds || 0);
-    byId("readiness-summary").textContent = `Downloading ${data.index} of ${data.total}`;
-    byId("readiness-time").textContent = `${elapsed} elapsed · downloading ${data.model_id}`;
-    byId("activity-percent").textContent = `Model ${data.index} of ${data.total}`;
+    const progress = downloadProgress(data);
+    const percent = progress.percent == null ? "" : ` · ${progress.percent.toFixed(1)}%`;
+    byId("readiness-summary").textContent = `Downloading ${data.index} of ${data.total}${percent}`;
+    byId("readiness-time").textContent = `${progress.text} · ${data.model_id}`;
+    byId("activity-percent").textContent = progress.percent == null
+      ? `Model ${data.index} of ${data.total}`
+      : `${progress.percent.toFixed(1)}% · model ${data.index} of ${data.total}`;
     byId("activity-text").textContent = `Downloading ${data.model_id}`;
-    byId("activity-detail").textContent = `${elapsed} elapsed`;
+    byId("activity-detail").textContent = progress.text;
+    updateDownloadMeter(progress.percent);
   } else if (data.event === "installation_model_complete") {
     cachedModels.add(data.model_id);
     byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
   } else if (data.event === "installation_complete") {
+    setupCompletionVisible = true;
     byId("readiness-summary").textContent = "Required models are installed.";
     byId("readiness-time").textContent = `Setup completed in ${seconds(data.elapsed_seconds)}.`;
+    updateDownloadMeter(100);
     setBusy(false);
   } else if (data.event === "settings") {
     showSettings(data);
@@ -1360,9 +2101,20 @@ function onEvent(raw) {
     setBusy(false);
   } else if (data.event === "status") {
     setBusy(true, data.message);
+  } else if (data.event === "answer_delta") {
+    appendAnswerText(data.text || "");
   } else if (data.event === "answer_phase") {
     activity.classList.add("answer-progress");
-    if (data.phase === "retrieving") {
+    if (data.phase === "identifying_intent") {
+      queueAnswerStage("intent", "Identifying intent");
+      byId("activity-text").textContent = "Checking whether this follows up on the previous answer";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "loading_model") {
+      const name = String(data.model_id || "the model").split("/").pop();
+      queueAnswerStage("loading", `Loading ${name}`);
+      byId("activity-text").textContent = `Loading ${name}`;
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "retrieving") {
       const message = data.message || "Searching project evidence";
       if (/expand/i.test(message)) {
         queueAnswerStage("expanding", "Expanding related context");
@@ -1372,6 +2124,10 @@ function onEvent(raw) {
         queueAnswerStage("retrieving", "Retrieving project evidence");
       }
       byId("activity-text").textContent = data.message || "Searching project evidence";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === "evidence_ready" && data.reused) {
+      queueAnswerStage("preparing", `Reusing ${data.evidence_count} references from the previous answer`);
+      byId("activity-text").textContent = "Follow-up: reusing the previous references";
       byId("activity-detail").textContent = "";
     } else if (data.phase === "evidence_ready") {
       queueAnswerStage(
@@ -1385,15 +2141,17 @@ function onEvent(raw) {
         : `Preparing ${data.evidence_count} retrieved references for the model`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === "generating") {
+      // The model reads its whole prompt before the first word appears;
+      // streamed text replaces this label.
       queueAnswerStage(
-        "writing",
+        "reading",
         data.evidence_count == null
-          ? "Writing the answer"
-          : `Writing with ${data.evidence_count} retrieved references`,
+          ? "Reading the question"
+          : `Reading ${data.evidence_count} references`,
       );
       byId("activity-text").textContent = data.evidence_count == null
-        ? "Writing the answer"
-        : `Writing the answer using ${data.evidence_count} retrieved references`;
+        ? "The model is reading the prompt"
+        : `The model is reading ${data.evidence_count} references before writing`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === "saving") {
       queueAnswerStage("saving", data.message || "Saving the answer");
@@ -1406,17 +2164,47 @@ function onEvent(raw) {
     }
   } else if (data.event === "model_download_started") {
     byId("model-download-status").textContent = `Downloading ${data.model_id}…`;
+  } else if (data.event === "model_download_progress") {
+    const progress = downloadProgress(data);
+    byId("model-download-status").textContent = `${data.model_id} · ${progress.text}`;
+    byId("activity-percent").textContent = progress.percent == null
+      ? "Connecting…"
+      : `${progress.percent.toFixed(1)}% downloaded`;
+    byId("activity-text").textContent = `Downloading ${data.model_id}`;
+    byId("activity-detail").textContent = progress.text;
+  } else if (data.event === "models_applied") {
+    applyingModels = false;
+    cachedModels = new Set(data.cached_models || [...cachedModels]);
+    modelRoles = data.model_roles || modelRoles;
+    // Without an open project, keep the levels for project creation.
+    if (data.effort_levels) savedLevels = data.effort_levels;
+    else savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
+    if (data.profile) { profile = data.profile; byId("query-format").value = profile.query_format; showModelFields(); }
+    else saveModelFields();
+    modelsBaseline = currentModelSettings();
+    byId("model-download-status").textContent = "Model settings applied.";
+    setBusy(false);
+    renderModelsPanel();
+    if (closeAfterModelsApply) hideModels();
+    closeAfterModelsApply = false;
   } else if (data.event === "model_downloaded") {
     cachedModels.add(data.model_id);
     downloadingModel = null;
     byId("cancel-model-download").classList.add("hidden");
-    byId("model-download-status").textContent = `${data.model_id} is cached locally. Choose Use to select it.`;
-    setBusy(false);
+    byId("model-download-status").textContent = `${data.model_id} downloaded in ${seconds(data.elapsed_seconds || 0)}.`;
+    if (!applyingModels) setBusy(false);
     refreshModelStatus();
+    if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
     ready = true;
+    if (data.profile) {
+      profile = data.profile;
+      byId("query-format").value = profile.query_format;
+      savedLevels = data.effort_levels || savedLevels;
+      showModelFields();
+    }
     activeProjectKind = data.kind;
     messageAttachments = [];
     renderAttachments();
@@ -1487,6 +2275,9 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
+    setupCompletionVisible = false;
+    byId("readiness-meter").classList.add("hidden");
+    byId("readiness-meter").classList.remove("indeterminate");
     if (downloadingModel) {
       byId("model-download-status").textContent = "Download stopped. Reopen Models to check what is cached.";
       downloadingModel = null;
@@ -1529,6 +2320,28 @@ function onEvent(raw) {
     showWorkspace(false);
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
+  } else if (data.event === "backend_restarted") {
+    const reopenProject = ready
+      && byId("workspace-path").value.trim()
+      && activeConversationId;
+    error.classList.add("hidden");
+    setupCompletionVisible = true;
+    byId("readiness-time").textContent = data.message;
+    byId("model-download-status").textContent = data.message;
+    downloadingModel = null;
+    byId("cancel-model-download").classList.add("hidden");
+    ready = false;
+    setBusy(false);
+    byId("connection").textContent = "Ready";
+    bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+    bridge.requestReadiness();
+    if (reopenProject) {
+      setBusy(true, "Reopening the project after backend recovery…");
+      bridge.resumeProjectConversation(
+        byId("workspace-path").value.trim(),
+        activeConversationId,
+      );
+    }
   } else if (data.event === "error") {
     showError(data.message, data.trace_path || activeTracePath);
   }
@@ -1553,7 +2366,7 @@ byId("stop").addEventListener("click", () => {
   bridge.stopOperation();
 });
 byId("send").addEventListener("click", (event) => {
-  if (!busy || !ready || !bridge) return;
+  if (!busy || !ready || !bridge || !activity.classList.contains("answer-progress")) return;
   event.preventDefault();
   resumeAfterStop = true;
   byId("send").disabled = true;
@@ -1562,7 +2375,10 @@ byId("send").addEventListener("click", (event) => {
 });
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
-byId("close-models").addEventListener("click", () => byId("models-panel").classList.add("hidden"));
+byId("close-models").addEventListener("click", closeModels);
+byId("models-panel").addEventListener("click", (event) => {
+  if (event.target === byId("models-panel")) closeModels();
+});
 byId("install-required").addEventListener("click", () => {
   if (busy || !bridge) return;
   setBusy(true, "Checking required models…");
@@ -1626,13 +2442,15 @@ byId("question-form").addEventListener("submit", (event) => {
   }
   byId("question").value = "";
   addPendingTurn(question);
+  showAskingConversation(question);
   setBusy(true, "Finding evidence and answering…");
   const attachedContext = messageAttachments.length
     ? `\n\nAttached paths to consider:\n${messageAttachments.map((path) => `- ${path}`).join("\n")}`
     : "";
   messageAttachments = [];
   renderAttachments();
-  bridge.askQuestion(`${question}${attachedContext}`, selectedEffort, JSON.stringify({
+  const effort = JSON.stringify({ model: selectedModelLevel, retrieval: selectedRetrievalLevel });
+  bridge.askQuestion(`${question}${attachedContext}`, effort, JSON.stringify({
     temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
     _title_question: question,
   }));
@@ -1670,7 +2488,10 @@ function commitProjectName() {
     bridge.renameProject(name);
   }
 }
-for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName]]) {
+byId("topbar-project-name").addEventListener("input", () => {
+  byId("project-name").textContent = byId("topbar-project-name").textContent;
+});
+for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName], ["topbar-project-name", commitProjectName]]) {
   byId(id).addEventListener("blur", commit);
   byId(id).addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
@@ -1710,8 +2531,11 @@ byId("effort-button").addEventListener("click", (event) => {
   menu.classList.toggle("hidden");
   byId("effort-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
 });
-byId("effort-range").addEventListener("input", (event) => {
-  updateEffort(event.target.value);
+byId("effort-model-range").addEventListener("input", (event) => {
+  setEffortLevel("model", event.target.value);
+});
+byId("effort-retrieval-range").addEventListener("input", (event) => {
+  setEffortLevel("retrieval", event.target.value);
 });
 byId("attach-button").addEventListener("click", (event) => {
   event.stopPropagation();
@@ -1755,15 +2579,21 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".attach-picker")) byId("attach-menu").classList.add("hidden");
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeModelMenus();
+  if (event.key === "Escape") {
+    closeModelMenus();
+    if (!byId("models-panel").classList.contains("hidden")) closeModels();
+  }
 });
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
 
 // Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge = channel.objects.qachat;
+  bridge.setAppearance(document.documentElement.dataset.appearance || "system");
   bridge.event.connect(onEvent);
   bridge.pathsSelected.connect(addSources);
+  bridge.sourceDragChanged.connect(showNativeSourceDrag);
+  syncSourceDropTarget();
   bridge.attachmentsSelected.connect((paths) => {
     for (const path of paths) {
       if (path && !messageAttachments.includes(path)) messageAttachments.push(path);
@@ -1778,7 +2608,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
   bridge.requestReadiness();
   showWorkspace(false);
-  updateEffort(2);
+  renderEffortPicker();
   setBusy(false);
   refreshSavedProject();
 });
@@ -1791,3 +2621,103 @@ document.addEventListener("visibilitychange", () => {
 // Also catch files removed while the project chooser stays in the foreground.
 window.setInterval(refreshSavedProject, 3000);
 applyAppearance(localStorage.getItem("qachat-appearance") || "system");
+
+// Draggable borders beside the conversation list and the side panels.
+const PANEL_LIMITS = { left: [180, 420], right: [260, 640] };
+const MIDDLE_MIN_WIDTH = 420;
+const panelResizers = {};
+
+/**
+ * Apply a remembered or dragged panel width, within its limits.
+ *
+ * @param side "left" (conversations) or "right" (workspace and references).
+ * @param width Requested width in pixels; null restores the default.
+ */
+function setPanelWidth(side, width) {
+  const property = side === "left" ? "--left-width" : "--right-width";
+  if (width === null) {
+    shell.style.removeProperty(property);
+    return;
+  }
+  const [min, max] = PANEL_LIMITS[side];
+  shell.style.setProperty(property, `${Math.round(Math.min(max, Math.max(min, width)))}px`);
+}
+
+/**
+ * Place each handle on its visible border, or hide it.
+ */
+function positionPanelResizers() {
+  const grid = getComputedStyle(shell).display === "grid" && shell.classList.contains("chat-open");
+  const left = byId("conversations-panel");
+  const right = document.querySelector(".side-panels");
+  for (const [side, panel] of [["left", left], ["right", right]]) {
+    const handle = panelResizers[side];
+    const box = panel.getBoundingClientRect();
+    const visible = grid && box.width > 0 && getComputedStyle(panel).display !== "none";
+    handle.classList.toggle("hidden", !visible);
+    if (visible) handle.style.left = `${(side === "left" ? box.right : box.left) - 3}px`;
+  }
+}
+
+for (const side of ["left", "right"]) {
+  const handle = document.createElement("div");
+  handle.className = "panel-resizer hidden";
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  handle.title = "Drag to resize; double-click to reset";
+  let lastPress = 0;
+  const reset = () => {
+    setPanelWidth(side, null);
+    try { localStorage.removeItem(`qachat-${side}-width`); } catch {}
+    positionPanelResizers();
+    syncSourceDropTarget();
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    // Detect double-clicks here: pointer capture can suppress dblclick.
+    if (event.timeStamp - lastPress < 400) {
+      lastPress = 0;
+      reset();
+      return;
+    }
+    lastPress = event.timeStamp;
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("dragging");
+    document.body.classList.add("resizing-panels");
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!handle.hasPointerCapture(event.pointerId)) return;
+    lastPress = 0;  // A drag is not the first half of a double-click.
+    const other = side === "left"
+      ? document.querySelector(".side-panels").getBoundingClientRect().width
+      : byId("conversations-panel").getBoundingClientRect().width;
+    const requested = side === "left" ? event.clientX : window.innerWidth - event.clientX;
+    // Keep the conversation column usable.
+    setPanelWidth(side, Math.min(requested, window.innerWidth - other - MIDDLE_MIN_WIDTH));
+    positionPanelResizers();
+  });
+  const finish = (event) => {
+    if (!handle.hasPointerCapture(event.pointerId)) return;
+    handle.releasePointerCapture(event.pointerId);
+    handle.classList.remove("dragging");
+    document.body.classList.remove("resizing-panels");
+    try {
+      localStorage.setItem(`qachat-${side}-width`, shell.style.getPropertyValue(`--${side}-width`));
+    } catch {}
+    syncSourceDropTarget();
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+  document.body.append(handle);
+  panelResizers[side] = handle;
+  try {
+    const saved = parseFloat(localStorage.getItem(`qachat-${side}-width`));
+    if (Number.isFinite(saved)) setPanelWidth(side, saved);
+  } catch {}
+}
+// Panels appear, hide, and change size on many events; follow them all.
+const panelObserver = new ResizeObserver(positionPanelResizers);
+panelObserver.observe(shell);
+panelObserver.observe(byId("conversations-panel"));
+panelObserver.observe(document.querySelector(".side-panels"));
+window.addEventListener("resize", positionPanelResizers);

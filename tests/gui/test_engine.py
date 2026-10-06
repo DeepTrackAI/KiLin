@@ -304,6 +304,32 @@ class TestChatEngine(unittest.TestCase):
             engine.find_saved_project("literature", "")
             self.assertIsNone(events[-1]["project"])
 
+    def test_saved_projects_are_newest_first(self) -> None:
+        """The project-list refresh shares startup's discovery rules."""
+
+        with TemporaryDirectory() as temporary:
+            sandbox = Path(temporary)
+            for index, (name, kind) in enumerate(
+                (("older", "code"), ("newer", "literature"))
+            ):
+                folder = sandbox / name
+                (folder / "sources").mkdir(parents=True)
+                profile = folder / "profile.ini"
+                profile.write_text(
+                    f"[project]\nkind = {kind}\nsource = sources\n"
+                )
+                os.utime(profile, (100 + index, 100 + index))
+            events: list[dict[str, object]] = []
+            engine = ChatEngine(sandbox, events.append)
+
+            engine.list_saved_projects("")
+
+            self.assertEqual(events[-1]["event"], "projects")
+            self.assertEqual(
+                [project["name"] for project in events[-1]["projects"]],
+                ["newer", "older"],
+            )
+
     def test_saved_project_checks_custom_workspace(self) -> None:
         """A chosen workspace takes precedence over sandbox suggestions."""
 

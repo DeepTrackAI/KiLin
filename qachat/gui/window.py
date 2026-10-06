@@ -57,14 +57,25 @@ import json
 from pathlib import Path
 import sys
 
-from PySide6.QtCore import QObject, QProcess, QUrl, Signal, Slot
+from PySide6.QtCore import (
+    QObject,
+    QProcess,
+    QRectF,
+    Qt,
+    QUrl,
+    Signal,
+    Slot,
+)
 from PySide6.QtGui import (
     QCloseEvent,
     QCursor,
     QDesktopServices,
     QDragEnterEvent,
     QDragMoveEvent,
+    QDragLeaveEvent,
     QDropEvent,
+    QGuiApplication,
+    QIcon,
 )
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEngineSettings
@@ -72,6 +83,7 @@ from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
 ROOT = Path(__file__).resolve().parents[2]
+ICONS = Path(__file__).resolve().parent / "icons"
 
 
 class ChatBridge(QObject):
@@ -150,6 +162,9 @@ class ChatBridge(QObject):
     workspaceSelected = Signal(str)
     commandRequested = Signal(dict)
     stopRequested = Signal()
+    sourceDropTargetChanged = Signal(str)
+    sourceDragChanged = Signal(bool)
+    appearanceChanged = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Keep only the currently opened project path on the UI side."""
@@ -159,10 +174,7 @@ class ChatBridge(QObject):
 
     @Slot()
     def chooseSources(self) -> None:
-        """Offer files and folders through one browse control.
-
-
-        """
+        """Offer files and folders through one browse control."""
 
         menu = QMenu()
         folder = menu.addAction("Choose a folder…")
@@ -175,10 +187,7 @@ class ChatBridge(QObject):
 
     @Slot()
     def chooseFolder(self) -> None:
-        """Show the native folder picker on the GUI thread.
-
-
-        """
+        """Show the native folder picker on the GUI thread."""
 
         path = QFileDialog.getExistingDirectory(None, "Choose project folder")
         if path:
@@ -186,10 +195,7 @@ class ChatBridge(QObject):
 
     @Slot()
     def chooseFiles(self) -> None:
-        """Add one or more individual files.
-
-
-        """
+        """Add one or more individual files."""
 
         paths, _ = QFileDialog.getOpenFileNames(None, "Choose source files")
         if paths:
@@ -213,10 +219,7 @@ class ChatBridge(QObject):
 
     @Slot()
     def chooseWorkspace(self) -> None:
-        """Choose the folder in which QAChat stores its project.
-
-
-        """
+        """Choose the folder in which QAChat stores its project."""
 
         path = QFileDialog.getExistingDirectory(
             None, "Choose QAChat workspace"
@@ -459,19 +462,13 @@ class ChatBridge(QObject):
 
     @Slot()
     def newConversation(self) -> None:
-        """Create and open a separate empty conversation.
-
-
-        """
+        """Create and open a separate empty conversation."""
 
         self.commandRequested.emit({"action": "new_conversation"})
 
     @Slot()
     def branchConversation(self) -> None:
-        """Branch the active conversation at its current saved checkpoint.
-
-
-        """
+        """Branch the active conversation at its current saved checkpoint."""
 
         self.commandRequested.emit({"action": "branch_conversation"})
 
@@ -523,6 +520,46 @@ class ChatBridge(QObject):
             {
                 "action": "delete_conversation",
                 "conversation_id": conversation_id,
+            }
+        )
+
+    @Slot(str)
+    def applyModelSettings(self, settings_json: str) -> None:
+        self.commandRequested.emit(
+            {"action": "apply_models", "settings": json.loads(settings_json)}
+        )
+
+    @Slot(str)
+    def setAppearance(self, mode: str) -> None:
+        """Report the page's color mode: system, light, or dark."""
+
+        self.appearanceChanged.emit(mode)
+
+    @Slot(str)
+    def setSourceDropTarget(self, bounds_json: str) -> None:
+        """Align the native drop region with the visible sources tree."""
+
+        self.sourceDropTargetChanged.emit(bounds_json)
+
+    @Slot(str)
+    def addProjectSources(self, sources_json: str) -> None:
+        """Import sources after the page's rebuild confirmation."""
+
+        self.commandRequested.emit(
+            {
+                "action": "add_project_sources",
+                "sources": json.loads(sources_json),
+            }
+        )
+
+    @Slot(str)
+    def removeProjectSources(self, paths_json: str) -> None:
+        """Delete confirmed workspace source copies and reindex."""
+
+        self.commandRequested.emit(
+            {
+                "action": "remove_project_sources",
+                "paths": json.loads(paths_json),
             }
         )
 
@@ -615,10 +652,7 @@ class ChatBridge(QObject):
 
     @Slot()
     def closeProject(self) -> None:
-        """Release models when the user chooses a different project.
-
-
-        """
+        """Release models when the user chooses a different project."""
 
         self.commandRequested.emit({"action": "close"})
 
@@ -637,100 +671,62 @@ class ChatBridge(QObject):
 
 
 class SourceDropView(QWebEngineView):
-    """Accept only local files and folders dropped onto the window.
-
-    Parameters
-    ----------
-    parent: QWidget | None, optional
-        Optional parent widget passed to the Qt base constructor. Defaults to
-        ``None``.
-
-    Methods
-    -------
-    dragEnterEvent(event)
-        Accept a drag only when every item is a local path.
-    dragMoveEvent(event)
-        Keep the native drop target active over the whole view.
-    dropEvent(event)
-        Send dropped paths through the same source-selection flow.
-
-    Notes
-    -----
-    Accepts local URL paths from native drops and delegates unsupported
-    drag/drop events to the base QWebEngineView implementation.
-
-    """
+    """Accept local files only inside the page's visible source drop target."""
 
     pathsDropped = Signal(list)
+    dragChanged = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        """Enable native drops before the web page is loaded.
-
-        Parameters
-        ----------
-        parent: QWidget | None, optional
-            Optional parent widget passed to the Qt base constructor. Defaults
-            to ``None``.
-
-        """
-
         super().__init__(parent)
         self.setAcceptDrops(True)
+        self.drop_target = QRectF()
+
+    @Slot(str)
+    def set_drop_target(self, bounds_json: str) -> None:
+        bounds = json.loads(bounds_json)
+        self.drop_target = QRectF(
+            *[
+                float(bounds.get(key, 0))
+                for key in ("x", "y", "width", "height")
+            ]
+        )
+
+    def _local_drag(self, event) -> bool:
+        urls = event.mimeData().urls()
+        return bool(urls) and all(url.isLocalFile() for url in urls)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        """Accept a drag only when every item is a local path.
-
-        Parameters
-        ----------
-        event: QDragEnterEvent
-            Qt event delivered by the corresponding widget event handler.
-
-        """
-
-        if event.mimeData().hasUrls() and all(
-            url.isLocalFile() for url in event.mimeData().urls()
-        ):
+        # Accept entry to continue receiving movement; the final drop is
+        # restricted to the target, even when the drag entered elsewhere.
+        if self._local_drag(event) and not self.drop_target.isEmpty():
+            self.dragChanged.emit(True)
             event.acceptProposedAction()
         else:
-            super().dragEnterEvent(event)
+            event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        """Keep the native drop target active over the whole view.
-
-        Parameters
-        ----------
-        event: QDragMoveEvent
-            Qt event delivered by the corresponding widget event handler.
-
-        """
-
-        if event.mimeData().hasUrls() and all(
-            url.isLocalFile() for url in event.mimeData().urls()
+        if self._local_drag(event) and self.drop_target.contains(
+            event.position()
         ):
             event.acceptProposedAction()
         else:
-            super().dragMoveEvent(event)
+            event.ignore()
+
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        self.dragChanged.emit(False)
+        event.accept()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        """Send dropped paths through the same source-selection flow.
-
-        Parameters
-        ----------
-        event: QDropEvent
-            Qt event delivered by the corresponding widget event handler.
-
-        """
-
-        paths = [
-            url.toLocalFile()
-            for url in event.mimeData().urls()
-            if url.isLocalFile()
-        ]
-        if paths:
-            self.pathsDropped.emit(paths)
+        self.dragChanged.emit(False)
+        if self._local_drag(event) and self.drop_target.contains(
+            event.position()
+        ):
+            self.pathsDropped.emit(
+                [url.toLocalFile() for url in event.mimeData().urls()]
+            )
             event.acceptProposedAction()
         else:
-            super().dropEvent(event)
+            event.ignore()
 
 
 class ChatWindow(QMainWindow):
@@ -754,10 +750,7 @@ class ChatWindow(QMainWindow):
     """
 
     def __init__(self) -> None:
-        """Create the bridge, backend process, and local web view.
-
-
-        """
+        """Create the bridge, backend process, and local web view."""
 
         super().__init__()
         self.setWindowTitle("QAChat")
@@ -767,22 +760,36 @@ class ChatWindow(QMainWindow):
         self._stopping = False
         self._pending: list[dict[str, object]] = []
         self._stdout = bytearray()
+        self._stderr = bytearray()
+        self._recovery_event: dict[str, object] | None = None
 
         self.bridge = ChatBridge(self)
         self.bridge.commandRequested.connect(self._send_command)
         self.bridge.stopRequested.connect(self._stop_operation)
 
+        # The page owns the appearance choice; "system" follows the OS.
+        self._appearance = "system"
+        self.bridge.appearanceChanged.connect(self._set_appearance)
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            lambda _scheme: self._update_icon()
+        )
+        self._update_icon()
+
         # Model work belongs in a child process so Stop can interrupt it.
         self.process = QProcess(self)
         self.process.setWorkingDirectory(str(ROOT))
         self.process.started.connect(self._send_pending)
+        self.process.started.connect(self._process_started)
         self.process.readyReadStandardOutput.connect(self._read_events)
+        self.process.readyReadStandardError.connect(self._read_diagnostics)
         self.process.finished.connect(self._process_finished)
         self.process.errorOccurred.connect(self._process_error)
         self._start_engine()
 
         self.view = SourceDropView(self)
         self.view.pathsDropped.connect(self.bridge.pathsSelected)
+        self.bridge.sourceDropTargetChanged.connect(self.view.set_drop_target)
+        self.view.dragChanged.connect(self.bridge.sourceDragChanged)
         settings = self.view.settings()
         settings.setAttribute(
             QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls,
@@ -795,14 +802,45 @@ class ChatWindow(QMainWindow):
         page = Path(__file__).resolve().parent / "web" / "index.html"
         self.view.load(QUrl.fromLocalFile(str(page)))
 
-    def _start_engine(self) -> None:
-        """Start the child that owns models, indexes, and chat history.
+    def _set_appearance(self, mode: str) -> None:
+        """Remember the page's color mode and refresh the app icon."""
 
+        self._appearance = (
+            mode if mode in ("system", "light", "dark") else "system"
+        )
+        self._update_icon()
 
+    def _update_icon(self) -> None:
+        """Show the light or dark logo in the window and Dock.
+
+        Missing icon files leave Qt's default icon in place.
         """
 
+        dark = self._appearance == "dark" or (
+            self._appearance == "system"
+            and QGuiApplication.styleHints().colorScheme()
+            == Qt.ColorScheme.Dark
+        )
+        path = ICONS / ("qachat-dark.png" if dark else "qachat-light.png")
+        if not path.is_file():
+            return
+        icon = QIcon(str(path))
+        self.setWindowIcon(icon)
+        QGuiApplication.setWindowIcon(icon)
+
+    def _start_engine(self) -> None:
+        """Start the child that owns models, indexes, and chat history."""
+
         self._stdout.clear()
+        self._stderr.clear()
         self.process.start(sys.executable, ["-m", "qachat.gui.engine"])
+
+    def _process_started(self) -> None:
+        """Report a successful automatic restart after an unexpected exit."""
+
+        if self._recovery_event is not None:
+            self.bridge.event.emit(json.dumps(self._recovery_event))
+            self._recovery_event = None
 
     def _send_command(self, command: dict[str, object]) -> None:
         """Queue a command until the child process is ready to receive it.
@@ -822,10 +860,7 @@ class ChatWindow(QMainWindow):
             self._send_pending()
 
     def _send_pending(self) -> None:
-        """Write queued commands as one JSON object per line.
-
-
-        """
+        """Write queued commands as one JSON object per line."""
 
         if self.process.state() != QProcess.ProcessState.Running:
             return
@@ -862,6 +897,13 @@ class ChatWindow(QMainWindow):
                     self.bridge.event.emit(json.dumps(event))
             except (UnicodeError, ValueError):
                 continue
+
+    def _read_diagnostics(self) -> None:
+        """Drain and retain a bounded tail of backend diagnostic output."""
+
+        self._stderr.extend(bytes(self.process.readAllStandardError()))
+        if len(self._stderr) > 65_536:
+            self._stderr = self._stderr[-65_536:]
 
     def _stop_operation(self) -> None:
         """Interrupt the child immediately and discard queued commands.
@@ -906,14 +948,32 @@ class ChatWindow(QMainWindow):
             self._start_engine()
             self.bridge.event.emit(json.dumps({"event": "stopped"}))
         else:
-            self.bridge.event.emit(
-                json.dumps(
-                    {
-                        "event": "backend_failed",
-                        "message": "Backend stopped. Reopen the project.",
-                    }
-                )
+            exit_code = int(_args[0]) if _args else self.process.exitCode()
+            exit_status = _args[1] if len(_args) > 1 else None
+            crashed = exit_status == QProcess.ExitStatus.CrashExit
+            diagnostic_lines = (
+                self._stderr.decode("utf-8", errors="replace")
+                .strip()
+                .splitlines()
             )
+            diagnostic = (
+                diagnostic_lines[-1][-1000:] if diagnostic_lines else ""
+            )
+            reason = (
+                "The background worker crashed"
+                if crashed
+                else f"The background worker exited with code {exit_code}"
+            )
+            self._recovery_event = {
+                "event": "backend_restarted",
+                "message": (
+                    f"{reason}, so QAChat restarted it. Downloaded model "
+                    "files were kept."
+                ),
+                "exit_code": exit_code,
+                "diagnostic": diagnostic,
+            }
+            self._start_engine()
 
     def _process_error(self, _error) -> None:
         """Forward a child-process failure to the visible interface.

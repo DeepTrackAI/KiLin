@@ -53,6 +53,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
+import json
+from pathlib import Path
 from typing import TypeAlias
 
 from qachat.model_defaults import (
@@ -69,6 +71,9 @@ from qachat.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
 
 
 __all__ = [
+    "DEEP_CHAT_MODEL_MLX",
+    "LIGHT_CHAT_MODEL_MLX",
+    "cached_model_roles",
     "GUI_REQUIRED_MODEL_IDS",
     "MODEL_CHOICES",
     "ModelChoice",
@@ -77,6 +82,10 @@ __all__ = [
 ]
 
 ModelBackend: TypeAlias = SelectedBackend
+
+# The GUI's smallest and largest effort models on MLX.
+LIGHT_CHAT_MODEL_MLX = "Qwen/Qwen3-0.6B-MLX-4bit"
+DEEP_CHAT_MODEL_MLX = "mlx-community/Qwen3-14B-4bit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,9 +130,9 @@ class ModelChoice:
 
 
 MODEL_CHOICES = (
-    ModelChoice("Qwen/Qwen3-0.6B-MLX-4bit", MODEL_ROLE_CHAT, BACKEND_MLX),
+    ModelChoice(LIGHT_CHAT_MODEL_MLX, MODEL_ROLE_CHAT, BACKEND_MLX),
     ModelChoice(
-        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        DEEP_CHAT_MODEL_MLX,
         MODEL_ROLE_CHAT,
         BACKEND_MLX,
     ),
@@ -145,9 +154,9 @@ MODEL_CHOICES = (
 
 GUI_REQUIRED_MODEL_IDS = {
     BACKEND_MLX: (
-        "Qwen/Qwen3-0.6B-MLX-4bit",
+        LIGHT_CHAT_MODEL_MLX,
         DEFAULT_CHAT_MODEL_MLX,
-        "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
+        DEEP_CHAT_MODEL_MLX,
         DEFAULT_EMBEDDING_MODEL_MLX,
     ),
     BACKEND_TORCH: (
@@ -213,3 +222,58 @@ def model_choices(cached_models: set[str]) -> list[dict[str, object]]:
         {**asdict(choice), "cached": choice.model_id in cached_models}
         for choice in MODEL_CHOICES
     ]
+
+
+def cached_model_roles(
+    cached_models: list[dict[str, object]],
+) -> dict[str, str]:
+    """Classify cached models as chat, embedding, or other.
+
+    Presets keep their catalog role. Otherwise a name containing "embed" or
+    a sentence-transformers configuration marks an embedding model, and a
+    causal or conditional-generation architecture marks a chat model.
+    Embedding models converted from chat architectures report a chat
+    architecture, so names are checked first.
+
+    Parameters
+    ----------
+    cached_models: list[dict[str, object]]
+        Entries from ``qachat.huggingface.available_models``.
+
+    Returns
+    -------
+    dict[str, str]
+        Role for each cached model ID.
+
+    """
+
+    presets = {choice.model_id: choice.role for choice in MODEL_CHOICES}
+    roles: dict[str, str] = {}
+    for entry in cached_models:
+        model_id = str(entry["model_id"])
+        snapshots = Path(str(entry.get("path", ""))) / "snapshots"
+        if model_id in presets:
+            roles[model_id] = presets[model_id]
+            continue
+        if "embed" in model_id.lower() or any(
+            snapshots.glob("*/config_sentence_transformers.json")
+        ):
+            roles[model_id] = MODEL_ROLE_EMBEDDING
+            continue
+        role = "other"
+        for config in snapshots.glob("*/config.json"):
+            try:
+                value = json.loads(config.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            architectures = value.get("architectures") or []
+            if any(
+                str(name).endswith(
+                    ("ForCausalLM", "ForConditionalGeneration")
+                )
+                for name in architectures
+            ):
+                role = MODEL_ROLE_CHAT
+            break
+        roles[model_id] = role
+    return roles

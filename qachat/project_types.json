@@ -1,0 +1,63 @@
+{
+  "code": {
+    "label": "Code repository",
+    "extensions": [
+      ".py",
+      ".ipynb",
+      ".m",
+      ".md"
+    ],
+    "max_file_bytes": 1048576,
+    "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
+    "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+    "answer_guidance": "Keep the answer concise: about 150-300 words, unless the question asks for more detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+    "welcome_prompts": [
+      "What would you like to understand about this codebase?",
+      "Which part of your project should we explore?",
+      "What do you want to trace through the code?",
+      "What behavior would you like to investigate?",
+      "Where should we start in this repository?"
+    ],
+    "suggestions": [
+      "Explain a concept",
+      "Find where a feature is implemented",
+      "Trace a function through the code",
+      "Compare two approaches",
+      "Find evidence across my files",
+      "Explain how modules connect",
+      "Identify code related to an error",
+      "Summarize an architecture decision",
+      "Find tests for a behavior"
+    ]
+  },
+  "literature": {
+    "label": "Literature collection",
+    "extensions": [
+      ".pdf",
+      ".md",
+      ".txt"
+    ],
+    "max_file_bytes": 20971520,
+    "retrieval_instruction": "Given a question about academic literature, retrieve relevant research papers, abstracts, and citations that help answer the question.",
+    "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+    "answer_guidance": "Keep the answer concise: about 150-300 words, unless the question asks for more detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+    "welcome_prompts": [
+      "What would you like to understand from your literature?",
+      "Which concept should we explore across these sources?",
+      "What evidence are you looking for?",
+      "What would you like to compare in the literature?",
+      "Which finding should we investigate?"
+    ],
+    "suggestions": [
+      "Explain a concept",
+      "Find evidence across my files",
+      "Compare two approaches",
+      "Summarize findings on a topic",
+      "Find supporting and conflicting evidence",
+      "Trace a claim to its sources",
+      "Compare methods across papers",
+      "Identify gaps in the evidence",
+      "Find how a term is defined"
+    ]
+  }
+}

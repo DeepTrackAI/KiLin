@@ -441,7 +441,7 @@ class ConversationStore:
         """Return whether a conversation has no saved turns."""
 
         item = self._require(conversation_id)
-        record = _conversation_record(_read_json(self.state_path(item)))
+        record = conversation_state(_read_json(self.state_path(item)))
         turns = record.get("turns", [])
         if not isinstance(turns, list):
             raise ValueError("The saved conversation is invalid.")

@@ -22,7 +22,7 @@
       <header class="topbar">
         <button id="toggle-conversations" class="panel-toggle left-panel-toggle hidden" type="button" aria-label="Hide conversations" title="Hide conversations"><span></span></button>
         <div id="topbar-project" class="topbar-project hidden" aria-live="polite">
-          <strong id="topbar-project-name"></strong>
+          <strong id="topbar-project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false"></strong>
           <span id="topbar-turn-count">0 turns</span>
         </div>
         <button id="open-models" class="sidebar-toggle" type="button">Settings</button>
@@ -77,13 +77,23 @@
             </div>
             <div class="composer-right">
               <div class="effort-picker">
-                <button id="effort-button" class="effort-button" type="button" aria-expanded="false">Lagom</button>
+                <button id="effort-button" class="effort-button" type="button" aria-expanded="false">Lagom · 20</button>
                 <div id="effort-menu" class="effort-menu hidden">
-                  <strong id="effort-name">Lagom</strong>
-                  <span id="effort-detail">8B model · 20 references</span>
-                  <div class="effort-slider">
-                    <input id="effort-range" type="range" min="0" max="4" step="1" value="2" aria-label="Answer effort">
-                    <div class="effort-points" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>Model</span><strong id="effort-model-name">Lagom</strong></div>
+                    <span id="effort-model-detail" class="effort-detail">Qwen3-8B-MLX-4bit</span>
+                    <div class="effort-slider">
+                      <input id="effort-model-range" type="range" min="0" max="4" step="1" value="2" aria-label="Model level">
+                      <div class="effort-points" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                    </div>
+                  </div>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>References</span><strong id="effort-retrieval-name">Lagom</strong></div>
+                    <span id="effort-retrieval-detail" class="effort-detail">20 references</span>
+                    <div class="effort-slider">
+                      <input id="effort-retrieval-range" type="range" min="0" max="4" step="1" value="2" aria-label="Reference level">
+                      <div class="effort-points" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -126,8 +136,39 @@
           <h3>QAChat setup</h3>
           <p id="readiness-summary">Checking the local environment…</p>
           <ol id="readiness-steps" class="readiness-steps"></ol>
+          <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
           <p id="readiness-time" class="hint"></p>
           <button id="install-required" class="primary" type="button">Install required models</button>
+        </section>
+        <section class="settings-section">
+          <h3>Appearance</h3>
+          <select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+        </section>
+        <section class="settings-section"><h3>Local models</h3>
+            <!-- Kept hidden: the rows below edit these values. -->
+            <div class="hidden" aria-hidden="true">
+              <label for="chat-model">Default language model</label>
+              <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
+              <label for="embedding-model">Embedding model</label>
+              <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
+              <label for="query-format">Embedding query format</label>
+              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+            </div>
+
+        <p id="models-backend" class="hint"></p>
+        <div id="model-list"></div>
+        <details class="other-models"><summary>Other cached models</summary><div id="other-model-list"></div></details>
+        <p id="model-download-status" class="hint" role="status"></p>
+        <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
+        </section>
+        <section class="settings-section">
+          <h3>Answers</h3>
+          <div class="conversation-fields">
+            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
+            <p class="hint">The token limit is a safety cap, not a target length; reaching it can cut an answer short.</p>
+            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
+          </div>
         </section>
         <section class="settings-section">
           <h3>Project</h3>
@@ -136,37 +177,12 @@
             <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: QAChat sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
             <label for="backend">Computation backend</label>
             <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
-            <label for="chat-model">Default language model</label>
-            <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
-            <label for="embedding-model">Embedding model</label>
-            <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
-            <label for="query-format">Embedding query format</label>
-            <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
             <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
             <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
             <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
             <label class="check-row"><input id="allow-download" type="checkbox"> Allow missing models to download during preparation</label>
           </div>
         </section>
-        <section class="settings-section">
-          <h3>Answers</h3>
-          <div class="conversation-fields">
-            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
-            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="No limit"></label>
-            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
-          </div>
-        </section>
-        <section class="settings-section">
-          <h3>Appearance</h3>
-          <label for="appearance">Color mode</label>
-          <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-        </section>
-        <section class="settings-section"><h3>Local models</h3><p class="hint">Downloads start only when you click Download.</p></section>
-        <p id="models-backend" class="hint"></p>
-        <div id="model-list"></div>
-        <details class="other-models"><summary>Other cached models</summary><div id="other-model-list"></div><p class="hint">These models are not classified by QAChat. You can enter a custom model ID in Settings; compatibility is checked when loading it.</p></details>
-        <p id="model-download-status" class="hint" role="status"></p>
-        <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
       </div>
     </section>
   </body>

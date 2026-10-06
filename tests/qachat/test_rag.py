@@ -105,3 +105,18 @@ class TestSemanticMatrixCache(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAnswerGuidance(unittest.TestCase):
+    """Optional guidance extends the prompt without changing the default."""
+
+    def test_guidance_is_appended_only_when_given(self) -> None:
+        from qachat.rag import _answer_prompt
+
+        plain = _answer_prompt("What is memory?", ())
+        guided = _answer_prompt("What is memory?", (), "Be brief.")
+
+        self.assertNotIn("Be brief.", plain)
+        self.assertTrue(guided.startswith(plain))
+        self.assertTrue(guided.endswith(" Be brief."))
+        self.assertEqual(_answer_prompt("What is memory?", (), None), plain)

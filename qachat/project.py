@@ -100,7 +100,7 @@ import json
 from pathlib import Path
 import re
 import shutil
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, TypeAlias, cast
 
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
@@ -108,6 +108,7 @@ from qachat.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
+from qachat.project_types import load_project_types
 from qachat.query_formats import (
     QUERY_FORMAT_CHOICES,
     QUERY_FORMAT_QWEN3,
@@ -140,23 +141,23 @@ __all__ = [
     "configure_project",
 ]
 
-ProjectKind: TypeAlias = Literal["code", "literature"]
+# Project types, their default files, and their instructions come from
+# qachat/project_types.json; "code" and "literature" are always present.
+ProjectKind: TypeAlias = str
 PROJECT_KIND_CODE: Final[ProjectKind] = "code"
 PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
-PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = (
-    PROJECT_KIND_CODE,
-    PROJECT_KIND_LITERATURE,
+PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = tuple(
+    load_project_types()
 )
 
 _PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
-    PROJECT_KIND_CODE: ".py, .ipynb, .m, .md",
-    PROJECT_KIND_LITERATURE: ".pdf, .md, .txt",
+    kind: ", ".join(item.extensions)
+    for kind, item in load_project_types().items()
 }
-# Literature PDFs need more space than typical code files.
 _DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
-    PROJECT_KIND_CODE: 2**20,
-    PROJECT_KIND_LITERATURE: 20 * 2**20,
+    kind: item.max_file_bytes for kind, item in load_project_types().items()
 }
+_KIND_CHOICE_TEXT = ", ".join(PROJECT_KIND_CHOICES)
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}
@@ -271,7 +272,7 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
     extensions = _PROJECT_EXTENSIONS[kind]
     parser = ConfigParser()
     parser.read_string(
@@ -603,7 +604,7 @@ def initialize_project(
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
@@ -685,7 +686,7 @@ def prepare_project_workspace(
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
 
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
@@ -1016,7 +1017,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
     kind_value = _required(parser, "project", "kind")
     if kind_value not in PROJECT_KIND_CHOICES:
-        raise ValueError("project.kind must be code or literature.")
+        raise ValueError(f"project.kind must be one of: {_KIND_CHOICE_TEXT}.")
     kind = cast("ProjectKind", kind_value)
 
     extensions = tuple(

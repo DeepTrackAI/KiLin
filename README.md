@@ -48,7 +48,9 @@ Models are downloaded and stored in the Hugging Face cache.
 Open the [Repository Q&A Chat](tutorials/130_project_chat.ipynb).
 In its configuration cell:
 
-- Set `PROJECT_KIND` to `"code"` or `"literature"`.
+- Set `PROJECT_KIND` to `"code"` or `"literature"`, or to another type
+  defined in `qachat/project_types.json`, which also holds each type's
+  default files and model instructions.
 - Set `PROJECT_DIRECTORY` to your original source folder.
 - Leave `PROJECT_DIRECTORY = None` to use `example_repos/code_repo` or
   `example_repos/literature_repo`.

@@ -112,6 +112,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+from math import isfinite
 from pathlib import Path
 import platform
 import sys
@@ -126,11 +127,10 @@ from qachat.chat import (
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
 from qachat.conversation_format import conversation_state
-from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
+from qachat.project import QAProject, open_project
+from qachat.project_types import project_type
 from qachat.query_formats import (
-    LITERATURE_REPOSITORY_INSTRUCTION,
     QUERY_FORMAT_PLAIN,
-    SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
 from qachat.repository import (
@@ -154,6 +154,7 @@ from qachat.retrievals import (
     save_indexes,
     semantic_search,
 )
+from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
 from qachat.runtime import SelectedBackend, choose_backend
 from qachat.sources import extract_source_units, read_repository_files
 from qachat.trace_logging import (
@@ -609,7 +610,7 @@ class RAGSession:
                 thinking=profile.thinking,
                 temperature=profile.temperature,
                 max_new_tokens=profile.max_new_tokens,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=project_type(profile.kind).system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
             )
@@ -865,7 +866,7 @@ class RAGSession:
             replacement = ChatSession(
                 model_id,
                 backend=self.backend,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=self._system_prompt(),
                 allow_download=self.project.profile.allow_download,
                 trace=self.trace,
                 **settings,
@@ -874,7 +875,7 @@ class RAGSession:
             self.chat_session = ChatSession(
                 old_model_id,
                 backend=self.backend,
-                system_prompt=_SYSTEM_PROMPT,
+                system_prompt=self._system_prompt(),
                 allow_download=self.project.profile.allow_download,
                 trace=self.trace,
                 **settings,
@@ -896,6 +897,10 @@ class RAGSession:
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
         phase_callback: AnswerPhaseCallback | None = None,
+        answer_guidance: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
+        retrieval_query: str | None = None,
+        reuse_evidence: bool = False,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -918,6 +923,22 @@ class RAGSession:
             Optional callback receiving (phase_name, details_dict) for answer
             phases. Its exceptions propagate; it is not an asynchronous
             notification queue. Defaults to ``None``.
+        answer_guidance: str | None, optional
+            Extra answer instruction appended to this question's prompt, such
+            as a length target. It is saved with the turn so resumed history
+            rebuilds the same prompt. Defaults to ``None``, which leaves the
+            prompt unchanged.
+        token_callback: Callable[[str], None] | None, optional
+            Receives answer text pieces as they are generated, for live
+            display; see ``ChatSession.reply``. Defaults to ``None``.
+        retrieval_query: str | None, optional
+            Text to search with instead of the question, such as a follow-up
+            rewritten to stand alone. The question itself is still answered.
+            Saved with the turn. Defaults to ``None``.
+        reuse_evidence: bool, optional
+            Answer from the previous turn's evidence without searching, for a
+            follow-up about the same sources. Saved with the turn. Defaults to
+            ``False``.
 
         Returns
         -------
@@ -946,6 +967,10 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Enter a non-empty question.")
+        if answer_guidance is not None and not isinstance(
+            answer_guidance, str
+        ):
+            raise ValueError("answer_guidance must be text or None.")
         if retrieval_count is not None and (
             type(retrieval_count) is not int or retrieval_count < 1
         ):
@@ -954,6 +979,14 @@ class RAGSession:
             )
         if phase_callback is not None and not callable(phase_callback):
             raise ValueError("phase_callback must be callable or None.")
+        if retrieval_query is not None and (
+            not isinstance(retrieval_query, str) or not retrieval_query.strip()
+        ):
+            raise ValueError("retrieval_query must be non-empty text or None.")
+        if type(reuse_evidence) is not bool:
+            raise ValueError("reuse_evidence must be True or False.")
+        if reuse_evidence and not self.turns:
+            raise ValueError("There is no previous answer to reuse.")
 
         def report_phase(phase: AnswerPhase, **details: object) -> None:
             """Notify an interface without coupling retrieval to GUI code.
@@ -1055,33 +1088,60 @@ class RAGSession:
                 data=effective,
                 turn_id=turn_id,
             )
-            report_phase(
-                ANSWER_PHASE_RETRIEVING,
-                message="Retrieving evidence",
-            )
-            evidence = self._retrieve(
-                question,
-                retrieval_count,
-                trace_turn_id=turn_id,
-                status_callback=lambda message: report_phase(
-                    "retrieving", message=message
-                ),
-            )
-            report_phase(
-                ANSWER_PHASE_EVIDENCE_READY,
-                message=f"{len(evidence)} references found",
-                evidence_count=len(evidence),
-            )
-            prompt = _answer_prompt(question, evidence)
+            if reuse_evidence:
+                evidence = self.turns[-1].evidence
+                effective["evidence_reused"] = True
+                trace.emit(
+                    "retrieval.reused",
+                    component="rag",
+                    data={"evidence_count": len(evidence)},
+                    turn_id=turn_id,
+                )
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message=f"Reusing {len(evidence)} previous references",
+                    evidence_count=len(evidence),
+                    reused=True,
+                )
+            else:
+                search_text = question
+                if retrieval_query is not None:
+                    search_text = retrieval_query.strip()
+                    effective["retrieval_query"] = search_text
+                report_phase(
+                    ANSWER_PHASE_RETRIEVING,
+                    message="Retrieving evidence",
+                )
+                evidence = self._retrieve(
+                    search_text,
+                    retrieval_count,
+                    trace_turn_id=turn_id,
+                    status_callback=lambda message: report_phase(
+                        "retrieving", message=message
+                    ),
+                )
+                report_phase(
+                    ANSWER_PHASE_EVIDENCE_READY,
+                    message=f"{len(evidence)} references found",
+                    evidence_count=len(evidence),
+                )
+            if answer_guidance:
+                effective["answer_guidance"] = answer_guidance
+            prompt = _answer_prompt(question, evidence, answer_guidance)
             report_phase(
                 ANSWER_PHASE_GENERATING,
                 message="Generating answer",
                 evidence_count=len(evidence),
             )
-            answer = self.chat_session.reply(
-                prompt,
-                trace_turn_id=turn_id,
+            reply_options: dict[str, object] = {"trace_turn_id": turn_id}
+            if token_callback is not None:
+                reply_options["token_callback"] = token_callback
+            answer = self.chat_session.reply(prompt, **reply_options)
+            finish_reason = getattr(
+                self.chat_session, "last_finish_reason", None
             )
+            if finish_reason in ("length", "stop"):
+                effective["finish_reason"] = finish_reason
             turn = ConversationTurn(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 question=question,
@@ -1264,6 +1324,7 @@ class RAGSession:
         self: RAGSession,
         embedding_session: EmbeddingSession,
         report: dict[str, object] | None = None,
+        cached_chunks: dict[Path, list[Chunk]] | None = None,
     ) -> tuple[list[Chunk], CodeGraph]:
         """Read configured source and produce chunks and its code graph.
 
@@ -1376,8 +1437,12 @@ class RAGSession:
                 ),
             )
 
+        cached_chunks = cached_chunks or {}
+        changed_units = [
+            unit for unit in units if unit.path not in cached_chunks
+        ]
         chunking_started = perf_counter()
-        unit_count = len(units)
+        unit_count = len(changed_units)
         self._emit_count_progress(
             "chunking_source",
             50.0,
@@ -1398,7 +1463,7 @@ class RAGSession:
             data={"unit_count": unit_count, **chunk_settings},
         ):
             chunks = chunk_source_units(
-                units,
+                changed_units,
                 count_tokens=embedding_session.count_tokens,
                 target_tokens=profile.target_tokens,
                 max_tokens=profile.max_tokens,
@@ -1415,12 +1480,24 @@ class RAGSession:
                     )
                 ),
             )
+        fresh_by_path: dict[Path, list[Chunk]] = {}
+        for chunk in chunks:
+            fresh_by_path.setdefault(chunk.path, []).append(chunk)
+        chunks = [
+            chunk
+            for source in source_files
+            for chunk in cached_chunks.get(
+                source.path, fresh_by_path.get(source.path, [])
+            )
+        ]
         self.trace.emit(
             "source.chunk.summary",
             component="rag",
             data={
                 "chunk_count": len(chunks),
                 "settings": chunk_settings,
+                "reused_file_count": len(cached_chunks),
+                "chunked_unit_count": unit_count,
             },
         )
         self._emit_progress(
@@ -1506,6 +1583,9 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
+        model_source = getattr(embedding_session, "model_source", None)
+        if isinstance(model_source, str):
+            expected_metadata["embedding_model_source"] = model_source
 
         saved_manifest: dict[str, object] | None = None
         saved_metadata: dict[str, object] | None = None
@@ -1613,12 +1693,63 @@ class RAGSession:
                     data={"index_path": str(index_path)},
                 )
 
+        previous = None
+        cached_chunks: dict[Path, list[Chunk]] = {}
+        cached_vectors = {}
+        if not configuration_changed and saved_manifest is not None:
+            try:
+                previous = load_indexes(index_path)
+                vectors = previous.semantic.embeddings
+                old_chunks = previous.semantic.chunks
+                dimensions = {len(vector) for vector in vectors}
+                if (
+                    len(vectors) != len(old_chunks)
+                    or len(dimensions) != 1
+                    or 0 in dimensions
+                    or any(
+                        not isfinite(value)
+                        for vector in vectors
+                        for value in vector
+                    )
+                ):
+                    raise ValueError("Saved embedding vectors are invalid.")
+                changed_paths = set(changes["added"]) | set(
+                    changes["modified"]
+                )
+                unchanged = set(report["selected_files"]) - changed_paths
+                cached_chunks = {Path(path): [] for path in unchanged}
+                for chunk, vector in zip(old_chunks, vectors):
+                    if chunk.path in cached_chunks:
+                        cached_chunks[chunk.path].append(chunk)
+                        cached_vectors[chunk.identifier] = (chunk, vector)
+            except (OSError, ValueError, TypeError, KeyError):
+                previous = None
+                cached_chunks = {}
+                cached_vectors = {}
         chunks, code_graph = self._prepare_source(
             embedding_session,
             report=report,
+            cached_chunks=cached_chunks,
         )
+        pending_chunks = [
+            chunk
+            for chunk in chunks
+            if cached_vectors.get(chunk.identifier, (None,))[0] != chunk
+        ]
         embedding_started = perf_counter()
-        chunk_count = len(chunks)
+        chunk_count = len(pending_chunks)
+        self.trace.emit(
+            "index.incremental.plan",
+            component="rag",
+            data={
+                "reused_chunks": len(chunks) - chunk_count,
+                "embedded_chunks": chunk_count,
+                "added": changes["added"],
+                "modified": changes["modified"],
+                "removed": changes["removed"],
+                "configuration_changed": configuration_changed,
+            },
+        )
         self._emit_count_progress(
             "building_semantic_index",
             58.0,
@@ -1636,22 +1767,44 @@ class RAGSession:
                 "batch_size": _EMBEDDING_PROGRESS_BATCH_SIZE,
             },
         ):
-            semantic = build_semantic_index(
-                chunks,
-                embedding_session,
-                batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
-                progress_callback=(
-                    lambda current, total: self._emit_count_progress(
-                        "building_semantic_index",
-                        58.0,
-                        74.0,
-                        "Embedding chunks",
-                        current,
-                        total,
-                        embedding_started,
-                    )
-                ),
+            fresh_semantic = (
+                build_semantic_index(
+                    pending_chunks,
+                    embedding_session,
+                    batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
+                    progress_callback=(
+                        lambda current, total: self._emit_count_progress(
+                            "building_semantic_index",
+                            58.0,
+                            74.0,
+                            "Embedding chunks",
+                            current,
+                            total,
+                            embedding_started,
+                        )
+                    ),
+                )
+                if pending_chunks
+                else SemanticIndex((), ())
             )
+        fresh_vectors = {
+            chunk.identifier: vector
+            for chunk, vector in zip(
+                fresh_semantic.chunks, fresh_semantic.embeddings
+            )
+        }
+        semantic = SemanticIndex(
+            tuple(chunks),
+            tuple(
+                (
+                    fresh_vectors[chunk.identifier]
+                    if chunk.identifier in fresh_vectors
+                    else cached_vectors[chunk.identifier][1]
+                )
+                for chunk in chunks
+            ),
+        )
+
         self._emit_progress(
             "building_lexical_index",
             75.0,
@@ -1977,12 +2130,20 @@ class RAGSession:
         profile = self.project.profile
         if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
-        instruction = (
-            SOFTWARE_REPOSITORY_INSTRUCTION
-            if profile.kind == PROJECT_KIND_CODE
-            else LITERATURE_REPOSITORY_INSTRUCTION
-        )
+        instruction = project_type(profile.kind).retrieval_instruction
         return format_qwen3_query(question, instruction)
+
+    def _system_prompt(self: RAGSession) -> str:
+        """Return the system prompt this conversation answers with.
+
+        A resumed conversation keeps the prompt it started with, even after
+        ``project_types.json`` changes; otherwise the project type's prompt.
+        """
+
+        messages = getattr(self.chat_session, "messages", None) or []
+        if messages and messages[0].get("role") == SYSTEM_ROLE:
+            return str(messages[0]["content"])
+        return project_type(self.project.profile.kind).system_prompt
 
     def _index_metadata(self: RAGSession) -> dict[str, object]:
         """Return settings that determine reusable index compatibility.
@@ -2051,7 +2212,7 @@ class RAGSession:
             "thinking": self.chat_session.thinking,
             "temperature": self.chat_session.temperature,
             "max_new_tokens": self.chat_session.max_new_tokens,
-            "system_prompt": _SYSTEM_PROMPT,
+            "system_prompt": self._system_prompt(),
         }
 
     def _load_conversation(
@@ -2111,6 +2272,7 @@ class RAGSession:
                                 "content": _answer_prompt(
                                     turn.question,
                                     turn.evidence,
+                                    turn.parameters.get("answer_guidance"),
                                 ),
                             },
                             {"role": ASSISTANT_ROLE, "content": turn.answer},
@@ -2147,7 +2309,7 @@ class RAGSession:
         """
 
         conversation = {
-            "system_prompt": _SYSTEM_PROMPT,
+            "system_prompt": self._system_prompt(),
             "turns": [_turn_to_data(turn) for turn in self.turns],
         }
         parent_checkpoint_id = getattr(self, "_checkpoint_id", None)
@@ -2414,6 +2576,7 @@ def _check_conversation_trace(
 def _answer_prompt(
     question: str,
     evidence: tuple[Evidence, ...],
+    guidance: object = None,
 ) -> str:
     """Combine one question with numbered, traceable evidence.
 
@@ -2423,6 +2586,9 @@ def _answer_prompt(
         User question supplied to query formatting or evidence retrieval.
     evidence: tuple[Evidence, ...]
         Ordered retrieved chunks with citation numbers and source provenance.
+    guidance: object, optional
+        Extra answer instruction; only a nonempty string is appended.
+        Defaults to ``None``.
 
     Returns
     -------
@@ -2449,6 +2615,8 @@ def _answer_prompt(
         "after the claims they support. Do not repeat the source text or "
         "write a bibliography."
     )
+    if isinstance(guidance, str) and guidance.strip():
+        sections[-1] += " " + guidance.strip()
     return "\n\n".join(sections)
 
 
