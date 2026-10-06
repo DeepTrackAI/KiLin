@@ -16,8 +16,8 @@
         5,
         60
       ],
-      "guidance": "The paper's authors (first author et al.), title, journal, and year as printed at the beginning of the paper, in Nature citation style.",
-      "source": "beginning",
+      "guidance": "The paper in Nature citation style: first author et al., title, and DOI and year when printed.",
+      "source": "citation",
       "inline": true
     },
     {

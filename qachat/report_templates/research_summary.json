@@ -6,8 +6,8 @@
     {
       "name": "Citation",
       "required": true,
-      "guidance": "Authors, title, journal or venue, and year, exactly as printed at the beginning of the paper.",
-      "source": "beginning"
+      "guidance": "The paper in Nature citation style: first author et al., title, and DOI and year when printed.",
+      "source": "citation"
     },
     {
       "name": "Research Question",

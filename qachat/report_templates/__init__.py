@@ -51,6 +51,7 @@ __all__ = [
     "LIMIT_TOLERANCE",
     "SECTION_SOURCE_BEGINNING",
     "SECTION_SOURCE_CHOICES",
+    "SECTION_SOURCE_CITATION",
     "SECTION_SOURCE_NOTES",
     "SECTION_SOURCE_REFERENCES",
     "SectionSource",
@@ -73,15 +74,20 @@ REPORT_TEMPLATES_DIR: Final[Path] = Path(__file__).parent
 # Word and item limits allow this fraction either way, as editors do.
 LIMIT_TOLERANCE: Final[float] = 0.1
 # What a section is written from: the reading notes, the beginning of the
-# document (title, authors, venue), or its reference list.
-SectionSource: TypeAlias = Literal["notes", "beginning", "references"]
+# document (title, authors, venue), its reference list, or its citation,
+# which QAChat copies from the document without the model.
+SectionSource: TypeAlias = Literal[
+    "notes", "beginning", "references", "citation"
+]
 SECTION_SOURCE_NOTES: Final[SectionSource] = "notes"
 SECTION_SOURCE_BEGINNING: Final[SectionSource] = "beginning"
 SECTION_SOURCE_REFERENCES: Final[SectionSource] = "references"
+SECTION_SOURCE_CITATION: Final[SectionSource] = "citation"
 SECTION_SOURCE_CHOICES: Final[tuple[SectionSource, ...]] = (
     SECTION_SOURCE_NOTES,
     SECTION_SOURCE_BEGINNING,
     SECTION_SOURCE_REFERENCES,
+    SECTION_SOURCE_CITATION,
 )
 _HEADING = re.compile(r"^##\s+(.+?)\s*#*\s*$")
 _TITLE = re.compile(r"^#\s+(.+?)\s*#*\s*$")
@@ -107,9 +113,10 @@ class TemplateSection:
     items: tuple[int, int] | None
         Allowed number of list items, or None for no limit.
     source: SectionSource
-        What the writer also sees besides the notes: ``beginning`` (the
-        document's first page, for citations) or ``references`` (its
-        reference list; items must come from it).
+        What the section is written from besides the notes: ``beginning``
+        (the document's first page), ``references`` (its reference list;
+        items must come from it), or ``citation`` (copied from the
+        document's metadata and first page without the model).
     inline: bool
         Written as one labelled line (``**Name:** content``) instead of a
         ``##`` section, as the "This is a summary of:" line of a
@@ -459,6 +466,10 @@ def template_guide(template: ReportTemplate) -> str:
         else:
             limit = "no fixed length"
         source = {
+            SECTION_SOURCE_CITATION: (
+                " Copied from the paper's metadata and first page, without "
+                "the language model."
+            ),
             SECTION_SOURCE_BEGINNING: " Taken from the paper's first page.",
             SECTION_SOURCE_REFERENCES: (
                 " Chosen from the paper's own reference list."

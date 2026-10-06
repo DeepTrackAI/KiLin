@@ -58,6 +58,8 @@ from typing import Final
 from qachat.chunking import Chunk
 from qachat.report_templates import (
     SECTION_SOURCE_BEGINNING,
+    SECTION_SOURCE_CITATION,
+    count_words,
     SECTION_SOURCE_REFERENCES,
     ReportTemplate,
     TemplateSection,
@@ -105,6 +107,7 @@ __all__ = [
     "fix_prompt",
     "headline_prompt",
     "paper_beginning",
+    "paper_citation",
     "parse_settings",
     "reference_list",
     "run",
@@ -351,6 +354,85 @@ _BEGINNING_CHARACTERS: Final[int] = 1500
 _REFERENCE_CHARACTERS: Final[int] = 6000
 # Share of an item's distinctive words that must appear in its source.
 _GROUNDED_SHARE: Final[float] = 0.6
+
+
+def paper_citation(
+    file: Path | None, passages: tuple[Chunk, ...]
+) -> str | None:
+    """Write a paper's citation from its metadata and first page.
+
+    Parameters
+    ----------
+    file: pathlib.Path | None
+        The paper on disk, for its PDF metadata; None when unknown.
+    passages: tuple[Chunk, ...]
+        The paper's passages, for the DOI, year, and author count.
+
+    Returns
+    -------
+    str | None
+        For example ``Patil, A. C. et al. Deep-Learning Investigation of
+        ... https://doi.org/10.1038/... (2025).``: the first author and the
+        title come from the PDF metadata; the DOI and year are added only
+        when printed on the first page. None when there is no metadata
+        title, so the model writes it from the first page instead.
+
+    """
+
+    if file is None or file.suffix.lower() != ".pdf" or not file.is_file():
+        return None
+    try:
+        from pypdf import PdfReader
+
+        metadata = PdfReader(file).metadata or {}
+    except Exception:  # Unreadable metadata: let the model write it.
+        return None
+    title = " ".join(str(metadata.get("/Title") or "").split()).rstrip(".")
+    if len(title.split()) < 3:
+        return None
+    first = paper_beginning(passages)
+    authors = [
+        name.strip()
+        for name in re.split(r";|,| and ", str(metadata.get("/Author") or ""))
+        if name.strip() and not name.strip().lower().startswith("for ")
+    ]
+    parts = []
+    if authors:
+        surname, initials = _author(authors[0])
+        many = len(authors) > 1 or bool(
+            re.search(
+                rf"{re.escape(surname)}[\s\S]{{0,60}}?,\s*[A-Z]", first
+            )
+        )
+        parts.append(f"{surname}, {initials}" + (" et al." if many else ""))
+    parts.append(f"{title}.")
+    doi = re.search(r"https?://doi\.org/\S+[0-9A-Za-z]", first)
+    year = re.search(
+        r"(?:Published|Accepted)[^\n]{0,30}?\b((?:19|20)\d\d)\b"
+        r"|\(((?:19|20)\d\d)\)",
+        first,
+    )
+    tail = []
+    if doi:
+        tail.append(doi.group(0))
+    if year:
+        tail.append(f"({year.group(1) or year.group(2)})")
+    if tail:
+        parts.append(" ".join(tail) + ".")
+    return " ".join(parts)
+
+
+def _author(name: str) -> tuple[str, str]:
+    """Split "Anoop C. Patil" into ("Patil", "A. C.")."""
+
+    words = name.split()
+    if len(words) == 1:
+        return words[0], ""
+    initials = " ".join(
+        "-".join(f"{part[0].upper()}." for part in word.split("-") if part)
+        for word in words[:-1]
+    )
+    return words[-1], initials
 
 
 def paper_beginning(passages: tuple[Chunk, ...]) -> str:
@@ -637,10 +719,17 @@ Use only this source text for the section:
 
 
 def _length(section: TemplateSection) -> str:
-    """Describe a section's length, such as "120-150 words"."""
+    """Describe a section's length, such as "about 135 words (120-150)".
 
+    The midpoint is the target, so the sections together fit the page.
+
+    """
+
+    if section.inline:
+        return "one line only"
     if section.words:
-        return f"{section.words[0]}-{section.words[1]} words"
+        low, high = section.words
+        return f"about {(low + high) // 2} words ({low}-{high})"
     if section.items:
         return (
             f"{section.items[0]}-{section.items[1]} items, one per line "
@@ -664,6 +753,16 @@ def _content(reply: str, section: TemplateSection) -> str:
         or not lines[0].strip()
     ):
         lines.pop(0)
+    if section.inline:
+        # One line, without a repeated label ("This is a summary of ...").
+        line = next((x.strip() for x in lines if x.strip()), "")
+        line = re.sub(
+            rf"^\**\s*{re.escape(section.name)}\s*:?\**\s*:?\s*",
+            "",
+            line,
+            flags=re.I,
+        )
+        return line.strip()
     if section.source == SECTION_SOURCE_REFERENCES:
         lines = [
             re.sub(r"^(\s*(?:[-*•]|\d+[.)])\s+)\[\d+\]\s*", r"\1", line)
@@ -719,8 +818,9 @@ def run(
     Returns
     -------
     ToolResult
-        The summary (with passage citations), every passage as evidence,
-        and a summary of the check, repairs, and saved file.
+        One line saying where the Markdown and PDF were saved, then the
+        saved Markdown itself; every passage of the paper as evidence; and
+        a summary of the checks, fixes, and files.
 
     """
 
@@ -864,8 +964,19 @@ def run(
     written: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
+        if section.source == SECTION_SOURCE_CITATION:
+            # Copied, not written: the model never touches the citation.
+            citation = paper_citation(_paper_file(path, context), passages)
+            if citation:
+                written.append((section.name, citation))
+                continue
         context.progress(f"Writing {section.name}")
-        source = sources.get(section.source, "")
+        source = sources.get(
+            SECTION_SOURCE_BEGINNING
+            if section.source == SECTION_SOURCE_CITATION
+            else section.source,
+            "",
+        )
         system, prompt = section_prompt(
             template, section, path.name, notes, written, source
         )
@@ -878,12 +989,21 @@ def run(
             context.progress(f"Fixing: {problem}")
             fixes.append(problem)
             repairs += 1
+            short = bool(
+                section.words and count_words(content) < section.words[0]
+            )
             system, prompt = fix_prompt(
-                section, content, problem, source, notes
+                section, content, problem, source, notes if short else None
             )
             content = _content(
                 context.ask_model(system, prompt, tokens), section
             )
+            problem = _problem(section, content, source)
+        if problem and section.words and (
+            count_words(content) > section.words[1]
+        ):
+            # Too long after its fixes: cut whole trailing sentences.
+            content = _trim_words(content, section.words[1])
             problem = _problem(section, content, source)
         if problem and section.source == SECTION_SOURCE_REFERENCES:
             # References the paper does not list are dropped, not shown.
@@ -892,6 +1012,8 @@ def run(
         if problem and problem not in (section_problem(section, content),):
             unsupported.append(problem)
         written.append((section.name, content))
+    if template.max_total_words:
+        written = _fit_total(written, template)
     inline = {s.name for s in template.sections if s.inline}
     draft = "\n\n".join(
         [f"# {headline}"]
@@ -923,20 +1045,21 @@ def run(
         turn_id=context.trace_turn_id,
     )
     read = sum(len(part) for part in runs)
-    footer = [
-        "",
-        "---",
-        f"Saved to `{saved.as_posix()}`"
-        + (f" and `{pdf.as_posix()}`" if pdf else "")
-        + ".",
+    # The answer says where the files are and then shows the saved file
+    # itself, so the chat and the file never differ. Checks and fixes are
+    # recorded in the turn and the trace.
+    files = f"`{saved.as_posix()}`" + (
+        f" and `{pdf.as_posix()}`" if pdf else ""
+    )
+    lead = [
+        f"Done: the {template.title.lower()} of {path.name} is saved as "
+        f"{files}."
     ]
-    # Checks and fixes are recorded in the turn and the trace; the answer
-    # stays a clean document.
     if pdf_note:
-        footer.append(pdf_note)
+        lead.append(pdf_note)
     if read < len(passages):
-        footer.append(
-            f"Read {read} of {len(passages)} passages"
+        lead.append(
+            f"It is based on {read} of {len(passages)} passages"
             + (
                 " (quick version: the first part)."
                 if choice == PLAN_CHOICE_QUICK
@@ -979,7 +1102,7 @@ def run(
         }
         for index, chunk in enumerate(passages)
     )
-    answer = draft.strip() + "\n" + "\n".join(footer)
+    answer = " ".join(lead) + "\n\n---\n\n" + file_text.strip()
     return ToolResult(answer, evidence, summary)
 
 
@@ -999,12 +1122,57 @@ def _problem(
                 f"{section.name} item {numbers} is not in the paper's "
                 "reference list."
             )
-    elif section.source == SECTION_SOURCE_BEGINNING:
+    elif section.source in (SECTION_SOURCE_BEGINNING, SECTION_SOURCE_CITATION):
         if ungrounded(content, source, items=False):
             return (
                 f"{section.name} does not match the beginning of the paper."
             )
+        invented = _unknown_names(content, source)
+        if invented:
+            return (
+                f"{section.name} names {', '.join(invented)}, which the "
+                "beginning of the paper does not; copy names exactly."
+            )
     return None
+
+
+# Capitalized words that are not names.
+_NOT_NAMES: Final[frozenset[str]] = frozenset(
+    "this the that these and for with from into in on at by of an et al "
+    "is are was a its their our nature journal".split()
+)
+
+
+def _unknown_names(content: str, source: str) -> list[str]:
+    """Capitalized words (names, title words) the source does not contain."""
+
+    # Join words hyphenated across lines ("Spec-\ntra") before comparing.
+    joined = re.sub(r"-\s*\n\s*", "", source)
+    known = set(re.findall(r"[a-z]+", joined.casefold()))
+    names = re.findall(r"\b[A-Z][a-z]{2,}\b", _CITATION.sub("", content))
+    return sorted(
+        {
+            name
+            for name in names
+            if name.casefold() not in known
+            and name.casefold() not in _NOT_NAMES
+        }
+    )
+
+
+def _trim_words(content: str, limit: int) -> str:
+    """Drop whole trailing sentences until the content has ``limit`` words.
+
+    Lists keep whole items; the first sentence is always kept.
+
+    """
+
+    if count_words(content) <= limit:
+        return content
+    pieces = re.split(r"(?<=[.!?])\s+(?=[A-Z\[(])", content.strip())
+    while len(pieces) > 1 and count_words(" ".join(pieces)) > limit:
+        pieces.pop()
+    return " ".join(pieces)
 
 
 def _write_pdf(
@@ -1034,6 +1202,49 @@ def _write_pdf(
     if pages > 1:
         return pdf, f"The PDF needed {pages} pages, even at a small font."
     return pdf, None
+
+
+def _paper_file(path: Path, context: ToolContext) -> Path | None:
+    """The paper on disk: ``target/...`` or below the project's sources."""
+
+    root = context.project_root
+    for candidate in (root / path, root / "sources" / path):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _fit_total(
+    written: list[tuple[str, str]], template: ReportTemplate
+) -> list[tuple[str, str]]:
+    """Trim the longest prose sections toward their midpoints to fit.
+
+    Sections are never cut below the middle of their range; reference
+    lists and one-line sections are left alone.
+
+    """
+
+    limits = {s.name: s.words for s in template.sections if s.words}
+    sections = dict(written)
+    total = sum(count_words(text) for text in sections.values())
+    while total > template.max_total_words:
+        over = [
+            (count_words(text) - sum(limits[name]) // 2, name)
+            for name, text in sections.items()
+            if name in limits
+            and count_words(text) > sum(limits[name]) // 2
+        ]
+        if not over:
+            break
+        _, name = max(over)
+        trimmed = _trim_words(
+            sections[name], count_words(sections[name]) - 1
+        )
+        if trimmed == sections[name]:
+            break
+        sections[name] = trimmed
+        total = sum(count_words(text) for text in sections.values())
+    return [(name, sections[name]) for name, _ in written]
 
 
 def _grounded_items(content: str, references: str) -> str:

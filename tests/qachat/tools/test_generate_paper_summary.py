@@ -13,6 +13,10 @@ from qachat.tools import ToolRequest
 from qachat.tools.generate_paper_summary import (
     SummarySettings,
     _content,
+    _fit_total,
+    _trim_words,
+    _unknown_names,
+    paper_citation,
     choose_template,
     parse_settings,
     reference_list,
@@ -298,6 +302,69 @@ class TestGeneratePaperSummary(unittest.TestCase):
             result.answer,
         )
         self.assertNotIn("## This is a summary of", result.answer)
+
+    def test_citation_is_copied_from_metadata_not_written(self) -> None:
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.add_metadata(
+            {
+                "/Title": "Deep spectra of stressed plants",
+                "/Author": "Anoop C. Patil; Yu-Wei Chang",
+            }
+        )
+        pdf = self.root / "paper.pdf"
+        with pdf.open("wb") as file:
+            writer.write(file)
+        first = chunk(
+            "paper.pdf",
+            [
+                "https://doi.org/10.1000/xyz123",
+                "Accepted: 6 March 2025",
+            ],
+        )
+        self.assertEqual(
+            paper_citation(pdf, (first,)),
+            "Patil, A. C. et al. Deep spectra of stressed plants. "
+            "https://doi.org/10.1000/xyz123 (2025).",
+        )
+        self.assertIsNone(paper_citation(self.root / "missing.pdf", ()))
+
+    def test_citation_names_must_be_on_the_first_page(self) -> None:
+        first_page = "Deep spectra. Anoop C. Patil, Benny Sng. Nature 2025."
+        self.assertEqual(
+            _unknown_names("Patil, Deepak et al. Deep spectra.", first_page),
+            ["Deepak"],
+        )
+        self.assertEqual(
+            _unknown_names("Patil, A. C. et al. Deep spectra.", first_page),
+            [],
+        )
+
+    def test_long_sections_lose_trailing_sentences(self) -> None:
+        text = "One two three. Four five six. Seven eight nine [2]."
+        self.assertEqual(_trim_words(text, 6), "One two three. Four five six.")
+        self.assertEqual(_trim_words(text, 1), "One two three.")
+        written = [
+            ("The Reason", " ".join(["Long sentence here."] * 60)),
+            ("The Future", "Short."),
+        ]
+        fitted = _fit_total(written, _BRIEFING)
+        self.assertLessEqual(
+            sum(len(text.split()) for _, text in fitted), 750
+        )
+        self.assertEqual(fitted[1], ("The Future", "Short."))
+
+    def test_inline_section_is_one_line_without_its_label(self) -> None:
+        section = next(s for s in _BRIEFING.sections if s.inline)
+        reply = (
+            "**This is a summary of:** Patil, A. C. et al. Deep spectra.\n"
+            "More text the model added."
+        )
+        self.assertEqual(
+            _content(reply, section), "Patil, A. C. et al. Deep spectra."
+        )
 
     def test_source_paper_named_in_the_question(self) -> None:
         chunks = [chunk("repo/smith2020.pdf", ["Smith used R."])]
