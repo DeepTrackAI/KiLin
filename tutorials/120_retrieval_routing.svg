@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="720"
+     viewBox="0 0 1000 720" role="img"
+     aria-labelledby="title desc">
+  <title id="title">QAChat retrieval routing pipeline</title>
+  <desc id="desc">
+    A question is ranked independently by semantic, lexical, and code-aware
+    retrieval. Reciprocal Rank Fusion combines the rankings. Deterministic
+    expansion then adds guaranteed repository context before final evidence is
+    supplied to the language model.
+  </desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8"
+            refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#334155"/>
+    </marker>
+    <style>
+      .title { font: 700 28px sans-serif; fill: #0f172a; }
+      .label { font: 700 19px sans-serif; fill: #0f172a; }
+      .body { font: 16px sans-serif; fill: #334155; }
+      .small { font: 14px sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #64748b; stroke-width: 2; rx: 14; }
+      .rank { fill: #f8fafc; stroke: #64748b; stroke-width: 2; rx: 14; }
+      .fusion { fill: #f1f5f9; stroke: #475569; stroke-width: 2; rx: 14; }
+      .expand { fill: #fff7ed; stroke: #c2410c; stroke-width: 2; rx: 14; }
+      .evidence { fill: #eff6ff; stroke: #2563eb; stroke-width: 2; rx: 14; }
+      .line { fill: none; stroke: #334155; stroke-width: 2.4;
+              marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1000" height="720" fill="#ffffff"/>
+  <text x="500" y="44" text-anchor="middle" class="title">
+    Retrieval ranking and deterministic expansion
+  </text>
+
+  <rect x="300" y="75" width="400" height="72" class="box"/>
+  <text x="500" y="105" text-anchor="middle" class="label">Question</text>
+  <text x="500" y="130" text-anchor="middle" class="body">
+    Natural-language request to answer
+  </text>
+
+  <path d="M500 147 L500 178" class="line"/>
+  <path d="M500 178 L180 178 L180 220" class="line"/>
+  <path d="M500 178 L500 220" class="line"/>
+  <path d="M500 178 L820 178 L820 220" class="line"/>
+
+  <rect x="55" y="220" width="250" height="112" class="rank"/>
+  <text x="180" y="252" text-anchor="middle" class="label">
+    Semantic ranking
+  </text>
+  <text x="180" y="279" text-anchor="middle" class="body">
+    Similarity in embedding space
+  </text>
+  <text x="180" y="305" text-anchor="middle" class="small">
+    Meaning-oriented signal
+  </text>
+
+  <rect x="375" y="220" width="250" height="112" class="rank"/>
+  <text x="500" y="252" text-anchor="middle" class="label">
+    Lexical ranking
+  </text>
+  <text x="500" y="279" text-anchor="middle" class="body">
+    Exact words and terms
+  </text>
+  <text x="500" y="305" text-anchor="middle" class="small">
+    Wording-oriented signal
+  </text>
+
+  <rect x="695" y="220" width="250" height="112" class="rank"/>
+  <text x="820" y="252" text-anchor="middle" class="label">
+    Code-aware ranking
+  </text>
+  <text x="820" y="279" text-anchor="middle" class="body">
+    Symbols and code structure
+  </text>
+  <text x="820" y="305" text-anchor="middle" class="small">
+    Repository-oriented signal
+  </text>
+
+  <path d="M180 332 L180 370 L500 370 L500 398" class="line"/>
+  <path d="M500 332 L500 398" class="line"/>
+  <path d="M820 332 L820 370 L500 370 L500 398" class="line"/>
+
+  <rect x="260" y="398" width="480" height="92" class="fusion"/>
+  <text x="500" y="431" text-anchor="middle" class="label">
+    Reciprocal Rank Fusion (RRF)
+  </text>
+  <text x="500" y="459" text-anchor="middle" class="body">
+    Combines the three independent ranked lists
+  </text>
+
+  <path d="M500 490 L500 525" class="line"/>
+
+  <rect x="220" y="525" width="560" height="94" class="expand"/>
+  <text x="500" y="559" text-anchor="middle" class="label">
+    Deterministic context expansion
+  </text>
+  <text x="500" y="586" text-anchor="middle" class="body">
+    Adds guaranteed exact-file, exact-function, or related context
+  </text>
+  <text x="500" y="607" text-anchor="middle" class="small">
+    Expansion does not change the RRF scores
+  </text>
+
+  <path d="M500 619 L500 648" class="line"/>
+
+  <rect x="300" y="648" width="400" height="58" class="evidence"/>
+  <text x="500" y="684" text-anchor="middle" class="label">
+    Final evidence supplied to the LLM
+  </text>
+</svg>
