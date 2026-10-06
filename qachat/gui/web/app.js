@@ -16,6 +16,11 @@
 
 // Resolve fixed DOM identifiers after the deferred script can see the page.
 const byId = (id) => document.getElementById(id);
+const ANSWER_PHASE_RETRIEVING = "retrieving";
+const ANSWER_PHASE_EVIDENCE_READY = "evidence_ready";
+const ANSWER_PHASE_GENERATING = "generating";
+const ANSWER_PHASE_SAVING = "saving";
+const ANSWER_PHASE_COMPLETED = "completed";
 const setup = byId("setup");
 const chat = byId("chat");
 const conversation = byId("conversation");
@@ -1017,16 +1022,16 @@ function onEvent(raw) {
     setBusy(true, data.message);
   } else if (data.event === "answer_phase") {
     const count = Number(data.count ?? data.evidence_count ?? 0);
-    if (data.phase === "retrieving") {
+    if (data.phase === ANSWER_PHASE_RETRIEVING) {
       showTurnPhase("Retrieving");
-    } else if (data.phase === "evidence_ready") {
+    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY) {
       const detail = `${count} reference${count === 1 ? "" : "s"} found`;
       showTurnPhase("Preparing evidence", detail);
-    } else if (data.phase === "generating") {
+    } else if (data.phase === ANSWER_PHASE_GENERATING) {
       showTurnPhase("Generating", count ? `${count} references` : "");
-    } else if (data.phase === "saving") {
+    } else if (data.phase === ANSWER_PHASE_SAVING) {
       showTurnPhase("Saving answer");
-    } else if (data.phase === "completed") {
+    } else if (data.phase === ANSWER_PHASE_COMPLETED) {
       stopPhaseAnimation();
     }
   } else if (data.event === "model_download_started") {

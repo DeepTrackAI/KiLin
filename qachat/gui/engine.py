@@ -85,16 +85,24 @@ from qachat.gui.model_catalog import (
 from qachat import RAGSession, prepare_sources_workspace
 from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
-from qachat.project import QAProject, default_project_profile, open_project
+from qachat.project import (
+    PROJECT_KIND_CODE,
+    PROJECT_KIND_CHOICES,
+    QAProject,
+    default_project_profile,
+    open_project,
+)
 from qachat.repository import (
     BLOCKED_SUFFIXES,
     DEFAULT_EXTENSIONS,
     SKIP_FILES,
     scan_repository,
 )
-from qachat.runtime import choose_backend
+from qachat.runtime import BACKEND_AUTO, choose_backend
 from qachat.sources import read_repository_files
 from qachat.trace_logging import (
+    FAILURE_POLICY_WARN,
+    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -267,8 +275,8 @@ class ChatEngine:
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
-                mode="forensic",
-                failure_policy="warn",
+                mode=TRACE_MODE_FORENSIC,
+                failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,
         )
@@ -432,7 +440,7 @@ class ChatEngine:
 
         """
 
-        if kind is not None and kind not in {"code", "literature"}:
+        if kind is not None and kind not in PROJECT_KIND_CHOICES:
             return None
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
@@ -453,7 +461,7 @@ class ChatEngine:
                 parser.read(profile_path, encoding="utf-8")
                 saved_kind = parser.get("project", "kind")
                 source_text = parser.get("project", "source")
-                if saved_kind not in {"code", "literature"}:
+                if saved_kind not in PROJECT_KIND_CHOICES:
                     continue
                 if kind is not None and saved_kind != kind:
                     continue
@@ -535,7 +543,7 @@ class ChatEngine:
             self._send(
                 "settings",
                 profile=asdict(profile),
-                backend=choose_backend("auto"),
+                backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
                 cached_models=sorted(cached),
@@ -737,10 +745,14 @@ class ChatEngine:
         """
 
         try:
-            if kind not in {"code", "literature"}:
+            if kind not in PROJECT_KIND_CHOICES:
                 raise ValueError("Choose code or literature.")
             if not sources and not workspace.strip():
-                example = "code_repo" if kind == "code" else "literature_repo"
+                example = (
+                    "code_repo"
+                    if kind == PROJECT_KIND_CODE
+                    else "literature_repo"
+                )
                 sources = [str(ROOT / "example_repos" / example)]
                 selected_files = None
             if not workspace.strip():

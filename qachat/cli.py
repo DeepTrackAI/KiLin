@@ -52,8 +52,17 @@ import shutil
 import subprocess
 import sys
 
+from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_CHOICES,
+    BACKEND_MLX,
+    BACKEND_TORCH,
+    Backend,
+    SelectedBackend,
+)
 
-def _selected_backend(backend: str) -> str:
+
+def _selected_backend(backend: Backend) -> SelectedBackend:
     """Resolve Automatic to the backend used by the local platform.
 
     Parameters
@@ -70,14 +79,14 @@ def _selected_backend(backend: str) -> str:
 
     """
 
-    if backend != "auto":
+    if backend != BACKEND_AUTO:
         return backend
     if sys.platform == "darwin" and platform.machine() == "arm64":
-        return "mlx"
-    return "torch"
+        return BACKEND_MLX
+    return BACKEND_TORCH
 
 
-def _ensure_gui_environment(backend: str) -> None:
+def _ensure_gui_environment(backend: Backend) -> None:
     """Install missing Qt and backend layers into the project environment.
 
     Parameters
@@ -102,8 +111,8 @@ def _ensure_gui_environment(backend: str) -> None:
     """
 
     modules = {
-        "mlx": ("PySide6", "mlx_embeddings", "mlx_lm"),
-        "torch": ("PySide6", "torch", "transformers"),
+        BACKEND_MLX: ("PySide6", "mlx_embeddings", "mlx_lm"),
+        BACKEND_TORCH: ("PySide6", "torch", "transformers"),
     }
     selected = _selected_backend(backend)
     if all(find_spec(module) is not None for module in modules[selected]):
@@ -159,8 +168,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=("auto", "mlx", "torch"),
-        default="auto",
+        choices=BACKEND_CHOICES,
+        default=BACKEND_AUTO,
         help="backend to prepare for the desktop interface",
     )
     options = parser.parse_args(arguments)

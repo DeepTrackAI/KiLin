@@ -89,16 +89,24 @@ import gc
 from importlib import import_module
 from pathlib import Path
 from time import perf_counter
-from typing import Any, cast, Literal, TYPE_CHECKING, TypeAlias
+from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
 from qachat.huggingface import cached_model_snapshot
 from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_MLX,
     Backend,
     SelectedBackend,
     choose_backend as _choose_backend,
     torch_device as _torch_device,
 )
-from qachat.trace_logging import NullTraceLogger, TraceSink
+from qachat.trace_logging import (
+    TRACE_EVENT_LLM_CALL_INPUT,
+    TRACE_EVENT_LLM_CALL_OUTPUT,
+    TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
+    NullTraceLogger,
+    TraceSink,
+)
 
 __all__ = [
     "SYSTEM_ROLE",
@@ -107,16 +115,15 @@ __all__ = [
     "ChatSession",
 ]
 
-SYSTEM_ROLE = "system"
-USER_ROLE = "user"
-ASSISTANT_ROLE = "assistant"
-
 Role: TypeAlias = Literal["system", "user", "assistant"]
-_ROLES = {
-    SYSTEM_ROLE,
-    USER_ROLE,
-    ASSISTANT_ROLE,
-}
+
+SYSTEM_ROLE: Final[Role] = "system"
+USER_ROLE: Final[Role] = "user"
+ASSISTANT_ROLE: Final[Role] = "assistant"
+
+_ROLES: Final[frozenset[Role]] = frozenset(
+    (SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE)
+)
 
 if TYPE_CHECKING:
     from mlx.nn import Module as MlxModel
@@ -247,7 +254,7 @@ class ChatSession:
         self: ChatSession,
         model_id: str,
         *,
-        backend: Backend = "auto",
+        backend: Backend = BACKEND_AUTO,
         thinking: bool = False,
         temperature: float = 0.0,
         max_new_tokens: int | None = None,
@@ -379,7 +386,7 @@ class ChatSession:
                 revision = None
             self.model_source = source
 
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 mx = import_module("mlx.core")
                 if not mx.metal.is_available():
                     raise RuntimeError("MLX Metal is not available.")
@@ -638,7 +645,7 @@ class ChatSession:
                 list(tokens),
             )
         self.trace.emit(
-            "llm.call.input",
+            TRACE_EVENT_LLM_CALL_INPUT,
             component="chat",
             data=input_data,
             turn_id=trace_turn_id,
@@ -660,7 +667,7 @@ class ChatSession:
             },
             turn_id=trace_turn_id,
         ):
-            if self.backend == "mlx":
+            if self.backend == BACKEND_MLX:
                 if self.trace.enabled:
                     answer = self._mlx_reply(
                         tokens,
@@ -725,7 +732,7 @@ class ChatSession:
                 text=True,
             )
         self.trace.emit(
-            "llm.call.output",
+            TRACE_EVENT_LLM_CALL_OUTPUT,
             component="chat",
             data=output_data,
             turn_id=trace_turn_id,
@@ -766,7 +773,7 @@ class ChatSession:
 
         """
 
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             model = cast("MlxModel", self._model)
             context = model.args.max_position_embeddings
         else:
@@ -885,7 +892,7 @@ class ChatSession:
                 generated,
             )
         self.trace.emit(
-            "llm.call.output.tokens",
+            TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
             component="chat",
             data=data,
             turn_id=trace_turn_id,
@@ -992,7 +999,7 @@ class ChatSession:
         self._tokenizer = None
         self.reset()
         gc.collect()
-        if self.backend == "mlx":
+        if self.backend == BACKEND_MLX:
             import_module("mlx.core").clear_cache()
         elif self.device == "cuda":
             import_module("torch").cuda.empty_cache()

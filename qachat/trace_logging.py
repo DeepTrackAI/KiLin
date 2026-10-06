@@ -18,8 +18,21 @@ multi-process locking or a transaction across separate logger instances.
 I/O failure handling applies to event writes according to the configuration;
 direct conversation-state updates have their own write path.
 
+Reopening an exact output path preserves previously saved readable turns and
+conversation-level operations. New records start above the highest saved
+number, including gaps in the existing numbering. Numbering is fixed for the
+lifetime of each logger, so rewriting its accumulated events does not append
+duplicate records. Turn identifiers group events within a logger run; reusing
+an identifier in a later run creates a separate readable turn rather than
+modifying a saved one. Event sequence numbers remain local to each run.
+
 Key Features
 ------------
+
+- **Canonical trace vocabulary**
+
+    Provide shared identifiers for trace modes, failure policies, and core
+    event types interpreted across QAChat components.
 
 - **Structured spans**
 
@@ -27,8 +40,13 @@ Key Features
 
 - **Grouped JSON output**
 
-    Present lifecycle, preparation, conversation, and progress operations in a
-    readable document.
+    Present lifecycle, preparation, conversation, and progress operations using
+    the shared internal conversation-format contract.
+
+- **Sequential trace reuse**
+
+    Retain saved turns and conversation operations when reopening a file, with
+    stable numbering for subsequent writes by the new logger.
 
 - **Optional artifacts**
 
@@ -41,6 +59,18 @@ Key Features
 Module Structure
 ----------------
 
+- ``TRACE_MODE_*`` constants and ``TraceMode``
+
+    Canonical identifiers for standard and forensic trace detail.
+
+- ``FAILURE_POLICY_*`` constants and ``FailurePolicy``
+
+    Canonical identifiers controlling trace-write failure handling.
+
+- ``TRACE_EVENT_*`` constants
+
+    Canonical event identifiers interpreted across QAChat components.
+
 - ``NullTraceLogger``
 
     No-op trace used when structured tracing is disabled.
@@ -52,10 +82,6 @@ Module Structure
 - ``TraceLogger``
 
     Collect ordered events and write a grouped conversation-trace JSON file.
-
-- ``TraceMode``
-
-    Type alias for ``"standard"`` or ``"forensic"`` detail.
 
 - ``TraceSink``
 
@@ -80,7 +106,7 @@ Examples
 --------
 >>> import qachat
 >>> logger = qachat.TraceLogger(
-...     qachat.TraceConfig(enabled=True, mode="standard"),
+...     qachat.TraceConfig(enabled=True, mode=qachat.TRACE_MODE_STANDARD),
 ...     default_directory="/path/to/local/traces",
 ... )
 >>> try:
@@ -98,6 +124,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
@@ -110,11 +137,33 @@ import sys
 from threading import Lock
 from time import perf_counter
 import traceback
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
+from qachat.conversation_format import (
+    CONVERSATION_RESUME_STATE_KEY,
+    CONVERSATION_SESSION_CATEGORY,
+    CONVERSATION_SESSION_KEY,
+    CONVERSATION_SESSION_TITLE,
+    LEGACY_CONVERSATION_KEY,
+    conversation_state,
+    new_conversation_session,
+)
+
 __all__ = [
+    "FAILURE_POLICY_CHOICES",
+    "FAILURE_POLICY_RAISE",
+    "FAILURE_POLICY_WARN",
+    "FailurePolicy",
+    "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
+    "TRACE_EVENT_LLM_CALL_INPUT",
+    "TRACE_EVENT_LLM_CALL_OUTPUT",
+    "TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS",
+    "TRACE_EVENT_PROGRESS_UPDATED",
+    "TRACE_MODE_CHOICES",
+    "TRACE_MODE_FORENSIC",
+    "TRACE_MODE_STANDARD",
     "NullTraceLogger",
     "TraceConfig",
     "TraceLogger",
@@ -127,11 +176,33 @@ __all__ = [
 
 TraceMode: TypeAlias = Literal["standard", "forensic"]
 FailurePolicy: TypeAlias = Literal["warn", "raise"]
+
+TRACE_MODE_STANDARD: Final[TraceMode] = "standard"
+TRACE_MODE_FORENSIC: Final[TraceMode] = "forensic"
+TRACE_MODE_CHOICES: Final[tuple[TraceMode, ...]] = (
+    TRACE_MODE_STANDARD,
+    TRACE_MODE_FORENSIC,
+)
+FAILURE_POLICY_WARN: Final[FailurePolicy] = "warn"
+FAILURE_POLICY_RAISE: Final[FailurePolicy] = "raise"
+FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
+    FAILURE_POLICY_WARN,
+    FAILURE_POLICY_RAISE,
+)
+
+TRACE_EVENT_EMBEDDING_TOKENS_PREPARED: Final[str] = (
+    "embedding.tokens.prepared"
+)
+TRACE_EVENT_LLM_CALL_INPUT: Final[str] = "llm.call.input"
+TRACE_EVENT_LLM_CALL_OUTPUT: Final[str] = "llm.call.output"
+TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS: Final[str] = "llm.call.output.tokens"
+TRACE_EVENT_PROGRESS_UPDATED: Final[str] = "progress.updated"
+
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _FORENSIC_ONLY_EVENTS = frozenset(
     {
-        "embedding.tokens.prepared",
-        "llm.call.output.tokens",
+        TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
+        TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
     }
 )
 
@@ -165,9 +236,9 @@ class TraceConfig:
 
     Parameters
     ----------
-    enabled: bool, optional, optional
+    enabled: bool, optional
         Whether events should be written. Defaults to ``False``.
-    output_path: str | pathlib.Path | None, optional, optional
+    output_path: str | pathlib.Path | None, optional
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
     mode: TraceMode, optional
@@ -219,9 +290,9 @@ class TraceConfig:
 
     enabled: bool = False
     output_path: str | Path | None = None
-    mode: TraceMode = "standard"
+    mode: TraceMode = TRACE_MODE_STANDARD
     include_embedding_vectors: bool = False
-    failure_policy: FailurePolicy = "warn"
+    failure_policy: FailurePolicy = FAILURE_POLICY_WARN
 
     def __post_init__(self) -> None:
         """Reject invalid trace settings before any file is opened.
@@ -236,13 +307,13 @@ class TraceConfig:
 
         if type(self.enabled) is not bool:
             raise ValueError("trace enabled must be True or False.")
-        if self.mode not in {"standard", "forensic"}:
+        if self.mode not in TRACE_MODE_CHOICES:
             raise ValueError("trace mode must be standard or forensic.")
         if type(self.include_embedding_vectors) is not bool:
             raise ValueError(
                 "include_embedding_vectors must be True or False."
             )
-        if self.failure_policy not in {"warn", "raise"}:
+        if self.failure_policy not in FAILURE_POLICY_CHOICES:
             raise ValueError("trace failure_policy must be warn or raise.")
         if self.output_path is not None and not isinstance(
             self.output_path, (str, Path)
@@ -306,6 +377,8 @@ class TraceLogger:
         Keep an exact payload inline so the conversation stays portable.
     update_conversation(data)
         Merge resumable conversation state into this same JSON document.
+    reset_conversation_state()
+        Clear retained conversation state and readable conversation records.
     close()
         Emit the closing event and mark subsequent event writes closed.
 
@@ -323,10 +396,17 @@ class TraceLogger:
     Standard mode is not a privacy guarantee: resume state, tracebacks, or
     backend text may contain sensitive data. Artifacts are inline dictionaries.
     There is no append-only log, multi-file transaction, or cross-process
-    locking. Explicitly reusing a file merges grouped state according to the
-    current implementation, not a globally unique event sequence.
+    locking. Close the current writer before opening another logger for the
+    same file. Saved readable turns and conversation operations are retained;
+    new records use numbers above the highest saved keys. Turn identifiers and
+    span identifiers group events only within one logger run. Event sequence
+    numbers and top-level event counts also describe the current run, not the
+    full lifetime of the conversation file.
 
     """
+
+    _turn_offset: int
+    _conversation_operation_offset: int
 
     enabled = True
 
@@ -358,7 +438,11 @@ class TraceLogger:
         Notes
         -----
         The first event is written during construction. Exact JSON paths can be
-        reused; output is not guaranteed to be a new file.
+        reused; output is not guaranteed to be a new file. Saved sessions
+        provide a fixed numbering baseline before that first event is emitted.
+        Later writes do not mutate this baseline or reload changes from another
+        writer. Resumable state is copied separately so its updates cannot
+        modify the saved-session snapshot.
 
         """
 
@@ -406,28 +490,33 @@ class TraceLogger:
                     )
                 if isinstance(sessions, dict):
                     self._previous_sessions = sessions
-                    for session in sessions.values():
-                        if (
-                            isinstance(session, dict)
-                            and session.get("category") == "conversations"
-                            and isinstance(
-                                session.get(
-                                    "resume_state",
-                                    session.get("conversation"),
-                                ),
-                                dict,
+                try:
+                    self._conversation = conversation_state(existing)
+                except ValueError:
+                    if isinstance(sessions, dict):
+                        try:
+                            self._conversation = conversation_state(
+                                {"sessions": sessions}
                             )
-                        ):
-                            self._conversation = session.get(
-                                "resume_state",
-                                session.get("conversation", {}),
-                            )
-                            break
-                legacy = existing.get("conversation")
-                if isinstance(legacy, dict):
-                    self._conversation = legacy
+                        except ValueError:
+                            pass
             except (OSError, json.JSONDecodeError, AttributeError):
                 raise ValueError("The conversation trace is invalid.")
+        # Keep the loaded trace immutable while current events are rewritten.
+        self._conversation = deepcopy(self._conversation)
+        previous_conversation = self._previous_sessions.get(
+            CONVERSATION_SESSION_KEY
+        )
+        if not isinstance(previous_conversation, Mapping):
+            previous_conversation = {}
+        self._turn_offset = _numbered_record_offset(
+            previous_conversation.get("turns"),
+            r"turn_([0-9]+)",
+        )
+        self._conversation_operation_offset = _numbered_record_offset(
+            previous_conversation.get("operations"),
+            r"([0-9]+)_.+",
+        )
         _restrict_permissions(self.output_path, 0o600)
         self.emit(
             "trace.started",
@@ -459,7 +548,7 @@ class TraceLogger:
 
         """
 
-        return self.config.mode == "forensic"
+        return self.config.mode == TRACE_MODE_FORENSIC
 
     @property
     def include_token_ids(self) -> bool:
@@ -472,7 +561,7 @@ class TraceLogger:
 
         """
 
-        return self.config.mode == "forensic"
+        return self.config.mode == TRACE_MODE_FORENSIC
 
     @property
     def include_embedding_vectors(self) -> bool:
@@ -575,7 +664,7 @@ class TraceLogger:
             raise ValueError("component must be non-empty text.")
         normalized_event_type = event_type.strip()
         if (
-            self.config.mode == "standard"
+            self.config.mode == TRACE_MODE_STANDARD
             and normalized_event_type in _FORENSIC_ONLY_EVENTS
         ):
             return
@@ -919,6 +1008,34 @@ class TraceLogger:
         self._conversation.update(_json_value(dict(data)))
         self._write_readable_trace()
 
+    def reset_conversation_state(self) -> None:
+        """Clear retained state for an archived conversation.
+
+        Notes
+        -----
+        Removes resumable conversation state, saved readable turns and
+        conversation-level operations, and conversation events accumulated by
+        the current logger run. Non-conversation sessions and events remain so
+        a reset can continue using the same loaded models and project context.
+
+        This method changes only in-memory logger state. It does not write,
+        archive, delete, or recreate the output file. A subsequent event or
+        conversation-state update writes the new projection. Turn and
+        conversation-operation numbering restart from one after the reset.
+
+        """
+
+        with self._lock:
+            self._conversation = {}
+            self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
+            self._events = [
+                event
+                for event in self._events
+                if not _is_conversation_event(event)
+            ]
+            self._turn_offset = 0
+            self._conversation_operation_offset = 0
+
     def close(self) -> None:
         """Emit the closing event and mark subsequent event writes closed.
 
@@ -957,7 +1074,7 @@ class TraceLogger:
             now = perf_counter()
             event_type = str(event["event_type"])
             if (
-                event_type != "progress.updated"
+                event_type != TRACE_EVENT_PROGRESS_UPDATED
                 or now - self._last_readable_write >= 0.5
             ):
                 self._write_readable_trace()
@@ -970,28 +1087,35 @@ class TraceLogger:
 
         Notes
         -----
-        Projects current in-memory events into grouped sessions and merges with
-        previously loaded sessions. A temporary JSON file replaces the target.
-        The operation is not an immutable snapshot history or a multi-writer
-        transaction. Numbered turn keys are generated per logger run.
+        Projects current events using the fixed numbering offsets captured
+        when the file was opened. Merging into a deep copy preserves the loaded
+        baseline and prevents nested turn, operation, or resume-state mappings
+        from being changed by a write. Repeated writes replace this run's
+        projection without duplicating it or overwriting earlier runs.
+
+        A temporary JSON file replaces the target. This is neither an immutable
+        snapshot history nor a multi-writer transaction. Another writer's
+        changes are not reloaded before replacement.
 
         """
 
         progress_checkpoints: list[dict[str, object]] = []
         execution_trace: list[dict[str, object]] = []
         for event in self._events:
-            if event.get("event_type") == "progress.updated":
+            if event.get("event_type") == TRACE_EVENT_PROGRESS_UPDATED:
                 progress_checkpoints.append(_progress_checkpoint(event))
             else:
                 execution_trace.append(self._readable_event(event))
         current_sessions = _readable_sessions(
             execution_trace,
             progress_checkpoints,
+            turn_offset=self._turn_offset,
+            conversation_operation_offset=self._conversation_operation_offset,
         )
-        sessions = dict(self._previous_sessions)
+        sessions = deepcopy(self._previous_sessions)
         for key, value in current_sessions.items():
             if (
-                key == "05_conversations"
+                key == CONVERSATION_SESSION_KEY
                 and isinstance(sessions.get(key), dict)
                 and isinstance(value, dict)
             ):
@@ -1011,18 +1135,15 @@ class TraceLogger:
                 number += 1
             sessions[candidate] = value
         conversation_session = sessions.setdefault(
-            "05_conversations",
-            {
-                "title": "Conversation turns",
-                "category": "conversations",
-                "turns": {},
-                "operations": {},
-            },
+            CONVERSATION_SESSION_KEY,
+            new_conversation_session(),
         )
         if isinstance(conversation_session, dict):
-            conversation_session.pop("conversation", None)
-            conversation_session.pop("resume_state", None)
-            conversation_session["resume_state"] = self._conversation
+            conversation_session.pop(LEGACY_CONVERSATION_KEY, None)
+            conversation_session.pop(CONVERSATION_RESUME_STATE_KEY, None)
+            conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
+                self._conversation
+            )
         sessions = dict(
             sorted(
                 sessions.items(),
@@ -1078,12 +1199,12 @@ class TraceLogger:
             return readable
         artifact_fields = {
             "retrieval.context.expanded": ("chunks_artifact",),
-            "llm.call.input": (
+            TRACE_EVENT_LLM_CALL_INPUT: (
                 "messages_artifact",
                 "rendered_prompt_artifact",
                 "input_token_ids_artifact",
             ),
-            "llm.call.output": ("answer_artifact",),
+            TRACE_EVENT_LLM_CALL_OUTPUT: ("answer_artifact",),
         }.get(str(event.get("event_type")), ())
         readable_data = dict(data)
         resolved: dict[str, object] = {}
@@ -1170,7 +1291,7 @@ class TraceLogger:
         """
 
         self._failed = True
-        if self.config.failure_policy == "raise":
+        if self.config.failure_policy == FAILURE_POLICY_RAISE:
             raise RuntimeError(
                 f"Could not write QAChat trace: {error}"
             ) from error
@@ -1200,6 +1321,8 @@ class NullTraceLogger:
         Return no artifact while tracing is disabled.
     update_conversation(data)
         Accept resumable state without writing it.
+    reset_conversation_state()
+        Keep resetting conversation state harmless while disabled.
     close()
         Keep closing a disabled trace harmless.
 
@@ -1348,11 +1471,18 @@ class NullTraceLogger:
 
         """
 
-    def close(self) -> None:
-        """Keep closing a disabled trace harmless.
+    def reset_conversation_state(self) -> None:
+        """Keep resetting conversation state harmless while disabled.
 
+        Notes
+        -----
+        A null sink retains neither resumable conversation state nor readable
+        trace records, so there is nothing to clear.
 
         """
+
+    def close(self) -> None:
+        """Keep closing a disabled trace harmless."""
 
 
 TraceSink: TypeAlias = TraceLogger | NullTraceLogger
@@ -1440,10 +1570,7 @@ class TraceTextStream:
         return len(text)
 
     def flush(self) -> None:
-        """Record the remaining text fragment.
-
-
-        """
+        """Record the remaining text fragment."""
 
         if self._buffer:
             self._emit(self._buffer)
@@ -1681,7 +1808,7 @@ _SESSION_TITLES = {
     "project": "Project and workspace setup",
     "sources": "Reading, extracting, and chunking sources",
     "indexing": "Loading models, embedding, and saving indexes",
-    "conversations": "Conversation turns",
+    CONVERSATION_SESSION_CATEGORY: CONVERSATION_SESSION_TITLE,
     "runtime": "Runtime output and errors",
 }
 
@@ -1690,7 +1817,7 @@ _SESSION_ORDER = {
     "project": 2,
     "sources": 3,
     "indexing": 4,
-    "conversations": 5,
+    CONVERSATION_SESSION_CATEGORY: 5,
     "runtime": 6,
 }
 
@@ -1703,9 +1830,80 @@ _TURN_STAGE_TITLES = {
 }
 
 
+def _numbered_record_offset(records: object, pattern: str) -> int:
+    """Find the highest saved number in a readable record mapping.
+
+    Parameters
+    ----------
+    records: object
+        Decoded turn or operation mapping. A missing or non-mapping value
+        contributes no reserved numbers.
+    pattern: str
+        Internal regular expression matching an entire record key. Its first
+        capture group must contain the decimal number, for example
+        ``r"turn_([0-9]+)"`` for readable turns.
+
+    Returns
+    -------
+    int
+        Highest matching number, or ``0`` when no numbered keys are present.
+        Non-string and non-matching keys are ignored but remain in the saved
+        mapping; this helper does not modify or validate their contents.
+
+    Notes
+    -----
+    Use the highest number rather than the number of records: saved traces may
+    contain gaps, legacy names, or keys wider than the usual padding. The
+    result is captured once per logger so repeated writes use a fixed offset.
+
+    """
+
+    if not isinstance(records, Mapping):
+        return 0
+    numbers = (
+        int(match.group(1))
+        for key in records
+        if isinstance(key, str)
+        if (match := re.fullmatch(pattern, key)) is not None
+    )
+    return max(numbers, default=0)
+
+
+def _is_conversation_event(event: Mapping[str, object]) -> bool:
+    """Return whether an event belongs to the active conversation.
+
+    Parameters
+    ----------
+    event: Mapping[str, object]
+        Structured trace event to classify.
+
+    Returns
+    -------
+    bool
+        ``True`` for turn-associated events and conversation-level events.
+
+    Notes
+    -----
+    A string ``turn_id`` is authoritative because turn events can use event
+    names routed to several readable stages. Events without a turn identifier
+    are conversation-specific only when their event-name prefix routes to the
+    conversation session.
+
+    """
+
+    if isinstance(event.get("turn_id"), str):
+        return True
+    return _event_session(str(event.get("event_type", ""))) == (
+        CONVERSATION_SESSION_CATEGORY
+    )
+
+
 def _readable_sessions(
     events: list[dict[str, object]],
     progress: list[dict[str, object]],
+    *,
+    turn_offset: int = 0,
+    conversation_operation_offset: int = 0,
 ) -> dict[str, object]:
     """Group compact events under names that remain useful when folded.
 
@@ -1716,6 +1914,13 @@ def _readable_sessions(
     progress: list[dict[str, object]]
         Sampled progress-checkpoint dictionaries to place beside their
         operations.
+    turn_offset: int, optional
+        Highest saved readable-turn number. New turns start at the next number.
+        Defaults to ``0`` for a fresh trace.
+    conversation_operation_offset: int, optional
+        Highest saved conversation-level operation number. Applies only to
+        conversation events without a turn identifier, not to operations inside
+        a turn or another session category. Defaults to ``0``.
 
     Returns
     -------
@@ -1725,38 +1930,42 @@ def _readable_sessions(
 
     Notes
     -----
-    Turn numbering starts at one for the supplied event list. The helper does
-    not know the previously saved turn count; merging with earlier runs is
-    performed by its caller.
+    Offsets are supplied from a fixed saved-session baseline. The helper
+    builds only this run's projection; its caller merges that projection with
+    saved sessions. Turn identifiers are grouped in first-seen order within
+    this run. Repeated or interleaved events use their own assigned number
+    when naming the turn, even after another turn begins.
 
     """
 
     sessions: dict[str, dict[str, object]] = {}
     span_nodes: dict[str, dict[str, object]] = {}
-    turn_keys: dict[str, str] = {}
-    turn_count = 0
+    turn_numbers: dict[str, int] = {}
+    turn_count = turn_offset
     for event in events:
+        operation_offset = 0
         event_type = str(event.get("event_type", "event"))
         turn_id = event.get("turn_id")
         if isinstance(turn_id, str):
-            session = _session_bucket(sessions, "conversations")
+            session = _session_bucket(sessions, CONVERSATION_SESSION_CATEGORY)
             turns = session.setdefault("turns", {})
             if not isinstance(turns, dict):
                 continue
-            if turn_id not in turn_keys:
+            if turn_id not in turn_numbers:
                 turn_count += 1
-                turn_keys[turn_id] = f"turn_{turn_count:04d}"
-            turn_key = turn_keys[turn_id]
+                turn_numbers[turn_id] = turn_count
+            turn_number = turn_numbers[turn_id]
+            turn_key = f"turn_{turn_number:04d}"
             turn = turns.setdefault(
                 turn_key,
                 {
-                    "title": _turn_title(event, turn_count),
+                    "title": _turn_title(event, turn_number),
                     "turn_id": turn_id,
                     "stages": {},
                 },
             )
             if event_type == "turn.started":
-                turn["title"] = _turn_title(event, turn_count)
+                turn["title"] = _turn_title(event, turn_number)
             stages = turn["stages"]
             if not isinstance(stages, dict):
                 continue
@@ -1777,8 +1986,15 @@ def _readable_sessions(
             category = _event_session(event_type)
             session = _session_bucket(sessions, category)
             operations = session.setdefault("operations", {})
+            if category == CONVERSATION_SESSION_CATEGORY:
+                operation_offset = conversation_operation_offset
         if isinstance(operations, dict):
-            _append_readable_operation(operations, event, span_nodes)
+            _append_readable_operation(
+                operations,
+                event,
+                span_nodes,
+                offset=operation_offset,
+            )
 
     for session in sessions.values():
         turns = session.get("turns")
@@ -1852,6 +2068,8 @@ def _append_readable_operation(
     operations: dict[str, object],
     event: dict[str, object],
     span_nodes: dict[str, dict[str, object]],
+    *,
+    offset: int = 0,
 ) -> None:
     """Add one compact event, merging span start and finish records.
 
@@ -1863,7 +2081,11 @@ def _append_readable_operation(
         Structured event dictionary used for storage or readable projection.
     span_nodes: dict[str, dict[str, object]]
         Mutable mapping from span identifiers to readable operations, used to
-        merge lifecycle events.
+        merge lifecycle events within the current logger run.
+    offset: int, optional
+        Number of the last operation reserved by an earlier logger run in this
+        group. Defaults to ``0``. The supplied operations contain only records
+        from the current run.
 
     Notes
     -----
@@ -1885,7 +2107,7 @@ def _append_readable_operation(
         node = span_nodes.get(span_id)
         if lifecycle == "started" and node is None:
             node = _compact_event(event)
-            key = _unique_operation_key(operations, base)
+            key = _unique_operation_key(operations, base, offset=offset)
             operations[key] = node
             span_nodes[span_id] = node
         if lifecycle == "started" and node is not None:
@@ -1906,7 +2128,7 @@ def _append_readable_operation(
                 node["result"] = data
             return
 
-    key = _unique_operation_key(operations, event_type)
+    key = _unique_operation_key(operations, event_type, offset=offset)
     operations[key] = _compact_event(event)
 
 
@@ -1970,25 +2192,32 @@ def _compact_event(event: Mapping[str, object]) -> dict[str, object]:
 def _unique_operation_key(
     operations: Mapping[str, object],
     event_type: str,
+    *,
+    offset: int = 0,
 ) -> str:
     """Return a numbered operation name that is readable when collapsed.
 
     Parameters
     ----------
     operations: Mapping[str, object]
-        Readable operation mapping whose keys already identify stored entries.
+        Sequentially generated operation records for the current logger run.
+        Previously saved records are not included in this mapping.
     event_type: str
         Nonblank machine-readable operation/event name, conventionally
         dot-separated.
+    offset: int, optional
+        Highest operation number reserved by a previously saved group.
+        Defaults to ``0``.
 
     Returns
     -------
     str
-        A numbered operation name that is readable when collapsed.
+        Next operation key after the reserved offset and current-run records.
 
     """
 
-    return _numbered_key(len(operations) + 1, event_type.replace(".", "_"))
+    number = offset + len(operations) + 1
+    return _numbered_key(number, event_type.replace(".", "_"))
 
 
 def _numbered_key(number: int, name: str) -> str:
@@ -2064,7 +2293,7 @@ def _event_session(event_type: str) -> str:
     if event_type.startswith(("index.", "embedding.", "model.")):
         return "indexing"
     if event_type.startswith("conversation."):
-        return "conversations"
+        return CONVERSATION_SESSION_CATEGORY
     if event_type.startswith(("trace.", "gui.trace")):
         return "trace"
     return "runtime"
@@ -2093,7 +2322,7 @@ def _turn_stage(event_type: str) -> str:
         ("retrieval.", "ranking.", "search.", "evidence.")
     ):
         return "retrieval"
-    if event_type == "llm.call.input":
+    if event_type == TRACE_EVENT_LLM_CALL_INPUT:
         return "llm_input"
     if event_type.startswith("llm.call") or event_type == (
         "state.checkpoint.committed"

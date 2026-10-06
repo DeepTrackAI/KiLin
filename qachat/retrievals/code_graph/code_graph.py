@@ -225,7 +225,9 @@ def build_code_graph(
             raise
         extensions[source_file.path] = extension
 
-        extract_constants = getattr(extension, "extract_module_constants", None)
+        extract_constants = getattr(
+            extension, "extract_module_constants", None
+        )
         if extract_constants is not None:
             for short_name, module in extract_constants(source_file).items():
                 known.setdefault(short_name, set()).add(module)

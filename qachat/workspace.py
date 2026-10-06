@@ -49,7 +49,7 @@ Examples
 --------
 >>> import qachat
 >>> project = qachat.prepare_sources_workspace(
-...     ["/path/to/source_repository"], "code",
+...     ["/path/to/source_repository"], qachat.PROJECT_KIND_CODE,
 ...     "/path/to/new_workspace",
 ... )
 
@@ -67,6 +67,7 @@ from time import perf_counter
 from typing import Mapping, Sequence
 
 from qachat.project import (
+    PROJECT_KIND_CHOICES,
     ProjectKind,
     QAProject,
     configure_project,
@@ -159,7 +160,7 @@ def prepare_sources_workspace(
         },
         status="started",
     )
-    if kind not in {"code", "literature"}:
+    if kind not in PROJECT_KIND_CHOICES:
         raise ValueError("kind must be code or literature.")
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")

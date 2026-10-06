@@ -20,6 +20,14 @@ Key Features
 Module Structure
 ----------------
 
+- ``BACKEND_AUTO``, ``BACKEND_MLX``, and ``BACKEND_TORCH``
+
+    Canonical string values for QAChat calculation backends.
+
+- ``BACKEND_CHOICES``
+
+    Ordered collection of accepted backend settings.
+
 - ``Backend``
 
     Type alias for ``"auto"``, ``"mlx"``, or ``"torch"``.
@@ -39,7 +47,7 @@ Module Structure
 Examples
 --------
 >>> import qachat
->>> backend = qachat.choose_backend("auto")
+>>> backend = qachat.choose_backend(qachat.BACKEND_AUTO)
 >>> device = qachat.torch_device(False, False)
 
 """
@@ -47,18 +55,31 @@ Examples
 from __future__ import annotations
 
 import platform
-from typing import Literal
+from typing import Final, Literal, TypeAlias
 
 
 __all__ = [
+    "BACKEND_AUTO",
+    "BACKEND_MLX",
+    "BACKEND_TORCH",
+    "BACKEND_CHOICES",
     "Backend",
     "SelectedBackend",
     "choose_backend",
     "torch_device",
 ]
 
-Backend = Literal["auto", "mlx", "torch"]
-SelectedBackend = Literal["mlx", "torch"]
+Backend: TypeAlias = Literal["auto", "mlx", "torch"]
+SelectedBackend: TypeAlias = Literal["mlx", "torch"]
+
+BACKEND_AUTO: Final[Backend] = "auto"
+BACKEND_MLX: Final[SelectedBackend] = "mlx"
+BACKEND_TORCH: Final[SelectedBackend] = "torch"
+BACKEND_CHOICES: Final[tuple[Backend, ...]] = (
+    BACKEND_AUTO,
+    BACKEND_MLX,
+    BACKEND_TORCH,
+)
 
 
 def choose_backend(requested: Backend) -> SelectedBackend:
@@ -81,18 +102,18 @@ def choose_backend(requested: Backend) -> SelectedBackend:
 
     """
 
-    if requested not in {"auto", "mlx", "torch"}:
+    if requested not in BACKEND_CHOICES:
         raise ValueError("Choose `auto`, `mlx`, or `torch`.")
 
     is_apple_silicon = (
         platform.system() == "Darwin" and platform.machine().lower() == "arm64"
     )
 
-    if requested == "mlx" and not is_apple_silicon:
+    if requested == BACKEND_MLX and not is_apple_silicon:
         raise ValueError("`mlx` requires a native Apple Silicon Mac.")
 
-    if requested == "auto":
-        return "mlx" if is_apple_silicon else "torch"
+    if requested == BACKEND_AUTO:
+        return BACKEND_MLX if is_apple_silicon else BACKEND_TORCH
 
     return requested
 
