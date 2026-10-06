@@ -785,8 +785,8 @@ def summary_file_text(summary: str, source: Path) -> str:
     -------
     str
         Markdown for the file. Passage numbers only make sense inside
-        QAChat, so they are removed; a line under the title names the
-        source.
+        QAChat, so they are removed; a closing line names the source, so
+        the headline and citation stay together at the top.
 
     """
 
@@ -795,10 +795,7 @@ def summary_file_text(summary: str, source: Path) -> str:
         f"*Source: {source.name}. Written by QAChat from the paper's text; "
         "check important details against the paper.*"
     )
-    lines = text.splitlines()
-    if lines and lines[0].startswith("# "):
-        return "\n".join([lines[0], "", note, *lines[1:]]) + "\n"
-    return f"{note}\n\n{text}\n"
+    return f"{text}\n\n{note}\n"
 
 
 def run(

@@ -394,7 +394,10 @@ button:disabled { opacity: .62; cursor: default; }
 .panel-resizer:hover::after, .panel-resizer.dragging::after { width: 2px; left: 2px; background: var(--focus); }
 body.resizing-panels { cursor: col-resize; user-select: none; }
 /* Effort levels in Settings: name, language model, reference count. */
-.level-row { display: grid; grid-template-columns: minmax(70px, 0.7fr) minmax(0, 2.4fr) 76px; gap: 8px; align-items: center; padding: 6px 0; }
+.level-row { display: grid; grid-template-columns: minmax(70px, 0.7fr) minmax(0, 2.4fr); gap: 8px; align-items: center; padding: 6px 0; }
+.depth-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 6px 0; }
+.depth-step { display: grid; gap: 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
+.depth-step input { min-width: 0; width: 100%; min-height: 34px; padding: 4px 8px; font-size: 13px; }
 .level-columns { padding: 2px 0; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
 .level-row input, .level-row select, .model-row select { min-width: 0; width: 100%; min-height: 34px; padding: 4px 8px; font-size: 13px; }
 .model-row select { flex: 1; }

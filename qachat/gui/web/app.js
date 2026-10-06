@@ -57,6 +57,10 @@ let modelChoices = [];
 let savedLevels = {};
 let defaultLevels = {};
 let draftLevels = [];
+// Search depth: passages retrieved at each of five steps (project-wide).
+let savedDepth = null;
+let defaultDepth = [5, 5, 10, 10, 15];
+let draftDepth = [];
 // Intent router model per backend: saved, built-in, and unsaved choice.
 let savedRouters = {};
 let defaultRouters = {};
@@ -89,7 +93,7 @@ let answerStageTimer = null;
 let answerStageKey = null;
 let answerStageQueue = [];
 let selectedModelLevel = 2;
-let selectedRetrievalLevel = 2;
+let selectedDepthStep = 2;
 let resumeAfterStop = false;
 let activeProjectKind = "code";
 let lastEmptyPrompt = { code: -1, literature: -1 };
@@ -448,17 +452,24 @@ function refreshModelStatus() {
 }
 
 const DEFAULT_LEVEL = 2;
-const MAX_RETRIEVAL = 200;
+const MAX_SEARCH_DEPTH = 200;
 
 const cloneLevels = (levels) => (levels || []).map((level) => ({ ...level }));
 
 /**
  * Return the saved effort levels for the active backend.
  *
- * @returns Five {name, model, retrieval} records, or none before settings load.
+ * @returns Five {name, model} records, or none before settings load.
  */
 function currentLevels() {
   return savedLevels[activeBackend] || defaultLevels[activeBackend] || [];
+}
+
+/**
+ * Return the saved search-depth steps (passages per step).
+ */
+function currentDepth() {
+  return savedDepth || defaultDepth;
 }
 
 /**
@@ -573,13 +584,13 @@ function renderModelsPanel() {
     // PyTorch cannot switch models per question.
     const hint = document.createElement("p");
     hint.className = "hint";
-    hint.textContent = "PyTorch answers every level with one model; levels still set the number of references.";
+    hint.textContent = "PyTorch answers every level with one model.";
     chat.append(hint);
   }
   const columns = document.createElement("div");
   columns.className = "level-row level-columns";
   columns.setAttribute("aria-hidden", "true");
-  for (const label of ["Level", "Language model", "References"]) {
+  for (const label of ["Level", "Language model"]) {
     const cell = document.createElement("span");
     cell.textContent = label;
     columns.append(cell);
@@ -609,26 +620,43 @@ function renderModelsPanel() {
       byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
       renderModelsPanel();
     });
-    const count = document.createElement("input");
-    count.type = "number";
-    count.className = "level-retrieval";
-    count.min = "1";
-    count.max = String(MAX_RETRIEVAL);
-    count.step = "1";
-    count.value = String(level.retrieval);
-    count.disabled = busy;
-    count.dataset.focusKey = `refs-${index}`;
-    count.setAttribute("aria-label", `References for ${level.name || `level ${index + 1}`}`);
-    count.addEventListener("input", () => {
-      level.retrieval = Number(count.value);
-      refreshRestoreButtons();
-    });
-    row.append(name, select, count);
+    row.append(name, select);
     chat.append(row);
     const notice = downloadNotice(level.model, installed);
     if (notice) chat.append(notice);
   });
   host.append(chat);
+
+  // Search depth: how many passages each step of the composer's second
+  // slider retrieves.
+  const depth = document.createElement("section");
+  depth.className = "model-group";
+  depth.append(modelGroupHeader("depth", "Search depth"));
+  const steps = document.createElement("div");
+  steps.className = "depth-row";
+  draftDepth.forEach((value, index) => {
+    const cell = document.createElement("label");
+    cell.className = "depth-step";
+    const caption = document.createElement("span");
+    caption.textContent = `Step ${index + 1}`;
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "1";
+    input.max = String(MAX_SEARCH_DEPTH);
+    input.step = "1";
+    input.value = String(value);
+    input.disabled = busy;
+    input.dataset.focusKey = `depth-${index}`;
+    input.setAttribute("aria-label", `Search depth step ${index + 1}, in passages`);
+    input.addEventListener("input", () => {
+      draftDepth[index] = Number(input.value);
+      refreshRestoreButtons();
+    });
+    cell.append(caption, input);
+    steps.append(cell);
+  });
+  depth.append(steps);
+  host.append(depth);
 
   const embedding = document.createElement("section");
   embedding.className = "model-group";
@@ -687,13 +715,15 @@ function defaultEmbeddingModel() {
 /**
  * Report whether a group differs from its built-in defaults.
  *
- * @param role chat (effort levels) or embedding.
+ * @param role chat (effort levels), depth (search depth), router, or
+ *   embedding.
  * @returns True when restoring defaults would change something.
  */
 function hasModelChanges(role) {
   if (role === "chat") {
     return JSON.stringify(draftLevels) !== JSON.stringify(defaultLevels[activeBackend] || []);
   }
+  if (role === "depth") return JSON.stringify(draftDepth) !== JSON.stringify(defaultDepth);
   if (role === "router") return draftRouter !== (defaultRouters[activeBackend] || "");
   return byId("embedding-model").value.trim() !== defaultEmbeddingModel()
     || byId("query-format").value !== "qwen3";
@@ -720,6 +750,8 @@ function restoreDefaultModels(role) {
   if (role === "chat") {
     draftLevels = cloneLevels(defaultLevels[activeBackend]);
     if (draftLevels.length) byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
+  } else if (role === "depth") {
+    draftDepth = [...defaultDepth];
   } else if (role === "router") {
     draftRouter = defaultRouters[activeBackend] || draftRouter;
   } else {
@@ -736,6 +768,7 @@ function restoreDefaultModels(role) {
 function openModels() {
   if (byId("models-panel").classList.contains("hidden")) {
     draftLevels = cloneLevels(currentLevels());
+    draftDepth = [...currentDepth()];
     draftRouter = currentRouter();
     modelsBaseline = currentModelSettings();
   }
@@ -750,6 +783,7 @@ function currentModelSettings() {
     embedding_model: byId("embedding-model").value.trim(),
     query_format: byId("query-format").value,
     effort_levels: cloneLevels(draftLevels),
+    search_depth: [...draftDepth],
     router_model: draftRouter,
   };
 }
@@ -762,11 +796,13 @@ function hideModels() {
 /**
  * Explain the first invalid effort level, or return an empty string.
  */
-function levelProblem(levels) {
+function levelProblem(levels, depth) {
   for (const [index, level] of levels.entries()) {
     if (!level.name.trim()) return `Give effort level ${index + 1} a name.`;
-    if (!Number.isInteger(level.retrieval) || level.retrieval < 1 || level.retrieval > MAX_RETRIEVAL) {
-      return `References for ${level.name.trim()} must be a whole number from 1 to ${MAX_RETRIEVAL}.`;
+  }
+  for (const [index, value] of depth.entries()) {
+    if (!Number.isInteger(value) || value < 1 || value > MAX_SEARCH_DEPTH) {
+      return `Search depth step ${index + 1} must be a whole number from 1 to ${MAX_SEARCH_DEPTH}.`;
     }
   }
   return "";
@@ -777,10 +813,11 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
   const changed = JSON.stringify(settings.effort_levels) !== JSON.stringify(before.effort_levels)
+    || JSON.stringify(settings.search_depth) !== JSON.stringify(before.search_depth)
     || settings.embedding_model !== before.embedding_model || settings.query_format !== before.query_format
     || settings.router_model !== before.router_model;
   if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return; }
-  const problem = levelProblem(settings.effort_levels);
+  const problem = levelProblem(settings.effort_levels, settings.search_depth);
   if (problem) {
     byId("model-download-status").textContent = problem;
     return;
@@ -891,6 +928,7 @@ function showModelFields() {
   byId("chat-model").value = profile[`chat_${activeBackend}`];
   byId("embedding-model").value = profile[`embedding_${activeBackend}`];
   draftLevels = cloneLevels(currentLevels());
+  draftDepth = [...currentDepth()];
   draftRouter = currentRouter();
   renderEffortPicker();
   refreshModelStatus();
@@ -909,6 +947,8 @@ function showSettings(data) {
   defaultLevels = data.default_effort_levels || defaultLevels;
   savedRouters = data.router_models || {};
   defaultRouters = data.default_router_models || defaultRouters;
+  savedDepth = data.search_depth || null;
+  defaultDepth = data.default_search_depth || defaultDepth;
   renderProjectTypes(data.project_types);
   modelRoles = data.model_roles || modelRoles;
   automaticBackend = data.backend;
@@ -944,6 +984,7 @@ function collectSettings() {
   return {
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
+    _gui_search_depth: [...currentDepth()],
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
@@ -1222,7 +1263,7 @@ function setBusy(value, message = "") {
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
   byId("question-form").setAttribute("aria-busy", String(value));
-  for (const id of ["question", "attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-retrieval-range"]) {
+  for (const id of ["question", "attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range"]) {
     byId(id).disabled = value || !ready;
   }
   if (value) {
@@ -1842,15 +1883,15 @@ function renderAttachments() {
 }
 
 /**
- * Choose the model level or the reference level for the next answers.
+ * Choose the effort level or the search-depth step for the next answers.
  *
- * @param kind "model" or "retrieval".
- * @param index Zero-based effort level.
+ * @param kind "model" or "depth".
+ * @param index Zero-based level or step.
  */
 function setEffortLevel(kind, index) {
   const level = Math.max(0, Math.min(4, Number(index)));
   if (kind === "model") selectedModelLevel = level;
-  else selectedRetrievalLevel = level;
+  else selectedDepthStep = level;
   renderEffortPicker();
 }
 
@@ -1859,14 +1900,14 @@ function setEffortLevel(kind, index) {
  */
 function renderEffortPicker() {
   const levels = currentLevels();
-  if (levels.length !== 5) return;
-  // The effort is named by the model level; references are just a count.
+  const depth = currentDepth();
+  if (levels.length !== 5 || depth.length !== 5) return;
+  // The effort is named by the model level; search depth is a count.
   byId("effort-name").textContent = levels[selectedModelLevel].name;
-  for (const [kind, index] of [["model", selectedModelLevel], ["retrieval", selectedRetrievalLevel]]) {
-    const level = levels[index];
+  for (const [kind, index] of [["model", selectedModelLevel], ["depth", selectedDepthStep]]) {
     byId(`effort-${kind}-detail`).textContent = kind === "model"
-      ? level.model.split("/").pop()
-      : `${level.retrieval} references`;
+      ? levels[index].model.split("/").pop()
+      : `${depth[index]} passages`;
     const range = byId(`effort-${kind}-range`);
     range.value = String(index);
     range.style.setProperty("--effort-percent", `${(index / (levels.length - 1)) * 100}%`);
@@ -1875,9 +1916,9 @@ function renderEffortPicker() {
     });
   }
   byId("effort-button").textContent =
-    `${levels[selectedModelLevel].name} · ${levels[selectedRetrievalLevel].retrieval}`;
+    `${levels[selectedModelLevel].name} · ${depth[selectedDepthStep]}`;
   byId("effort-button").title =
-    `${levels[selectedModelLevel].name}: ${levels[selectedModelLevel].model.split("/").pop()} · ${levels[selectedRetrievalLevel].retrieval} references`;
+    `${levels[selectedModelLevel].name}: ${levels[selectedModelLevel].model.split("/").pop()} · search depth ${depth[selectedDepthStep]} passages`;
 }
 
 /**
@@ -2493,6 +2534,7 @@ function onEvent(raw) {
     else savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
     if (data.router_models) savedRouters = data.router_models;
     else savedRouters = { ...savedRouters, [activeBackend]: draftRouter };
+    savedDepth = data.search_depth || [...draftDepth];
     if (data.profile) { profile = data.profile; byId("query-format").value = profile.query_format; showModelFields(); }
     else saveModelFields();
     modelsBaseline = currentModelSettings();
@@ -2518,6 +2560,7 @@ function onEvent(raw) {
       byId("query-format").value = profile.query_format;
       savedLevels = data.effort_levels || savedLevels;
       savedRouters = data.router_models || savedRouters;
+      savedDepth = data.search_depth || savedDepth;
       showModelFields();
     }
     activeProjectKind = data.kind;
@@ -2764,7 +2807,7 @@ byId("question-form").addEventListener("submit", (event) => {
     : "";
   messageAttachments = [];
   renderAttachments();
-  const effort = JSON.stringify({ model: selectedModelLevel, retrieval: selectedRetrievalLevel });
+  const effort = JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep });
   bridge.askQuestion(`${question}${attachedContext}`, effort, JSON.stringify({
     temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
     _title_question: question,
@@ -2849,8 +2892,8 @@ byId("effort-button").addEventListener("click", (event) => {
 byId("effort-model-range").addEventListener("input", (event) => {
   setEffortLevel("model", event.target.value);
 });
-byId("effort-retrieval-range").addEventListener("input", (event) => {
-  setEffortLevel("retrieval", event.target.value);
+byId("effort-depth-range").addEventListener("input", (event) => {
+  setEffortLevel("depth", event.target.value);
 });
 byId("attach-button").addEventListener("click", (event) => {
   event.stopPropagation();

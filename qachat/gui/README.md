@@ -158,7 +158,13 @@ is loaded, and unknown settings are rejected. The tools are:
   separately and checked in Python (word and item limits, the citation
   against the paper's first page, suggested reading against its reference
   list), with one targeted fix each; the result is saved as Markdown in the
-  project's `target/` folder and the answer says whether every check passed.
+  project's `target/` folder, with a one-page PDF in the desktop app. The
+  answer says where both files are and shows the saved Markdown. The
+  citation line is copied from the PDF's metadata and first page, never
+  written by the model. A paper can be named by file name or first author
+  ("Patil's paper"); a guessed paper is always confirmed first. Opening a
+  literature project writes a readable guide to each template into
+  `target/templates/` (Markdown and PDF).
 - `qachat_help` (intent `qachat_usage`): answers questions about QAChat
   itself from this README and the main README.
 
@@ -186,24 +192,28 @@ The window and Dock icon follow the Appearance setting: `icons/qachat-light.png`
 for light, `icons/qachat-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
 
-Settings are ordered Appearance, Effort levels and Embedding model, Answers,
-then Project. Clicking
+Settings are ordered Appearance, Effort levels, Search depth, Embedding
+model, Intent model, Answers, then Project. Clicking
 the backdrop or Close applies model edits, with confirmation for downloads and
 embedding changes; cancelling keeps the panel open.
 
-Effort levels lists five levels. Each has an editable name, a language
-model chosen from a dropdown of cached language models, and a reference
-count (1-200). The composer's effort picker shows the effort name (the model level's name)
-once at the top and has two sliders: one chooses the level whose model
-answers, the other the level whose reference count is retrieved, so a small model can be paired with many references or the
-reverse. The middle level's model is also the project's chat model. Cached
+Effort levels lists five levels. Each has an editable name and a language
+model chosen from a dropdown of cached language models. Search depth is a
+separate section of five steps, each the number of passages retrieved for
+an answer (1-200; default 5, 5, 10, 10, 15). The composer's effort picker
+shows the effort name once at the top and has two sliders: Model chooses
+the level whose model answers, and Search depth chooses the step, so a
+small model can be paired with a deep search or the reverse. The middle
+level's model is also the project's chat model. Cached
 models are classified as language or embedding models by preset, by an
 "embed" name or sentence-transformers configuration, then by architecture.
 A selected model that is not downloaded shows a Download button. On PyTorch
-every level uses one chat model; levels still set reference counts.
+every level uses one chat model; search depth still applies.
 
 Levels that differ from the defaults are saved per backend in
-effort_levels.json; with defaults, no file is kept. An older
+effort_levels.json, and a customized search depth under "search_depth";
+with defaults, no file is kept. Per-level reference counts saved by earlier
+versions become the search depth (the old defaults become the new ones). An older
 model_choices.json is migrated on first read and removed on the next save.
 Changing a language model does not rebuild the index; changing the embedding
 model (also a dropdown of cached embedding models) or query format requires

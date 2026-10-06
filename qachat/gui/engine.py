@@ -93,11 +93,15 @@ from qachat.gui.model_settings import (
     LEVEL_COUNT,
     default_effort_levels,
     default_router_model,
+    DEFAULT_SEARCH_DEPTH,
     read_effort_levels,
+    read_search_depth,
     read_router_model,
     validate_effort_levels,
+    validate_search_depth,
     validate_model_id,
     write_effort_levels,
+    write_search_depth,
     write_router_model,
 )
 from qachat.gui.model_catalog import (
@@ -816,6 +820,10 @@ class ChatEngine:
                     backend: default_effort_levels(backend)
                     for backend in (BACKEND_MLX, BACKEND_TORCH)
                 },
+                search_depth=read_search_depth(
+                    profile_path.parent if profile_path.is_file() else None
+                ),
+                default_search_depth=list(DEFAULT_SEARCH_DEPTH),
                 router_models=_router_models_by_backend(
                     profile_path.parent if profile_path.is_file() else None
                 ),
@@ -905,6 +913,7 @@ class ChatEngine:
         old_profile = None
         old_levels = None
         old_router = None
+        old_depth = None
         old_backend = None
         conversation_id = None
         profile_text = None
@@ -918,6 +927,11 @@ class ChatEngine:
                 chat_model = str(levels[DEFAULT_LEVEL]["model"])
             else:
                 chat_model = validate_model_id(request["chat_model"])
+            depth = (
+                validate_search_depth(request["search_depth"])
+                if request.get("search_depth") is not None
+                else None
+            )
             embedding_model = validate_model_id(request["embedding_model"])
             router_model = (
                 validate_model_id(request["router_model"])
@@ -1034,6 +1048,9 @@ class ChatEngine:
                 changed_profile = True
                 if levels is not None:
                     write_effort_levels(root, backend, levels)
+                if depth is not None:
+                    old_depth = read_search_depth(root)
+                    write_search_depth(root, depth)
                 if router_model is not None:
                     write_router_model(root, backend, router_model)
                 if reopen:
@@ -1049,6 +1066,7 @@ class ChatEngine:
                     data={
                         **settings,
                         "effort_levels": levels,
+                        "search_depth": depth,
                         "reindexed": rebuilt,
                     },
                 )
@@ -1071,6 +1089,11 @@ class ChatEngine:
                     if profile is not None
                     else None
                 ),
+                search_depth=(
+                    read_search_depth(self.session.project.root)
+                    if profile is not None
+                    else None
+                ),
                 profile=asdict(profile) if profile is not None else None,
                 cached_models=sorted(cached | set(missing)),
                 model_roles=cached_model_roles(available_models()),
@@ -1082,6 +1105,8 @@ class ChatEngine:
                     (root / "profile.ini").write_text(profile_text)
                     write_effort_levels(root, old_backend, old_levels)
                     write_router_model(root, old_backend, old_router)
+                    if old_depth is not None:
+                        write_search_depth(root, old_depth)
                     self.close()
                     self._reopen_project_conversation(
                         open_project(root), conversation_id
@@ -1248,6 +1273,9 @@ class ChatEngine:
                 raise ValueError("Choose a project type.")
             settings = dict(settings or {})
             created_levels = settings.pop("_gui_effort_levels", None)
+            created_depth = settings.pop("_gui_search_depth", None)
+            if created_depth is not None:
+                created_depth = validate_search_depth(created_depth)
             if created_levels is not None:
                 if not isinstance(created_levels, dict) or any(
                     backend not in {BACKEND_MLX, BACKEND_TORCH}
@@ -1324,6 +1352,8 @@ class ChatEngine:
                 workspace,
                 **options,
             )
+            if created_depth is not None:
+                write_search_depth(project.root, created_depth)
             if created_levels:
                 for backend, levels in created_levels.items():
                     write_effort_levels(project.root, backend, levels)
@@ -1428,6 +1458,7 @@ class ChatEngine:
                 project.root, project.profile
             ),
             router_models=_router_models_by_backend(project.root),
+            search_depth=read_search_depth(project.root),
             index_status=session.index_status,
             turns=[asdict(turn) for turn in session.turns],
             workspace_files=_workspace_files(project.root),
@@ -1692,10 +1723,11 @@ class ChatEngine:
             Temperature, thinking, and answer length for this answer. Defaults
             to ``None``.
         effort: dict | str | None, optional
-            Effort levels for this answer: ``{"model": i, "retrieval": j}``
-            picks the model of level i and the reference count of level j
-            (zero-based). A level name such as ``"lagom"`` uses one built-in
-            level for both. Defaults to ``None``.
+            Effort for this answer: ``{"model": i, "search_depth": j}``
+            picks the model of effort level i and search-depth step j
+            (zero-based; the step is the number of passages retrieved). A
+            level name such as ``"lagom"`` uses the same index for both.
+            Defaults to ``None``.
 
         Notes
         -----
@@ -1730,8 +1762,9 @@ class ChatEngine:
                 and self.active_conversation.name.startswith("Conversation ")
             )
             if indexes is not None:
-                model_index, retrieval_index = indexes
-                retrieval_count = int(levels[retrieval_index]["retrieval"])
+                model_index, depth_index = indexes
+                depth = read_search_depth(self.session.project.root)
+                retrieval_count = depth[depth_index]
                 model_id = str(levels[model_index]["model"])
                 # RAGSession switches chat models in place only on MLX.
                 if is_mlx:
@@ -2625,7 +2658,7 @@ def _effort_levels_by_backend(
 
 
 def _effort_indexes(effort: object) -> tuple[int, int] | None:
-    """Read the model and reference level indexes chosen for one answer."""
+    """Read the effort level and search-depth step chosen for one answer."""
 
     if effort is None:
         return None
@@ -2638,13 +2671,15 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
         except ValueError:
             effort = None
     if isinstance(effort, dict):
-        indexes = (effort.get("model"), effort.get("retrieval"))
+        # "retrieval" is the name earlier pages used for search depth.
+        depth = effort.get("search_depth", effort.get("retrieval"))
+        indexes = (effort.get("model"), depth)
         if all(
             type(index) is int and 0 <= index < LEVEL_COUNT
             for index in indexes
         ):
             return indexes
-    raise ValueError("Choose a model level and a reference level.")
+    raise ValueError("Choose an effort level and a search depth.")
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:

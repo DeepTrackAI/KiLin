@@ -102,7 +102,16 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(result.summary["paper"], "target/my_paper.md")
         self.assertEqual(result.summary["saved"], "target/my_paper_summary.md")
         saved = (self.root / "target/my_paper_summary.md").read_text()
-        self.assertTrue(saved.startswith("# Research Summary\n\n*Source:"))
+        self.assertTrue(saved.startswith("# Research Summary\n\n## Citation"))
+        self.assertTrue(saved.rstrip().endswith("against the paper.*"))
+        # The answer says where the files are, then shows the file itself.
+        self.assertTrue(
+            result.answer.startswith(
+                "Done: the research summary of my_paper.md is saved as "
+                "`target/my_paper_summary.md`."
+            )
+        )
+        self.assertIn(saved.strip(), result.answer)
         self.assertNotIn("[1]", saved)  # Passage numbers stay in QAChat.
         self.assertNotIn("## Citation\n## Citation", saved)
         # Checks are kept with the turn; the answer stays a clean document.
@@ -161,10 +170,8 @@ class TestGeneratePaperSummary(unittest.TestCase):
             fixing,
             ["Fixing: The Reason has 20 words; it should have 120-150."],
         )
-        self.assertTrue(
-            result.answer.startswith(
-                "# Plants show stress before it is visible"
-            )
+        self.assertIn(
+            "\n# Plants show stress before it is visible\n", result.answer
         )
 
     def test_still_outside_after_a_fix_is_reported(self) -> None:
@@ -423,9 +430,8 @@ class TestGeneratePaperSummary(unittest.TestCase):
         text = summary_file_text(
             report_skeleton(_SUMMARY) + "\nx [3]", Path("p.pdf")
         )
-        self.assertTrue(
-            text.startswith("# Research Summary\n\n*Source: p.pdf")
-        )
+        self.assertTrue(text.startswith("# Research Summary\n## Citation"))
+        self.assertTrue(text.rstrip().endswith("against the paper.*"))
         self.assertNotIn("[3]", text)
 
 

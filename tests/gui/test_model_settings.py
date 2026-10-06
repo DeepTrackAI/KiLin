@@ -243,13 +243,14 @@ class TestModelSettings(unittest.TestCase):
             read_effort_levels(root, "torch"), default_effort_levels("torch")
         )
 
-    def test_effort_uses_saved_model_and_reference_levels(self):
+    def test_effort_uses_saved_model_and_search_depth(self):
         levels = default_effort_levels(self.backend)
         levels[0]["model"] = "example/new-chat"
-        levels[3]["retrieval"] = 7
         self.request["effort_levels"] = levels
+        self.request["search_depth"] = [5, 5, 7, 10, 15]
         self.engine.apply_model_settings(self.request)
         self.assertEqual(self.events[-1]["event"], "models_applied")
+        self.assertEqual(self.events[-1]["search_depth"], [5, 5, 7, 10, 15])
         self.engine.session.chat_session.backend = "mlx"
         self.engine.session.turns = [SimpleNamespace()]
         with (
@@ -260,9 +261,49 @@ class TestModelSettings(unittest.TestCase):
                 side_effect=RuntimeError("stop before generation"),
             ) as ask,
         ):
-            self.engine.ask("test", effort={"model": 0, "retrieval": 3})
+            self.engine.ask("test", effort={"model": 0, "search_depth": 2})
         use.assert_called_once_with("example/new-chat")
         self.assertEqual(ask.call_args.kwargs["retrieval_count"], 7)
+
+    def test_search_depth_defaults_and_migration(self):
+        import json
+
+        from qachat.gui.model_settings import (
+            DEFAULT_SEARCH_DEPTH,
+            EFFORT_FILE,
+            read_search_depth,
+            validate_search_depth,
+            write_search_depth,
+        )
+
+        root = self.project.root
+        self.assertEqual(read_search_depth(None), [5, 5, 10, 10, 15])
+        self.assertEqual(read_search_depth(root), list(DEFAULT_SEARCH_DEPTH))
+        with self.assertRaisesRegex(ValueError, "Search depth"):
+            validate_search_depth([5, 5, 0, 10, 15])
+        write_search_depth(root, [1, 2, 3, 4, 5])
+        self.assertEqual(read_search_depth(root), [1, 2, 3, 4, 5])
+        write_search_depth(root, list(DEFAULT_SEARCH_DEPTH))
+        self.assertFalse((root / EFFORT_FILE).exists())
+
+        def old_file(counts):
+            levels = [
+                {**level, "retrieval": count}
+                for level, count in zip(
+                    default_effort_levels("mlx"), counts
+                )
+            ]
+            (root / EFFORT_FILE).write_text(json.dumps({"mlx": levels}))
+
+        # Earlier versions' default counts become the new defaults ...
+        old_file([5, 20, 20, 50, 50])
+        self.assertEqual(read_search_depth(root), [5, 5, 10, 10, 15])
+        # ... and customized counts are kept as search depth.
+        old_file([3, 6, 9, 12, 15])
+        self.assertEqual(read_search_depth(root), [3, 6, 9, 12, 15])
+        self.assertEqual(
+            read_effort_levels(root, "mlx"), default_effort_levels("mlx")
+        )
 
     def test_new_chat_is_named_after_its_first_answer(self):
         from qachat.rag import ConversationTurn

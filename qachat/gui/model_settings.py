@@ -1,8 +1,9 @@
-"""Persist editable effort levels alongside a GUI workspace.
+"""Persist editable effort levels and search depth with a GUI workspace.
 
-Each backend has five effort levels. A level has a display name, the chat
-model it answers with, and how many references it retrieves. The composer
-picks a model level and a reference level independently. The file is
+Each backend has five effort levels; a level has a display name and the
+chat model it answers with. Search depth is a separate vector of five
+steps, each the number of passages retrieved for an answer. The composer
+picks an effort level and a search-depth step independently. The file is
 written only when a project differs from the defaults.
 
 """
@@ -31,10 +32,14 @@ LEVEL_COUNT = 5
 # The level whose model is also the project's default chat model.
 DEFAULT_LEVEL = 2
 MAX_LEVEL_NAME = 24
-MAX_RETRIEVAL = 200
+# Search depth: passages retrieved at each of five steps, project-wide.
+SEARCH_DEPTH_KEY = "search_depth"
+DEFAULT_SEARCH_DEPTH = (5, 5, 10, 10, 15)
+MAX_SEARCH_DEPTH = 200
 
 _NAMES = ("Light", "Instant", "Lagom", "Thorough", "Deep")
-_RETRIEVAL = (5, 20, 20, 50, 50)
+# Per-level reference counts of earlier versions, before search depth.
+_LEGACY_RETRIEVAL = (5, 20, 20, 50, 50)
 
 
 def validate_model_id(value: str) -> str:
@@ -76,7 +81,7 @@ def default_effort_levels(backend: str) -> list[dict[str, object]]:
     Returns
     -------
     list[dict[str, object]]
-        Five levels of ``name``, ``model``, and ``retrieval``.
+        Five levels of ``name`` and ``model``.
 
     """
 
@@ -92,13 +97,12 @@ def default_effort_levels(backend: str) -> list[dict[str, object]]:
         # Other backends cannot switch chat models per question.
         models = (DEFAULT_CHAT_MODEL_TORCH,) * LEVEL_COUNT
     return [
-        {"name": name, "model": model, "retrieval": count}
-        for name, model, count in zip(_NAMES, models, _RETRIEVAL)
+        {"name": name, "model": model} for name, model in zip(_NAMES, models)
     ]
 
 
 def validate_effort_levels(value: object) -> list[dict[str, object]]:
-    """Check five levels of name, model ID, and reference count.
+    """Check five levels of name and model ID.
 
     Parameters
     ----------
@@ -108,7 +112,9 @@ def validate_effort_levels(value: object) -> list[dict[str, object]]:
     Returns
     -------
     list[dict[str, object]]
-        Levels with names collapsed to single spaces.
+        Levels with names collapsed to single spaces. A ``retrieval``
+        count saved by earlier versions is ignored here; see
+        ``read_search_depth``.
 
     Raises
     ------
@@ -132,23 +138,112 @@ def validate_effort_levels(value: object) -> list[dict[str, object]]:
                 f"Effort level names can have at most {MAX_LEVEL_NAME} "
                 "characters."
             )
-        retrieval = item.get("retrieval")
-        if (
-            type(retrieval) is not int
-            or not 1 <= retrieval <= MAX_RETRIEVAL
-        ):
-            raise ValueError(
-                f"Reference counts must be whole numbers from 1 to "
-                f"{MAX_RETRIEVAL}."
-            )
         levels.append(
-            {
-                "name": name,
-                "model": validate_model_id(item.get("model")),
-                "retrieval": retrieval,
-            }
+            {"name": name, "model": validate_model_id(item.get("model"))}
         )
     return levels
+
+
+def validate_search_depth(value: object) -> list[int]:
+    """Check five search-depth steps.
+
+    Parameters
+    ----------
+    value: object
+        Steps as received from the page or read from the file.
+
+    Returns
+    -------
+    list[int]
+        Five whole numbers of passages, each from 1 to
+        ``MAX_SEARCH_DEPTH``.
+
+    Raises
+    ------
+    ValueError
+        If there are not five steps or a step is out of range.
+
+    """
+
+    if not isinstance(value, list) or len(value) != LEVEL_COUNT:
+        raise ValueError(f"Expected {LEVEL_COUNT} search-depth steps.")
+    if not all(
+        type(step) is int and 1 <= step <= MAX_SEARCH_DEPTH for step in value
+    ):
+        raise ValueError(
+            "Search depth steps must be whole numbers from 1 to "
+            f"{MAX_SEARCH_DEPTH}."
+        )
+    return list(value)
+
+
+def read_search_depth(root: Path | None) -> list[int]:
+    """Return a project's search-depth steps, or the defaults.
+
+    Parameters
+    ----------
+    root: pathlib.Path | None
+        Project workspace, or None for a project not created yet.
+
+    Returns
+    -------
+    list[int]
+        Five steps. Projects saved with per-level reference counts keep
+        their customized counts as steps; the old defaults become the new
+        defaults.
+
+    """
+
+    saved = _read_json(root / EFFORT_FILE) if root is not None else None
+    saved = saved if isinstance(saved, dict) else {}
+    if SEARCH_DEPTH_KEY in saved:
+        return validate_search_depth(saved[SEARCH_DEPTH_KEY])
+    return _legacy_depth(saved) or list(DEFAULT_SEARCH_DEPTH)
+
+
+def write_search_depth(root: Path, steps: list[int]) -> None:
+    """Save search-depth steps, or drop them when they are the defaults.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Project workspace.
+    steps: list[int]
+        Five steps to validate and save.
+
+    """
+
+    steps = validate_search_depth(steps)
+    path = root / EFFORT_FILE
+    saved = _read_json(path)
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    if steps == list(DEFAULT_SEARCH_DEPTH):
+        saved.pop(SEARCH_DEPTH_KEY, None)
+    else:
+        saved[SEARCH_DEPTH_KEY] = steps
+    _write_json(path, saved)
+
+
+def _legacy_depth(saved: dict) -> list[int] | None:
+    """Customized per-level counts saved by earlier versions, if any."""
+
+    for key, levels in saved.items():
+        if key in (ROUTER_KEY, SEARCH_DEPTH_KEY) or not isinstance(
+            levels, list
+        ):
+            continue
+        counts = [
+            level.get("retrieval") for level in levels
+            if isinstance(level, dict)
+        ]
+        if (
+            len(counts) == LEVEL_COUNT
+            and all(type(c) is int and 1 <= c <= MAX_SEARCH_DEPTH
+                    for c in counts)
+            and tuple(counts) != _LEGACY_RETRIEVAL
+        ):
+            return counts
+    return None
 
 
 def default_router_model(backend: str) -> str:
@@ -313,6 +408,10 @@ def write_effort_levels(
     path = root / EFFORT_FILE
     saved = _read_json(path)
     saved = dict(saved) if isinstance(saved, dict) else {}
+    legacy = _legacy_depth(saved)
+    if legacy and SEARCH_DEPTH_KEY not in saved:
+        # Keep customized counts of earlier versions as search depth.
+        saved[SEARCH_DEPTH_KEY] = legacy
     if levels == default_effort_levels(backend):
         saved.pop(backend, None)
     else:
