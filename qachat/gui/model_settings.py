@@ -204,11 +204,9 @@ def _read_json(path: Path) -> object:
 
 
 def read_effort_levels(
-    root: Path | None,
-    backend: str,
-    chat_model: str | None = None,
+    root: Path | None, backend: str
 ) -> list[dict[str, object]]:
-    """Return a project's levels, falling back to defaults.
+    """Return a project's levels, falling back to the defaults.
 
     Parameters
     ----------
@@ -216,9 +214,13 @@ def read_effort_levels(
         Project workspace, or None for a project not created yet.
     backend: str
         Computation backend whose levels are wanted.
-    chat_model: str | None, optional
-        The profile's chat model, used only to migrate projects saved before
-        effort levels existed. Defaults to ``None``.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        The project's saved levels, or the current defaults from
+        ``qachat/gui/defaults.json`` when it saved none (with replacements
+        from an earlier ``model_choices.json`` applied).
 
     """
 
@@ -236,16 +238,6 @@ def read_effort_levels(
         replacement = replacements.get(level["model"])
         if isinstance(replacement, str) and replacement.strip():
             level["model"] = validate_model_id(replacement)
-    if chat_model:
-        # The middle levels used to follow the profile's chat model; other
-        # backends use that one model throughout.
-        targets = (
-            (DEFAULT_LEVEL, DEFAULT_LEVEL + 1)
-            if backend == BACKEND_MLX
-            else range(LEVEL_COUNT)
-        )
-        for index in targets:
-            levels[index]["model"] = chat_model
     return levels
 
 
