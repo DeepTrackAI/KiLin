@@ -60,6 +60,7 @@ if TYPE_CHECKING:
     from qachat.trace_logging import TraceSink
 
 __all__ = [
+    "EarlierTurn",
     "ToolContext",
     "ToolRequest",
     "ToolResult",
@@ -68,6 +69,26 @@ __all__ = [
     "check_int",
     "reject_unknown",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class EarlierTurn:
+    """An earlier turn the question points back to.
+
+    Attributes
+    ----------
+    number: int
+        One-based turn number in the chat.
+    question: str
+        The question asked in that turn.
+    paths: tuple[pathlib.Path, ...]
+        Paths of the evidence that turn used, one per evidence passage.
+
+    """
+
+    number: int
+    question: str
+    paths: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,12 +105,18 @@ class ToolRequest:
     guidance: str | None
         Answer guidance (such as a length target) for tools whose answer
         the model writes.
+    earlier: tuple[EarlierTurn, ...]
+        The earlier turns the question points back to, newest first,
+        including the turns those turns pointed back to ("turn this into a
+        briefing" after "summarize that" after "walk me through Smith's
+        paper").
 
     """
 
     question: str
     text: str
     guidance: str | None = None
+    earlier: tuple[EarlierTurn, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +126,8 @@ class ToolContext:
     Attributes
     ----------
     project_root: pathlib.Path
-        The project folder (``target/`` lives here; see
-        ``qachat.tools.load_target``).
+        The project folder (``outputs/`` and ``templates/`` live here; see
+        ``qachat.tools.outputs`` and ``qachat.tools.report_template``).
     chunks: Sequence[Chunk]
         Every indexed chunk, in index order.
     graph: CodeGraph
@@ -137,6 +164,10 @@ class ToolContext:
         ``write_pdf(markdown, path, label=...)`` writes a one-page PDF and
         returns its page count; None where no PDF writer is available
         (for example notebooks without Qt).
+    choose: Callable[[str, tuple[str, ...]], int | None] | None
+        ``choose(question, options)`` asks the user to pick one option and
+        returns its index, or None when they cancel; None where nobody can
+        be asked (notebooks), so tools fall back to their best guess.
     trace: TraceSink
         The conversation's trace; emit events with ``trace_turn_id``.
     trace_turn_id: str | None
@@ -161,6 +192,7 @@ class ToolContext:
     trace: TraceSink
     trace_turn_id: str | None
     write_pdf: Callable[..., int] | None = None
+    choose: Callable[[str, tuple[str, ...]], int | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)

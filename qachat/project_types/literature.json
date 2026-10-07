@@ -19,7 +19,7 @@
   "default_intent": "question_answering",
   "intents": {
     "question_answering": {
-      "description": "Answer a question about the documents' content, methods, or findings.",
+      "description": "Answer a question about the documents' content, methods, or findings, including what the papers say about a topic ('what methods do these papers use?', 'summarize what the papers say about memory capacity'). Not for a summary of one particular paper (paper_overview).",
       "system_prompt": "Answer the question directly and support each claim with the evidence.",
       "history": {
         "policy": "relevant"
@@ -60,8 +60,22 @@
         "large_batches": 3
       }
     },
+    "paper_overview": {
+      "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Yao paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a briefing or template saved as a file (paper_summary), and not for what several papers say about a topic (question_answering).",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "paper_overview",
+        "max_tokens": 6000,
+        "answer_tokens": 500
+      }
+    },
     "paper_summary": {
-      "description": "Turn one paper into a structured one-page document and save it as a file: a research briefing (the default; title, summary of, background, discovery, figure, future, related reading) or a research summary ('turn the Smith paper into a research briefing', 'write a research summary of smith2020.pdf', 'summarize my paper in target with the template'). The paper may be in the target folder or among the sources. Not for answering a specific question about a paper.",
+      "description": "Only when the user asks for a formatted document saved as a file: a research briefing, or a report template ('turn the Smith paper into a research briefing', 'summarize smith2020.pdf with the lab_summary template', 'make a briefing of my paper in outputs'). Not for a short summary in the chat (paper_overview).",
       "history": {
         "policy": "none"
       },
@@ -71,10 +85,6 @@
       "tool": {
         "name": "generate_paper_summary",
         "template": "research_briefing",
-        "templates": [
-          "research_briefing",
-          "research_summary"
-        ],
         "part_tokens": 6000,
         "note_tokens": 500,
         "section_tokens": 600,
@@ -99,7 +109,7 @@
       }
     },
     "mention_listing": {
-      "description": "List or count every place an exact word, name, or phrase appears in the sources ('list all mentions of transfer learning', 'where is the Mann-Whitney test mentioned?', 'how many times does the Smith paper say MRI?'). Exhaustive and exact; not for explaining what something is or sorting mentions into groups.",
+      "description": "List or count every place an exact word, name, or phrase appears, including spelling variants such as 'BRAPH2' and 'BRAPH 2' ('list all mentions of transfer learning', 'where is the Mann-Whitney test mentioned?', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the request is about how something is used or what it means ('which files use BRAPH 2 as an analysis tool?' is topic_listing), and not for sorting mentions into categories.",
       "history": {
         "policy": "none"
       },
@@ -112,6 +122,24 @@
         "whole_words": true,
         "context_lines": 1,
         "max_listed": 100
+      }
+    },
+    "topic_listing": {
+      "description": "Only when the user asks for the matching sentences, passages, or files themselves, judged by meaning rather than exact words: 'list the sentences that discuss network analysis', 'find every passage about the study's limitations', 'which files use BRAPH 2 as an analysis tool?', 'list the papers that apply deep learning to spectra'. Reads every passage. Not for summarizing or answering what the papers say about a topic, and not for counting or listing an exact word, name, or phrase (mention_listing).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_passages",
+        "batch_tokens": 2500,
+        "max_model_calls": 200,
+        "quick_passages": 40,
+        "max_listed": 100,
+        "confirmation": "when_large",
+        "large_batches": 3
       }
     },
     "mention_classification": {
@@ -136,7 +164,7 @@
       }
     },
     "report_generation": {
-      "description": "Write a structured report or overview of a topic across the documents.",
+      "description": "Write a structured report or overview of a topic across the documents ('write an overview of how the papers measure stress'). Not for turning one paper into a briefing (paper_summary).",
       "system_prompt": "Write a structured report with short headings, based only on the evidence.",
       "answer_guidance": "Use short headings and up to about 600 words unless the question asks for a different length.",
       "history": {
@@ -146,20 +174,6 @@
         "mode": "search",
         "strategy": "hybrid",
         "include_related_evidence": true
-      }
-    },
-    "qachat_usage": {
-      "description": "Questions about the QAChat application itself rather than the project's content: how to add or remove files, what happens when a file is dropped in, whether something re-indexes, where conversations, indexes, or summaries are stored, how settings, effort levels, models, or tools work ('how do I add a paper?', 'will adding a file re-index everything?', 'where are my conversations saved?').",
-      "history": {
-        "policy": "none"
-      },
-      "retrieval": {
-        "mode": "none"
-      },
-      "tool": {
-        "name": "qachat_help",
-        "max_sections": 6,
-        "answer_tokens": 700
       }
     },
     "conversation_followup": {
@@ -210,13 +224,14 @@
     "Which finding should we investigate?"
   ],
   "suggestions": [
-    "Turn … into a Nature research briefing",
+    "Turn any paper into a Nature research briefing",
+    "Summarize what the papers say about …",
     "What methods do these papers use?",
     "Compare how the papers evaluate …",
     "Read … in full",
-    "Summarize what the papers say about …",
-    "How many papers are here?",
+    "List every sentence about …",
     "List every mention of …",
-    "Classify mentions of …"
+    "Classify mentions of …",
+    "How many papers are here?"
   ]
 }

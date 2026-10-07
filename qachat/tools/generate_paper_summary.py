@@ -1,36 +1,38 @@
 """Tool ``generate_paper_summary``: a structured summary of one paper.
 
-Turns one paper into a summary that follows a report template, such as
+Turns one paper into a report that follows a Markdown template, such as
 ``research_briefing`` (the one-page Research Briefing format of
-Nature-family journals) or ``research_summary`` (a compact structured
-summary), and saves it as Markdown in the project's ``target/`` folder.
-The question picks the template ("research briefing"); the intent's
-default applies otherwise. It is QAChat's reference example of a custom
-tool (see tutorial 150): it composes existing capabilities instead of
-re-implementing them.
+Nature-family journals), and saves it in the project's ``outputs/``
+folder. Templates live in the project's ``templates/`` folder, which
+starts with a copy of the shipped ones; the question picks one by name or
+title ("research briefing"), and the intent's default applies otherwise.
+It is QAChat's reference example of a custom tool (see tutorial 160): it
+composes existing capabilities instead of re-implementing them.
 
-1. Choose the paper: a ``target/`` file or an indexed source the question
-   names, the only ``target/`` file when the question says "my paper", or
-   the indexed paper that best matches the question.
-2. Load it: ``load_target`` for ``target/`` files; indexed passages for
+1. Choose the paper: a file in ``outputs/`` or an indexed source the
+   question names, the only ``outputs/`` file when the question says "my
+   paper", or the indexed paper that best matches the question.
+2. Load it: ``load_output`` for ``outputs/`` files; indexed passages for
    sources.
 3. Read it in parts: ``batch_review.take_notes`` writes notes with passage
    numbers, because a whole paper is too long for one small-model prompt.
 4. Write the headline and each section in separate calls; Python
    assembles the headings, so sections cannot go missing or out of order.
+   The citation and the reference items are copied by code: the model
+   only chooses which reference entries fit, by number.
 5. Check each piece against its limit (``section_problem``) and ask the
-   model once to fix exactly that problem; then check the whole report
+   model to fix exactly that problem; then check the whole report
    (``check_report``).
-6. Save it to ``target/<paper>_summary.md`` (never overwriting a file),
+6. Save it to ``outputs/<paper>_summary.md`` (never overwriting a file),
    where it is never indexed.
 
 Key Features
 ------------
 
-- **Template-driven**: sections and their guidance come from JSON.
-- **Checked, then fixed once per piece**: no open-ended loop.
-- **Grounded**: the chat answer cites passages; the saved file states its
-  source.
+- **Template-driven**: sections, limits, and guidance come from Markdown.
+- **Nothing bibliographic is invented**: the citation comes from the
+  file's metadata, and references are copied from the paper's own list.
+- **Checked, then fixed per piece**: no open-ended loop.
 
 Module Structure
 ----------------
@@ -40,8 +42,11 @@ Module Structure
 - ``run``
 - ``choose_paper``
 - ``choose_template``
+- ``paper_citation``
+- ``reference_entries``
 - ``headline_prompt``
 - ``section_prompt``
+- ``references_prompt``
 - ``fix_prompt``
 - ``summary_file_text``
 
@@ -49,6 +54,7 @@ Module Structure
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -56,23 +62,12 @@ from time import perf_counter
 from typing import Final
 
 from qachat.chunking import Chunk
-from qachat.report_templates import (
-    SECTION_SOURCE_BEGINNING,
-    SECTION_SOURCE_CITATION,
-    count_words,
-    SECTION_SOURCE_REFERENCES,
-    ReportTemplate,
-    TemplateSection,
-    check_report,
-    load_template,
-    section_problem,
-)
 from qachat.retrievals.document_reading import (
-    dominant_path,
     estimate_tokens,
     named_paths,
 )
 from qachat.tools.batch_review import plan_parts, take_notes
+from qachat.tools.choose_document import choose_document
 from qachat.tools.contract import (
     ToolContext,
     ToolRequest,
@@ -81,13 +76,13 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.load_target import (
-    TARGET_FOLDER,
-    find_target,
-    free_target_path,
-    load_target,
-    save_target_file,
-    target_files,
+from qachat.tools.outputs import (
+    OUTPUTS_FOLDER,
+    find_output,
+    free_output_path,
+    load_output,
+    output_files,
+    save_output_file,
 )
 from qachat.tools.planning import (
     CONFIRMATION_ALWAYS,
@@ -99,6 +94,20 @@ from qachat.tools.planning import (
     ToolPlan,
     confirm_plan,
 )
+from qachat.tools.report_template import (
+    SECTION_SOURCE_CITATION,
+    SECTION_SOURCE_NOTES,
+    SECTION_SOURCE_REFERENCES,
+    SHIPPED_TEMPLATES_DIR,
+    ReportTemplate,
+    TemplateSection,
+    check_report,
+    count_words,
+    load_template,
+    section_problem,
+    template_names,
+    templates_folder,
+)
 
 __all__ = [
     "SummarySettings",
@@ -109,18 +118,19 @@ __all__ = [
     "paper_beginning",
     "paper_citation",
     "parse_settings",
+    "reference_entries",
     "reference_list",
+    "references_prompt",
     "run",
     "section_prompt",
     "summary_file_text",
-    "ungrounded",
 ]
 
 # One or more passage citations, with separators: " [1], [3]", "[2][24]".
 _CITATION = re.compile(r"(?:\s*,?\s*\[\d+(?:\s*[,–-]\s*\d+)*\])+")
-# Words that point at the user's own paper in target/.
+# Words that point at the user's own paper in outputs/.
 _OWN_PAPER = re.compile(
-    r"\b(target|my (paper|manuscript|pdf|draft|article)|this (pdf|paper))\b",
+    r"\b(outputs?|my (paper|manuscript|pdf|draft|article)|this (pdf|paper))\b",
     flags=re.I,
 )
 _SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".md", ".txt")
@@ -135,10 +145,9 @@ class SummarySettings:
     Attributes
     ----------
     template: str
-        Default report template in ``qachat/report_templates``.
-    templates: tuple[str, ...]
-        Templates the question may ask for by name or title ("research
-        briefing", "research summary"); the default is always allowed.
+        Template used when the question names none: a file name without
+        ``.md`` in the project's ``templates/`` folder (or, when the
+        project has no such file, among the shipped templates).
     part_tokens: int
         Estimated tokens of paper per reading part (1000-16000).
     note_tokens: int
@@ -156,8 +165,7 @@ class SummarySettings:
 
     """
 
-    template: str = "research_summary"
-    templates: tuple[str, ...] = ()
+    template: str = "research_briefing"
     part_tokens: int = 6000
     note_tokens: int = 500
     section_tokens: int = 600
@@ -185,14 +193,14 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
     Raises
     ------
     ValueError
-        If a setting is unknown or out of range, or the template does not
-        exist or is malformed.
+        If a setting is unknown or out of range, or the template name is
+        not a plain file name. Whether the template exists is checked when
+        the tool runs, because each project has its own templates.
 
     """
 
     names = (
         "template",
-        "templates",
         "part_tokens",
         "note_tokens",
         "section_tokens",
@@ -204,19 +212,14 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
     reject_unknown(where, data, names)
     defaults = SummarySettings()
     template = data.get("template", defaults.template)
-    if not isinstance(template, str):
-        raise ValueError(f"{where!r} template must be a template name.")
-    load_template(template)  # Fails early, naming the known templates.
-    templates = data.get("templates", [])
-    if not isinstance(templates, list) or not all(
-        isinstance(name, str) for name in templates
+    if not isinstance(template, str) or not re.fullmatch(
+        r"[A-Za-z0-9][\w-]*", template
     ):
-        raise ValueError(f"{where!r} templates must be a list of names.")
-    for name in templates:
-        load_template(name)
+        raise ValueError(
+            f"{where!r} template must be a template file name without .md."
+        )
     return SummarySettings(
         template=template,
-        templates=tuple(dict.fromkeys([template, *templates])),
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
         ),
@@ -246,120 +249,175 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
 
 
 def choose_paper(
-    request: ToolRequest, context: ToolContext
-) -> tuple[Path, tuple[Chunk, ...], str, bool] | None:
+    request: ToolRequest, context: ToolContext, what: str = "summary"
+) -> tuple[Path, tuple[Chunk, ...], str, bool] | str:
     """Choose the paper to summarize and return its passages.
 
     Parameters
     ----------
     request: ToolRequest
-        The question; ``request.text`` adds the earlier questions it points
-        back to ("that paper").
+        The question, with the earlier turns it points back to.
     context: ToolContext
         QAChat's services.
+    what: str, optional
+        What will be made, for the question to the user, such as
+        "research briefing". Defaults to ``"summary"``.
 
     Returns
     -------
-    tuple[pathlib.Path, tuple[Chunk, ...], str, bool] | None
-        The paper's path (``target/...`` or the indexed source path), its
+    tuple[pathlib.Path, tuple[Chunk, ...], str, bool] | str
+        The paper's path (``outputs/...`` or the indexed source path), its
         passages in order, why it was chosen, and whether it is a guess the
-        user should confirm; None when no paper fits.
+        user should confirm; or a message to answer with when no paper fits
+        or the user cancelled.
 
     Notes
     -----
-    In order: a file named in the question, then in the earlier questions
-    it points back to, by path, name, stem, or first author ("Smith's
-    paper" for ``smith2020.pdf``), ``target/`` files first; the only
-    ``target/`` file when the question says "target" or "my paper"; and
-    otherwise the indexed PDF that best matches the question. Several
-    files with the same name are resolved by search and confirmed.
+    A file in ``outputs/`` the question names, or the only one when it
+    says "outputs" or "my paper", comes first. Otherwise
+    ``choose_document`` decides from the question and the earlier turns it
+    points back to, and asks the user when the paper is unclear.
 
     """
 
     root = context.project_root
-    targets = [
+    outputs = [
         path
-        for path in target_files(root)
+        for path in output_files(root)
         if path.suffix.lower() in _SUFFIXES
     ]
-    sources = list(dict.fromkeys(chunk.path for chunk in context.chunks))
-    ranked = context.rank(request.text) if context.chunks else []
-    for words in dict.fromkeys([request.question, request.text]):
-        named_target = named_paths(words, targets, authors=True)
-        if len(named_target) == 1:
-            document = load_target(root, named_target[0])
-            return document.path, document.passages, "named target file", (
-                False
-            )
-        named = named_paths(words, sources, authors=True)
-        if named:
-            path = dominant_path(ranked, named) or named[0]
-            passages = tuple(c for c in context.chunks if c.path == path)
-            if len(named) == 1:
-                return path, passages, "named source file", False
-            return path, passages, (
-                f"best match among {len(named)} files with that name"
-            ), True
+
+    def output(name: Path, reason: str):
+        document = load_output(root, name)
+        return document.path, document.passages, reason, False
+
+    hits = named_paths(request.question, outputs, authors=True)
+    if len(hits) == 1:
+        return output(hits[0], "named in the question")
     if _OWN_PAPER.search(request.question):
-        only = find_target(request.question, root, suffixes=_SUFFIXES)
+        only = find_output(request.question, root, suffixes=_SUFFIXES)
         if only is not None:
-            document = load_target(root, only)
-            return document.path, document.passages, (
-                "the only target file"
-            ), False
-    papers = [path for path in sources if path.suffix.lower() == ".pdf"]
-    top = ranked[: context.retrieval_count]
-    path = dominant_path(top, papers or None) or dominant_path(top)
-    if path is None:
-        return None
+            return output(only, "the only outputs file")
+    chosen = choose_document(
+        request,
+        context,
+        question=f"Which paper should I turn into a {what}?",
+        example=f"turn smith2020.pdf into a {what}",
+        prefer=(".pdf",),
+    )
+    if isinstance(chosen, str):
+        return chosen
+    path, reason, guessed = chosen
     passages = tuple(c for c in context.chunks if c.path == path)
-    return path, passages, "best match for the question", True
+    return path, passages, reason, guessed
 
 
-def choose_template(question: str, settings: SummarySettings) -> str:
+def choose_template(
+    question: str, folder: Path, default: str
+) -> ReportTemplate:
     """Pick the template a question asks for.
 
     Parameters
     ----------
     question: str
         The question.
-    settings: SummarySettings
-        The allowed templates and the default.
+    folder: pathlib.Path
+        The project's templates folder.
+    default: str
+        Template used when the question names none.
 
     Returns
     -------
-    str
-        The first allowed template whose title ("Research Briefing") or name
-        with spaces ("research briefing") occurs in the question; otherwise
-        the default.
+    ReportTemplate
+        The first template in the folder whose title ("Research
+        Briefing"), file name ("research_briefing"), or file name with
+        spaces occurs in the question; otherwise the default, read from
+        the folder or, when the project has no such file, from the shipped
+        templates.
+
+    Raises
+    ------
+    ValueError
+        If the chosen template does not exist or breaks a template rule;
+        the message names the line and lists the project's templates.
 
     """
 
     text = " ".join(question.casefold().split())
-    for name in settings.templates or (settings.template,):
-        template = load_template(name)
-        if template.title.casefold() in text or (
-            name.replace("_", " ") in text
+    for name in template_names(folder):
+        try:
+            template = load_template(name, folder)
+        except ValueError:
+            # Broken templates are reported only when they are chosen.
+            words = (name.casefold(), name.casefold().replace("_", " "))
+            if any(word in text for word in words):
+                raise
+            continue
+        if template.title.casefold() in text or any(
+            word in text
+            for word in (name.casefold(), name.casefold().replace("_", " "))
         ):
-            return name
-    return settings.template
+            return template
+    if (folder / f"{default}.md").is_file():
+        return load_template(default, folder)
+    if (SHIPPED_TEMPLATES_DIR / f"{default}.md").is_file():
+        return load_template(default)
+    return load_template(default, folder)  # Raises, listing the templates.
 
 
 _REFERENCES_HEADING = re.compile(
-    r"^\s*(references|bibliography|literature cited|works cited)\s*:?\s*$",
+    r"^\s*#*\s*(references|bibliography|literature cited|works cited)"
+    r"\s*:?\s*$",
     flags=re.I | re.M,
 )
-_ITEM_LINE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+(.*\S)")
+# A numbered reference entry: "12. Smith, J. ...", "[12] Smith ...".
+_ENTRY_START = re.compile(r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+(\S.*)$")
+# The end of an entry: "(2019).", "2019.", "2023;24(9):557–74.", a PMID, or
+# a DOI. Two-column PDFs print the numbers apart from the entries, so ends
+# separate entries more reliably than numbers.
+_ENTRY_END = re.compile(
+    r"(?:\((?:19|20)\d\d[a-z]?\)\.?"
+    r"|\b(?:19|20)\d\d[a-z]?\."
+    r"|\d+(?:\(\d+\))?:\s*[\w–-]+\."
+    r"|PMID:\s*\d+"
+    r"|doi\.org/\S+[0-9A-Za-z])\s*$"
+)
+# A number printed alone ("2.", "[2]") in a column of its own.
+_LONE_NUMBER = re.compile(r"^\s*(?:\[\d{1,3}\]|\d{1,3}\.)\s*$")
+# Running heads and footers: "PLOS ONE | https://...", "12 / 25".
+_FURNITURE = re.compile(r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$")
+# Headings after the reference list, where it ends: alone on the line, or
+# followed by text ("Acknowledgements This work ..."). Not "Methods", which
+# starts journal names ("Nat\nMethods 18, ...").
+_AFTER_REFERENCES = re.compile(
+    r"^\s*#*\s*(acknowledge?ments?|author contributions|funding|competing "
+    r"interests|additional information|supplementary information|data "
+    r"availability|code availability|appendix)\s*(?::|$|\s+[A-Z][a-z])",
+    flags=re.I,
+)
+# A line that always continues the entry before it (its DOI or PMID).
+_CONTINUATION = re.compile(r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I)
 _BEGINNING_CHARACTERS: Final[int] = 1500
-_REFERENCE_CHARACTERS: Final[int] = 6000
-# Share of an item's distinctive words that must appear in its source.
-_GROUNDED_SHARE: Final[float] = 0.6
+# Words that make an author an organisation rather than a person.
+_ORGANISATION_WORDS: Final[frozenset[str]] = frozenset(
+    "team group consortium developers lab laboratory committee "
+    "collaboration project society".split()
+)
+_REFERENCE_CHARACTERS: Final[int] = 40000
+# Page numbers between entries ("12", "Page 12") are skipped.
+_PAGE_LINE = re.compile(r"^\s*(?:page\s*)?\d{1,4}\s*$", flags=re.I)
+# A short line repeated this often in a paper is a running head or footer
+# ("I.-u. Tiunn et al.", "SoftwareX 35 (2026) 102791").
+_RUNNING_LINE_REPEATS: Final[int] = 3
+_RUNNING_LINE_WORDS: Final[int] = 12
+# Entries shorter than this are page furniture, not references.
+_ENTRY_MIN_WORDS: Final[int] = 5
 
 
-def paper_citation(
-    file: Path | None, passages: tuple[Chunk, ...]
-) -> str | None:
+def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
     """Write a paper's citation from its metadata and first page.
+
+    The language model never writes or edits the citation.
 
     Parameters
     ----------
@@ -370,26 +428,31 @@ def paper_citation(
 
     Returns
     -------
-    str | None
+    str
         For example ``Patil, A. C. et al. Deep-Learning Investigation of
         ... https://doi.org/10.1038/... (2025).``: the first author and the
         title come from the PDF metadata; the DOI and year are added only
-        when printed on the first page. None when there is no metadata
-        title, so the model writes it from the first page instead.
+        when printed on the first page. Without a metadata title, the file
+        name, saying so (for example ``smith2020.pdf (the file has no
+        title metadata).``).
 
     """
 
+    fallback = (
+        f"{file.name if file else 'The paper'} (the file has no title "
+        "metadata)."
+    )
     if file is None or file.suffix.lower() != ".pdf" or not file.is_file():
-        return None
+        return fallback
     try:
         from pypdf import PdfReader
 
         metadata = PdfReader(file).metadata or {}
-    except Exception:  # Unreadable metadata: let the model write it.
-        return None
+    except Exception:  # Unreadable metadata: name the file instead.
+        return fallback
     title = " ".join(str(metadata.get("/Title") or "").split()).rstrip(".")
     if len(title.split()) < 3:
-        return None
+        return fallback
     first = paper_beginning(passages)
     authors = [
         name.strip()
@@ -404,7 +467,11 @@ def paper_citation(
                 rf"{re.escape(surname)}[\s\S]{{0,60}}?,\s*[A-Z]", first
             )
         )
-        parts.append(f"{surname}, {initials}" + (" et al." if many else ""))
+        if initials:
+            etal = " et al." if many else ""
+            parts.append(f"{surname}, {initials}{etal}")
+        else:
+            parts.append(f"{surname.rstrip('.')}.")
     parts.append(f"{title}.")
     doi = re.search(r"https?://doi\.org/\S+[0-9A-Za-z]", first)
     year = re.search(
@@ -423,11 +490,18 @@ def paper_citation(
 
 
 def _author(name: str) -> tuple[str, str]:
-    """Split "Anoop C. Patil" into ("Patil", "A. C.")."""
+    """Split "Anoop C. Patil" into ("Patil", "A. C.").
+
+    Organisations ("The BRAPH 2 Team") keep their name, without initials.
+
+    """
 
     words = name.split()
-    if len(words) == 1:
-        return words[0], ""
+    if len(words) == 1 or len(words) > 4 or any(
+        word.isdigit() or word.casefold() in _ORGANISATION_WORDS
+        for word in words
+    ):
+        return " ".join(words), ""
     initials = " ".join(
         "-".join(f"{part[0].upper()}." for part in word.split("-") if part)
         for word in words[:-1]
@@ -467,7 +541,7 @@ def reference_list(passages: tuple[Chunk, ...]) -> str:
     -------
     str
         Text from the last "References" (or "Bibliography") heading,
-        about 6,000 characters at most; empty when there is none.
+        about 40,000 characters at most; empty when there is none.
 
     """
 
@@ -479,43 +553,74 @@ def reference_list(passages: tuple[Chunk, ...]) -> str:
     return text[start : start + _REFERENCE_CHARACTERS].strip()
 
 
-def ungrounded(content: str, source: str, *, items: bool) -> list[int]:
-    """Find content the given source text does not support.
+def reference_entries(passages: tuple[Chunk, ...]) -> list[str]:
+    """Split the paper's reference list into entries, as printed.
 
     Parameters
     ----------
-    content: str
-        Section content.
-    source: str
-        The text it must come from (the first page or reference list).
-    items: bool
-        Check each list item separately (for reference lists); otherwise
-        check the whole content.
+    passages: tuple[Chunk, ...]
+        The paper's passages, in order.
 
     Returns
     -------
-    list[int]
-        One-based numbers of unsupported items, or ``[1]`` for unsupported
-        whole content. An item is supported when at least 60% of its
-        distinctive words (four letters or more) occur in the source.
+    list[str]
+        One string per entry, without the paper's own number, with lines
+        joined (and words hyphenated across lines rejoined). When the
+        entries are numbered on their own lines ("12. ...", "[12] ..."), a
+        new entry starts at each number; when the numbers stand apart (as
+        two-column PDFs print them), after a line that ends an entry (a
+        year, volume and pages, a PMID, or a DOI).
+        Lone numbers, page numbers, running heads and footers (short lines
+        repeated on three or more pages), and entries of fewer than five
+        words are dropped; the list stops at a following heading
+        such as "Acknowledgements". Empty when the paper has no reference
+        list.
 
     """
 
-    vocabulary = set(_distinctive(source))
-    pieces = (
-        [match.group(1) for line in content.splitlines()
-         if (match := _ITEM_LINE.match(line))]
-        if items
-        else [content]
+    lines = reference_list(passages).splitlines()
+    repeats = Counter(
+        " ".join(line.split())
+        for chunk in passages
+        for line in chunk.text.splitlines()
+        if 0 < len(line.split()) <= _RUNNING_LINE_WORDS
     )
-    missing: list[int] = []
-    for number, piece in enumerate(pieces, start=1):
-        words = _distinctive(_CITATION.sub("", piece))
-        if words and sum(w in vocabulary for w in words) < (
-            _GROUNDED_SHARE * len(words)
+    lines = [
+        line for line in lines
+        if repeats[" ".join(line.split())] < _RUNNING_LINE_REPEATS
+    ]
+    numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
+    by_number = numbered >= 5 and not any(
+        _LONE_NUMBER.match(line) for line in lines
+    )
+    entries: list[list[str]] = []
+    complete = True
+    for line in lines:
+        if _AFTER_REFERENCES.match(line):
+            break
+        if (
+            not line.strip()
+            or _PAGE_LINE.match(line)
+            or _LONE_NUMBER.match(line)
+            or _FURNITURE.search(line)
         ):
-            missing.append(number)
-    return missing
+            continue
+        match = _ENTRY_START.match(line)
+        text = (match.group(3) if match else line).strip()
+        if not entries or match or (
+            not by_number and complete and not _CONTINUATION.match(text)
+        ):
+            entries.append([text])
+        else:
+            entries[-1].append(text)
+        complete = bool(_ENTRY_END.search(text))
+    cleaned = []
+    for lines in entries:
+        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(lines))
+        joined = " ".join(joined.split())
+        if len(joined.split()) >= _ENTRY_MIN_WORDS:
+            cleaned.append(joined)
+    return cleaned
 
 
 def _distinctive(text: str) -> list[str]:
@@ -584,7 +689,6 @@ def section_prompt(
     name: str,
     notes: list[tuple[int, list[str]]],
     written: list[tuple[str, str]],
-    source: str = "",
 ) -> tuple[str, str]:
     """Return the prompts that write one section from reading notes.
 
@@ -600,9 +704,6 @@ def section_prompt(
         Part numbers and note lines.
     written: list[tuple[str, str]]
         Sections written so far, so they are not repeated.
-    source: str, optional
-        The section's source text (the first page or the reference list),
-        when its template source is not the notes. Defaults to ``""``.
 
     Returns
     -------
@@ -641,27 +742,69 @@ Sections already written (do not repeat them):
 Reading notes:
 
 {_notes_block(notes)}"""
-    if section.source == SECTION_SOURCE_BEGINNING:
-        user += f"""
-
-The beginning of the paper (take the citation from here):
-
-{source or "Not available."}"""
-    elif section.source == SECTION_SOURCE_REFERENCES:
-        user += f"""
-
-The paper's reference list (choose only from here and copy entries as
-they appear; if it is not available, write "Not stated in the paper."):
-
-{source or "Not available."}"""
     return system, user
 
+
+def references_prompt(
+    template: ReportTemplate,
+    section: TemplateSection,
+    name: str,
+    notes: list[tuple[int, list[str]]],
+    entries: list[str],
+) -> tuple[str, str]:
+    """Return the prompts that choose reference entries, by number only.
+
+    Parameters
+    ----------
+    template: ReportTemplate
+        The report template.
+    section: TemplateSection
+        A section filled from ``{references}``, with an item limit.
+    name: str
+        The paper's file name.
+    notes: list[tuple[int, list[str]]]
+        Part numbers and note lines, for what the paper is about.
+    entries: list[str]
+        The paper's reference entries, from ``reference_entries``.
+
+    Returns
+    -------
+    tuple[str, str]
+        System prompt and user prompt. The reply is entry numbers only;
+        the entries themselves are copied by code, so the model cannot
+        change or invent a reference.
+
+    """
+
+    low, high = section.items or (1, 3)
+    system = (
+        "You choose references for QAChat. You reply with entry numbers "
+        "only, separated by commas, and nothing else."
+    )
+    guidance = section.guidance.replace("{references}", "the list below")
+    listed = "\n".join(
+        f"{number}. {entry}" for number, entry in enumerate(entries, start=1)
+    )
+    user = f"""For the "{section.name}" section of a {template.title} of
+{name}, choose {low} to {high} entries from the paper's reference list.
+
+What the section needs: {guidance}
+
+Reply with the entry numbers only, for example: 4, 17
+
+What the paper is about (reading notes):
+
+{_notes_block(notes)}
+
+The paper's reference list:
+
+{listed}"""
+    return system, user
 
 def fix_prompt(
     section: TemplateSection,
     content: str,
     problem: str,
-    source: str = "",
     notes: list[tuple[int, list[str]]] | None = None,
 ) -> tuple[str, str]:
     """Return the prompts that fix one section's length or form.
@@ -673,9 +816,7 @@ def fix_prompt(
     content: str
         Its current content.
     problem: str
-        What is wrong, from ``section_problem`` or the source check.
-    source: str, optional
-        The section's source text, when it has one. Defaults to ``""``.
+        What is wrong, from ``section_problem``.
     notes: list[tuple[int, list[str]]] | None, optional
         Reading notes, so a section that is too short can be extended with
         real content rather than padding. Defaults to ``None``.
@@ -709,12 +850,6 @@ Current content:
 Reading notes:
 
 {_notes_block(notes)}"""
-    if source:
-        user += f"""
-
-Use only this source text for the section:
-
-{source}"""
     return system, user
 
 
@@ -739,12 +874,7 @@ def _length(section: TemplateSection) -> str:
 
 
 def _content(reply: str, section: TemplateSection) -> str:
-    """The section text from a reply, without a repeated heading.
-
-    In a reference-list section, the paper's own reference numbers ("[2]
-    Smith ...") are removed, because in QAChat ``[n]`` cites passage n.
-
-    """
+    """The section text from a reply, without a repeated heading."""
 
     lines = reply.strip().splitlines()
     while lines and (
@@ -763,11 +893,6 @@ def _content(reply: str, section: TemplateSection) -> str:
             flags=re.I,
         )
         return line.strip()
-    if section.source == SECTION_SOURCE_REFERENCES:
-        lines = [
-            re.sub(r"^(\s*(?:[-*•]|\d+[.)])\s+)\[\d+\]\s*", r"\1", line)
-            for line in lines
-        ]
     return "\n".join(lines).strip()
 
 
@@ -801,7 +926,7 @@ def summary_file_text(summary: str, source: Path) -> str:
 def run(
     settings: SummarySettings, request: ToolRequest, context: ToolContext
 ) -> ToolResult:
-    """Summarize one paper with a template and save it to ``target/``.
+    """Summarize one paper with a template and save it to ``outputs/``.
 
     Parameters
     ----------
@@ -822,27 +947,26 @@ def run(
     """
 
     trace = context.trace
-    template = load_template(choose_template(request.question, settings))
-    context.progress("Choosing the paper to summarize")
-    summary: dict[str, object] = {
-        "name": "generate_paper_summary",
-        "template": template.name,
-    }
+    summary: dict[str, object] = {"name": "generate_paper_summary"}
     try:
-        chosen = choose_paper(request, context)
+        template = choose_template(
+            request.question,
+            templates_folder(context.project_root),
+            settings.template,
+        )
+    except ValueError as error:
+        context.done("Could not read the template", evidence_count=0)
+        return ToolResult(str(error), (), summary)
+    summary["template"] = template.name
+    context.progress("Choosing the paper to summarize")
+    try:
+        chosen = choose_paper(request, context, template.title.lower())
     except (FileNotFoundError, ValueError) as error:
         context.done("Could not load the paper", evidence_count=0)
         return ToolResult(str(error), (), summary)
-    if chosen is None:
-        files = ", ".join(str(p) for p in target_files(context.project_root))
-        context.done("No paper found", evidence_count=0)
-        return ToolResult(
-            "I couldn't tell which paper to summarize. Name the file, for "
-            "example: turn smith2020.pdf into a research briefing. Papers "
-            f"in {TARGET_FOLDER}/: {files or 'none'}.",
-            (),
-            summary,
-        )
+    if isinstance(chosen, str):
+        context.done("No paper chosen", evidence_count=0)
+        return ToolResult(chosen, (), summary)
     path, passages, reason, guessed = chosen
     texts = [chunk.text for chunk in passages]
     trace.emit(
@@ -887,7 +1011,7 @@ def run(
                 else ()
             ),
             f"About {tokens:,} tokens",
-            f"Saved to {TARGET_FOLDER}/{path.stem}_summary.md",
+            f"Saved to {OUTPUTS_FOLDER}/{path.stem}_summary.md",
             f"Model: {context.model_id}",
         ),
     )
@@ -927,6 +1051,7 @@ def run(
         + "\n".join(
             f"- {section.name}: {section.guidance}"
             for section in template.sections
+            if section.source == SECTION_SOURCE_NOTES
         )
     )
     notes = take_notes(
@@ -961,32 +1086,35 @@ def run(
                     60,
                 )
             )
-    sources = {
-        SECTION_SOURCE_BEGINNING: paper_beginning(passages),
-        SECTION_SOURCE_REFERENCES: reference_list(passages),
-    }
+    entries = reference_entries(passages)
     written: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
         if section.source == SECTION_SOURCE_CITATION:
             # Copied, not written: the model never touches the citation.
-            citation = paper_citation(_paper_file(path, context), passages)
-            if citation:
-                written.append((section.name, citation))
-                continue
+            written.append(
+                (
+                    section.name,
+                    paper_citation(_paper_file(path, context), passages),
+                )
+            )
+            continue
+        if section.source == SECTION_SOURCE_REFERENCES:
+            context.progress(f"Choosing {section.name}")
+            content, problem = _references(
+                template, section, path.name, notes, entries, context
+            )
+            if problem:
+                unsupported.append(problem)
+            written.append((section.name, content))
+            continue
         context.progress(f"Writing {section.name}")
-        source = sources.get(
-            SECTION_SOURCE_BEGINNING
-            if section.source == SECTION_SOURCE_CITATION
-            else section.source,
-            "",
-        )
         system, prompt = section_prompt(
-            template, section, path.name, notes, written, source
+            template, section, path.name, notes, written
         )
         tokens = _section_tokens(section, settings)
         content = _content(context.ask_model(system, prompt, tokens), section)
-        problem = _problem(section, content, source)
+        problem = section_problem(section, content)
         for _ in range(settings.repair_attempts):
             if problem is None:
                 break
@@ -997,24 +1125,17 @@ def run(
                 section.words and count_words(content) < section.words[0]
             )
             system, prompt = fix_prompt(
-                section, content, problem, source, notes if short else None
+                section, content, problem, notes if short else None
             )
             content = _content(
                 context.ask_model(system, prompt, tokens), section
             )
-            problem = _problem(section, content, source)
+            problem = section_problem(section, content)
         if problem and section.words and (
             count_words(content) > section.words[1]
         ):
             # Too long after its fixes: cut whole trailing sentences.
             content = _trim_words(content, section.words[1])
-            problem = _problem(section, content, source)
-        if problem and section.source == SECTION_SOURCE_REFERENCES:
-            # References the paper does not list are dropped, not shown.
-            content = _grounded_items(content, source)
-            problem = _problem(section, content, source)
-        if problem and problem not in (section_problem(section, content),):
-            unsupported.append(problem)
         written.append((section.name, content))
     if template.max_total_words:
         written = _fit_total(written, template)
@@ -1038,7 +1159,7 @@ def run(
         turn_id=context.trace_turn_id,
     )
     file_text = summary_file_text(draft, path)
-    saved = save_target_file(
+    saved = save_output_file(
         context.project_root, f"{path.stem}_summary.md", file_text
     )
     pdf, pdf_note = _write_pdf(file_text, saved, template, context)
@@ -1110,58 +1231,55 @@ def run(
     return ToolResult(answer, evidence, summary)
 
 
-def _problem(
-    section: TemplateSection, content: str, source: str
-) -> str | None:
-    """A section's length problem, or content its source does not support."""
+def _references(
+    template: ReportTemplate,
+    section: TemplateSection,
+    name: str,
+    notes: list[tuple[int, list[str]]],
+    entries: list[str],
+    context: ToolContext,
+) -> tuple[str, str | None]:
+    """Fill a ``{references}`` section with entries copied verbatim.
 
-    problem = section_problem(section, content)
-    if problem or not source or "not stated" in content.casefold():
-        return problem
-    if section.source == SECTION_SOURCE_REFERENCES:
-        missing = ungrounded(content, source, items=True)
-        if missing:
-            numbers = ", ".join(str(number) for number in missing)
-            return (
-                f"{section.name} item {numbers} is not in the paper's "
-                "reference list."
-            )
-    elif section.source in (SECTION_SOURCE_BEGINNING, SECTION_SOURCE_CITATION):
-        if ungrounded(content, source, items=False):
-            return (
-                f"{section.name} does not match the beginning of the paper."
-            )
-        invented = _unknown_names(content, source)
-        if invented:
-            return (
-                f"{section.name} names {', '.join(invented)}, which the "
-                "beginning of the paper does not; copy names exactly."
-            )
-    return None
+    The model replies with entry numbers; numbers outside the list are
+    ignored. When it gives too few, the entries sharing the most words with
+    the notes complete the list. Returns the content (one ``- `` line per
+    entry) and a problem when the paper has no readable reference list.
 
+    """
 
-# Capitalized words that are not names.
-_NOT_NAMES: Final[frozenset[str]] = frozenset(
-    "this the that these and for with from into in on at by of an et al "
-    "is are was a its their our nature journal".split()
-)
-
-
-def _unknown_names(content: str, source: str) -> list[str]:
-    """Capitalized words (names, title words) the source does not contain."""
-
-    # Join words hyphenated across lines ("Spec-\ntra") before comparing.
-    joined = re.sub(r"-\s*\n\s*", "", source)
-    known = set(re.findall(r"[a-z]+", joined.casefold()))
-    names = re.findall(r"\b[A-Z][a-z]{2,}\b", _CITATION.sub("", content))
-    return sorted(
-        {
-            name
-            for name in names
-            if name.casefold() not in known
-            and name.casefold() not in _NOT_NAMES
-        }
+    low, high = section.items or (1, 3)
+    if not entries:
+        return (
+            "- Not available: the paper's reference list could not be read.",
+            f"{section.name}: the paper's reference list could not be read.",
+        )
+    system, prompt = references_prompt(
+        template, section, name, notes, entries
     )
+    reply = context.ask_model(system, prompt, 40)
+    chosen: list[int] = []
+    for number in re.findall(r"\d+", reply):
+        index = int(number) - 1
+        if 0 <= index < len(entries) and index not in chosen:
+            chosen.append(index)
+    chosen = chosen[:high]
+    if len(chosen) < low:
+        vocabulary = set(_distinctive(_notes_block(notes)))
+        ranked = sorted(
+            (i for i in range(len(entries)) if i not in chosen),
+            key=lambda i: -sum(
+                w in vocabulary for w in set(_distinctive(entries[i]))
+            ),
+        )
+        chosen += ranked[: low - len(chosen)]
+    context.trace.emit(
+        "tool.generate_paper_summary.references",
+        component="tool",
+        data={"entries": len(entries), "reply": reply, "chosen": chosen},
+        turn_id=context.trace_turn_id,
+    )
+    return "\n".join(f"- {entries[i]}" for i in chosen), None
 
 
 def _trim_words(content: str, limit: int) -> str:
@@ -1191,12 +1309,14 @@ def _write_pdf(
 
     if context.write_pdf is None:
         return None, None
-    target = free_target_path(context.project_root, f"{saved.stem}.pdf")
+    destination = free_output_path(
+        context.project_root, f"{saved.stem}.pdf"
+    )
     try:
-        pages = context.write_pdf(text, target, label=template.title)
+        pages = context.write_pdf(text, destination, label=template.title)
     except Exception as error:  # The Markdown is saved either way.
         return None, f"The PDF could not be written: {error}"
-    pdf = Path(TARGET_FOLDER) / target.name
+    pdf = Path(OUTPUTS_FOLDER) / destination.name
     context.trace.emit(
         "tool.generate_paper_summary.pdf",
         component="tool",
@@ -1209,7 +1329,7 @@ def _write_pdf(
 
 
 def _paper_file(path: Path, context: ToolContext) -> Path | None:
-    """The paper on disk: ``target/...`` or below the project's sources."""
+    """The paper on disk: ``outputs/...`` or below the project's sources."""
 
     root = context.project_root
     for candidate in (root / path, root / "sources" / path):
@@ -1251,21 +1371,6 @@ def _fit_total(
     return [(name, sections[name]) for name, _ in written]
 
 
-def _grounded_items(content: str, references: str) -> str:
-    """Keep only list items found in the reference list."""
-
-    missing = set(ungrounded(content, references, items=True))
-    kept: list[str] = []
-    number = 0
-    for line in content.splitlines():
-        if _ITEM_LINE.match(line):
-            number += 1
-            if number in missing:
-                continue
-        kept.append(line)
-    return "\n".join(kept).strip()
-
-
 def _headline(reply: str) -> str:
     """The headline from a reply: first line, without '#' or quotes."""
 
@@ -1299,9 +1404,18 @@ def _estimate(
         total += 1.0 + prompt / _PROMPT_TOKENS_PER_SECOND
         total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
     notes = len(parts) * settings.note_tokens * 0.6
-    calls = len(template.sections) + (1 if template.headline_characters else 0)
-    for section in template.sections:
-        reply = _section_tokens(section, settings) * 0.6
+    written = [
+        section
+        for section in template.sections
+        if section.source != SECTION_SOURCE_CITATION
+    ]
+    calls = len(written) + (1 if template.headline_characters else 0)
+    for section in written:
+        reply = (
+            20
+            if section.source == SECTION_SOURCE_REFERENCES
+            else _section_tokens(section, settings) * 0.6
+        )
         total += 1.0 + reply / _REPLY_TOKENS_PER_SECOND
     total += calls * (notes + 400) / _PROMPT_TOKENS_PER_SECOND
     return total

@@ -46,9 +46,10 @@ from typing import Final, Literal, TypeAlias
 from qachat.tools import (
     batch_classify,
     batch_review,
+    find_passages,
     generate_paper_summary,
+    paper_overview,
     project_inventory,
-    qachat_help,
     scan_and_list,
 )
 from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
@@ -56,10 +57,11 @@ from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
 __all__ = [
     "TOOL_BATCH_CLASSIFY",
     "TOOL_BATCH_REVIEW",
+    "TOOL_FIND_PASSAGES",
     "TOOL_CHOICES",
     "TOOL_GENERATE_PAPER_SUMMARY",
+    "TOOL_PAPER_OVERVIEW",
     "TOOL_PROJECT_INVENTORY",
-    "TOOL_QACHAT_HELP",
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
     "Tool",
@@ -75,22 +77,25 @@ ToolName: TypeAlias = Literal[
     "scan_and_list",
     "batch_classify",
     "batch_review",
+    "find_passages",
     "generate_paper_summary",
-    "qachat_help",
+    "paper_overview",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
 TOOL_BATCH_CLASSIFY: Final[ToolName] = "batch_classify"
 TOOL_BATCH_REVIEW: Final[ToolName] = "batch_review"
+TOOL_FIND_PASSAGES: Final[ToolName] = "find_passages"
 TOOL_GENERATE_PAPER_SUMMARY: Final[ToolName] = "generate_paper_summary"
-TOOL_QACHAT_HELP: Final[ToolName] = "qachat_help"
+TOOL_PAPER_OVERVIEW: Final[ToolName] = "paper_overview"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
     TOOL_BATCH_CLASSIFY,
     TOOL_BATCH_REVIEW,
+    TOOL_FIND_PASSAGES,
     TOOL_GENERATE_PAPER_SUMMARY,
-    TOOL_QACHAT_HELP,
+    TOOL_PAPER_OVERVIEW,
 )
 
 
@@ -162,19 +167,26 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         batch_review.parse_settings,
         batch_review.run,
     ),
+    TOOL_FIND_PASSAGES: Tool(
+        TOOL_FIND_PASSAGES,
+        "Read every sentence in scope and list the ones about a topic, "
+        "copied word for word.",
+        find_passages.parse_settings,
+        find_passages.run,
+    ),
+    TOOL_PAPER_OVERVIEW: Tool(
+        TOOL_PAPER_OVERVIEW,
+        "Summarize one paper in the chat; ask which paper when it is "
+        "unclear.",
+        paper_overview.parse_settings,
+        paper_overview.run,
+    ),
     TOOL_GENERATE_PAPER_SUMMARY: Tool(
         TOOL_GENERATE_PAPER_SUMMARY,
         "Summarize one paper with a report template, check the structure, "
-        "and save the Markdown to target/.",
+        "and save the Markdown to outputs/.",
         generate_paper_summary.parse_settings,
         generate_paper_summary.run,
-    ),
-    TOOL_QACHAT_HELP: Tool(
-        TOOL_QACHAT_HELP,
-        "Answer questions about how QAChat works from its own "
-        "documentation.",
-        qachat_help.parse_settings,
-        qachat_help.run,
     ),
 }
 

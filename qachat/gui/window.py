@@ -82,7 +82,7 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
-from qachat.gui.preferences import preferred_appearance, write_preferences
+from qachat.gui.preferences import default_appearance, write_defaults
 
 ROOT = Path(__file__).resolve().parents[2]
 ICONS = Path(__file__).resolve().parent / "icons"
@@ -97,6 +97,9 @@ class ChatBridge(QObject):
         Serialized engine event sent back to the web page.
     pathsSelected: Signal(list)
         Local source paths chosen using native dialogs.
+    folderFilesSelected: Signal(str, str, list)
+        Editable folder (outputs or templates), purpose ("add" or the path
+        to replace), and the chosen files.
     workspaceSelected: Signal(str)
         Selected workspace directory.
     commandRequested: Signal(dict)
@@ -161,6 +164,7 @@ class ChatBridge(QObject):
     event = Signal(str)
     pathsSelected = Signal(list)
     attachmentsSelected = Signal(list)
+    folderFilesSelected = Signal(str, str, list)
     workspaceSelected = Signal(str)
     commandRequested = Signal(dict)
     stopRequested = Signal()
@@ -218,6 +222,36 @@ class ChatBridge(QObject):
         paths, _ = QFileDialog.getOpenFileNames(None, "Attach files")
         if paths:
             self.attachmentsSelected.emit(paths)
+
+    @Slot(str, str)
+    def chooseFolderFiles(self, folder: str, purpose: str) -> None:
+        """Choose files for ``outputs/`` or ``templates/``.
+
+        ``purpose`` is ``"add"`` (any number of files) or a path to replace
+        (one file); folder and purpose are echoed back with the paths.
+
+        """
+
+        if purpose == "add":
+            paths, _ = QFileDialog.getOpenFileNames(None, f"Add to {folder}")
+        else:
+            path, _ = QFileDialog.getOpenFileName(None, "Replace with")
+            paths = [path] if path else []
+        if paths:
+            self.folderFilesSelected.emit(folder, purpose, paths)
+
+    @Slot(str, list)
+    def folderDropped(self, folder: str, paths: list) -> None:
+        """Offer files dropped on ``outputs`` or ``templates`` to the page."""
+
+        self.folderFilesSelected.emit(folder, "add", paths)
+
+    @Slot(str)
+    def editFolder(self, request_json: str) -> None:
+        """Add, replace, or delete files in outputs or templates."""
+
+        request = json.loads(request_json)
+        self.commandRequested.emit({**request, "action": "edit_folder"})
 
     @Slot()
     def chooseWorkspace(self) -> None:
@@ -438,7 +472,8 @@ class ChatBridge(QObject):
         Parameters
         ----------
         choice: str
-            ``continue``, ``quick``, or ``cancel``; the engine treats any
+            ``continue``, ``quick``, or ``cancel`` for a plan, or
+            ``option:<index>`` for a tool's question; the engine treats any
             other value as cancel.
 
         Notes
@@ -700,62 +735,101 @@ class ChatBridge(QObject):
 
 
 class SourceDropView(QWebEngineView):
-    """Accept local files only inside the page's visible source drop target."""
+    """Accept local files only inside the page's visible drop targets.
+
+    The sources folder (or the new-project drop zone) adds sources; the
+    workspace's ``outputs`` and ``templates`` folders receive copies.
+
+    """
 
     pathsDropped = Signal(list)
+    folderDropped = Signal(str, list)
     dragChanged = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.drop_target = QRectF()
+        self.folder_targets: list[tuple[str, QRectF]] = []
 
     @Slot(str)
     def set_drop_target(self, bounds_json: str) -> None:
         bounds = json.loads(bounds_json)
-        self.drop_target = QRectF(
-            *[
-                float(bounds.get(key, 0))
-                for key in ("x", "y", "width", "height")
-            ]
-        )
+
+        def rect(item: dict) -> QRectF:
+            return QRectF(
+                *[
+                    float(item.get(key, 0))
+                    for key in ("x", "y", "width", "height")
+                ]
+            )
+
+        self.drop_target = rect(bounds)
+        self.folder_targets = [
+            (str(item.get("name")), rect(item))
+            for item in bounds.get("folders", [])
+            if isinstance(item, dict)
+        ]
+
+    def _target(self, event) -> str | None:
+        """``"sources"``, a folder name, or None at the event position."""
+
+        position = event.position()
+        if self.drop_target.contains(position):
+            return "sources"
+        for name, rect in self.folder_targets:
+            if rect.contains(position):
+                return name
+        return None
 
     def _local_drag(self, event) -> bool:
         urls = event.mimeData().urls()
         return bool(urls) and all(url.isLocalFile() for url in urls)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        # Drags inside the page (a workspace file onto sources) are the
+        # page's own.
+        if not event.mimeData().hasUrls():
+            super().dragEnterEvent(event)
+            return
         # Accept entry to continue receiving movement; the final drop is
         # restricted to the target, even when the drag entered elsewhere.
-        if self._local_drag(event) and not self.drop_target.isEmpty():
+        if self._local_drag(event) and (
+            not self.drop_target.isEmpty() or self.folder_targets
+        ):
             self.dragChanged.emit(True)
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        if self._local_drag(event) and self.drop_target.contains(
-            event.position()
-        ):
+        if not event.mimeData().hasUrls():
+            super().dragMoveEvent(event)
+            return
+        if self._local_drag(event) and self._target(event):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
         self.dragChanged.emit(False)
-        event.accept()
+        super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
         self.dragChanged.emit(False)
-        if self._local_drag(event) and self.drop_target.contains(
-            event.position()
-        ):
-            self.pathsDropped.emit(
-                [url.toLocalFile() for url in event.mimeData().urls()]
-            )
-            event.acceptProposedAction()
-        else:
+        if not event.mimeData().hasUrls():
+            super().dropEvent(event)
+            return
+        target = self._target(event) if self._local_drag(event) else None
+        if target is None:
             event.ignore()
+            return
+        paths = [url.toLocalFile() for url in event.mimeData().urls()]
+        if target == "sources":
+            self.pathsDropped.emit(paths)
+        else:
+            self.folderDropped.emit(target, paths)
+        event.acceptProposedAction()
 
 
 class ChatWindow(QMainWindow):
@@ -798,7 +872,7 @@ class ChatWindow(QMainWindow):
 
         # The saved appearance until the page reports its choice; "system"
         # follows the OS.
-        self._appearance = preferred_appearance()
+        self._appearance = default_appearance()
         self.bridge.appearanceChanged.connect(self._set_appearance)
         QGuiApplication.styleHints().colorSchemeChanged.connect(
             lambda _scheme: self._update_icon()
@@ -818,6 +892,7 @@ class ChatWindow(QMainWindow):
 
         self.view = SourceDropView(self)
         self.view.pathsDropped.connect(self.bridge.pathsSelected)
+        self.view.folderDropped.connect(self.bridge.folderDropped)
         self.bridge.sourceDropTargetChanged.connect(self.view.set_drop_target)
         self.view.dragChanged.connect(self.bridge.sourceDragChanged)
         settings = self.view.settings()
@@ -843,7 +918,7 @@ class ChatWindow(QMainWindow):
             mode if mode in ("system", "light", "dark") else "system"
         )
         try:
-            write_preferences({"appearance": self._appearance})
+            write_defaults({"appearance": self._appearance})
         except OSError:
             pass  # An unwritable preferences file keeps today's choice.
         self._update_icon()

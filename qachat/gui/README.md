@@ -81,7 +81,14 @@ update the source manifest and indexes, and restore the active conversation.
 Right-clicking a file or folder inside `sources` (not `sources` itself or any
 other workspace item) offers deletion. After confirmation the workspace copy
 is deleted and the project is reopened, so the index drops the removed files;
-originals outside the workspace and saved chats are untouched. Drops are disabled during a running operation. The dashed target and dimmed
+originals outside the workspace and saved chats are untouched.
+
+The `outputs` and `templates` folders are always shown and can be edited
+from their right-click menus: **Add files to …** copies files in (a taken
+name is replaced after confirmation, or the copy is numbered), **Replace
+with another file…** overwrites one file keeping its name, and **Delete**
+removes a file or folder. Neither folder is indexed, so these edits only
+refresh the tree; the open chat and index stay as they are. Drops are disabled during a running operation. The dashed target and dimmed
 surroundings appear only during dragging. During indexing, the composer,
 Ask, attachment, effort, and Branch controls are disabled; the progress area
 provides a separate Stop button. Existing draft text is retained.
@@ -150,23 +157,24 @@ is loaded, and unknown settings are rejected. The tools are:
   whole document in parts, takes notes with passage numbers, and answers
   from the notes; the answer streams and its citations are checked.
 - `generate_paper_summary` (intent `paper_summary`): turns one paper into a
-  one-page document that follows a report template in
-  `qachat/report_templates/`: `research_briefing` (the Research Briefing
+  one-page document that follows a Markdown template from the project's
+  `templates/` folder, which starts with a copy of
+  `qachat/tools/templates/research_briefing.md` (the Research Briefing
   format of Nature-family journals: a headline of at most 90 characters and
-  six sections with word limits, at most 750 words) or `research_summary`
-  (ten compact sections). The headline and each section are written
-  separately and checked in Python (word and item limits, the citation
-  against the paper's first page, suggested reading against its reference
-  list), with one targeted fix each; the result is saved as Markdown in the
-  project's `target/` folder, with a one-page PDF in the desktop app. The
-  answer says where both files are and shows the saved Markdown. The
-  citation line is copied from the PDF's metadata and first page, never
-  written by the model. A paper can be named by file name or first author
-  ("Patil's paper"); a guessed paper is always confirmed first. Opening a
-  literature project writes a readable guide to each template into
-  `target/templates/` (Markdown and PDF).
-- `qachat_help` (intent `qachat_usage`): answers questions about QAChat
-  itself from this README and the main README.
+  six sections with word limits, at most 750 words). Edit it, or add your
+  own `.md` template and name it in the question ("…with the lab_summary
+  template"); the rules (limits in brackets after a heading, `{citation}`
+  and `{references}` placeholders) are in tutorial 160 and in
+  `qachat/tools/report_template.py`. The headline and each section are
+  written separately and checked in Python (word and item limits), with
+  targeted fixes; the result is saved as Markdown in the project's
+  `outputs/` folder, with a one-page PDF in the desktop app. The answer
+  says where both files are and shows the saved Markdown. Nothing
+  bibliographic is written by the model: the citation comes from the PDF's
+  metadata and first page (or the file name), and reference items are
+  entries of the paper's own reference list, which the model only chooses
+  by number. A paper can be named by file name or first author ("Patil's
+  paper"); a guessed paper is always confirmed first.
 
 Tools that call the model many times (`batch_classify`, `batch_review`,
 `generate_paper_summary`) first show a plan (scope, model calls, estimated
@@ -174,16 +182,18 @@ time) with **Continue**, **Quick** (a smaller, non-exhaustive version), and
 **Cancel**, when the plan is larger than the tool's `large_batches`
 setting (`confirmation`: always, when_large, or never).
 
-A project folder has `sources/` (copied in, indexed, searched) and
-`target/` (never indexed). Put a paper you are working on in `target/`, or
-name any source paper; summaries and reports QAChat writes go to `target/`,
-so they can never come back as sources. Saving never overwrites a file:
-`-2`, `-3`, ... is added instead.
+A project folder has `sources/` (copied in, indexed, searched), `outputs/`
+and `templates/` (never indexed). Summaries and reports QAChat writes go to
+`outputs/`, so they can never come back as sources; you can also put a
+paper you are working on there. Saving never overwrites a file: `-2`,
+`-3`, ... is added instead. Projects from earlier versions have their
+`target/` folder renamed to `outputs/` when opened.
 
 Types are validated when QAChat starts; mistakes name the type and field.
 Add a JSON file to create a new type; `code` and `literature` must stay.
 Restart QAChat after editing. Only `code` and `literature` have bundled
-example repositories, so other types need sources. Tutorial 150 shows how to
+example repositories, so other types need sources. Tutorial 150 explains
+project types and intents and builds a new type; tutorial 160 shows how to
 write and register a new tool.
 
 ## Models and generation settings
@@ -244,11 +254,17 @@ Each user's own changes are kept in `qachat/gui/preferences.json` (ignored
 by git; `QACHAT_PREFERENCES_FILE` points elsewhere, as the tests do): the
 appearance, and the effort levels, router model, embedding model, query
 format, and search depth that new projects start from. Settings edited with
-no project open are saved there; with a project open they apply to that
-project only. Precedence: defaults.json < preferences.json < the project's
+no project open are saved there. With a project open, the switch at the top
+of Settings chooses **This project** (the default) or **New projects**,
+which edits these preferences and leaves the open project unchanged; a note
+under the switch says which one is edited. Settings always reopen on
+**This project**. Precedence: defaults.json < preferences.json < the project's
 own settings. Only values that differ from the built-in defaults are written,
 so restoring defaults removes them. The first-run check asks for the models
-these preferences use. When some are missing but installed models of the
+these preferences use. Its **QAChat setup** card stays at the top of
+Settings: folded with "Ready" when everything is installed (click to see
+each check), and opened by itself when something is missing or a download
+runs. When some are missing but installed models of the
 same role exist, **Use installed models** switches to the closest installed
 size (for example a missing 8B model is replaced by an installed 14B
 rather than a 4B) and saves that choice.
@@ -258,7 +274,7 @@ backend compatibility, model architecture, tokenizer behavior, and pooling
 assumptions are enforced or encountered later in the model-loading path.
 
 The GUI allows up to 2,048 generated tokens; the backend profile default
-stays 256, and GUI sessions using 256 are raised to 2,048 when opened. The
+stays 256, and projects saved with 256 answer with 2,048 in the GUI. The
 token cap is a safety limit, not a requested answer length. Model-reported
 length stops are
 saved with the turn and shown as an incomplete-answer notice. Old answers are
@@ -268,8 +284,10 @@ Answer-time controls set retrieval count, temperature, thinking, and maximum
 new tokens without rebuilding the index or reloading models. A blank answer
 limit requests the session's automatic budget; it does not remove the model's
 finite context limit. The values used for a completed answer are recorded with
-that turn. Reopening a saved conversation restores its saved settings when
-available.
+that turn. Temperature, thinking, and answer length belong to the project:
+a change is saved to its profile.ini when the next question is asked, every
+chat in the project uses it, switching chats keeps it, and opening another
+project loads that project's own values.
 
 ## Conversations, references, and progress
 
@@ -301,7 +319,16 @@ per second and the page appends it. On MLX this is token by token; PyTorch
 delivers the whole reply at once. With thinking enabled, the model's thinking
 shows live in a grey box that folds into "Thought for Ns" when the answer
 starts; saved answers keep a collapsed "Show thinking". Citation links are
-added when the answer completes, under a short "Took Ns" line.
+added when the answer completes, under a short "Took Ns · 3.5k tokens" line.
+
+Tokens are the pieces of text models work in (about ¾ of a word). Each
+answer counts the tokens the models read (question, evidence, instructions,
+history) and wrote, over the answer model, the router, and every tool call;
+the count updates live next to the timer while an answer is generated and
+is saved with the turn. The gauge button next to Ask shows the project's
+total (every chat, deleted ones included; turns branched chats share count
+once); its menu splits it into read and written, and shows this chat's
+total.
 
 Routing: each question first goes to the 8B router model (see
 `qachat/answering.py`), which picks one of the project type's intents and

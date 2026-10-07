@@ -132,5 +132,37 @@ class TestBatchReview(unittest.TestCase):
         self.assertEqual(result.evidence, ())
 
 
+    def test_an_unnamed_document_is_asked_not_guessed(self) -> None:
+        asked = []
+
+        def choose(question, options):
+            asked.append((question, options))
+            return None  # The user cancels.
+
+        built, _ = context(
+            self.paper + self.other,
+            rank=lambda text: _ranked(self.paper[0], self.other[0]),
+            choose=choose,
+        )
+        question = "read the whole thing and list the software"
+        result = run(ReviewSettings(), ToolRequest(question, question), built)
+        (text, options), = asked
+        self.assertEqual(text, "Which document should I read in full?")
+        self.assertEqual(
+            options[0], "smith2020.pdf (best match for the question)"
+        )
+        self.assertIn("Tell me which one you mean", result.answer)
+        # A named document is read without asking.
+        asked.clear()
+        built, _ = context(
+            self.paper + self.other,
+            rank=lambda text: _ranked(self.paper[0]),
+            confirm=lambda plan: "cancel",
+            choose=choose,
+        )
+        question = "read Smith's paper in full"
+        run(ReviewSettings(), ToolRequest(question, question), built)
+        self.assertEqual(asked, [])
+
 if __name__ == "__main__":
     unittest.main()

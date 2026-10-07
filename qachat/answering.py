@@ -2,7 +2,7 @@
 
 QAChat has one machine state for now, ``answering``. Within it, a router
 model classifies each question into one of the current project type's
-intents (see ``qachat/project_types.json``). The configuration, not the
+intents (see ``qachat/project_types/``). The configuration, not the
 router, then decides the intent's instructions, which earlier turns are
 included, and whether evidence is searched, reused, or skipped.
 
@@ -65,10 +65,11 @@ import re
 from typing import Final, Literal, Protocol, TypeAlias
 
 from qachat.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
-from qachat.project_types import (
+from qachat.project_type import (
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_NONE,
+    RETRIEVAL_MODE_REUSE,
     HistoryPolicy,
 )
 
@@ -356,12 +357,28 @@ Return one line of JSON with:
 "intent": one intent ID from the list; when unsure whether a message is
 small talk, choose another intent,
 "standalone": true if the question is understandable without earlier turns;
-a question that names its own topic is standalone even after other turns.
+a question that names its own topic is standalone even after other turns. A
+request about the form of the last answer ("shorter", "in two sentences",
+"as a list", "in simpler words") is not standalone: it refers to the last
+turn.
 Only when standalone is false, also add:
 "related_turns": numbers of the earlier turns it refers to.
 
 Example: {{"intent": "{next(iter(project.intents))}", "standalone": false, \
 "related_turns": [2]}}"""
+    reuse = next(
+        (
+            intent_id
+            for intent_id, intent in project.intents.items()
+            if intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+        ),
+        None,
+    )
+    if reuse and listed:
+        last = listed[-1].get("turn_id", len(listed))
+        user += f"""
+Example: "just in two sentences" after turn {last} -> {{"intent": \
+"{reuse}", "standalone": false, "related_turns": [{last}]}}"""
     return system, user
 
 
@@ -491,12 +508,31 @@ def route_question(
             dropped.append(
                 (number, "question neither points back nor shares a term")
             )
+    standalone = decision.standalone or (bool(dropped) and not kept)
+    intent = project.intents.get(decision.intent)
+    if (
+        not kept
+        and intent is not None
+        and intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+    ):
+        # An intent that reuses earlier evidence always refers to a turn:
+        # without one named, it is the last turn that is not small talk.
+        last = next(
+            (
+                item["turn_id"]
+                for item in reversed(representations)
+                if not item["skip"]
+            ),
+            None,
+        )
+        if last is not None:
+            kept, standalone = [last], False
     return RouteDecision(
         **{
             **_fields(decision),
             # Only when every named turn was dropped does the check
             # overrule the router's standalone judgement.
-            "standalone": decision.standalone or (bool(dropped) and not kept),
+            "standalone": standalone,
             "related_turn_ids": tuple(kept),
         },
         fallback=decision.fallback,
@@ -618,8 +654,10 @@ def select_history(
         Number of earlier turns in the conversation.
     policy: HistoryPolicy
         ``none`` includes nothing; ``recent`` the last ``recent_turns``;
-        ``relevant`` adds the router's related turns to the recent ones,
-        unless the router judged the question standalone.
+        ``relevant`` adds the router's related turns to the recent ones.
+        A question the router judged standalone still gets the previous
+        turn (its question and answer, never its evidence), so the model
+        knows what the user is reacting to.
     recent_turns: int
         How many of the latest turns count as recent.
     decision: RouteDecision
@@ -638,7 +676,7 @@ def select_history(
     if policy == HISTORY_POLICY_RECENT:
         return recent
     if decision.standalone:
-        return []
+        return [turn_count]
     return sorted(set(recent) | set(decision.related_turn_ids))
 
 

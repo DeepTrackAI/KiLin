@@ -7,62 +7,66 @@ import re
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.report_templates import load_template, report_skeleton
 from qachat.repository import scan_repository
-from qachat.tools import ToolRequest
+from qachat.tools import EarlierTurn, ToolRequest
 from qachat.tools.generate_paper_summary import (
     SummarySettings,
     _content,
     _fit_total,
     _trim_words,
-    _unknown_names,
-    paper_citation,
     choose_template,
+    paper_citation,
     parse_settings,
-    reference_list,
+    reference_entries,
     run,
     summary_file_text,
-    ungrounded,
 )
-from qachat.tools.load_target import (
-    load_target,
-    save_target_file,
-    target_folder,
+from qachat.tools.outputs import (
+    load_output,
+    output_folder,
+    save_output_file,
 )
+from qachat.tools.report_template import load_template, templates_folder
 from tests.qachat.tools.helpers import chunk, context
 
-_SUMMARY = load_template("research_summary")
 _BRIEFING = load_template("research_briefing")
+# A user's own template, as saved in a project's templates/ folder.
+_LAB_SUMMARY = """# Lab Summary
+
+## Background
+Why the work was done.
+
+## Findings
+What it found.
+"""
+_JONES = "Jones, B. Raman spectroscopy of leaves. Plant J. 12, 3 (2019)."
+_LEE = "Lee, C. Deep learning for spectra. Nat. Methods 18, 9 (2021)."
 
 
 def _words(count: int) -> str:
     return " ".join(["word"] * (count - 1)) + " end [1]."
 
 
-_CITATION = "A paper: We used Python 3.11 and it works [1]."
-
-
 def _fitting(name: str) -> str:
     """Content that fits a briefing section's limit."""
 
-    if name == "This is a summary of":
-        return _CITATION
     section = next(s for s in _BRIEFING.sections if s.name == name)
-    if section.items:
-        return "- First paper [1]\n- Second paper [1]"
     return _words(sum(section.words) // 2)
 
 
 class TestGeneratePaperSummary(unittest.TestCase):
-    """The model writes pieces; Python checks, fixes once, and saves."""
+    """The model writes pieces; Python checks, fixes, copies, and saves."""
 
     def setUp(self) -> None:
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
-        target = target_folder(self.root)
-        (target / "my_paper.md").write_text(
-            "# A paper\n\nWe used Python 3.11.\n\n## Results\n\nIt works.\n"
+        (output_folder(self.root) / "my_paper.md").write_text(
+            "# A paper\n\nWe used Python 3.11.\n\n## Results\n\nIt works.\n\n"
+            f"## References\n\n1. {_JONES}\n2. {_LEE}\n"
+        )
+        (templates_folder(self.root) / "lab_summary.md").write_text(
+            _LAB_SUMMARY
         )
 
     def summarize(self, question, write, settings=None, chunks=()):
@@ -73,12 +77,18 @@ class TestGeneratePaperSummary(unittest.TestCase):
         def model(system, prompt, tokens):
             if "take notes" in system:
                 calls.append(("notes", None))
-                return "- Uses Python 3.11 [1]"
+                return "- Uses Python 3.11 for leaf spectroscopy [1]"
             if "write headlines" in system:
                 calls.append(("headline", None))
                 return write("headline", None)
             name = re.search(r'"(.+?)" section', prompt).group(1)
-            kind = "fix" if "revise one section" in system else "section"
+            kind = (
+                "fix"
+                if "revise one section" in system
+                else "references"
+                if "choose references" in system
+                else "section"
+            )
             calls.append((kind, name))
             return write(kind, name)
 
@@ -90,35 +100,43 @@ class TestGeneratePaperSummary(unittest.TestCase):
         )
         return result, calls, events
 
-    def test_target_paper_is_written_checked_and_saved(self) -> None:
+    def briefing(self, write, question="my paper"):
+        """Summarize my_paper.md as a briefing; references pick 1 and 2."""
+
+        def reply(kind, name):
+            if kind == "references":
+                return "2, 1"
+            return write(kind, name)
+
+        return self.summarize(question, reply)
+
+    def test_outputs_paper_is_written_checked_and_saved(self) -> None:
         result, calls, _ = self.summarize(
-            "summarize my paper with the template",
-            lambda kind, name: _CITATION
-            if name == "Citation"
-            else f"## {name}\nText [1].",
+            "summarize my paper with the lab summary template",
+            lambda kind, name: f"## {name}\nText [1].",
         )
         self.assertTrue(result.summary["valid"], result.summary["problems"])
-        self.assertEqual(result.summary["repairs"], 0)
-        self.assertEqual(result.summary["paper"], "target/my_paper.md")
-        self.assertEqual(result.summary["saved"], "target/my_paper_summary.md")
-        saved = (self.root / "target/my_paper_summary.md").read_text()
-        self.assertTrue(saved.startswith("# Research Summary\n\n## Citation"))
+        self.assertEqual(result.summary["template"], "lab_summary")
+        self.assertEqual(result.summary["paper"], "outputs/my_paper.md")
+        self.assertEqual(
+            result.summary["saved"], "outputs/my_paper_summary.md"
+        )
+        saved = (self.root / "outputs/my_paper_summary.md").read_text()
+        self.assertTrue(saved.startswith("# Lab Summary\n\n## Background"))
         self.assertTrue(saved.rstrip().endswith("against the paper.*"))
         # The answer says where the files are, then shows the file itself.
         self.assertTrue(
             result.answer.startswith(
-                "Done: the research summary of my_paper.md is saved as "
-                "`target/my_paper_summary.md`."
+                "Done: the lab summary of my_paper.md is saved as "
+                "`outputs/my_paper_summary.md`."
             )
         )
         self.assertIn(saved.strip(), result.answer)
         self.assertNotIn("[1]", saved)  # Passage numbers stay in QAChat.
-        self.assertNotIn("## Citation\n## Citation", saved)
-        # Checks are kept with the turn; the answer stays a clean document.
+        self.assertNotIn("## Background\n## Background", saved)
         self.assertEqual(result.summary["problems"], [])
-        self.assertNotIn("Template check", result.answer)
         # One part of notes, then one call per section.
-        self.assertEqual(len(calls), 1 + len(_SUMMARY.sections))
+        self.assertEqual(len(calls), 3)
 
     def test_pdf_is_saved_next_to_the_markdown(self) -> None:
         written = []
@@ -131,28 +149,23 @@ class TestGeneratePaperSummary(unittest.TestCase):
         def model(system, prompt, tokens):
             if "take notes" in system:
                 return "- Uses Python 3.11 [1]"
-            return _CITATION
+            return "Text [1]."
 
         built, _ = context(model=model, root=self.root, write_pdf=write_pdf)
+        question = "my paper as a lab summary"
         result = run(
-            SummarySettings(), ToolRequest("my paper", "my paper"), built
+            SummarySettings(), ToolRequest(question, question), built
         )
         self.assertEqual(
-            result.summary["saved_pdf"], "target/my_paper_summary.pdf"
+            result.summary["saved_pdf"], "outputs/my_paper_summary.pdf"
         )
         self.assertEqual(
             written,
-            [
-                (
-                    "my_paper_summary.pdf",
-                    "Research Summary",
-                    "# Research Summary",
-                )
-            ],
+            [("my_paper_summary.pdf", "Lab Summary", "# Lab Summary")],
         )
-        self.assertIn("and `target/my_paper_summary.pdf`", result.answer)
+        self.assertIn("and `outputs/my_paper_summary.pdf`", result.answer)
 
-    def test_briefing_section_outside_its_limit_is_fixed_once(self) -> None:
+    def test_briefing_section_outside_its_limit_is_fixed(self) -> None:
         def write(kind, name):
             if kind == "headline":
                 return "# Plants show stress before it is visible"
@@ -160,8 +173,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
                 return _words(20)
             return _fitting(name)
 
-        settings = SummarySettings(template="research_briefing")
-        result, calls, events = self.summarize("my paper", write, settings)
+        result, calls, events = self.briefing(write)
         self.assertTrue(result.summary["valid"], result.summary["problems"])
         self.assertEqual(result.summary["repairs"], 1)
         self.assertIn(("fix", "The Reason"), calls)
@@ -182,8 +194,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
                 return _words(20)
             return _fitting(name)
 
-        settings = SummarySettings(template="research_briefing")
-        result, calls, _ = self.summarize("my paper", write, settings)
+        result, calls, _ = self.briefing(write)
         self.assertFalse(result.summary["valid"])
         self.assertEqual(calls.count(("headline", None)), 2)
         problems = " ".join(result.summary["problems"])
@@ -191,82 +202,219 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertIn("The Reason has 20 words", problems)
         self.assertNotIn("The Reason has 20 words", result.answer)
 
-    def test_references_must_come_from_the_reference_list(self) -> None:
-        paper = [
-            chunk("repo/p.pdf", ["Title. Smith, A. et al.", "Methods."]),
+    def test_citation_and_references_are_copied_never_written(self) -> None:
+        def write(kind, name):
+            return "Plants under stress" if kind == "headline" else (
+                _fitting(name)
+            )
+
+        result, calls, _ = self.briefing(write)
+        # The model only chose entry numbers; the entries are verbatim.
+        self.assertIn(f"- {_LEE}\n- {_JONES}", result.answer)
+        self.assertIn(("references", "Related Reviews and Literature"), calls)
+        self.assertNotIn(("section", "This is a summary of"), calls)
+        self.assertIn(
+            "# Plants under stress\n\n**This is a summary of:** my_paper.md "
+            "(the file has no title metadata).",
+            result.answer,
+        )
+        self.assertNotIn("## This is a summary of", result.answer)
+
+    def test_reference_numbers_outside_the_list_are_ignored(self) -> None:
+        def write(kind, name):
+            if kind == "references":
+                return "There is no good match, maybe 9."
+            return "Leaves" if kind == "headline" else _fitting(name)
+
+        result, _, _ = self.summarize("my paper", write)
+        # Too few valid numbers: the closest entries to the notes fill in.
+        section = result.answer.split("## Related Reviews and Literature")[1]
+        self.assertEqual(section.count("\n- "), 2)
+        self.assertIn(_JONES, section)
+        self.assertNotIn("maybe", section)
+
+    def test_reference_entries_are_split_as_printed(self) -> None:
+        paper = (
+            chunk("p.pdf", ["Title. Smith, A. et al.", "Methods."]),
             chunk(
-                "repo/p.pdf",
+                "p.pdf",
                 [
                     "References",
-                    "1. Jones, B. Raman spectroscopy of leaves. Plant J. 2019",
-                    "2. Lee, C. Deep learning for spectra. Nat. Methods 2021",
+                    "1. Jones, B. Raman spectro-",
+                    "scopy of leaves. Plant J. 12, 3 (2019).",
+                    "[2] Lee, C. Deep learning for spectra. Nat. Methods",
+                    "18, 9 (2021).",
+                    "Page 12",
                 ],
                 start=3,
             ),
-        ]
-        references = reference_list(tuple(paper))
-        self.assertTrue(references.startswith("1. Jones"))
-        real = "- Jones, B. Raman spectroscopy of leaves. Plant J. 2019"
-        invented = "- Unsupervised analysis reveals plant stress responses"
-        self.assertEqual(ungrounded(real, references, items=True), [])
-        self.assertEqual(
-            ungrounded(f"{real}\n{invented}", references, items=True), [2]
         )
+        self.assertEqual(
+            reference_entries(paper),
+            [_JONES, _LEE],
+        )
+        self.assertEqual(reference_entries((paper[0],)), [])
 
-        def write(kind, name):
-            if kind == "headline":
-                return "Leaves under stress"
-            if name == "Related Reviews and Literature":
-                if kind == "section":
-                    return f"{real}\n{invented}"
-                return (
-                    f"{real}\n- Lee, C. Deep learning for spectra. "
-                    "Nat. Methods 2021"
-                )
-            if name == "This is a summary of":
-                return "Smith, A. et al. Title."
-            return _fitting(name)
+    def test_running_heads_stay_out_of_reference_entries(self) -> None:
+        head = ["I.-u. Tiunn et al.", "SoftwareX 35 (2026) 102791"]
+        paper = tuple(
+            chunk("p.pdf", head + [f"Body text of page {n}."], start=n * 10)
+            for n in range(1, 4)
+        ) + (
+            chunk(
+                "p.pdf",
+                ["References", "1. Jones, B. Raman spectroscopy of",
+                 *head, "leaves. Plant J. 12, 3 (2019).",
+                 f"2. {_LEE}"],
+                start=50,
+            ),
+        )
+        self.assertEqual(reference_entries(paper), [_JONES, _LEE])
 
-        settings = SummarySettings(template="research_briefing")
+    def test_missing_reference_list_is_said_not_invented(self) -> None:
+        (self.root / "outputs" / "my_paper.md").write_text(
+            "# A paper\n\nIt works.\n"
+        )
         result, calls, _ = self.summarize(
-            "turn p.pdf into a research briefing", write, settings, paper
+            "my paper", lambda kind, name: "T" if kind == "headline" else (
+                _fitting(name)
+            )
         )
-        self.assertIn(("fix", "Related Reviews and Literature"), calls)
-        self.assertTrue(result.summary["valid"], result.summary["problems"])
-        self.assertNotIn("Unsupervised analysis", result.answer)
+        self.assertNotIn(("references", "Related Reviews and Literature"),
+                         calls)
+        self.assertIn("reference list could not be read", result.answer)
+        self.assertFalse(result.summary["valid"])
 
-    def test_reference_numbers_are_not_passage_citations(self) -> None:
-        section = next(
-            s for s in _BRIEFING.sections if s.source == "references"
+    def test_citation_comes_from_metadata(self) -> None:
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        writer.add_metadata(
+            {
+                "/Title": "Deep spectra of stressed plants",
+                "/Author": "Anoop C. Patil; Yu-Wei Chang",
+            }
+        )
+        pdf = self.root / "paper.pdf"
+        with pdf.open("wb") as file:
+            writer.write(file)
+        first = chunk(
+            "paper.pdf",
+            ["https://doi.org/10.1000/xyz123", "Accepted: 6 March 2025"],
         )
         self.assertEqual(
-            _content("- [2] Jones, B. Leaves. 2019\n- [5] Lee", section),
-            "- Jones, B. Leaves. 2019\n- Lee",
+            paper_citation(pdf, (first,)),
+            "Patil, A. C. et al. Deep spectra of stressed plants. "
+            "https://doi.org/10.1000/xyz123 (2025).",
+        )
+        self.assertEqual(
+            paper_citation(self.root / "missing.pdf", ()),
+            "missing.pdf (the file has no title metadata).",
         )
 
-    def test_that_paper_follows_the_author_named_earlier(self) -> None:
-        chunks = [
-            chunk("repo/smith2020.pdf", ["Smith studies plants."]),
-            chunk("repo/README.md", ["See Smith et al. 2020 for plants."]),
-        ]
+    def paper_for(self, chunks, request, **options):
+        """Run the tool up to the plan; return the summary and the asks."""
+
         asked = []
         built, _ = context(
             chunks,
             model=lambda system, prompt, tokens: "Text [1].",
             root=self.root,
-            confirm=lambda plan: asked.append(plan) or "continue",
+            confirm=lambda plan: asked.append(plan) or "cancel",
+            **options,
         )
-        # "that paper" carries the earlier question as the user's words.
+        (self.root / "outputs" / "my_paper.md").unlink(missing_ok=True)
+        return run(SummarySettings(), request, built), asked
+
+    def test_this_follows_the_chain_back_to_the_named_paper(self) -> None:
+        # The user's conversation: walk through Tiunn's paper, summarize
+        # "that" (evidence split over two papers), then "turn this into a
+        # research briefing". Patil's paper matches the words best.
+        tiunn, mijalkov = Path("repo/tiunn26.pdf"), Path("repo/mijalkov25.pdf")
+        chunks = [
+            chunk("repo/tiunn26.pdf", ["BRAPH 2 software."]),
+            chunk("repo/mijalkov25.pdf", ["Memory capacity."]),
+            chunk("repo/patil25deep.pdf", ["Research on plant stress."]),
+        ]
         request = ToolRequest(
-            "can you turn that paper into a research summary",
-            "can you turn that paper into a research summary "
-            "what is smith's paper about?",
+            "turn this into research briefing",
+            "turn this into research briefing",
+            earlier=(
+                EarlierTurn(4, "can you turn that into a summary report",
+                            (tiunn,) * 7 + (mijalkov,) * 7),
+                EarlierTurn(3, "can you walk me through Tiunn's paper",
+                            (tiunn,) * 36),
+            ),
         )
-        (self.root / "target" / "my_paper.md").unlink()
-        result = run(SummarySettings(), request, built)
-        self.assertEqual(result.summary["paper"], "repo/smith2020.pdf")
-        self.assertEqual(result.summary["reason"], "named source file")
-        self.assertEqual(asked, [])  # Named, so no confirmation needed.
+        result, _ = self.paper_for(chunks, request)
+        self.assertEqual(result.summary["paper"], "repo/tiunn26.pdf")
+        self.assertEqual(result.summary["reason"], "named in turn 3")
+
+    def test_this_means_the_paper_an_earlier_turn_used(self) -> None:
+        chunks = [
+            chunk("repo/a.pdf", ["A."]),
+            chunk("repo/b.pdf", ["B."]),
+        ]
+        request = ToolRequest(
+            "make a briefing of it",
+            "make a briefing of it",
+            earlier=(
+                EarlierTurn(2, "what are the main results?",
+                            (Path("repo/b.pdf"),) * 5 + (Path("repo/a.pdf"),)),
+            ),
+        )
+        result, asked = self.paper_for(chunks, request)
+        self.assertEqual(result.summary["paper"], "repo/b.pdf")
+        self.assertEqual(
+            result.summary["reason"], "the file discussed in turn 2"
+        )
+
+    def test_unclear_paper_is_asked_not_guessed(self) -> None:
+        from qachat.retrievals import HybridResult
+
+        papers = [chunk(f"repo/{n}.pdf", ["Spectra."]) for n in "ab"]
+        ranked = [
+            HybridResult(score=0.5, chunk=c, channels=("x",)) for c in papers
+        ]
+        questions = []
+
+        def choose(question, options):
+            questions.append((question, options))
+            return 1
+
+        request = ToolRequest(
+            "turn this into a research briefing",
+            "turn this into a research briefing",
+        )
+        result, _ = self.paper_for(
+            papers, request, rank=lambda text: ranked, choose=choose
+        )
+        (question, options), = questions
+        self.assertEqual(
+            question, "Which paper should I turn into a research briefing?"
+        )
+        self.assertEqual(
+            options,
+            ("a.pdf (best match for the question)",
+             "b.pdf (matches the question)"),
+        )
+        self.assertEqual(result.summary["paper"], "repo/b.pdf")
+        cancelled, _ = self.paper_for(
+            papers, request, rank=lambda text: ranked,
+            choose=lambda question, options: None,
+        )
+        # A cancel asks the user to name the paper, listing candidates.
+        self.assertIn("Tell me which one you mean", cancelled.answer)
+        self.assertIn("a.pdf, b.pdf", cancelled.answer)
+        # Even one candidate is asked about, not assumed.
+        asked = []
+        single, _ = self.paper_for(
+            papers[:1], request, rank=lambda text: ranked[:1],
+            choose=lambda question, options: asked.append(options) or 0,
+        )
+        self.assertEqual(asked, [("a.pdf (best match for the question)",)])
+        self.assertEqual(single.summary["paper"], "repo/a.pdf")
 
     def test_a_guess_prefers_pdfs_and_is_always_confirmed(self) -> None:
         from qachat.retrievals import HybridResult
@@ -285,8 +433,8 @@ class TestGeneratePaperSummary(unittest.TestCase):
             root=self.root,
             confirm=lambda plan: asked.append(plan) or "cancel",
         )
-        (self.root / "target" / "my_paper.md").unlink()
-        question = "turn the plant spectra work into a research summary"
+        (self.root / "outputs" / "my_paper.md").unlink()
+        question = "turn the plant spectra work into a research briefing"
         result = run(
             SummarySettings(), ToolRequest(question, question), built
         )
@@ -295,59 +443,76 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertIn("chose this paper", " ".join(asked[0].details))
         self.assertIn("Cancelled", result.answer)
 
-    def test_briefing_citation_is_one_line_under_the_headline(self) -> None:
-        settings = SummarySettings(template="research_briefing")
-
-        def write(kind, name):
-            if kind == "headline":
-                return "Plants show stress early"
-            return _fitting(name)
-
-        result, _, _ = self.summarize("my paper", write, settings)
-        self.assertIn(
-            "# Plants show stress early\n\n**This is a summary of:** A paper",
-            result.answer,
+    def test_source_paper_named_in_the_question(self) -> None:
+        chunks = [chunk("repo/smith2020.pdf", ["Smith used R."])]
+        result, _, _ = self.summarize(
+            "turn smith2020.pdf into a lab summary",
+            lambda kind, name: "Text [1].",
+            chunks=chunks,
         )
-        self.assertNotIn("## This is a summary of", result.answer)
-
-    def test_citation_is_copied_from_metadata_not_written(self) -> None:
-        from pypdf import PdfWriter
-
-        writer = PdfWriter()
-        writer.add_blank_page(width=200, height=200)
-        writer.add_metadata(
-            {
-                "/Title": "Deep spectra of stressed plants",
-                "/Author": "Anoop C. Patil; Yu-Wei Chang",
-            }
+        self.assertEqual(result.summary["paper"], "repo/smith2020.pdf")
+        self.assertEqual(result.summary["reason"], "named in the question")
+        self.assertTrue(
+            (self.root / "outputs/smith2020_summary.md").exists()
         )
-        pdf = self.root / "paper.pdf"
-        with pdf.open("wb") as file:
-            writer.write(file)
-        first = chunk(
-            "paper.pdf",
-            [
-                "https://doi.org/10.1000/xyz123",
-                "Accepted: 6 March 2025",
-            ],
+
+    def test_template_is_chosen_from_the_question(self) -> None:
+        folder = self.root / "templates"
+        self.assertEqual(
+            choose_template(
+                "make a lab summary of it", folder, "research_briefing"
+            ).name,
+            "lab_summary",
         )
         self.assertEqual(
-            paper_citation(pdf, (first,)),
-            "Patil, A. C. et al. Deep spectra of stressed plants. "
-            "https://doi.org/10.1000/xyz123 (2025).",
+            choose_template("summarize it", folder, "research_briefing").name,
+            "research_briefing",
         )
-        self.assertIsNone(paper_citation(self.root / "missing.pdf", ()))
+        # A deleted default falls back to the shipped template.
+        (folder / "research_briefing.md").unlink()
+        self.assertEqual(
+            choose_template("summarize it", folder, "research_briefing").name,
+            "research_briefing",
+        )
+        # A broken template is reported when it is asked for.
+        (folder / "broken.md").write_text("## A (sixty words)\n")
+        with self.assertRaisesRegex(ValueError, "broken, line 1"):
+            choose_template("use the broken template", folder, "lab_summary")
+        result, _, _ = self.summarize(
+            "my paper with the broken template", lambda kind, name: "x"
+        )
+        self.assertIn("cannot read the limit", result.answer)
 
-    def test_citation_names_must_be_on_the_first_page(self) -> None:
-        first_page = "Deep spectra. Anoop C. Patil, Benny Sng. Nature 2025."
-        self.assertEqual(
-            _unknown_names("Patil, Deepak et al. Deep spectra.", first_page),
-            ["Deepak"],
-        )
-        self.assertEqual(
-            _unknown_names("Patil, A. C. et al. Deep spectra.", first_page),
-            [],
-        )
+    def test_settings_and_errors(self) -> None:
+        with self.assertRaisesRegex(ValueError, "template file name"):
+            parse_settings({"template": "../nope"}, "x")
+        with self.assertRaisesRegex(ValueError, "unknown settings"):
+            parse_settings({"templates": ["a"]}, "x")
+        with self.assertRaisesRegex(FileNotFoundError, "my_paper.md"):
+            load_output(self.root, "missing.pdf")
+        with self.assertRaisesRegex(ValueError, "cannot be read"):
+            load_output(self.root, "image.png")
+
+    def test_saving_never_overwrites(self) -> None:
+        first = save_output_file(self.root, "a_summary.md", "one")
+        second = save_output_file(self.root, "a_summary.md", "two")
+        self.assertEqual(first.as_posix(), "outputs/a_summary.md")
+        self.assertEqual(second.as_posix(), "outputs/a_summary-2.md")
+        self.assertEqual((self.root / first).read_text(), "one")
+
+    def test_outputs_are_never_indexed_and_target_moves(self) -> None:
+        sources = self.root / "sources"
+        sources.mkdir()
+        (sources / "paper.md").write_text("# Indexed\n")
+        report = scan_repository(sources, extensions=(".md",))
+        self.assertEqual(report["selected_files"], ["paper.md"])
+        with TemporaryDirectory() as other:
+            old = Path(other) / "target"
+            old.mkdir()
+            (old / "draft.md").write_text("Draft")
+            folder = output_folder(Path(other))
+            self.assertEqual((folder / "draft.md").read_text(), "Draft")
+            self.assertFalse(old.exists())
 
     def test_long_sections_lose_trailing_sentences(self) -> None:
         text = "One two three. Four five six. Seven eight nine [2]."
@@ -373,64 +538,11 @@ class TestGeneratePaperSummary(unittest.TestCase):
             _content(reply, section), "Patil, A. C. et al. Deep spectra."
         )
 
-    def test_source_paper_named_in_the_question(self) -> None:
-        chunks = [chunk("repo/smith2020.pdf", ["Smith used R."])]
-        result, _, _ = self.summarize(
-            "turn smith2020.pdf into a research summary",
-            lambda kind, name: "Text [1].",
-            chunks=chunks,
-        )
-        self.assertEqual(result.summary["paper"], "repo/smith2020.pdf")
-        self.assertEqual(result.summary["reason"], "named source file")
-        self.assertTrue((self.root / "target/smith2020_summary.md").exists())
-
-    def test_template_is_chosen_from_the_question(self) -> None:
-        settings = parse_settings(
-            {
-                "template": "research_briefing",
-                "templates": ["research_summary"],
-            },
-            "x",
-        )
-        self.assertEqual(
-            choose_template("make a research summary of it", settings),
-            "research_summary",
-        )
-        self.assertEqual(
-            choose_template("summarize my paper", settings),
-            "research_briefing",
-        )
-
-    def test_settings_and_errors(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unknown report template"):
-            parse_settings({"template": "nope"}, "x")
-        with self.assertRaisesRegex(ValueError, "unknown settings"):
-            parse_settings({"summary_tokens": 9}, "x")
-        with self.assertRaisesRegex(FileNotFoundError, "my_paper.md"):
-            load_target(self.root, "missing.pdf")
-        with self.assertRaisesRegex(ValueError, "cannot be read"):
-            load_target(self.root, "image.png")
-
-    def test_saving_never_overwrites(self) -> None:
-        first = save_target_file(self.root, "a_summary.md", "one")
-        second = save_target_file(self.root, "a_summary.md", "two")
-        self.assertEqual(first.as_posix(), "target/a_summary.md")
-        self.assertEqual(second.as_posix(), "target/a_summary-2.md")
-        self.assertEqual((self.root / first).read_text(), "one")
-
-    def test_target_folder_is_never_indexed(self) -> None:
-        sources = self.root / "sources"
-        sources.mkdir()
-        (sources / "paper.md").write_text("# Indexed\n")
-        report = scan_repository(sources, extensions=(".md",))
-        self.assertEqual(report["selected_files"], ["paper.md"])
-        self.assertTrue((self.root / "target/my_paper.md").exists())
-
     def test_file_text_keeps_title_first(self) -> None:
         text = summary_file_text(
-            report_skeleton(_SUMMARY) + "\nx [3]", Path("p.pdf")
+            "# Lab Summary\n## Background\nx [3]", Path("p.pdf")
         )
-        self.assertTrue(text.startswith("# Research Summary\n## Citation"))
+        self.assertTrue(text.startswith("# Lab Summary\n## Background"))
         self.assertTrue(text.rstrip().endswith("against the paper.*"))
         self.assertNotIn("[3]", text)
 

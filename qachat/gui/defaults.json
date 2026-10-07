@@ -17,18 +17,11 @@
     ]
   },
   "search_depth": [5, 5, 10, 10, 15],
-  "router_models": {
-    "mlx": "Qwen/Qwen3-8B-MLX-4bit",
-    "torch": "Qwen/Qwen3-8B"
-  },
+  "router_models": {"mlx": "Qwen/Qwen3-8B-MLX-4bit", "torch": "Qwen/Qwen3-8B"},
   "embedding_models": {
     "mlx": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "torch": "Qwen/Qwen3-Embedding-0.6B"
   },
   "query_format": "qwen3",
-  "answers": {
-    "temperature": 0.0,
-    "thinking": false,
-    "max_new_tokens": 2048
-  }
+  "answers": {"temperature": 0.0, "thinking": false, "max_new_tokens": 2048}
 }

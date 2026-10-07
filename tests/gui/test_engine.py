@@ -15,7 +15,7 @@ from qachat.gui.engine import ChatEngine, _reference_context
 from qachat.gui.model_catalog import MODEL_CHOICES
 from qachat.project import open_project
 from qachat.rag import Evidence
-from qachat.project_types import project_type
+from qachat.project_type import project_type
 from qachat.workspace import prepare_sources_workspace
 
 

@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from qachat.project import default_project_profile
-from qachat.project_types import (
+from qachat.project_type import (
     PROJECT_TYPES_DIR,
     load_project_types,
     project_type,

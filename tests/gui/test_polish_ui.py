@@ -60,6 +60,7 @@ class TestPolishUI(unittest.TestCase):
         page.setWebChannel(channel)
         bridge.sourceDropTargetChanged.connect(view.set_drop_target)
         view.pathsDropped.connect(bridge.pathsSelected)
+        view.folderDropped.connect(bridge.folderDropped)
         view.dragChanged.connect(bridge.sourceDragChanged)
         commands = []
         bridge.commandRequested.connect(commands.append)
@@ -283,7 +284,7 @@ class TestPolishUI(unittest.TestCase):
         pause()
         from qachat.project import default_project_profile
         from qachat.gui.model_catalog import model_choices, MODEL_CHOICES
-        from qachat.gui.model_settings import default_effort_levels
+        from qachat.gui.preferences import default_effort_levels
 
         test_profile = asdict(default_project_profile("literature"))
         cached_ids = [choice.model_id for choice in MODEL_CHOICES]
@@ -414,6 +415,184 @@ class TestPolishUI(unittest.TestCase):
             applied["settings"]["embedding_model"] == "example/new-embedding"
         )
         assert applied["settings"]["download"] is False
+        bridge.event.emit(
+            json.dumps(
+                {
+                    "event": "models_applied",
+                    "effort_levels": {
+                        "mlx": applied["settings"]["effort_levels"]
+                    },
+                    "profile": test_profile,
+                    "cached_models": cached_ids + ["example/new-embedding"],
+                    "model_roles": {},
+                }
+            )
+        )
+        pause()
+        assert js('byId("models-panel").classList.contains("hidden")')
+        # While QAChat is busy, Settings opens and closes freely ...
+        js('setBusy(true, "Answering…"); openModels();')
+        assert js('!byId("models-panel").classList.contains("hidden")')
+        assert not js('byId("close-models").disabled')
+        js('byId("close-models").click();')
+        pause()
+        assert js('byId("models-panel").classList.contains("hidden")')
+        # ... but unsaved edits keep it open until QAChat is idle.
+        js('openModels(); draftDepth[0] = 3; byId("close-models").click();')
+        pause()
+        assert js('!byId("models-panel").classList.contains("hidden")')
+        assert "busy" in js('byId("model-download-status").textContent')
+        js("draftDepth[0] = currentDepth()[0]; setBusy(false);")
+        js('byId("close-models").click();')
+        pause()
+        assert js('byId("models-panel").classList.contains("hidden")')
+        # Outputs and templates are always shown and can be edited.
+        for folder in ("outputs", "templates"):
+            js(
+                "document.querySelector('#workspace-tree "
+                f'details[data-path="{folder}"] > summary\')'
+                '.dispatchEvent(new MouseEvent("contextmenu", '
+                "{bubbles: true, clientX: 40, clientY: 40}));"
+            )
+            menu = js('document.querySelector(".context-menu").innerText')
+            assert f"Add files to {folder}" in menu, menu
+        # A Finder drop onto templates copies the file there (no indexing).
+        js(
+            'renderWorkspace(["profile.ini", "sources/papers/paper.md", '
+            '"outputs/paper_summary.md", "templates/research_briefing.md"]);'
+            "showWorkspace(true); showConversations(false);"
+            "byId('models-panel').classList.add('hidden');"
+            "setBusy(false); syncSourceDropTarget();"
+        )
+        pause(300)
+        box = json.loads(
+            js(
+                "JSON.stringify(document.querySelector('#workspace-tree "
+                "details[data-path=\"templates\"]').getBoundingClientRect())"
+            )
+        )
+        commands.clear()
+        assert drop(QPointF(box["x"] + 20, box["y"] + box["height"] / 2))
+        pause()
+        edit = next(c for c in commands if c["action"] == "edit_folder")
+        assert edit["folder"] == "templates", edit
+        assert edit["operation"] == "add"
+        assert edit["paths"] == ["/tmp/new-paper.md"]
+        js("setBusy(false);")
+        # Dragging an outputs file onto sources asks to add it as a source.
+        page.questions.clear()
+        page.confirmed = False
+        js(
+            "const data = new DataTransfer();"
+            "data.setData(WORKSPACE_DRAG_TYPE, 'outputs/paper_summary.md');"
+            "byId('workspace-source-drop').dispatchEvent("
+            "new DragEvent('drop', {bubbles: true, dataTransfer: data}));"
+        )
+        pause()
+        assert any(
+            "Add these sources" in q and "paper_summary.md" in q
+            for q in page.questions
+        ), page.questions
+        # Files in outputs and templates are draggable and deletable.
+        assert js(
+            "document.querySelector('#workspace-tree "
+            "details[data-path=\"outputs\"] .tree-file').draggable"
+        )
+        assert js(
+            "document.querySelectorAll('#workspace-tree .tree-delete').length"
+        ) == 2
+        # Dragging the conversations border far left hides the panel.
+        js(
+            "showConversations(true); positionPanelResizers();"
+            "const h = panelResizers.left;"
+            "h.setPointerCapture = () => {};"
+            "h.releasePointerCapture = () => {};"
+            "h.hasPointerCapture = () => true;"
+            "window.dragTo = (x) => {"
+            "  h.dispatchEvent(new PointerEvent('pointerdown',"
+            "    {pointerId: 1, clientX: 200, bubbles: true}));"
+            "  h.dispatchEvent(new PointerEvent('pointermove',"
+            "    {pointerId: 1, clientX: x, bubbles: true}));"
+            "};"
+            "window.release = () => h.dispatchEvent(new PointerEvent("
+            "  'pointerup', {pointerId: 1, bubbles: true}));"
+        )
+        js("dragTo(260); release();")
+        assert not js('shell.classList.contains("conversations-hidden")')
+        assert js('shell.style.getPropertyValue("--left-width")') == "260px"
+        js("dragTo(60);")
+        assert js('shell.classList.contains("collapsing-left")')
+        js("release();")
+        assert js('shell.classList.contains("conversations-hidden")')
+        assert not js('shell.classList.contains("collapsing-left")')
+        # It reopens at its last width.
+        assert js('shell.style.getPropertyValue("--left-width")') == "260px"
+        js("showConversations(false);")
+        # Token counts are short and readable; the composer shows totals.
+        assert [
+            js(f"formatTokens({n})")
+            for n in (850, 3456, 42_000, 1_234_567, 2_500_000_000)
+        ] == ["850", "3.5k", "42k", "1.2M", "2.5B"]
+        js(
+            "usageTotals = {project: {input_tokens: 3000, output_tokens: 456,"
+            " answers: 4}, chat: {input_tokens: 900, output_tokens: 100,"
+            " answers: 1}}; renderUsage();"
+        )
+        # The composer shows only the gauge icon; the menu has the numbers.
+        assert js('byId("usage-button").textContent.trim()') == ""
+        js('byId("effort-button").click();')
+        js('byId("usage-button").click();')
+        assert js('!byId("usage-menu").classList.contains("hidden")')
+        # One composer menu at a time.
+        assert js('byId("effort-menu").classList.contains("hidden")')
+        assert js('byId("usage-project-total").textContent') == "3.5k tokens"
+        assert js('byId("usage-chat-answers").textContent') == "1 answer"
+        read = js('byId("usage-project-read-text").textContent')
+        # Numbers follow the system locale ("3,000", "3 000", ...).
+        assert "".join(c for c in read if c.isdigit()) == "3000", read
+        written = js('byId("usage-project-written-text").textContent')
+        assert "written" in written
+        # The bar is full: read, then written.
+        widths = js(
+            'parseFloat(byId("usage-project-read").style.width)'
+            ' + parseFloat(byId("usage-project-written").style.width)'
+        )
+        assert abs(widths - 100) < 0.2, widths
+        js('byId("effort-button").click();')
+        assert js('byId("usage-menu").classList.contains("hidden")')
+        js('byId("effort-menu").classList.add("hidden");')
+        js("document.body.click();")
+        assert js('byId("usage-menu").classList.contains("hidden")')
+        # The setup card stays available, folded when everything is ready.
+        readiness = {
+            "event": "readiness",
+            "ready": True,
+            "environment_ready": True,
+            "backend": "mlx",
+            "required_models": cached_ids[:1],
+            "missing_models": [],
+            "cached_models": cached_ids,
+        }
+        bridge.event.emit(json.dumps(readiness))
+        pause()
+        card = 'byId("first-run-setup")'
+        assert js(f'!{card}.classList.contains("hidden") && !{card}.open')
+        assert js('byId("readiness-status").textContent') == "Ready"
+        assert js('byId("install-required").classList.contains("hidden")')
+        bridge.event.emit(
+            json.dumps(
+                {
+                    **readiness,
+                    "ready": False,
+                    "missing_models": ["example/missing"],
+                    "required_models": ["example/missing"],
+                }
+            )
+        )
+        pause()
+        assert js(f"{card}.open")
+        assert js('byId("readiness-status").textContent') == "1 missing"
+        js('byId("models-panel").classList.add("hidden");')
         assert not page.errors, page.errors
 
         view.close()

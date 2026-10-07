@@ -202,6 +202,11 @@ class ChatSession:
         Current session-level generation-length limit.
     messages: list[dict[str, str]]
         Ordered in-memory conversation history using the canonical roles.
+    input_token_total: int
+        Prompt tokens this session has read, over all replies.
+    output_token_total: int
+        Tokens this session has generated, over all replies; it grows while
+        a reply streams, so callers can show usage live.
     trace: TraceSink
         Trace sink used by the session.
 
@@ -250,6 +255,10 @@ class ChatSession:
     _system_prompt: str | None
     _model: Model | None
     _tokenizer: Tokenizer | None
+
+    # Token totals start at zero; replies add to them on the instance.
+    input_token_total: int = 0
+    output_token_total: int = 0
 
     def __init__(
         self: ChatSession,
@@ -662,6 +671,7 @@ class ChatSession:
         self._last_generation_output_token_count = None
         self._last_generation_token_count_source = None
         self.last_finish_reason = None
+        self.input_token_total += len(tokens)
         generation_started_at = perf_counter()
         with self.trace.span(
             "llm.call",
@@ -847,6 +857,7 @@ class ChatSession:
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
         parts = []
+        generated = 0
         for response in mlx_lm.stream_generate(
             self._model,
             self._tokenizer,
@@ -854,10 +865,16 @@ class ChatSession:
             max_tokens=token_budget,
             sampler=sampler,
         ):
+            # Each response is one generated token, even when its text is
+            # empty (part of a character still being decoded).
+            generated += 1
+            self.output_token_total += 1
             parts.append(response.text)
             self.last_finish_reason = response.finish_reason
             if token_callback is not None and response.text:
                 token_callback(response.text)
+        self._last_generation_output_token_count = generated
+        self._last_generation_token_count_source = "generated_tokens"
         return "".join(parts)
 
     def _torch_reply(
@@ -906,6 +923,7 @@ class ChatSession:
         with torch.inference_mode():
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
+        self.output_token_total += len(generated)
         eos = getattr(
             getattr(model, "generation_config", None), "eos_token_id", None
         )

@@ -51,6 +51,18 @@ class FakeSession:
     def use_router_model(self, model_id):
         self.router_model = model_id
 
+    def refresh_sources(self, project):
+        """Index the copied sources again: one stand-in chunk per file."""
+
+        self.project = project
+        self.refreshed = getattr(self, "refreshed", 0) + 1
+        self.source_changes = {}
+        self.chunks = [
+            SimpleNamespace(path=path.relative_to(project.source))
+            for path in project.source.rglob("*")
+            if path.is_file()
+        ]
+
     def configure(self, settings):
         for key, value in settings.items():
             setattr(self.chat_session, key, value)
@@ -151,7 +163,11 @@ class TestProjectPolish(unittest.TestCase):
         (folder / "paper.md").write_text("# New paper")
         old_session = self.engine.session
         self.engine.add_project_sources([str(file), str(folder)])
-        self.assertTrue(old_session.closed)
+        # The models stay loaded; only the indexes are updated.
+        self.assertIs(self.engine.session, old_session)
+        self.assertFalse(old_session.closed)
+        indexed = {chunk.path.name for chunk in old_session.chunks}
+        self.assertTrue({"new.txt", "paper.md"} <= indexed, indexed)
         self.assert_chat_preserved(self.project.root)
         sources = self.project.root / "sources"
         self.assertEqual((sources / "new.txt").read_text(), "New source text.")
@@ -166,12 +182,17 @@ class TestProjectPolish(unittest.TestCase):
         self.assertEqual(self.events[-1]["event"], "error")
 
     def test_upgrade_legacy_budget_preserves_other_settings(self):
-        self.engine.session.chat_session.max_new_tokens = 256
-        self.engine._upgrade_answer_budget()
-        self.assertEqual(self.engine.session.chat_session.max_new_tokens, 2048)
-        self.engine.session.chat_session.max_new_tokens = 512
-        self.engine._upgrade_answer_budget()
-        self.assertEqual(self.engine.session.chat_session.max_new_tokens, 512)
+        from qachat.project import configure_project
+
+        session = self.engine.session
+        for saved, used in ((256, 2048), (512, 512)):
+            session.project = configure_project(
+                session.project.root,
+                {"max_new_tokens": saved, "temperature": 0.3},
+            )
+            self.engine._use_project_answer_settings()
+            self.assertEqual(session.chat_session.max_new_tokens, used)
+            self.assertEqual(session.chat_session.temperature, 0.3)
 
 
 class TestIndexPersistence(unittest.TestCase):
@@ -265,6 +286,11 @@ class TestGenerationFinish(unittest.TestCase):
                 self.assertEqual(answer, "First last.")
                 self.assertEqual(pieces, ["First ", "last."])
                 self.assertEqual(session.last_finish_reason, reason)
+                # Each streamed response is one generated token.
+                self.assertEqual(session.output_token_total, 2)
+                self.assertEqual(
+                    session._last_generation_output_token_count, 2
+                )
 
     def test_torch_eos_at_limit_is_complete(self):
         for token, expected in [(2, "stop"), (99, "length")]:

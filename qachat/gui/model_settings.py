@@ -1,22 +1,38 @@
-"""Persist editable effort levels and search depth with a GUI workspace.
+"""Keep a project's effort levels, search depth, and router in profile.ini.
 
 Each backend has five effort levels; a level has a display name and the
 chat model it answers with. Search depth is a separate vector of five
 steps, each the number of passages retrieved for an answer. The composer
-picks an effort level and a search-depth step independently.
+picks an effort level and a search-depth step independently. The intent
+router model is chosen per backend.
 
-Each project keeps all of these settings, changed or not, in its own
-``effort_levels.json``, so it resumes exactly as it was set up even when
-``defaults.json`` or the app-wide preferences change later.
+Every project keeps all its settings, changed or not, in its own
+``profile.ini``, next to the core settings, so it resumes exactly as it was
+set up even when ``qachat/gui/defaults.json`` changes later:
+
+.. code-block:: ini
+
+    [effort.mlx]
+    level1 = Light | Qwen/Qwen3-0.6B-MLX-4bit
+    ...
+    level5 = Deep | Qwen/Qwen3-14B-MLX-4bit
+
+    [search]
+    depth = 5, 5, 10, 10, 15
+
+    [router]
+    mlx = Qwen/Qwen3-8B-MLX-4bit
+    torch = Qwen/Qwen3-8B
+
 ``save_project_settings`` writes them when a project is created or first
-opened by this version, starting from the preferences.
+opened, from the defaults, or from the ``effort_levels.json`` and
+``model_choices.json`` files earlier versions kept, which it then removes.
 
-The defaults themselves, and the validation shared with the app-wide
-preferences, live in ``qachat.gui.preferences`` (``defaults.json``); they
-are imported here so existing imports keep working.
+The defaults and the shared validation live in ``qachat.gui.preferences``.
 
 """
 
+from configparser import ConfigParser
 import json
 from pathlib import Path
 
@@ -27,9 +43,6 @@ from qachat.gui.preferences import (
     default_effort_levels,
     default_router_model,
     default_search_depth,
-    preferred_effort_levels,
-    preferred_router_model,
-    preferred_search_depth,
     validate_effort_levels,
     validate_model_id,
     validate_search_depth,
@@ -38,42 +51,120 @@ from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "DEFAULT_LEVEL",
-    "EFFORT_FILE",
     "LEVEL_COUNT",
     "MAX_LEVEL_NAME",
     "MAX_SEARCH_DEPTH",
-    "ROUTER_KEY",
-    "SEARCH_DEPTH_KEY",
-    "default_effort_levels",
-    "default_router_model",
-    "default_search_depth",
+    "PROFILE_FILE",
     "read_effort_levels",
     "read_router_model",
     "read_search_depth",
     "save_project_settings",
-    "validate_effort_levels",
-    "validate_model_id",
-    "validate_search_depth",
     "write_effort_levels",
     "write_router_model",
     "write_search_depth",
 ]
 
-EFFORT_FILE = "effort_levels.json"
-# The same file keeps a customized intent router model per backend.
-ROUTER_KEY = "router"
-# Earlier GUI versions stored per-preset model replacements here.
-LEGACY_FILE = "model_choices.json"
+# The project's settings file, shared with the core library.
+PROFILE_FILE = "profile.ini"
 # The level whose model is also the project's default chat model.
 DEFAULT_LEVEL = 2
-# Search depth: passages retrieved at each of five steps, project-wide.
-SEARCH_DEPTH_KEY = "search_depth"
+# Sections and keys in profile.ini.
+_EFFORT_SECTION = "effort.{backend}"
+_SEARCH_SECTION = "search"
+_ROUTER_SECTION = "router"
+_SEPARATOR = " | "
+# Files of earlier versions, migrated into profile.ini and removed.
+_LEGACY_EFFORT_FILE = "effort_levels.json"
+_LEGACY_CHOICES_FILE = "model_choices.json"
 # Per-level reference counts of earlier versions, before search depth.
 _LEGACY_RETRIEVAL = (5, 20, 20, 50, 50)
 
 
+def read_effort_levels(
+    root: Path | None, backend: str
+) -> list[dict[str, object]]:
+    """Return a project's levels for one backend.
+
+    Parameters
+    ----------
+    root: pathlib.Path | None
+        Project workspace, or None for a project not created yet.
+    backend: str
+        Computation backend whose levels are wanted.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        Five ``{"name", "model"}`` levels from ``profile.ini``; for a
+        project that has not saved them yet, from an earlier version's
+        files, otherwise the defaults.
+
+    """
+
+    if root is None:
+        return default_effort_levels(backend)
+    profile = _read(root)
+    section = _EFFORT_SECTION.format(backend=backend)
+    if profile.has_section(section):
+        levels = []
+        for index in range(1, LEVEL_COUNT + 1):
+            name, _, model = profile.get(
+                section, f"level{index}", fallback=""
+            ).partition(_SEPARATOR.strip())
+            levels.append({"name": name.strip(), "model": model.strip()})
+        return validate_effort_levels(levels)
+    legacy = _legacy(root)
+    if backend in legacy:
+        return validate_effort_levels(
+            [
+                {"name": level["name"], "model": level["model"]}
+                for level in legacy[backend]
+            ]
+        )
+    levels = default_effort_levels(backend)
+    choices = _read_json(root / _LEGACY_CHOICES_FILE)
+    replacements = choices if isinstance(choices, dict) else {}
+    for level in levels:
+        replacement = replacements.get(level["model"])
+        if isinstance(replacement, str) and replacement.strip():
+            level["model"] = validate_model_id(replacement)
+    return levels
+
+
+def write_effort_levels(
+    root: Path, backend: str, levels: list[dict[str, object]]
+) -> None:
+    """Save a project's levels for one backend in ``profile.ini``.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Project workspace.
+    backend: str
+        Computation backend the levels belong to.
+    levels: list[dict[str, object]]
+        Five levels to validate and save. A name may not contain ``|``.
+
+    """
+
+    levels = validate_effort_levels(levels)
+    if any(_SEPARATOR.strip() in str(level["name"]) for level in levels):
+        raise ValueError("Effort level names cannot contain '|'.")
+    profile = _read(root)
+    section = _EFFORT_SECTION.format(backend=backend)
+    if not profile.has_section(section):
+        profile.add_section(section)
+    for index, level in enumerate(levels, start=1):
+        profile.set(
+            section,
+            f"level{index}",
+            f"{level['name']}{_SEPARATOR}{level['model']}",
+        )
+    _write(root, profile)
+
+
 def read_search_depth(root: Path | None) -> list[int]:
-    """Return a project's search-depth steps, or the defaults.
+    """Return a project's search-depth steps.
 
     Parameters
     ----------
@@ -83,20 +174,33 @@ def read_search_depth(root: Path | None) -> list[int]:
     Returns
     -------
     list[int]
-        Five steps. Projects saved with per-level reference counts keep
-        their customized counts as steps; otherwise the preferences.
+        Five steps from ``profile.ini``; for a project that has not saved
+        them yet, from an earlier version's files, otherwise the defaults.
 
     """
 
-    saved = _read_json(root / EFFORT_FILE) if root is not None else None
-    saved = saved if isinstance(saved, dict) else {}
-    if SEARCH_DEPTH_KEY in saved:
-        return validate_search_depth(saved[SEARCH_DEPTH_KEY])
-    return _legacy_depth(saved) or preferred_search_depth()
+    if root is None:
+        return default_search_depth()
+    profile = _read(root)
+    if profile.has_option(_SEARCH_SECTION, "depth"):
+        try:
+            steps = [
+                int(part)
+                for part in profile.get(_SEARCH_SECTION, "depth").split(",")
+            ]
+        except ValueError as error:
+            raise ValueError(
+                "Search depth steps must be whole numbers."
+            ) from error
+        return validate_search_depth(steps)
+    legacy = _legacy(root)
+    if "search_depth" in legacy:
+        return validate_search_depth(legacy["search_depth"])
+    return _legacy_depth(legacy) or default_search_depth()
 
 
 def write_search_depth(root: Path, steps: list[int]) -> None:
-    """Save a project's search-depth steps.
+    """Save a project's search-depth steps in ``profile.ini``.
 
     Parameters
     ----------
@@ -108,37 +212,15 @@ def write_search_depth(root: Path, steps: list[int]) -> None:
     """
 
     steps = validate_search_depth(steps)
-    path = root / EFFORT_FILE
-    saved = _read_json(path)
-    saved = dict(saved) if isinstance(saved, dict) else {}
-    saved[SEARCH_DEPTH_KEY] = steps
-    _write_json(path, saved)
-
-
-def _legacy_depth(saved: dict) -> list[int] | None:
-    """Customized per-level counts saved by earlier versions, if any."""
-
-    for key, levels in saved.items():
-        if key in (ROUTER_KEY, SEARCH_DEPTH_KEY) or not isinstance(
-            levels, list
-        ):
-            continue
-        counts = [
-            level.get("retrieval") for level in levels
-            if isinstance(level, dict)
-        ]
-        if (
-            len(counts) == LEVEL_COUNT
-            and all(type(c) is int and 1 <= c <= MAX_SEARCH_DEPTH
-                    for c in counts)
-            and tuple(counts) != _LEGACY_RETRIEVAL
-        ):
-            return counts
-    return None
+    profile = _read(root)
+    if not profile.has_section(_SEARCH_SECTION):
+        profile.add_section(_SEARCH_SECTION)
+    profile.set(_SEARCH_SECTION, "depth", ", ".join(map(str, steps)))
+    _write(root, profile)
 
 
 def read_router_model(root: Path | None, backend: str) -> str:
-    """Return a project's intent router model, or the default.
+    """Return a project's intent router model for one backend.
 
     Parameters
     ----------
@@ -150,19 +232,24 @@ def read_router_model(root: Path | None, backend: str) -> str:
     Returns
     -------
     str
-        The saved model ID, or the preferred router model.
+        The saved model ID; for a project that has not saved one yet, an
+        earlier version's choice, otherwise the default.
 
     """
 
-    saved = _read_json(root / EFFORT_FILE) if root is not None else None
-    routers = saved.get(ROUTER_KEY) if isinstance(saved, dict) else None
+    if root is None:
+        return default_router_model(backend)
+    profile = _read(root)
+    if profile.has_option(_ROUTER_SECTION, backend):
+        return validate_model_id(profile.get(_ROUTER_SECTION, backend))
+    routers = _legacy(root).get("router")
     if isinstance(routers, dict) and isinstance(routers.get(backend), str):
         return validate_model_id(routers[backend])
-    return preferred_router_model(backend)
+    return default_router_model(backend)
 
 
 def write_router_model(root: Path, backend: str, model_id: str) -> None:
-    """Save a project's router model for one backend.
+    """Save a project's intent router model for one backend.
 
     Parameters
     ----------
@@ -176,105 +263,15 @@ def write_router_model(root: Path, backend: str, model_id: str) -> None:
     """
 
     model_id = validate_model_id(model_id)
-    path = root / EFFORT_FILE
-    saved = _read_json(path)
-    saved = dict(saved) if isinstance(saved, dict) else {}
-    routers = dict(saved.get(ROUTER_KEY) or {})
-    routers[backend] = model_id
-    saved[ROUTER_KEY] = routers
-    _write_json(path, saved)
-
-
-def _write_json(path: Path, value: dict) -> None:
-    if value:
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(value, indent=2) + "\n", encoding="utf-8"
-        )
-        temporary.replace(path)
-    else:
-        path.unlink(missing_ok=True)
-
-
-def _read_json(path: Path) -> object:
-    if not path.is_file():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_effort_levels(
-    root: Path | None, backend: str
-) -> list[dict[str, object]]:
-    """Return a project's levels, falling back to the defaults.
-
-    Parameters
-    ----------
-    root: pathlib.Path | None
-        Project workspace, or None for a project not created yet.
-    backend: str
-        Computation backend whose levels are wanted.
-
-    Returns
-    -------
-    list[dict[str, object]]
-        The project's saved levels, or the preferences when it saved none
-        (with replacements from an earlier ``model_choices.json`` applied).
-
-    """
-
-    levels = preferred_effort_levels(backend)
-    if root is None:
-        return levels
-    saved = _read_json(root / EFFORT_FILE)
-    if isinstance(saved, dict) and backend in saved:
-        return validate_effort_levels(saved[backend])
-
-    # Migrate the earlier per-preset replacements, ignoring retired presets.
-    legacy = _read_json(root / LEGACY_FILE)
-    replacements = legacy if isinstance(legacy, dict) else {}
-    for level in levels:
-        replacement = replacements.get(level["model"])
-        if isinstance(replacement, str) and replacement.strip():
-            level["model"] = validate_model_id(replacement)
-    return levels
-
-
-def write_effort_levels(
-    root: Path, backend: str, levels: list[dict[str, object]]
-) -> None:
-    """Save a project's levels for one backend.
-
-    Parameters
-    ----------
-    root: pathlib.Path
-        Project workspace.
-    backend: str
-        Computation backend the levels belong to.
-    levels: list[dict[str, object]]
-        Five levels to validate and save.
-
-    Notes
-    -----
-    The earlier ``model_choices.json`` is removed once migrated.
-
-    """
-
-    levels = validate_effort_levels(levels)
-    path = root / EFFORT_FILE
-    saved = _read_json(path)
-    saved = dict(saved) if isinstance(saved, dict) else {}
-    legacy = _legacy_depth(saved)
-    if legacy and SEARCH_DEPTH_KEY not in saved:
-        # Keep customized counts of earlier versions as search depth.
-        saved[SEARCH_DEPTH_KEY] = legacy
-    saved[backend] = levels
-    _write_json(path, saved)
-    # Migrated into effort levels; the old file is no longer read.
-    (root / LEGACY_FILE).unlink(missing_ok=True)
+    profile = _read(root)
+    if not profile.has_section(_ROUTER_SECTION):
+        profile.add_section(_ROUTER_SECTION)
+    profile.set(_ROUTER_SECTION, backend, model_id)
+    _write(root, profile)
 
 
 def save_project_settings(root: Path) -> bool:
-    """Write every setting a project does not keep yet.
+    """Write every setting a project's ``profile.ini`` does not keep yet.
 
     Parameters
     ----------
@@ -285,26 +282,75 @@ def save_project_settings(root: Path) -> bool:
     -------
     bool
         Whether anything was written. Saved values are never changed;
-        missing ones are filled from what the project uses now (the
-        preferences, or settings migrated from earlier versions), so the
+        missing ones come from an earlier version's ``effort_levels.json``
+        and ``model_choices.json`` (then removed) or the defaults, so the
         project no longer follows later changes to the defaults.
 
     """
 
-    path = root / EFFORT_FILE
-    saved = _read_json(path)
-    saved = dict(saved) if isinstance(saved, dict) else {}
-    before = json.dumps(saved, sort_keys=True)
-    routers = dict(saved.get(ROUTER_KEY) or {})
+    profile = _read(root)
+    changed = False
     for backend in (BACKEND_MLX, BACKEND_TORCH):
-        if backend not in saved:
-            saved[backend] = read_effort_levels(root, backend)
-        routers.setdefault(backend, read_router_model(root, backend))
-    saved[ROUTER_KEY] = routers
-    if SEARCH_DEPTH_KEY not in saved:
-        saved[SEARCH_DEPTH_KEY] = read_search_depth(root)
-    if json.dumps(saved, sort_keys=True) == before:
-        return False
-    _write_json(path, saved)
-    (root / LEGACY_FILE).unlink(missing_ok=True)
-    return True
+        if not profile.has_section(_EFFORT_SECTION.format(backend=backend)):
+            levels = read_effort_levels(root, backend)
+            write_effort_levels(root, backend, levels)
+            changed = True
+        if not profile.has_option(_ROUTER_SECTION, backend):
+            write_router_model(root, backend, read_router_model(root, backend))
+            changed = True
+    if not profile.has_option(_SEARCH_SECTION, "depth"):
+        write_search_depth(root, read_search_depth(root))
+        changed = True
+    for name in (_LEGACY_EFFORT_FILE, _LEGACY_CHOICES_FILE):
+        if (root / name).exists():
+            (root / name).unlink()
+            changed = True
+    return changed
+
+
+def _read(root: Path) -> ConfigParser:
+    # No interpolation: model IDs and level names are taken literally.
+    profile = ConfigParser(interpolation=None)
+    profile.read(Path(root) / PROFILE_FILE, encoding="utf-8")
+    return profile
+
+
+def _write(root: Path, profile: ConfigParser) -> None:
+    path = Path(root) / PROFILE_FILE
+    temporary = path.with_suffix(".ini.tmp")
+    with temporary.open("w", encoding="utf-8") as stream:
+        profile.write(stream)
+    temporary.replace(path)
+
+
+def _read_json(path: Path) -> object:
+    if not path.is_file():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _legacy(root: Path) -> dict:
+    """The ``effort_levels.json`` an earlier version kept, if any."""
+
+    saved = _read_json(root / _LEGACY_EFFORT_FILE)
+    return saved if isinstance(saved, dict) else {}
+
+
+def _legacy_depth(saved: dict) -> list[int] | None:
+    """Customized per-level counts saved by even earlier versions."""
+
+    for key, levels in saved.items():
+        if key in ("router", "search_depth") or not isinstance(levels, list):
+            continue
+        counts = [
+            level.get("retrieval") for level in levels
+            if isinstance(level, dict)
+        ]
+        if (
+            len(counts) == LEVEL_COUNT
+            and all(type(c) is int and 1 <= c <= MAX_SEARCH_DEPTH
+                    for c in counts)
+            and tuple(counts) != _LEGACY_RETRIEVAL
+        ):
+            return counts
+    return None

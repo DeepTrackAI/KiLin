@@ -109,7 +109,7 @@ from qachat.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from qachat.project_types import load_project_types
+from qachat.project_type import load_project_types
 from qachat.query_formats import (
     QUERY_FORMAT_CHOICES,
     QUERY_FORMAT_QWEN3,
@@ -143,7 +143,7 @@ __all__ = [
 ]
 
 # Project types, their default files, and their instructions come from
-# qachat/project_types.json; "code" and "literature" are always present.
+# qachat/project_types/; "code" and "literature" are always present.
 ProjectKind: TypeAlias = str
 PROJECT_KIND_CODE: Final[ProjectKind] = "code"
 PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
@@ -155,7 +155,7 @@ def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
     Parameters
     ----------
     types: Mapping[str, object]
-        Project types loaded from ``project_types.json``, in file order.
+        Project types loaded from ``qachat/project_types/``, in file order.
 
     Returns
     -------
@@ -176,7 +176,7 @@ def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
     ]
     if missing:
         raise ValueError(
-            "project_types.json must keep the built-in types: "
+            "qachat/project_types/ must keep the built-in types: "
             f"{', '.join(missing)}."
         )
     return tuple(types)

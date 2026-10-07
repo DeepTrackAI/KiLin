@@ -49,6 +49,12 @@ const checkedFiles = new Map();
 const expandedFolders = new Set();
 // Workspace folders that start open but the user has folded.
 const collapsedWorkspaceFolders = new Set();
+// Paths shown in the workspace tree, to warn before replacing files.
+let workspacePaths = new Set();
+// Workspace folders the user edits directly; neither is indexed.
+const EDITABLE_FOLDERS = ["outputs", "templates"];
+// Drag data for a workspace file dragged within the panel.
+const WORKSPACE_DRAG_TYPE = "application/x-qachat-workspace-path";
 let profile = null;
 let cachedModels = new Set();
 let modelChoices = [];
@@ -90,6 +96,9 @@ let askingConversation = null;
 let pendingTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
+// Tokens used by the open chat and the project, from the engine; the
+// running answer's tokens are added live while it is generated.
+let usageTotals = null;
 let answerStageTimer = null;
 let answerStageKey = null;
 let answerStageQueue = [];
@@ -204,22 +213,23 @@ function applyAppearance(value) {
 function renderSavedProjects(projects) {
   const host = byId("saved-projects");
   host.replaceChildren();
-  const groups = [
-    ["code", "Resume previous code projects"],
-    ["literature", "Resume previous literature projects"],
-  ];
-  for (const [kind, title] of groups) {
-    const matches = projects.filter((project) => project.kind === kind);
-    if (!matches.length) continue;
+  if (projects.length) {
+    // One list of every kind, most recently used first (engine order).
     const group = document.createElement("div");
     group.className = "saved-project-group";
     const heading = document.createElement("strong");
-    heading.textContent = title;
+    heading.textContent = "Resume a previous project";
     group.append(heading);
-    for (const project of matches) {
+    for (const project of projects) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = `Resume ${project.name}`;
+      const name = document.createElement("span");
+      name.className = "saved-project-name";
+      name.textContent = `Resume ${project.name}`;
+      const kind = document.createElement("span");
+      kind.className = "saved-project-kind";
+      kind.textContent = project.kind === "code" ? "Code" : "Literature";
+      button.append(name, kind);
       button.title = `Resume ${project.kind} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
@@ -791,6 +801,18 @@ function currentModelSettings() {
     router_model: draftRouter,
   };
 }
+
+/**
+ * Report whether Settings hold edits that are not saved yet.
+ */
+function modelEditsPending() {
+  const settings = currentModelSettings();
+  const before = modelsBaseline || settings;
+  return JSON.stringify(settings.effort_levels) !== JSON.stringify(before.effort_levels)
+    || JSON.stringify(settings.search_depth) !== JSON.stringify(before.search_depth)
+    || settings.embedding_model !== before.embedding_model || settings.query_format !== before.query_format
+    || settings.router_model !== before.router_model;
+}
 function hideModels() {
   setupCompletionVisible = false;
   byId("models-panel").classList.add("hidden");
@@ -816,10 +838,7 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   if (busy || !bridge) return;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
-  const changed = JSON.stringify(settings.effort_levels) !== JSON.stringify(before.effort_levels)
-    || JSON.stringify(settings.search_depth) !== JSON.stringify(before.search_depth)
-    || settings.embedding_model !== before.embedding_model || settings.query_format !== before.query_format
-    || settings.router_model !== before.router_model;
+  const changed = modelEditsPending();
   if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return; }
   const problem = levelProblem(settings.effort_levels, settings.search_depth);
   if (problem) {
@@ -850,8 +869,13 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   bridge.applyModelSettings(JSON.stringify({ ...settings, download: missing.length > 0 }));
 }
 function closeModels() {
-  if (busy) return;
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+  if (busy) {
+    // Nothing to apply: just close. Edits wait until QAChat is idle.
+    if (!modelEditsPending()) hideModels();
+    else byId("model-download-status").textContent = "QAChat is busy. Close Settings again when it finishes to apply your changes.";
+    return;
+  }
   applyModelEdits(true);
 }
 
@@ -1014,16 +1038,23 @@ function collectSettings() {
  * @param paths Workspace-relative file paths reported by the backend.
  */
 function renderWorkspace(paths) {
+  workspacePaths = new Set(paths);
   const host = byId("workspace-tree");
   host.replaceChildren();
   const root = fileTree(paths);
   const selected = new Set(paths);
+  // Editable folders are always shown, even empty, so files can be added.
+  for (const folder of EDITABLE_FOLDERS) {
+    if (ready && !root.directories.has(folder)) {
+      root.directories.set(folder, { directories: new Map(), files: [] });
+    }
+  }
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
     const item = branch(name, node, files, selected);
-    // Sources and target start open; indexes and logs stay folded.
+    // Sources and outputs start open; the other folders stay folded.
     const key = `${name}|${files[0] || ""}`;
-    const startsOpen = name === "sources" || name === "target";
+    const startsOpen = name === "sources" || name === "outputs";
     item.open = startsOpen ? !collapsedWorkspaceFolders.has(key) : expandedFolders.has(key);
     item.addEventListener("toggle", () => {
       if (!item.isConnected || !startsOpen) return;
@@ -1060,6 +1091,9 @@ function renderWorkspace(paths) {
       item.addEventListener("drop", (event) => {
         event.preventDefault();
         showNativeSourceDrag(false);
+        // A file dragged from outputs or templates in this panel.
+        const inside = event.dataTransfer.getData(WORKSPACE_DRAG_TYPE);
+        if (inside) return copyToSources(inside);
         addSources(Array.from(event.dataTransfer.files, (file) => file.path).filter(Boolean));
       });
       item.addEventListener("contextmenu", (event) => {
@@ -1070,6 +1104,41 @@ function renderWorkspace(paths) {
         if (!path || !path.startsWith("sources/")) return;
         event.preventDefault();
         showSourceMenu(event.clientX, event.clientY, path, row.classList.contains("tree-file"));
+      });
+    }
+    if (EDITABLE_FOLDERS.includes(name)) {
+      item.dataset.path = name;
+      item.querySelectorAll(".tree-file").forEach((line) => {
+        const path = line.dataset.path;
+        // Drag a file onto sources to add it there (and index it).
+        line.draggable = true;
+        line.addEventListener("dragstart", (event) => {
+          event.dataTransfer.setData(WORKSPACE_DRAG_TYPE, path);
+          event.dataTransfer.effectAllowed = "copy";
+        });
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "tree-delete";
+        remove.textContent = "×";
+        remove.title = `Delete ${path.split("/").pop()}`;
+        remove.setAttribute("aria-label", remove.title);
+        remove.addEventListener("click", (event) => {
+          event.stopPropagation();
+          deleteFromFolder(name, path, true);
+        });
+        line.append(remove);
+      });
+      const hint = document.createElement("p");
+      hint.className = "source-drop-hint";
+      hint.textContent = "Right-click to add, replace, or delete; never indexed";
+      item.querySelector("summary").append(hint);
+      item.addEventListener("contextmenu", (event) => {
+        const row = event.target.closest(".tree-file, .tree-folder > summary");
+        const isFile = Boolean(row?.classList.contains("tree-file"));
+        const path = isFile ? row.dataset.path : row?.parentElement.dataset.path;
+        if (!path || !(path === name || path.startsWith(`${name}/`))) return;
+        event.preventDefault();
+        showFolderMenu(event.clientX, event.clientY, name, path, isFile);
       });
     }
     host.append(item);
@@ -1092,13 +1161,14 @@ sourceDropSpotlight.className = "source-drop-spotlight hidden";
 sourceDropSpotlight.setAttribute("aria-hidden", "true");
 document.body.append(sourceDropSpotlight);
 let lastSourceDropBounds = "";
-function syncSourceDropTarget() {
-  if (!bridge?.setSourceDropTarget) return;
-  const target = ready ? byId("workspace-source-drop") : byId("drop-zone");
+/**
+ * The visible part of an element, clipped by scrolling parents, or null.
+ */
+function visibleRect(target) {
   const rect = target?.getBoundingClientRect();
   const visible = !busy && rect?.width && rect?.height && target.getClientRects().length
     && !target.closest(".hidden") && byId("models-panel").classList.contains("hidden");
-  if (!visible) return sendSourceDropBounds("{}");
+  if (!visible) return null;
   let left = Math.max(0, rect.left), top = Math.max(0, rect.top);
   let right = Math.min(innerWidth, rect.right), bottom = Math.min(innerHeight, rect.bottom);
   for (let parent = target.parentElement; parent; parent = parent.parentElement) {
@@ -1111,7 +1181,20 @@ function syncSourceDropTarget() {
       left = Math.max(left, bounds.left); right = Math.min(right, bounds.right);
     }
   }
-  sendSourceDropBounds(JSON.stringify({x: left, y: top, width: Math.max(0, right-left), height: Math.max(0, bottom-top)}));
+  return {x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top)};
+}
+
+/**
+ * Tell Qt where files may be dropped: sources, and outputs or templates.
+ */
+function syncSourceDropTarget() {
+  if (!bridge?.setSourceDropTarget) return;
+  const sources = visibleRect(ready ? byId("workspace-source-drop") : byId("drop-zone"));
+  const folders = ready ? EDITABLE_FOLDERS.flatMap((name) => {
+    const rect = visibleRect(document.querySelector(`#workspace-tree details[data-path="${name}"]`));
+    return rect ? [{ name, ...rect }] : [];
+  }) : [];
+  sendSourceDropBounds(JSON.stringify({ ...(sources || {}), folders }));
 }
 function sendSourceDropBounds(bounds) {
   const region = JSON.parse(bounds);
@@ -1131,6 +1214,10 @@ function showNativeSourceDrag(active) {
   sourceDragActive = Boolean(active && !busy);
   const target = ready ? byId("workspace-source-drop") : byId("drop-zone");
   target?.classList.toggle("drag-over", sourceDragActive);
+  for (const name of EDITABLE_FOLDERS) {
+    document.querySelector(`#workspace-tree details[data-path="${name}"]`)
+      ?.classList.toggle("drag-over", sourceDragActive);
+  }
   syncSourceDropTarget();
 }
 window.addEventListener("resize", syncSourceDropTarget);
@@ -1167,21 +1254,113 @@ document.body.append(sourceMenu);
  * @param isFile Whether the path is a file rather than a folder.
  */
 function showSourceMenu(x, y, path, isFile) {
+  showWorkspaceMenu(x, y, [[
+    isFile ? "Delete file from project…" : "Delete folder from project…",
+    () => removeSource(path, isFile),
+  ]]);
+}
+
+/**
+ * Show the shared workspace menu with labelled actions at the pointer.
+ *
+ * @param x Viewport x coordinate of the right-click.
+ * @param y Viewport y coordinate of the right-click.
+ * @param items Pairs of menu label and action.
+ */
+function showWorkspaceMenu(x, y, items) {
   if (busy || !ready) return;
-  const remove = document.createElement("button");
-  remove.type = "button";
-  remove.setAttribute("role", "menuitem");
-  remove.textContent = isFile ? "Delete file from project…" : "Delete folder from project…";
-  remove.addEventListener("click", () => {
-    hideSourceMenu();
-    removeSource(path, isFile);
+  const buttons = items.map(([label, action]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitem");
+    button.textContent = label;
+    button.addEventListener("click", () => {
+      hideSourceMenu();
+      action();
+    });
+    return button;
   });
-  sourceMenu.replaceChildren(remove);
+  sourceMenu.replaceChildren(...buttons);
   sourceMenu.classList.remove("hidden");
   const { width, height } = sourceMenu.getBoundingClientRect();
   sourceMenu.style.left = `${Math.min(x, window.innerWidth - width - 8)}px`;
   sourceMenu.style.top = `${Math.min(y, window.innerHeight - height - 8)}px`;
-  remove.focus();
+  buttons[0]?.focus();
+}
+
+/**
+ * Offer edits in an editable folder: add files, replace a file, or delete.
+ *
+ * @param x Viewport x coordinate of the right-click.
+ * @param y Viewport y coordinate of the right-click.
+ * @param folder Editable folder: outputs or templates.
+ * @param path Workspace-relative path: the folder or inside it.
+ * @param isFile Whether the path is a file rather than a folder.
+ */
+function showFolderMenu(x, y, folder, path, isFile) {
+  const items = [[`Add files to ${folder}…`, () => bridge.chooseFolderFiles(folder, "add")]];
+  if (isFile) {
+    items.push(["Replace with another file…", () => bridge.chooseFolderFiles(folder, path)]);
+    items.push(["Copy to sources (and index it)…", () => copyToSources(path)]);
+  }
+  if (path !== folder) {
+    items.push([isFile ? `Delete file from ${folder}…` : `Delete folder from ${folder}…`,
+      () => deleteFromFolder(folder, path, isFile)]);
+  }
+  showWorkspaceMenu(x, y, items);
+}
+
+/**
+ * Confirm, then delete a file or folder in outputs or templates.
+ */
+function deleteFromFolder(folder, path, isFile) {
+  const name = path.split("/").pop();
+  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nThis folder is not indexed, so nothing is rebuilt. Continue?`)) return;
+  editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
+}
+
+/**
+ * Copy a workspace file (from outputs or templates) into the sources.
+ *
+ * @param path Workspace-relative path, such as outputs/summary.md.
+ */
+function copyToSources(path) {
+  const root = byId("workspace-path").value.trim().replace(/[\\/]+$/, "");
+  if (!root || !EDITABLE_FOLDERS.some((name) => path.startsWith(`${name}/`))) return;
+  addSources([`${root}/${path}`]);
+}
+
+/**
+ * Send a folder edit; the engine only refreshes the workspace tree.
+ */
+function editFolder(request, message) {
+  if (busy || !bridge) return;
+  error.classList.add("hidden");
+  setBusy(true, message);
+  bridge.editFolder(JSON.stringify(request));
+}
+
+/**
+ * Copy chosen files into an editable folder, or replace one file there.
+ *
+ * @param folder Editable folder: outputs or templates.
+ * @param purpose "add", or the workspace path to replace.
+ * @param paths Local files chosen in the native dialog.
+ */
+function folderFilesChosen(folder, purpose, paths) {
+  if (purpose !== "add") {
+    const name = purpose.split("/").pop();
+    if (!confirm(`Replace "${name}" with the content of ${paths[0].split(/[\\/]/).pop()}?\n\nThe name stays ${name}.`)) return;
+    editFolder({ folder, operation: "replace", path: purpose, source: paths[0] }, `Replacing a file in ${folder}…`);
+    return;
+  }
+  const names = paths.map((path) => String(path).split(/[\\/]/).pop());
+  const taken = names.filter((name) => workspacePaths.has(`${folder}/${name}`));
+  let replace = false;
+  if (taken.length) {
+    replace = confirm(`These names are already in ${folder}:\n\n${taken.join("\n")}\n\nOK replaces them; Cancel keeps both (the new copies get a number).`);
+  }
+  editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
 
 function hideSourceMenu() {
@@ -1265,7 +1444,8 @@ function setBusy(value, message = "") {
   byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  byId("close-models").disabled = value;
+  // Settings can close while QAChat works; only unsaved edits must wait.
+  byId("close-models").disabled = false;
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
   if (!value) activity.classList.remove("answer-progress");
@@ -2001,7 +2181,13 @@ function renderTimeline(current, turn, totalMs) {
   const details = document.createElement("details");
   details.className = "answer-duration";
   const summary = document.createElement("summary");
-  summary.textContent = `Took ${formatDuration(totalMs)}`;
+  const usage = turn.parameters?.usage;
+  const tokens = usageSum(usage);
+  summary.textContent = `Took ${formatDuration(totalMs)}`
+    + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
+  if (tokens) {
+    summary.title = `${usage.input_tokens.toLocaleString()} tokens read, ${usage.output_tokens.toLocaleString()} written`;
+  }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
   const end = current.started + totalMs;
@@ -2020,6 +2206,14 @@ function renderTimeline(current, turn, totalMs) {
     row.append(label, time);
     list.append(row);
   });
+  if (tokens) {
+    const row = document.createElement("li");
+    row.className = "timeline-usage";
+    const label = document.createElement("span");
+    label.textContent = `Tokens: ${usage.input_tokens.toLocaleString()} read, ${usage.output_tokens.toLocaleString()} written`;
+    row.append(label);
+    list.append(row);
+  }
   details.append(summary, list);
   return details;
 }
@@ -2049,6 +2243,55 @@ function showTurnPhase(label, detail = "") {
 }
 
 /**
+ * Format a token count compactly: 850, 3.5k, 42k, 1.2M.
+ *
+ * @param count Number of tokens.
+ * @returns Short human-readable count.
+ */
+function formatTokens(count) {
+  const n = Math.max(0, Number(count) || 0);
+  const short = (value, unit) => `${value >= 10 ? Math.round(value) : value.toFixed(1).replace(/\.0$/, "")}${unit}`;
+  if (n < 1000) return String(Math.round(n));
+  if (n < 1e6) return short(n / 1e3, "k");
+  if (n < 1e9) return short(n / 1e6, "M");
+  return short(n / 1e9, "B");
+}
+
+/**
+ * Total tokens of a usage record (read plus written).
+ */
+function usageSum(usage) {
+  return (Number(usage?.input_tokens) || 0) + (Number(usage?.output_tokens) || 0);
+}
+
+/**
+ * Show the composer's token pill and its menu, including a running answer.
+ */
+function renderUsage() {
+  const live = pendingTurn?.usage || null;
+  const plus = (base) => ({
+    input_tokens: (Number(base?.input_tokens) || 0) + (Number(live?.input_tokens) || 0),
+    output_tokens: (Number(base?.output_tokens) || 0) + (Number(live?.output_tokens) || 0),
+    answers: Number(base?.answers) || 0,
+  });
+  const show = (key, usage) => {
+    const total = usageSum(usage);
+    byId(`usage-${key}-total`).textContent = `${formatTokens(total)} tokens`;
+    byId(`usage-${key}-answers`).textContent = usage.answers === 1 ? "1 answer" : `${usage.answers} answers`;
+    // The bar is full: read (green-grey) then written (orange).
+    const read = total ? (100 * usage.input_tokens) / total : 0;
+    byId(`usage-${key}-read`).style.width = `${read.toFixed(1)}%`;
+    byId(`usage-${key}-written`).style.width = total ? `${(100 - read).toFixed(1)}%` : "0";
+    byId(`usage-${key}-read-text`).textContent = `${usage.input_tokens.toLocaleString()} read`;
+    byId(`usage-${key}-written-text`).textContent = `${usage.output_tokens.toLocaleString()} written`;
+    return total;
+  };
+  const total = show("project", plus(usageTotals?.project));
+  show("chat", plus(usageTotals?.chat));
+  byId("usage-button").title = `${formatTokens(total)} tokens used in this project`;
+}
+
+/**
  * Format a duration compactly: 8s, 42s, 1m 05s.
  *
  * @param ms Duration in milliseconds.
@@ -2067,8 +2310,10 @@ function paintPendingTurn() {
   if (!pendingTurn) return;
   const dots = Math.floor(performance.now() / 400) % 4;
   pendingTurn.label.textContent = `${pendingTurn.phase}${".".repeat(dots)}`;
+  const tokens = usageSum(pendingTurn.usage);
   pendingTurn.timer.textContent = formatDuration(
-    pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started);
+    pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
+    + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
   if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
 }
 
@@ -2155,6 +2400,44 @@ function showToolPlan(plan) {
     actions.append(button);
   }
   card.append(summary, facts, actions);
+  pendingTurn.answer.append(card);
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+}
+
+/**
+ * Show a tool's question with one button per option, plus Cancel.
+ *
+ * @param choice Question and option labels from the tool.
+ */
+function showToolChoice(choice) {
+  if (!pendingTurn) return;
+  const card = document.createElement("div");
+  card.className = "tool-plan tool-choice";
+  const question = document.createElement("p");
+  question.className = "tool-plan-summary";
+  question.textContent = choice.question;
+  const actions = document.createElement("div");
+  actions.className = "tool-choice-options";
+  const answer = (value, label) => {
+    card.remove();
+    queueAnswerStage(`choice:${value}`, value === "cancel" ? "Cancelling" : `Using ${label}`);
+    bridge.choosePlan(value);
+  };
+  (choice.options || []).forEach((label, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = label;
+    button.addEventListener("click", () => answer(`option:${index}`, label.replace(/ \(.*\)$/, "")));
+    actions.append(button);
+  });
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "secondary tool-choice-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => answer("cancel", ""));
+  actions.append(cancel);
+  card.append(question, actions);
   pendingTurn.answer.append(card);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
@@ -2374,13 +2657,19 @@ function onEvent(raw) {
       item.classList.toggle("complete", present);
       steps.append(item);
     }
-    card.classList.toggle("hidden", data.ready && !setupCompletionVisible);
+    // Always available; it opens by itself when something is missing.
+    card.classList.remove("hidden");
+    if (!data.ready) card.open = true;
+    const missing = data.missing_models.length + (data.environment_ready ? 0 : 1);
+    byId("readiness-status").textContent = data.ready ? "Ready" : `${missing} missing`;
+    byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
     byId("readiness-summary").textContent = data.ready
       ? "QAChat is ready."
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
     byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    byId("install-required").classList.toggle("hidden", !data.missing_models.length);
     // Compatible models already on this computer can be used instead.
     byId("use-installed").classList.toggle("hidden", !data.can_use_installed);
     byId("use-installed").disabled = !data.environment_ready;
@@ -2404,6 +2693,9 @@ function onEvent(raw) {
     setupCompletionVisible = false;
     setBusy(true, `Preparing ${data.total} required models…`);
     byId("first-run-setup").classList.remove("hidden");
+    byId("first-run-setup").open = true;
+    byId("readiness-status").textContent = "Downloading";
+    byId("readiness-status").classList.remove("ready");
     byId("install-required").disabled = true;
     byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
     updateDownloadMeter(null);
@@ -2423,6 +2715,8 @@ function onEvent(raw) {
     byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
   } else if (data.event === "installation_complete") {
     setupCompletionVisible = true;
+    byId("readiness-status").textContent = "Ready";
+    byId("readiness-status").classList.add("ready");
     byId("readiness-summary").textContent = "Required models are installed.";
     byId("readiness-time").textContent = `Setup completed in ${seconds(data.elapsed_seconds)}.`;
     updateDownloadMeter(100);
@@ -2486,6 +2780,12 @@ function onEvent(raw) {
         queueAnswerStage(`retrieval:${message}`, message.replace(/^Embedding the query and running /, "Running "));
       }
       byId("activity-text").textContent = data.message || "Searching project evidence";
+      byId("activity-detail").textContent = "";
+    } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
+      // A tool asks which option the user means, such as which paper.
+      queueAnswerStage("choice", "Waiting for your choice");
+      showToolChoice(data.choice);
+      byId("activity-text").textContent = "Waiting for your choice";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
       // An expensive tool run waits for Continue, Quick, or Cancel.
@@ -2582,9 +2882,17 @@ function onEvent(raw) {
     if (!applyingModels) setBusy(false);
     refreshModelStatus();
     if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
+  } else if (data.event === "usage_progress") {
+    if (pendingTurn) {
+      pendingTurn.usage = { input_tokens: data.input_tokens, output_tokens: data.output_tokens };
+      paintPendingTurn();
+      renderUsage();
+    }
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
+    usageTotals = data.usage || usageTotals;
+    renderUsage();
     ready = true;
     if (data.profile) {
       profile = data.profile;
@@ -2624,6 +2932,8 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversation_opened") {
+    usageTotals = data.usage || usageTotals;
+    renderUsage();
     stopPhaseAnimation();
     resetAnswerStages();
     clearInterval(answerTimer);
@@ -2655,8 +2965,13 @@ function onEvent(raw) {
         && data.citation === activeReference.citation) {
       activeReference.note.textContent = data.message;
     }
+  } else if (data.event === "folder_changed") {
+    renderWorkspace(data.workspace_files);
+    setBusy(false);
   } else if (data.event === "answered") {
+    if (data.usage) usageTotals = data.usage;
     completeAfterAnswerStages(data.turn);
+    renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
   } else if (data.event === "reset") {
     renderConversationEmpty();
@@ -2919,9 +3234,22 @@ byId("toggle-workspace").addEventListener("click", () => {
 byId("toggle-conversations").addEventListener("click", () => {
   showConversations(shell.classList.contains("conversations-hidden"));
 });
+byId("usage-button").addEventListener("click", (event) => {
+  event.stopPropagation();
+  const menu = byId("usage-menu");
+  renderUsage();
+  byId("effort-menu").classList.add("hidden");
+  byId("effort-button").setAttribute("aria-expanded", "false");
+  menu.classList.toggle("hidden");
+  byId("usage-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+});
+byId("usage-menu").addEventListener("click", (event) => event.stopPropagation());
 byId("effort-button").addEventListener("click", (event) => {
   event.stopPropagation();
   const menu = byId("effort-menu");
+  // One composer menu at a time.
+  byId("usage-menu").classList.add("hidden");
+  byId("usage-button").setAttribute("aria-expanded", "false");
   menu.classList.toggle("hidden");
   byId("effort-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
 });
@@ -2970,6 +3298,7 @@ for (const id of ["chat-model", "embedding-model"]) {
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".model-picker")) closeModelMenus();
   if (!event.target.closest(".effort-picker")) byId("effort-menu").classList.add("hidden");
+  if (!event.target.closest(".usage-picker")) byId("usage-menu").classList.add("hidden");
   if (!event.target.closest(".attach-picker")) byId("attach-menu").classList.add("hidden");
 });
 document.addEventListener("keydown", (event) => {
@@ -2986,6 +3315,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
   bridge.setAppearance(document.documentElement.dataset.appearance || "system");
   bridge.event.connect(onEvent);
   bridge.pathsSelected.connect(addSources);
+  bridge.folderFilesSelected.connect(folderFilesChosen);
   bridge.sourceDragChanged.connect(showNativeSourceDrag);
   syncSourceDropTarget();
   bridge.attachmentsSelected.connect((paths) => {
@@ -3019,6 +3349,8 @@ applyAppearance(localStorage.getItem("qachat-appearance") || "system");
 // Draggable borders beside the conversation list and the side panels.
 const PANEL_LIMITS = { left: [180, 420], right: [260, 640] };
 const MIDDLE_MIN_WIDTH = 420;
+// Dragging a panel below this share of its minimum width hides it.
+const COLLAPSE_SHARE = 0.55;
 const panelResizers = {};
 
 /**
@@ -3060,6 +3392,9 @@ for (const side of ["left", "right"]) {
   handle.setAttribute("aria-orientation", "vertical");
   handle.title = "Drag to resize; double-click to reset";
   let lastPress = 0;
+  let collapse = false;
+  let startWidth = "";
+  const panelClass = `collapsing-${side}`;
   const reset = () => {
     setPanelWidth(side, null);
     try { localStorage.removeItem(`qachat-${side}-width`); } catch {}
@@ -3075,6 +3410,8 @@ for (const side of ["left", "right"]) {
       return;
     }
     lastPress = event.timeStamp;
+    collapse = false;
+    startWidth = shell.style.getPropertyValue(`--${side}-width`);
     handle.setPointerCapture(event.pointerId);
     handle.classList.add("dragging");
     document.body.classList.add("resizing-panels");
@@ -3086,6 +3423,10 @@ for (const side of ["left", "right"]) {
       ? document.querySelector(".side-panels").getBoundingClientRect().width
       : byId("conversations-panel").getBoundingClientRect().width;
     const requested = side === "left" ? event.clientX : window.innerWidth - event.clientX;
+    // Far below the minimum: preview hiding the panel instead of resizing.
+    collapse = requested < PANEL_LIMITS[side][0] * COLLAPSE_SHARE;
+    shell.classList.toggle(panelClass, collapse);
+    if (collapse) return;
     // Keep the conversation column usable.
     setPanelWidth(side, Math.min(requested, window.innerWidth - other - MIDDLE_MIN_WIDTH));
     positionPanelResizers();
@@ -3095,6 +3436,18 @@ for (const side of ["left", "right"]) {
     handle.releasePointerCapture(event.pointerId);
     handle.classList.remove("dragging");
     document.body.classList.remove("resizing-panels");
+    shell.classList.remove(panelClass);
+    if (collapse) {
+      // Hide the panel as its toggle does; it reopens at its last width.
+      collapse = false;
+      if (startWidth) shell.style.setProperty(`--${side}-width`, startWidth);
+      else shell.style.removeProperty(`--${side}-width`);
+      if (side === "left") showConversations(false);
+      else showWorkspace(false);
+      positionPanelResizers();
+      syncSourceDropTarget();
+      return;
+    }
     try {
       localStorage.setItem(`qachat-${side}-width`, shell.style.getPropertyValue(`--${side}-width`));
     } catch {}

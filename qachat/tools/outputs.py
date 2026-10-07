@@ -1,43 +1,48 @@
-"""Load documents from a project's ``target/`` folder.
+"""Read and write files in a project's ``outputs/`` folder.
 
 A project has two kinds of documents. ``sources/`` holds the knowledge base:
-it is copied in, indexed, embedded, and searched. ``target/`` holds what the
-user is working on (a paper to summarize, a manuscript, generated reports):
-it is never indexed, so a report QAChat writes there can never come back as
-a "source", and it is read only when a tool asks for it.
+it is copied in, indexed, embedded, and searched. ``outputs/`` holds what
+QAChat writes (research briefings, reports) and anything the user adds to
+work on: it is never indexed, so a report QAChat writes there can never
+come back as a "source", and it is read only when a tool asks for it.
 
-``load_target`` reads one target file with the same readers that index
-sources (pdfminer.six layout text for PDFs, structure-aware units for
-Markdown and code) and splits it into numbered passages with the same
-chunker, so tools can cite passages exactly as they cite indexed evidence.
+``load_output`` reads one file with the same readers that index sources
+(pdfminer.six layout text for PDFs, structure-aware units for Markdown and
+code) and splits it into numbered passages with the same chunker, so tools
+can cite passages exactly as they cite indexed evidence.
 
 Key Features
 ------------
 
 - **Folder**
 
-    ``target_folder`` returns (and creates) ``<project>/target``;
-    ``target_files`` lists readable files in it.
+    ``output_folder`` returns (and creates) ``<project>/outputs``, moving a
+    ``target/`` folder of earlier versions there; ``output_files`` lists
+    readable files in it.
 
 - **Choosing a file**
 
-    ``find_target`` picks the file a question names, or the only file.
+    ``find_output`` picks the file a question names, or the only file.
 
 - **Loading**
 
-    ``load_target`` returns a ``TargetDocument`` with passages.
+    ``load_output`` returns an ``OutputDocument`` with passages.
+
+- **Saving**
+
+    ``save_output_file`` never replaces an existing file.
 
 Module Structure
 ----------------
 
-- ``TARGET_FOLDER``
-- ``TargetDocument``
-- ``target_folder``
-- ``target_files``
-- ``find_target``
-- ``load_target``
-- ``save_target_file``
-- ``free_target_path``
+- ``OUTPUTS_FOLDER``
+- ``OutputDocument``
+- ``output_folder``
+- ``output_files``
+- ``find_output``
+- ``load_output``
+- ``save_output_file``
+- ``free_output_path``
 
 """
 
@@ -52,20 +57,22 @@ from qachat.retrievals.document_reading import estimate_tokens, named_paths
 from qachat.sources import extract_source_units, read_repository_files
 
 __all__ = [
+    "OUTPUTS_FOLDER",
+    "OutputDocument",
     "READABLE_SUFFIXES",
-    "TARGET_FOLDER",
-    "TargetDocument",
-    "find_target",
-    "free_target_path",
-    "load_target",
-    "save_target_file",
-    "target_files",
-    "target_folder",
+    "find_output",
+    "free_output_path",
+    "load_output",
+    "output_files",
+    "output_folder",
+    "save_output_file",
 ]
 
 # Folder name inside a project; never indexed.
-TARGET_FOLDER: Final[str] = "target"
-# File types load_target can read, as for indexed sources.
+OUTPUTS_FOLDER: Final[str] = "outputs"
+# Name of the same folder in earlier versions, moved on first use.
+_LEGACY_FOLDER: Final[str] = "target"
+# File types load_output can read, as for indexed sources.
 READABLE_SUFFIXES: Final[tuple[str, ...]] = (
     ".pdf",
     ".md",
@@ -77,13 +84,13 @@ READABLE_SUFFIXES: Final[tuple[str, ...]] = (
 
 
 @dataclass(frozen=True, slots=True)
-class TargetDocument:
-    """One target file, read and split into passages.
+class OutputDocument:
+    """One file in ``outputs/``, read and split into passages.
 
     Attributes
     ----------
     path: pathlib.Path
-        Path relative to the project, such as ``target/paper.pdf``.
+        Path relative to the project, such as ``outputs/paper.pdf``.
     passages: tuple[Chunk, ...]
         Passages in reading order; passage ``n`` is ``passages[n - 1]``.
     estimated_tokens: int
@@ -96,8 +103,8 @@ class TargetDocument:
     estimated_tokens: int
 
 
-def target_folder(project_root: Path) -> Path:
-    """Return ``<project>/target``, creating it when missing.
+def output_folder(project_root: Path) -> Path:
+    """Return ``<project>/outputs``, creating it when missing.
 
     Parameters
     ----------
@@ -107,17 +114,21 @@ def target_folder(project_root: Path) -> Path:
     Returns
     -------
     pathlib.Path
-        The target folder.
+        The outputs folder. A ``target/`` folder written by an earlier
+        version is renamed to ``outputs/`` the first time.
 
     """
 
-    folder = Path(project_root) / TARGET_FOLDER
+    folder = Path(project_root) / OUTPUTS_FOLDER
+    legacy = Path(project_root) / _LEGACY_FOLDER
+    if not folder.exists() and legacy.is_dir():
+        legacy.rename(folder)
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
 
-def target_files(project_root: Path) -> list[Path]:
-    """List readable files in the target folder.
+def output_files(project_root: Path) -> list[Path]:
+    """List readable files in the outputs folder.
 
     Parameters
     ----------
@@ -127,12 +138,12 @@ def target_files(project_root: Path) -> list[Path]:
     Returns
     -------
     list[pathlib.Path]
-        Paths relative to the target folder, sorted, of files with a
+        Paths relative to the outputs folder, sorted, of files with a
         readable suffix (subfolders included; hidden files skipped).
 
     """
 
-    folder = target_folder(project_root)
+    folder = output_folder(project_root)
     return sorted(
         path.relative_to(folder)
         for path in folder.rglob("*")
@@ -142,10 +153,10 @@ def target_files(project_root: Path) -> list[Path]:
     )
 
 
-def find_target(
+def find_output(
     question: str, project_root: Path, *, suffixes: tuple[str, ...] = ()
 ) -> Path | None:
-    """Pick the target file a question is about.
+    """Pick the file in ``outputs/`` a question is about.
 
     Parameters
     ----------
@@ -167,7 +178,7 @@ def find_target(
 
     files = [
         path
-        for path in target_files(project_root)
+        for path in output_files(project_root)
         if not suffixes or path.suffix.lower() in suffixes
     ]
     named = named_paths(question, files)
@@ -178,45 +189,45 @@ def find_target(
     return None
 
 
-def load_target(project_root: Path, name: Path | str) -> TargetDocument:
-    """Read one target file and split it into passages.
+def load_output(project_root: Path, name: Path | str) -> OutputDocument:
+    """Read one file in ``outputs/`` and split it into passages.
 
     Parameters
     ----------
     project_root: pathlib.Path
         The project folder.
     name: pathlib.Path | str
-        File path relative to the target folder.
+        File path relative to the outputs folder.
 
     Returns
     -------
-    TargetDocument
-        The passages, with paths such as ``target/paper.pdf``.
+    OutputDocument
+        The passages, with paths such as ``outputs/paper.pdf``.
 
     Raises
     ------
     FileNotFoundError
-        If the file does not exist; the message lists the target files.
+        If the file does not exist; the message lists the files there.
     ValueError
-        If the file type cannot be read, the path leaves the target folder,
+        If the file type cannot be read, the path leaves the outputs folder,
         or the file has no text (for example a scanned PDF).
 
     """
 
-    folder = target_folder(project_root)
+    folder = output_folder(project_root)
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError("Target files must stay inside the target folder.")
+        raise ValueError("Files must stay inside the outputs folder.")
     if relative.suffix.lower() not in READABLE_SUFFIXES:
         raise ValueError(
             f"{relative.name} cannot be read; supported types: "
             f"{', '.join(READABLE_SUFFIXES)}."
         )
     if not (folder / relative).is_file():
-        available = ", ".join(str(p) for p in target_files(project_root))
+        available = ", ".join(str(p) for p in output_files(project_root))
         raise FileNotFoundError(
-            f"{TARGET_FOLDER}/{relative.as_posix()} does not exist. Files in "
-            f"{TARGET_FOLDER}/: {available or 'none'}."
+            f"{OUTPUTS_FOLDER}/{relative.as_posix()} does not exist. Files "
+            f"in {OUTPUTS_FOLDER}/: {available or 'none'}."
         )
     files = read_repository_files(
         {"repository": str(folder), "selected_files": [relative.as_posix()]}
@@ -230,10 +241,10 @@ def load_target(project_root: Path, name: Path | str) -> TargetDocument:
             f"{relative.name} has no readable text (a scanned PDF needs OCR "
             "first)."
         )
-    shown = Path(TARGET_FOLDER) / relative
+    shown = Path(OUTPUTS_FOLDER) / relative
     passages = tuple(
         Chunk(
-            identifier=f"{TARGET_FOLDER}:{chunk.identifier}",
+            identifier=f"{OUTPUTS_FOLDER}:{chunk.identifier}",
             path=shown,
             text=chunk.text,
             start_line=chunk.start_line,
@@ -245,15 +256,15 @@ def load_target(project_root: Path, name: Path | str) -> TargetDocument:
         )
         for chunk in chunks
     )
-    return TargetDocument(
+    return OutputDocument(
         path=shown,
         passages=passages,
         estimated_tokens=sum(estimate_tokens(c.text) for c in passages),
     )
 
 
-def save_target_file(project_root: Path, name: str, text: str) -> Path:
-    """Write a generated file into the target folder without overwriting.
+def save_output_file(project_root: Path, name: str, text: str) -> Path:
+    """Write a generated file into the outputs folder without overwriting.
 
     Parameters
     ----------
@@ -273,13 +284,13 @@ def save_target_file(project_root: Path, name: str, text: str) -> Path:
 
     """
 
-    candidate = free_target_path(project_root, name)
+    candidate = free_output_path(project_root, name)
     candidate.write_text(text, encoding="utf-8")
-    return Path(TARGET_FOLDER) / candidate.name
+    return Path(OUTPUTS_FOLDER) / candidate.name
 
 
-def free_target_path(project_root: Path, name: str) -> Path:
-    """Return a path in the target folder that no file uses yet.
+def free_output_path(project_root: Path, name: str) -> Path:
+    """Return a path in the outputs folder that no file uses yet.
 
     Parameters
     ----------
@@ -291,12 +302,12 @@ def free_target_path(project_root: Path, name: str) -> Path:
     Returns
     -------
     pathlib.Path
-        ``target/<name>``, or with ``-2``, ``-3``, ... before the suffix
+        ``outputs/<name>``, or with ``-2``, ``-3``, ... before the suffix
         when that name is taken.
 
     """
 
-    folder = target_folder(project_root)
+    folder = output_folder(project_root)
     candidate = folder / name
     stem, suffix = candidate.stem, candidate.suffix
     number = 2

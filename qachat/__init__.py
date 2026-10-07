@@ -75,7 +75,7 @@ from .answering import (
     MACHINE_STATE_CHOICES,
     MachineState,
 )
-from .project_types import (
+from .project_type import (
     HISTORY_POLICY_CHOICES,
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,

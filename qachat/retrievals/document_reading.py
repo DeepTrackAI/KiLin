@@ -152,6 +152,7 @@ def read_document(
     *,
     max_tokens: int,
     top: int = 20,
+    path: Path | None = None,
 ) -> DocumentSelection | None:
     """Choose one document for a question and fit it to a token budget.
 
@@ -172,6 +173,9 @@ def read_document(
     top: int, optional
         How many leading results decide the dominant file. Defaults to
         ``20``.
+    path: pathlib.Path | None, optional
+        The file to read, when the caller already chose it (for example
+        the user did). Defaults to ``None``.
 
     Returns
     -------
@@ -207,7 +211,7 @@ def read_document(
                 reason=DOCUMENT_REASON_NAMED_FUNCTION,
             )
     paths = list(dict.fromkeys(chunk.path for chunk in chunks))
-    named = named_paths(question, paths)
+    named = [path] if path is not None else named_paths(question, paths)
     path = dominant_path(ranked[:top], named or None)
     reason = DOCUMENT_REASON_NAMED_FILE if named else DOCUMENT_REASON_SEARCH
     if path is None and named:
@@ -241,8 +245,9 @@ def named_paths(
         Files named by full path; otherwise by file name; otherwise by
         file stem of at least four characters ("smith2020"); otherwise,
         with ``authors``, by a name that starts an author-year file stem
-        ("smith" or "Smith's paper" for ``smith2020.pdf``). Matching
-        ignores case and needs a boundary on both sides.
+        ("smith", "Smith's paper", or "smith20" for ``smith2020.pdf``;
+        "yao25" for ``yao25connecting.pdf``). Matching ignores case and
+        needs a boundary on both sides.
 
     """
 
@@ -261,18 +266,25 @@ def named_paths(
     ]
     if stems or not authors:
         return stems
-    words = set(re.findall(r"[a-z]{4,}", text))
+    words = set(re.findall(r"(?<![a-z0-9])[a-z]{3,}\d*(?![a-z])", text))
     return [path for path in paths if _starts_stem(path.stem, words)]
 
 
 def _starts_stem(stem: str, words: set[str]) -> bool:
-    """Whether a word starts an author-year stem: "smith" in smith2020."""
+    """Whether a word starts an author-year stem.
+
+    A name ends where the year starts ("smith" in smith2020); a name with
+    its year ("yao25" in yao25connecting) may be followed by anything.
+
+    """
 
     stem = stem.casefold()
     for word in words:
         if stem.startswith(word):
             rest = stem[len(word) :]
-            if not rest or rest[0].isdigit() or rest[0] in "_-":
+            if word[-1].isdigit() or not rest or rest[0].isdigit() or (
+                rest[0] in "_-"
+            ):
                 return True
     return False
 

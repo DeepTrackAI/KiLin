@@ -2,9 +2,13 @@
 
 import os
 from pathlib import Path
+import shutil
 import tempfile
 
-# Tests never touch the user's desktop preferences.
-os.environ["QACHAT_PREFERENCES_FILE"] = str(
-    Path(tempfile.mkdtemp(prefix="qachat-tests-")) / "preferences.json"
+# Tests read and write a copy, never the real desktop defaults.
+_DEFAULTS = Path(tempfile.mkdtemp(prefix="qachat-tests-")) / "defaults.json"
+shutil.copyfile(
+    Path(__file__).resolve().parents[1] / "qachat" / "gui" / "defaults.json",
+    _DEFAULTS,
 )
+os.environ["QACHAT_DEFAULTS_FILE"] = str(_DEFAULTS)

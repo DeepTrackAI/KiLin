@@ -55,6 +55,7 @@ __all__ = [
     "ConfirmationPolicy",
     "PlanChoice",
     "ToolPlan",
+    "ask_choice",
     "confirm_plan",
     "needs_confirmation",
 ]
@@ -212,3 +213,52 @@ def confirm_plan(
         turn_id=context.trace_turn_id,
     )
     return choice, asked
+
+
+def ask_choice(
+    question: str, options: tuple[str, ...], context: ToolContext
+) -> int | None:
+    """Ask the user to pick one option, tracing the question and answer.
+
+    Parameters
+    ----------
+    question: str
+        What to ask, such as "Which paper should I turn into a research
+        briefing?".
+    options: tuple[str, ...]
+        The options, shown as buttons.
+    context: ToolContext
+        QAChat's services; ``context.choose`` asks the user.
+
+    Returns
+    -------
+    int | None
+        The chosen option's index; None when the user cancels, the answer
+        is not an option, or nobody can be asked (``context.choose`` is
+        None).
+
+    """
+
+    trace = context.trace
+    trace.emit(
+        "tool.choice.proposed",
+        component="tool",
+        data={"question": question, "options": list(options)},
+        turn_id=context.trace_turn_id,
+    )
+    index = None
+    if context.choose is not None and options:
+        context.progress(
+            "Waiting for your choice",
+            choice={"question": question, "options": list(options)},
+        )
+        answer = context.choose(question, options)
+        if type(answer) is int and 0 <= answer < len(options):
+            index = answer
+    trace.emit(
+        "tool.choice.decided",
+        component="tool",
+        data={"index": index, "asked": context.choose is not None},
+        turn_id=context.trace_turn_id,
+    )
+    return index

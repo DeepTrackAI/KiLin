@@ -16,7 +16,7 @@ from qachat.answering import (
     select_history,
     turn_representation,
 )
-from qachat.project_types import project_type
+from qachat.project_type import project_type
 from qachat.rag import Evidence
 
 
@@ -173,7 +173,10 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(
             select_history(10, "relevant", 2, related), [2, 9, 10]
         )
-        self.assertEqual(select_history(10, "relevant", 2, standalone), [])
+        # A standalone question still sees the previous turn.
+        self.assertEqual(
+            select_history(10, "relevant", 2, standalone), [10]
+        )
         self.assertEqual(select_history(10, "recent", 2, standalone), [9, 10])
         self.assertEqual(select_history(10, "none", 2, related), [])
         self.assertEqual(select_history(0, "relevant", 2, related), [])

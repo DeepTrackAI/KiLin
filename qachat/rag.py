@@ -139,7 +139,7 @@ from qachat.answering import (
     turn_representation,
 )
 from qachat.answering import search_text as answering_search_text
-from qachat.project_types import (
+from qachat.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
@@ -174,11 +174,16 @@ from qachat.retrievals import (
 )
 from qachat.retrievals.document_reading import (
     DocumentSelection,
+    named_paths,
     read_document,
 )
 from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
 from qachat.runtime import BACKEND_MLX, SelectedBackend, choose_backend
-from qachat.sources import extract_source_units, read_repository_files
+from qachat.sources import (
+    SourceFile,
+    extract_source_units,
+    read_repository_files,
+)
 from qachat.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from qachat.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
@@ -190,6 +195,7 @@ from qachat.trace_logging import (
     trace_text_preview,
 )
 from qachat.tools import (
+    EarlierTurn,
     ToolContext,
     ToolPlan,
     ToolRequest,
@@ -970,6 +976,9 @@ class RAGSession:
         use_router: bool = True,
         confirm_callback: Callable[[ToolPlan], str] | None = None,
         pdf_writer: Callable[..., int] | None = None,
+        choice_callback: (
+            Callable[[str, tuple[str, ...]], int | None] | None
+        ) = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -1022,6 +1031,12 @@ class RAGSession:
             PDF and returns its page count; tools that save reports also
             save a PDF when it is given (the desktop app passes a Qt
             writer). Defaults to ``None``.
+        choice_callback: Callable[[str, tuple[str, ...]], int | None] | None
+            ``choice_callback(question, options)`` asks the user to pick one
+            option and returns its index, or None to cancel; tools use it
+            when they cannot tell what the user means (for example which
+            paper to summarize). None lets tools fall back to their best
+            guess. Defaults to ``None``.
 
         Returns
         -------
@@ -1118,6 +1133,7 @@ class RAGSession:
         }
         if trace.include_content:
             question_data["question"] = question
+        usage = self.usage_mark()
         with trace.span(
             "turn",
             component="rag",
@@ -1388,6 +1404,7 @@ class RAGSession:
                     report_phase=report_phase,
                     confirm_callback=confirm_callback,
                     pdf_writer=pdf_writer,
+                    choice_callback=choice_callback,
                     token_callback=token_callback,
                     answer_guidance=intent.answer_guidance or answer_guidance,
                 )
@@ -1443,6 +1460,8 @@ class RAGSession:
                 )
                 if finish_reason in ("length", "stop"):
                     effective["finish_reason"] = finish_reason
+            # Tokens the models read and generated for this answer.
+            effective["usage"] = self.usage_since(usage)
             turn = ConversationTurn(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 question=question,
@@ -1670,7 +1689,32 @@ class RAGSession:
                 extensions=profile.extensions,
                 max_file_bytes=profile.max_file_bytes,
             )
-        selected_count = len(report.get("selected_files", []))
+        cached_chunks = cached_chunks or {}
+        selected = list(report.get("selected_files", []))
+        graph = project_type(profile.kind).code_graph is not False
+        # Text read earlier is reused when the file's bytes are unchanged
+        # (same SHA-256), so only new or changed files are read again;
+        # reading is slow for PDFs. A file with the same name but other
+        # content has another hash and is read again.
+        texts = _read_text_cache(self.project.indexes)
+        hashes = {
+            name: sha256(
+                (self.project.source / name).read_bytes()
+            ).hexdigest()
+            for name in selected
+        }
+        reused = {
+            name: SourceFile(Path(name), texts[name]["text"])
+            for name in selected
+            if texts.get(name, {}).get("sha256") == hashes[name]
+        }
+        report = {
+            **report,
+            "selected_files": [
+                name for name in selected if name not in reused
+            ],
+        }
+        selected_count = len(report["selected_files"])
 
         reading_started = perf_counter()
         self._emit_count_progress(
@@ -1687,7 +1731,7 @@ class RAGSession:
             component="rag",
             data={"selected_file_count": selected_count},
         ):
-            source_files = read_repository_files(
+            source_files = [] if not selected_count else read_repository_files(
                 report,
                 progress_callback=(
                     lambda current, total: self._emit_count_progress(
@@ -1701,10 +1745,28 @@ class RAGSession:
                     )
                 ),
             )
+        read = {source.path.as_posix(): source for source in source_files}
+        _write_text_cache(
+            self.project.indexes,
+            {
+                name: {
+                    "sha256": hashes[name],
+                    "text": (reused.get(name) or read[name]).text,
+                }
+                for name in selected
+                if name in reused or name in read
+            },
+        )
+        source_files = [
+            reused.get(name) or read[name]
+            for name in selected
+            if name in reused or name in read
+        ]
         self.trace.emit(
             "source.read.summary",
             component="rag",
             data={
+                "reused_file_count": len(reused),
                 "file_count": len(source_files),
                 "files": [
                     {
@@ -1735,7 +1797,7 @@ class RAGSession:
             component="rag",
             data={"file_count": source_file_count},
         ):
-            units = extract_source_units(
+            units = [] if not source_files else extract_source_units(
                 source_files,
                 progress_callback=(
                     lambda current, total: self._emit_count_progress(
@@ -1750,7 +1812,6 @@ class RAGSession:
                 ),
             )
 
-        cached_chunks = cached_chunks or {}
         changed_units = [
             unit for unit in units if unit.path not in cached_chunks
         ]
@@ -1798,9 +1859,9 @@ class RAGSession:
             fresh_by_path.setdefault(chunk.path, []).append(chunk)
         chunks = [
             chunk
-            for source in source_files
+            for name in selected
             for chunk in cached_chunks.get(
-                source.path, fresh_by_path.get(source.path, [])
+                Path(name), fresh_by_path.get(Path(name), [])
             )
         ]
         self.trace.emit(
@@ -1825,11 +1886,40 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            if project_type(profile.kind).code_graph is False:
+            if not graph or not source_files:
+                # Nothing to read means no code files: an empty graph.
                 code_graph = CodeGraph((), ())
             else:
                 code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
+
+    def refresh_sources(self: RAGSession, project: QAProject) -> None:
+        """Update the indexes after sources were added or removed.
+
+        The loaded models and the conversation stay; only the indexes are
+        prepared again, and files that did not change keep their chunks and
+        vectors, so only new or changed files are embedded.
+
+        Parameters
+        ----------
+        project: QAProject
+            The project reopened after its sources changed.
+
+        """
+
+        self.project = project
+        with self.trace.span(
+            "indexing",
+            component="rag",
+            data={"project_directory": str(project.root), "refresh": True},
+        ):
+            chunks, indexes, status, source_changes = (
+                self._prepare_retrieval(self.embedding_session)
+            )
+        self.chunks = chunks
+        self.indexes = indexes
+        self.index_status = status
+        self.source_changes = source_changes
 
     def _prepare_retrieval(
         self: RAGSession,
@@ -2333,6 +2423,28 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         report(f"Hybrid ranking kept {len(combined)} results")
+        # A question about one named file ("a short summary of yao25")
+        # ranks that file's passages only.
+        named = named_paths(
+            question,
+            list(dict.fromkeys(chunk.path for chunk in self.chunks)),
+            authors=True,
+        )
+        if len(named) == 1:
+            focused = [
+                result
+                for result in self._rank_everything(question, trace_turn_id)
+                if result.chunk.path == named[0]
+            ][:count]
+            if focused:
+                combined = focused
+                report(f"Kept the passages of {named[0].name}")
+                trace.emit(
+                    "retrieval.named_file.focused",
+                    component="retrieval",
+                    data={"path": str(named[0]), "count": len(focused)},
+                    turn_id=trace_turn_id,
+                )
         plan = plan_retrieval(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
@@ -2438,6 +2550,9 @@ class RAGSession:
         report_phase: Callable[..., None],
         confirm_callback: Callable[[ToolPlan], str] | None = None,
         pdf_writer: Callable[..., int] | None = None,
+        choice_callback: (
+            Callable[[str, tuple[str, ...]], int | None] | None
+        ) = None,
         token_callback: Callable[[str], None] | None = None,
         answer_guidance: str | None = None,
     ) -> ToolResult:
@@ -2461,6 +2576,9 @@ class RAGSession:
             Asked to confirm an expensive plan. Defaults to ``None``.
         pdf_writer: Callable[..., int] | None, optional
             Writes reports as PDF. Defaults to ``None``.
+        choice_callback: Callable[[str, tuple[str, ...]], int | None] | None
+            Asks the user to pick one option (for example which paper to
+            summarize). Defaults to ``None``.
         token_callback: Callable[[str], None] | None, optional
             Receives an answer the tool writes with the model, as it is
             generated. Defaults to ``None``.
@@ -2514,13 +2632,53 @@ class RAGSession:
             trace=trace,
             trace_turn_id=trace_turn_id,
             write_pdf=pdf_writer,
+            choose=choice_callback,
         )
         request = ToolRequest(
             question=question,
             text=answering_search_text(question, self.turns, decision),
             guidance=answer_guidance,
+            earlier=self._earlier_turns(decision),
         )
         return run_tool(use, request, context)
+
+    def _earlier_turns(
+        self: RAGSession, decision: RouteDecision
+    ) -> tuple[EarlierTurn, ...]:
+        """The turns a question points back to, and theirs, newest first.
+
+        The router's related turns are followed through the turns they
+        were related to in turn, so "turn this into a briefing" after
+        "summarize that" still reaches "walk me through Smith's paper". A
+        question that points back without related turns uses the last
+        turn. At most ``_MAX_EARLIER_TURNS`` turns are returned.
+
+        """
+
+        pending = list(decision.related_turn_ids)
+        if not pending and decision.refers_back and self.turns:
+            pending = [len(self.turns)]
+        found: set[int] = set()
+        while pending:
+            number = pending.pop()
+            if number in found or not 1 <= number <= len(self.turns):
+                continue
+            found.add(number)
+            related = self.turns[number - 1].parameters.get(
+                "related_turn_ids"
+            )
+            if isinstance(related, list):
+                pending.extend(n for n in related if isinstance(n, int))
+        return tuple(
+            EarlierTurn(
+                number=number,
+                question=self.turns[number - 1].question,
+                paths=tuple(
+                    Path(item.path) for item in self.turns[number - 1].evidence
+                ),
+            )
+            for number in sorted(found, reverse=True)[:_MAX_EARLIER_TURNS]
+        )
 
     def _source_files(self: RAGSession) -> dict[Path, int]:
         """Return selected source files and sizes from the source manifest."""
@@ -2822,6 +2980,61 @@ class RAGSession:
             data={"from": self.router_model, "to": model_id},
         )
         self.router_model = model_id
+
+    def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
+        """Remember the token totals of the loaded model sessions.
+
+        Returns
+        -------
+        dict[int, tuple[int, int]]
+            Prompt and generated token totals per model session, for
+            ``usage_since``.
+
+        """
+
+        return {
+            id(chat): (chat.input_token_total, chat.output_token_total)
+            for chat in self._model_sessions()
+        }
+
+    def usage_since(
+        self: RAGSession, mark: dict[int, tuple[int, int]]
+    ) -> dict[str, int]:
+        """Return the tokens read and generated since ``usage_mark``.
+
+        Parameters
+        ----------
+        mark: dict[int, tuple[int, int]]
+            Totals from ``usage_mark``. A session loaded since then counts
+            from zero.
+
+        Returns
+        -------
+        dict[str, int]
+            ``input_tokens`` (prompts the models read: questions, evidence,
+            instructions, and history) and ``output_tokens`` (text they
+            generated), over the answer model, the router, and any tool
+            calls. Safe to call while an answer is being generated.
+
+        """
+
+        read = written = 0
+        for chat in self._model_sessions():
+            before_read, before_written = mark.get(id(chat), (0, 0))
+            read += max(0, chat.input_token_total - before_read)
+            written += max(0, chat.output_token_total - before_written)
+        return {"input_tokens": read, "output_tokens": written}
+
+    def _model_sessions(self: RAGSession) -> list[ChatSession]:
+        """The answer model's session and, when separate, the router's."""
+
+        sessions = [self.chat_session]
+        router = getattr(self, "_router_session", None)
+        if router is not None and router is not self.chat_session:
+            sessions.append(router)
+        return [
+            chat for chat in sessions if hasattr(chat, "input_token_total")
+        ]
 
     def _router_chat(self: RAGSession) -> ChatSession:
         """Return the router model's session, loading it once if needed."""
@@ -3264,10 +3477,44 @@ def _check_conversation_trace(
         )
 
 
+# Extracted text of each source file, by path, with the SHA-256 of its bytes.
+_TEXT_CACHE = "source_text.json"
+
+
+def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
+    """The cached text of source files; empty when missing or unreadable."""
+
+    try:
+        data = json.loads((indexes / _TEXT_CACHE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        str(name): entry
+        for name, entry in (data.items() if isinstance(data, dict) else ())
+        if isinstance(entry, dict)
+        and isinstance(entry.get("sha256"), str)
+        and isinstance(entry.get("text"), str)
+    }
+
+
+def _write_text_cache(
+    indexes: Path, entries: dict[str, dict[str, str]]
+) -> None:
+    """Save the text of the current source files (removed files drop out)."""
+
+    indexes.mkdir(parents=True, exist_ok=True)
+    path = indexes / _TEXT_CACHE
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(entries), encoding="utf-8")
+    temporary.replace(path)
+
+
 _MAX_REUSED_EVIDENCE = 40
 
 
 _MAX_RELATED_EVIDENCE = 10
+# Earlier turns a tool may look back through for what "this" refers to.
+_MAX_EARLIER_TURNS = 6
 
 
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:

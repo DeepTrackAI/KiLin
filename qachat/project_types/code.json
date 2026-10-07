@@ -104,6 +104,24 @@
         "max_listed": 100
       }
     },
+    "topic_listing": {
+      "description": "Only when the user asks for the matching comments, passages, or files themselves, judged by meaning rather than exact names: 'list the comments that discuss caching', 'which files handle authentication?'. Reads every passage. Not for explaining code, and not for an exact name or text (mention_listing).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_passages",
+        "batch_tokens": 2500,
+        "max_model_calls": 200,
+        "quick_passages": 40,
+        "max_listed": 100,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
     "mention_classification": {
       "description": "Sort every occurrence of an exact name or text in the code into groups the user names, then count each group ('which uses of load_data are in tests and which in library code?', 'which TODO comments are about performance and which about features?'). Exhaustive; judges each occurrence.",
       "history": {
@@ -123,20 +141,6 @@
         "max_model_calls": 30,
         "confirmation": "when_large",
         "large_batches": 2
-      }
-    },
-    "qachat_usage": {
-      "description": "Questions about the QAChat application itself rather than the project's content: how to add or remove files, what happens when a file is dropped in, whether something re-indexes, where conversations, indexes, or summaries are stored, how settings, effort levels, models, or tools work ('how do I add a paper?', 'will adding a file re-index everything?', 'where are my conversations saved?').",
-      "history": {
-        "policy": "none"
-      },
-      "retrieval": {
-        "mode": "none"
-      },
-      "tool": {
-        "name": "qachat_help",
-        "max_sections": 6,
-        "answer_tokens": 700
       }
     },
     "conversation_followup": {
@@ -193,6 +197,7 @@
     "Why does … fail?",
     "How many Python files are there?",
     "Find every use of …",
+    "List every comment about …",
     "Classify uses of …"
   ]
 }

@@ -1,71 +1,75 @@
-"""Check the app-wide desktop preferences and installed-model choices."""
+"""Check the desktop defaults file and installed-model choices."""
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from qachat.gui.engine import ChatEngine, _installed_replacements
-from qachat.gui.model_settings import default_effort_levels
 from qachat.gui.preferences import (
-    preferences_file,
-    preferred_appearance,
-    preferred_effort_levels,
-    preferred_search_depth,
-    read_preferences,
+    DEFAULTS_FILE,
+    built_in_defaults,
+    default_effort_levels,
+    default_search_depth,
+    defaults_file,
     required_models,
-    write_preferences,
+    write_defaults,
 )
 
 
-class TestPreferences(unittest.TestCase):
-    """Only customized choices are saved; defaults stay in code."""
+class TestWriteDefaults(unittest.TestCase):
+    """App-wide choices are saved in the one defaults file."""
 
     def setUp(self) -> None:
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)
-        self.path = Path(folder.name) / "preferences.json"
+        self.path = Path(folder.name) / "defaults.json"
+        shutil.copyfile(DEFAULTS_FILE, self.path)
 
     def test_tests_never_use_the_real_file(self) -> None:
-        self.assertIn("qachat-tests-", str(preferences_file()))
-        self.assertIn("QACHAT_PREFERENCES_FILE", os.environ)
+        self.assertIn("qachat-tests-", str(defaults_file()))
+        self.assertIn("QACHAT_DEFAULTS_FILE", os.environ)
 
-    def test_only_customized_values_are_written(self) -> None:
-        self.assertEqual(read_preferences(self.path), {})
-        write_preferences({"appearance": "dark"}, self.path)
-        write_preferences({"search_depth": [3, 3, 6, 6, 9]}, self.path)
-        self.assertEqual(preferred_appearance(self.path), "dark")
-        self.assertEqual(preferred_search_depth(self.path), [3, 3, 6, 6, 9])
-        write_preferences(
-            {"appearance": "system", "search_depth": [5, 5, 10, 10, 15]},
-            self.path,
-        )
-        self.assertFalse(self.path.exists())
+    def test_changes_are_saved_in_the_same_style(self) -> None:
+        write_defaults({"appearance": "dark"}, self.path)
+        write_defaults({"search_depth": [3, 3, 6, 6, 9]}, self.path)
+        saved = built_in_defaults(self.path)
+        self.assertEqual(saved["appearance"], "dark")
+        self.assertEqual(saved["search_depth"], [3, 3, 6, 6, 9])
+        text = self.path.read_text()
+        # Short lists and levels stay on one line, as the file is kept.
+        self.assertIn('"search_depth": [3, 3, 6, 6, 9]', text)
+        self.assertIn('{"name": "Light", "model": ', text)
+        # Other settings are untouched.
+        original = json.loads(DEFAULTS_FILE.read_text())
+        self.assertEqual(json.loads(text)["answers"], original["answers"])
 
-    def test_required_models_follow_the_preferences(self) -> None:
-        levels = default_effort_levels("mlx")
-        defaults = required_models("mlx", self.path)
-        self.assertIn(levels[0]["model"], defaults)
-        levels = [{**level, "model": "a/Qwen3-4B-MLX"} for level in levels]
-        write_preferences({"effort_levels": {"mlx": levels}}, self.path)
-        self.assertEqual(
-            preferred_effort_levels("mlx", self.path)[0]["model"],
-            "a/Qwen3-4B-MLX",
-        )
-        self.assertIn("a/Qwen3-4B-MLX", required_models("mlx", self.path))
-        self.assertNotIn(
-            default_effort_levels("mlx")[0]["model"],
-            required_models("mlx", self.path),
-        )
+    def test_required_models_follow_the_defaults(self) -> None:
+        levels = [
+            {**level, "model": "a/Qwen3-4B-MLX"}
+            for level in default_effort_levels("mlx")
+        ]
+        write_defaults({"effort_levels": {"mlx": levels}})
+        try:
+            self.assertIn("a/Qwen3-4B-MLX", required_models("mlx"))
+        finally:
+            write_defaults(
+                {"effort_levels": {"mlx": built_in_defaults(
+                    DEFAULTS_FILE)["effort_levels"]["mlx"]}}
+            )
 
-    def test_invalid_values_are_rejected_and_ignored(self) -> None:
+    def test_invalid_values_are_rejected(self) -> None:
+        before = self.path.read_text()
         with self.assertRaisesRegex(ValueError, "appearance"):
-            write_preferences({"appearance": "pink"}, self.path)
-        self.path.write_text('{"search_depth": [0], "appearance": "dark"}')
-        self.assertEqual(read_preferences(self.path), {"appearance": "dark"})
+            write_defaults({"appearance": "pink"}, self.path)
+        with self.assertRaisesRegex(ValueError, "Unknown default"):
+            write_defaults({"colour": "red"}, self.path)
+        self.assertEqual(self.path.read_text(), before)
 
     def test_closest_installed_model_replaces_a_missing_one(self) -> None:
         roles = {
@@ -100,11 +104,9 @@ class TestDefaults(unittest.TestCase):
         import json
 
         from qachat.gui.preferences import (
-            DEFAULTS_FILE,
             default_answer_settings,
             default_embedding_model,
             default_router_model,
-            default_search_depth,
         )
 
         data = json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))
@@ -125,8 +127,6 @@ class TestDefaults(unittest.TestCase):
 
     def test_mistakes_in_the_defaults_file_name_the_setting(self) -> None:
         import json
-
-        from qachat.gui.preferences import DEFAULTS_FILE, built_in_defaults
 
         data = json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))
         with TemporaryDirectory() as folder:
@@ -183,10 +183,12 @@ class TestUseInstalledModels(unittest.TestCase):
         )
         self.assertTrue(events[-1]["ready"])
         self.assertNotIn("Qwen/Qwen3-8B-MLX-4bit", required_models("mlx"))
-        write_preferences(
+        original = built_in_defaults(DEFAULTS_FILE)
+        write_defaults(
             {
-                "effort_levels": {"mlx": default_effort_levels("mlx")},
-                "router_models": {"mlx": "Qwen/Qwen3-8B-MLX-4bit"},
+                "effort_levels": original["effort_levels"],
+                "router_models": original["router_models"],
+                "embedding_models": original["embedding_models"],
             }
         )
 

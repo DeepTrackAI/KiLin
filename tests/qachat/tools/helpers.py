@@ -37,6 +37,7 @@ def context(
     confirm=None,
     root=None,
     write_pdf=None,
+    choose=None,
 ):
     """Return a ToolContext whose services are plain functions.
 
@@ -64,5 +65,6 @@ def context(
         trace=NullTraceLogger(),
         trace_turn_id=None,
         write_pdf=write_pdf,
+        choose=choose,
     )
     return built, events

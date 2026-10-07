@@ -69,7 +69,8 @@ interface or the documented engine methods to open a project.
 from __future__ import annotations
 
 from configparser import ConfigParser, Error as ConfigError
-from contextlib import redirect_stderr, redirect_stdout
+from collections.abc import Iterator
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, replace
 from hashlib import sha256
 import json
@@ -84,40 +85,32 @@ from typing import Callable, Final
 
 from qachat.gui.preferences import (
     default_answer_settings,
+    default_appearance,
+    default_effort_levels,
     default_embedding_model,
+    default_query_format,
+    default_router_model,
     default_search_depth,
-    preferred_appearance,
-    preferred_effort_levels,
-    preferred_embedding_model,
-    preferred_query_format,
-    preferred_router_model,
-    preferred_search_depth,
     required_models,
-    write_preferences,
+    validate_effort_levels,
+    validate_model_id,
+    validate_search_depth,
+    write_defaults,
 )
 from qachat.gui.report_pdf import write_report_pdf
-from qachat.report_templates import (
-    GUIDE_MARKER,
-    load_template,
-    template_guide,
-)
-from qachat.tools.load_target import target_folder
+from qachat.tools.outputs import OUTPUTS_FOLDER, output_folder
+from qachat.tools.report_template import TEMPLATES_FOLDER, templates_folder
 from qachat.gui.model_settings import (
-    EFFORT_FILE,
     DEFAULT_LEVEL,
     LEVEL_COUNT,
-    default_effort_levels,
-    default_router_model,
+    PROFILE_FILE,
     read_effort_levels,
-    read_search_depth,
     read_router_model,
-    validate_effort_levels,
-    validate_search_depth,
-    validate_model_id,
+    read_search_depth,
     save_project_settings,
     write_effort_levels,
-    write_search_depth,
     write_router_model,
+    write_search_depth,
 )
 from qachat.gui.model_catalog import (
     MODEL_CHOICES,
@@ -126,9 +119,10 @@ from qachat.gui.model_catalog import (
     model_choices,
 )
 from qachat import RAGSession, prepare_sources_workspace
+from qachat.conversation_format import conversation_state
 from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
-from qachat.project_types import load_project_types, project_type
+from qachat.project_type import load_project_types, project_type
 from qachat.project import (
     PROJECT_KIND_CODE,
     PROJECT_KIND_CHOICES,
@@ -551,11 +545,11 @@ class ChatEngine:
             )
             levels = [
                 {**level, "model": chosen.get(level["model"], level["model"])}
-                for level in preferred_effort_levels(backend)
+                for level in default_effort_levels(backend)
             ]
-            router = preferred_router_model(backend)
-            embedding = preferred_embedding_model(backend)
-            saved = write_preferences(
+            router = default_router_model(backend)
+            embedding = default_embedding_model(backend)
+            saved = write_defaults(
                 {
                     "effort_levels": {backend: levels},
                     "router_models": {backend: chosen.get(router, router)},
@@ -900,18 +894,18 @@ class ChatEngine:
                     temperature=default_answer_settings()["temperature"],
                     thinking=default_answer_settings()["thinking"],
                     chat_mlx=str(
-                        preferred_effort_levels(BACKEND_MLX)[DEFAULT_LEVEL][
+                        default_effort_levels(BACKEND_MLX)[DEFAULT_LEVEL][
                             "model"
                         ]
                     ),
                     chat_torch=str(
-                        preferred_effort_levels(BACKEND_TORCH)[
+                        default_effort_levels(BACKEND_TORCH)[
                             DEFAULT_LEVEL
                         ]["model"]
                     ),
-                    embedding_mlx=preferred_embedding_model(BACKEND_MLX),
-                    embedding_torch=preferred_embedding_model(BACKEND_TORCH),
-                    query_format=preferred_query_format(),
+                    embedding_mlx=default_embedding_model(BACKEND_MLX),
+                    embedding_torch=default_embedding_model(BACKEND_TORCH),
+                    query_format=default_query_format(),
                 )
             )
             entries = available_models()
@@ -930,9 +924,10 @@ class ChatEngine:
                 search_depth=(
                     read_search_depth(profile_path.parent)
                     if profile_path.is_file()
-                    else preferred_search_depth()
+                    else default_search_depth()
                 ),
-                appearance=preferred_appearance(),
+                appearance=default_appearance(),
+                preferences=_preference_payload(),
                 default_search_depth=default_search_depth(),
                 router_models=_router_models_by_backend(
                     profile_path.parent if profile_path.is_file() else None
@@ -1115,8 +1110,8 @@ class ChatEngine:
                     elapsed_seconds=elapsed,
                 )
             if root is None:
-                # No project is open: these become the app-wide
-                # preferences that new projects start from.
+                # No project is open: these become the defaults new
+                # projects start from (qachat/gui/defaults.json).
                 backend = request.get("backend")
                 if backend not in (BACKEND_MLX, BACKEND_TORCH):
                     backend = choose_backend(BACKEND_AUTO)
@@ -1130,7 +1125,7 @@ class ChatEngine:
                     changes["search_depth"] = depth
                 if router_model is not None:
                     changes["router_models"] = {backend: router_model}
-                write_preferences(changes)
+                write_defaults(changes)
             rebuilt = False
             if root is not None:
                 backend = self.session.backend
@@ -1204,6 +1199,7 @@ class ChatEngine:
             )
             self._send(
                 "models_applied",
+                preferences=_preference_payload(),
                 effort_levels=(
                     _effort_levels_by_backend(
                         self.session.project.root, profile
@@ -1571,7 +1567,7 @@ class ChatEngine:
             self.active_trace.emit(
                 "gui.project.settings.saved",
                 component="gui_engine",
-                data={"path": str(project.root / EFFORT_FILE)},
+                data={"path": str(project.root / PROFILE_FILE)},
             )
         options["conversation_path"] = self.conversation_store.state_path(
             conversation
@@ -1581,8 +1577,16 @@ class ChatEngine:
             read_router_model(project.root, session.backend)
         )
         self.session = session
-        self._upgrade_answer_budget()
-        self._write_template_guides(project.root, project.profile.kind)
+        self._use_project_answer_settings()
+        self._announce_project(project, conversation)
+
+    def _announce_project(
+        self, project: QAProject, conversation: ConversationInfo
+    ) -> None:
+        """Prepare the project folders and send the ``opened`` event."""
+
+        session = self.session
+        self._prepare_project_folders(project.root)
         self._send(
             "opened",
             project=str(project.root),
@@ -1594,6 +1598,8 @@ class ChatEngine:
             ),
             router_models=_router_models_by_backend(project.root),
             search_depth=read_search_depth(project.root),
+            preferences=_preference_payload(),
+            usage=self._usage_totals(),
             index_status=session.index_status,
             turns=[asdict(turn) for turn in session.turns],
             workspace_files=_workspace_files(project.root),
@@ -1619,17 +1625,47 @@ class ChatEngine:
             ],
         )
 
-    def _upgrade_answer_budget(self) -> None:
-        """Give conversations saved with the legacy default room to finish."""
+    def _use_project_answer_settings(self) -> None:
+        """Answer every chat with the project's saved answer settings.
 
-        if self.session.chat_session.max_new_tokens == 256:
-            self.session.chat_session.configure_generation(
-                {
-                    "max_new_tokens": default_answer_settings()[
-                        "max_new_tokens"
-                    ]
-                }
-            )
+        Temperature, thinking, and answer length belong to the project, not
+        to a chat: switching chats keeps them, and switching projects loads
+        the other project's. Profiles with the legacy 256-token answer
+        limit get the current default instead, so answers can finish.
+
+        """
+
+        profile = self.session.project.profile
+        max_new_tokens = profile.max_new_tokens
+        if max_new_tokens == 256:
+            max_new_tokens = default_answer_settings()["max_new_tokens"]
+        self.session.chat_session.configure_generation(
+            {
+                "temperature": profile.temperature,
+                "thinking": profile.thinking,
+                "max_new_tokens": max_new_tokens,
+            }
+        )
+
+    def _save_answer_settings(self, settings: dict[str, object]) -> None:
+        """Save changed answer settings to the project's profile.ini."""
+
+        profile = self.session.project.profile
+        changes = {
+            key: settings[key]
+            for key in ("temperature", "thinking", "max_new_tokens")
+            if key in settings and settings[key] != getattr(profile, key)
+        }
+        if not changes:
+            return
+        self.session.project = configure_project(
+            self.session.project.root,
+            {
+                key: "none" if value is None else value
+                for key, value in changes.items()
+            },
+            trace=self.active_trace,
+        )
 
     def add_project_sources(self, sources: list[str]) -> None:
         """Add confirmed sources and restore the active chat."""
@@ -1658,16 +1694,18 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
-            try:
-                project = prepare_sources_workspace(
-                    sources, kind, root, trace=self.active_trace
-                )
-            finally:
-                self.close()
-            self._reopen_project_conversation(project, conversation_id)
+            project = prepare_sources_workspace(
+                sources, kind, root, trace=self.active_trace
+            )
+            self._refresh_sources(project)
         except Exception as error:
-            # A failed copy may have written some files. Reopen through normal
-            # index validation so an old in-memory index is never used.
+            # A failed copy may have written some files: index what is there,
+            # so an old in-memory index is never used.
+            if root is not None and self.session is not None:
+                try:
+                    self._refresh_sources(open_project(root))
+                except Exception:
+                    pass
             if root is not None and self.session is None:
                 try:
                     self._reopen_project_conversation(
@@ -1734,17 +1772,19 @@ class ChatEngine:
             self._send(
                 "status", message="Removing sources and updating the index…"
             )
-            self.close()
             for target in targets:
                 if target.is_dir() and not target.is_symlink():
                     shutil.rmtree(target)
                 else:
                     target.unlink()
-            self._reopen_project_conversation(
-                open_project(root), conversation_id
-            )
+            self._refresh_sources(open_project(root))
         except Exception as error:
-            # Reopen through normal index validation after a partial delete.
+            # Index what is left after a partial delete.
+            if root is not None and self.session is not None:
+                try:
+                    self._refresh_sources(open_project(root))
+                except Exception:
+                    pass
             if root is not None and self.session is None:
                 try:
                     self._reopen_project_conversation(
@@ -1764,6 +1804,119 @@ class ChatEngine:
                 error,
                 f"Could not remove sources: {error}",
             )
+
+    def edit_folder(
+        self, folder: str, operation: str, **arguments: object
+    ) -> None:
+        """Add, replace, or delete files in ``outputs/`` or ``templates/``.
+
+        Neither folder is indexed, so editing them only refreshes the
+        workspace tree and the open session keeps running.
+
+        Parameters
+        ----------
+        folder: str
+            ``"outputs"`` or ``"templates"``.
+        operation: str
+            ``"add"`` copies ``paths`` (files or folders outside the
+            project) into the folder; an existing name is replaced when
+            ``replace`` is true and otherwise kept, with the copy renamed.
+            ``"replace"`` overwrites the file ``path`` with the content of
+            ``source``, keeping its name. ``"remove"`` deletes the
+            workspace-relative ``paths`` inside the folder.
+        **arguments: object
+            The operation's arguments, as listed above.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if folder not in _EDITABLE_FOLDERS:
+                raise ValueError(
+                    f"Only {' and '.join(_EDITABLE_FOLDERS)} can be edited."
+                )
+            root = self.session.project.root.resolve(strict=True)
+            directory = (
+                output_folder(root)
+                if folder == OUTPUTS_FOLDER
+                else templates_folder(root)
+            ).resolve(strict=True)
+            changed: list[str] = []
+            if operation == "add":
+                replace = arguments.get("replace") is True
+                for value in _path_list(arguments.get("paths")):
+                    origin = Path(value).expanduser().resolve(strict=True)
+                    if origin == directory or origin.is_relative_to(
+                        directory
+                    ):
+                        raise ValueError(
+                            f"{origin.name} is already in {folder}/."
+                        )
+                    destination = directory / origin.name
+                    if destination.exists() or destination.is_symlink():
+                        if replace:
+                            _remove_path(destination)
+                        else:
+                            destination = _free_path(directory, origin.name)
+                    if origin.is_dir():
+                        shutil.copytree(origin, destination)
+                    else:
+                        shutil.copy2(origin, destination)
+                    changed.append(destination.relative_to(root).as_posix())
+            elif operation == "replace":
+                destination = _inside_folder(
+                    root, directory, arguments.get("path")
+                )
+                origin = Path(str(arguments.get("source") or ""))
+                origin = origin.expanduser().resolve(strict=True)
+                if not destination.is_file() or not origin.is_file():
+                    raise ValueError("Choose a file to replace it with.")
+                shutil.copyfile(origin, destination)
+                changed.append(destination.relative_to(root).as_posix())
+            elif operation == "remove":
+                for value in _path_list(arguments.get("paths")):
+                    _remove_path(_inside_folder(root, directory, value))
+                    changed.append(value)
+            else:
+                raise ValueError(f"Unknown operation: {operation}.")
+            self.active_trace.emit(
+                f"gui.folder.{operation}",
+                component="gui_engine",
+                data={"folder": folder, "paths": changed},
+            )
+            self._send(
+                "folder_changed",
+                folder=folder,
+                operation=operation,
+                paths=changed,
+                workspace_files=_workspace_files(root),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.folder.edit.failed",
+                error,
+                f"Could not change {folder}/: {error}",
+            )
+
+    def _refresh_sources(self, project: QAProject) -> None:
+        """Re-index changed sources, keeping the models and the chat.
+
+        Only new or changed files are chunked and embedded; the models
+        stay loaded, so adding or removing a file does not reload them.
+
+        """
+
+        self.session.refresh_sources(project)
+        self.active_trace.emit(
+            "gui.sources.refreshed",
+            component="gui_engine",
+            data={
+                "index_status": self.session.index_status,
+                "changes": self.session.source_changes,
+            },
+        )
+        self._announce_project(project, self.active_conversation)
 
     def _reopen_project_conversation(
         self, project: QAProject, conversation_id: str
@@ -1884,6 +2037,8 @@ class ChatEngine:
             title_question = str(
                 generation_settings.pop("_title_question", question)
             )
+            # Answer settings belong to the project; every chat uses them.
+            self._save_answer_settings(generation_settings)
             backend = self.session.backend
             levels = read_effort_levels(self.session.project.root, backend)
             indexes = _effort_indexes(effort)
@@ -1932,9 +2087,11 @@ class ChatEngine:
             )
             if self.read_command is not None:
                 options["confirm_callback"] = self._confirm_plan
+                options["choice_callback"] = self._choose_option
             # Reports such as research briefings also get a one-page PDF.
             options["pdf_writer"] = write_report_pdf
-            self.session.ask(question, **options)
+            with self._live_usage():
+                self.session.ask(question, **options)
             stream.flush()
             if (
                 self.conversation_store is not None
@@ -1947,9 +2104,12 @@ class ChatEngine:
                     asdict(self.active_conversation)
                 )
             turn = self.session.turns[-1]
-            event: dict[str, object] = {"turn": asdict(turn)}
+            event: dict[str, object] = {
+                "turn": asdict(turn),
+                "usage": self._usage_totals(),
+            }
             # A tool that saved a file (for example a research briefing in
-            # target/) refreshes the workspace tree.
+            # outputs/) refreshes the workspace tree.
             if (turn.parameters.get("tool") or {}).get("saved"):
                 event["workspace_files"] = _workspace_files(
                     self.session.project.root
@@ -1975,57 +2135,114 @@ class ChatEngine:
                     data={"error": str(error)},
                 )
 
-    def _write_template_guides(self, root: Path, kind: str) -> None:
-        """Keep a readable guide to each report template in the project.
+    @contextmanager
+    def _live_usage(self) -> Iterator[None]:
+        """Send the tokens used by the running answer twice a second.
+
+        Notes
+        -----
+        A background thread reads the model sessions' token totals, which
+        grow while a reply streams, and sends ``usage_progress`` events
+        with the tokens read and generated so far for this answer.
+
+        """
+
+        session = self.session
+        mark = session.usage_mark()
+        stopped = Event()
+
+        def tick() -> None:
+            while not stopped.wait(0.5):
+                self._send("usage_progress", **session.usage_since(mark))
+
+        ticker = Thread(target=tick, name="qachat-usage", daemon=True)
+        ticker.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            ticker.join(timeout=1.0)
+
+    def _usage_totals(self) -> dict[str, dict[str, int]]:
+        """Tokens used by the open chat and by the whole project.
+
+        Returns
+        -------
+        dict[str, dict[str, int]]
+            ``chat`` and ``project``, each with ``input_tokens``,
+            ``output_tokens``, and ``answers``. The project counts every
+            saved chat, deleted chats included; a turn that branched chats
+            share is counted once.
+
+        """
+
+        def add(total: dict[str, int], parameters: object) -> None:
+            usage = (
+                parameters.get("usage") if isinstance(parameters, dict)
+                else None
+            )
+            if isinstance(usage, dict):
+                total["input_tokens"] += int(usage.get("input_tokens", 0))
+                total["output_tokens"] += int(usage.get("output_tokens", 0))
+                total["answers"] += 1
+
+        empty = {"input_tokens": 0, "output_tokens": 0, "answers": 0}
+        chat = dict(empty)
+        project = dict(empty)
+        if self.session is None:
+            return {"chat": chat, "project": project}
+        for turn in self.session.turns:
+            add(chat, getattr(turn, "parameters", None))
+        seen: set[tuple[str, str]] = set()
+        traces = self.session.project.root / "logs" / "traces"
+        for path in sorted(traces.rglob("conversation_*.json")):
+            try:
+                state = conversation_state(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError):
+                continue  # An unreadable file is left out of the total.
+            for turn in state.get("turns", []) or []:
+                if not isinstance(turn, dict):
+                    continue
+                key = (str(turn.get("timestamp")), str(turn.get("question")))
+                if key not in seen:
+                    seen.add(key)
+                    add(project, turn.get("parameters"))
+        return {"chat": chat, "project": project}
+
+    def _prepare_project_folders(self, root: Path) -> None:
+        """Create ``outputs/`` and ``templates/`` in an opened project.
 
         Parameters
         ----------
         root: pathlib.Path
-            Project folder; guides go to ``target/templates``.
-        kind: str
-            Project type; guides are written for the templates its tools
-            use (none for types without report tools).
+            Project folder.
 
         Notes
         -----
-        Each guide is Markdown generated from its template, plus a PDF. A
-        guide is rewritten only when it still starts with QAChat's marker
-        and its text changed, so a user's own file of the same name is
-        kept. Failures are traced and never stop the project opening.
+        ``outputs/`` replaces the ``target/`` folder of earlier versions,
+        which is renamed; the template guides those versions generated in
+        it are removed, because templates are now readable Markdown in
+        ``templates/``, which starts with a copy of the shipped templates.
+        Failures are traced and never stop the project opening.
 
         """
 
         try:
-            names = _report_templates(kind)
-            if not names:
-                return
-            folder = target_folder(root) / "templates"
-            folder.mkdir(parents=True, exist_ok=True)
-            for name in names:
-                template = load_template(name)
-                text = template_guide(template)
-                guide = folder / f"{name}_template.md"
-                if guide.exists():
-                    current = guide.read_text(encoding="utf-8")
-                    if not current.startswith(GUIDE_MARKER) or (
-                        current == text
-                    ):
-                        continue
-                guide.write_text(text, encoding="utf-8")
-                readable = "\n".join(
-                    line
-                    for line in text.splitlines()
-                    if not line.startswith("<!--")
-                )
-                write_report_pdf(
-                    readable,
-                    folder / f"{name}_template.pdf",
-                    max_pages=3,
-                    label="QAChat template",
-                )
-        except Exception as error:  # Guides are a convenience.
+            outputs = output_folder(root)
+            templates_folder(root)
+            guides = outputs / "templates"
+            for guide in sorted(guides.glob("*_template.md")):
+                text = guide.read_text(encoding="utf-8")
+                if text.startswith(_LEGACY_GUIDE_MARKER):
+                    guide.unlink()
+                    guide.with_suffix(".pdf").unlink(missing_ok=True)
+            if guides.is_dir() and not any(guides.iterdir()):
+                guides.rmdir()
+        except Exception as error:  # The project opens either way.
             self.active_trace.emit(
-                "gui.template_guides.failed",
+                "gui.project.folders.failed",
                 component="gui_engine",
                 data={"error": str(error)},
             )
@@ -2066,6 +2283,46 @@ class ChatEngine:
                 "error",
                 message="Choose Continue, Quick, or Cancel for the plan "
                 "first.",
+            )
+
+    def _choose_option(
+        self, question: str, options: tuple[str, ...]
+    ) -> int | None:
+        """Wait for the user to pick one of a tool's options.
+
+        The page shows the options from the ``processing`` answer phase
+        that precedes this call and answers with a ``plan_choice`` command
+        whose choice is ``option:<index>`` or ``cancel``.
+
+        Parameters
+        ----------
+        question: str
+            The question the page is showing.
+        options: tuple[str, ...]
+            The options the page is showing.
+
+        Returns
+        -------
+        int | None
+            The chosen index; None for cancel, an invalid answer, or ended
+            input.
+
+        """
+
+        while True:
+            command = self.read_command()
+            if command is None:
+                return None
+            if command.get("action") == "plan_choice":
+                choice = str(command.get("choice") or "")
+                number = choice.removeprefix("option:")
+                if choice.startswith("option:") and number.isdigit():
+                    index = int(number)
+                    return index if index < len(options) else None
+                return None
+            self._send(
+                "error",
+                message=f"Answer the question first: {question}",
             )
 
     def preview_reference(self, turn_index: int, citation: int) -> None:
@@ -2419,7 +2676,7 @@ class ChatEngine:
             trace=self.project_trace,
         )
         self.active_conversation = conversation
-        self._upgrade_answer_budget()
+        self._use_project_answer_settings()
         self.active_trace.emit(
             "conversation.selected",
             component="gui_engine",
@@ -2439,6 +2696,7 @@ class ChatEngine:
             temperature=self.session.chat_session.temperature,
             thinking=self.session.chat_session.thinking,
             max_new_tokens=self.session.chat_session.max_new_tokens,
+            usage=self._usage_totals(),
         )
 
     def _send_conversations(self, event: str, **data: object) -> None:
@@ -2758,30 +3016,73 @@ def _preference_payload() -> dict[str, object]:
 
     backends = (BACKEND_MLX, BACKEND_TORCH)
     return {
-        "effort_levels": {b: preferred_effort_levels(b) for b in backends},
-        "router_models": {b: preferred_router_model(b) for b in backends},
+        "effort_levels": {b: default_effort_levels(b) for b in backends},
+        "router_models": {b: default_router_model(b) for b in backends},
         "embedding_models": {
-            b: preferred_embedding_model(b) for b in backends
+            b: default_embedding_model(b) for b in backends
         },
-        "search_depth": preferred_search_depth(),
-        "query_format": preferred_query_format(),
-        "appearance": preferred_appearance(),
+        "search_depth": default_search_depth(),
+        "query_format": default_query_format(),
+        "appearance": default_appearance(),
     }
 
 
-def _report_templates(kind: str) -> list[str]:
-    """Return the report templates a project type's tools use."""
+# First line of the template guides earlier versions wrote to target/.
+_LEGACY_GUIDE_MARKER: Final[str] = (
+    "<!-- Generated by QAChat from a report template"
+)
+# Workspace folders the user may edit directly; neither is indexed.
+_EDITABLE_FOLDERS: Final[tuple[str, ...]] = (OUTPUTS_FOLDER, TEMPLATES_FOLDER)
 
-    names: list[str] = []
-    for intent in project_type(kind).intents.values():
-        settings = getattr(intent.tool, "settings", None)
-        for name in (
-            getattr(settings, "template", None),
-            *getattr(settings, "templates", ()),
-        ):
-            if isinstance(name, str) and name not in names:
-                names.append(name)
-    return names
+
+def _path_list(value: object) -> list[str]:
+    """Return a non-empty list of path strings, or raise ValueError."""
+
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValueError("Choose files or folders.")
+    return value
+
+
+def _inside_folder(root: Path, folder: Path, relative: object) -> Path:
+    """Resolve a workspace path that must lie inside ``folder``."""
+
+    if not isinstance(relative, str) or not relative:
+        raise ValueError(f"Choose a file in {folder.name}/.")
+    path = root / relative
+    # Resolve the parent only, so a symlink is handled itself.
+    resolved = path.parent.resolve(strict=True) / path.name
+    if not resolved.is_relative_to(folder) or resolved == folder:
+        raise ValueError(
+            f"Only items inside {folder.name}/ can be changed: {relative}"
+        )
+    if not resolved.exists() and not resolved.is_symlink():
+        raise ValueError(f"Not found: {relative}")
+    return resolved
+
+
+def _free_path(directory: Path, name: str) -> Path:
+    """``directory/name``, or with ``-2``, ``-3``, ... when it is taken."""
+
+    candidate = directory / name
+    stem, suffix = candidate.stem, candidate.suffix
+    number = 2
+    while candidate.exists():
+        candidate = directory / f"{stem}-{number}{suffix}"
+        number += 1
+    return candidate
+
+
+def _remove_path(path: Path) -> None:
+    """Delete a file, symlink, or folder."""
+
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
 
 
 def _workspace_files(root: Path) -> list[str]:
@@ -2790,8 +3091,8 @@ def _workspace_files(root: Path) -> list[str]:
     Parameters
     ----------
     root: pathlib.Path
-        Managed project directory whose sources, target, indexes, and logs
-        are listed.
+        Managed project directory whose sources, outputs, templates,
+        indexes, and logs are listed.
 
     Returns
     -------
@@ -2805,11 +3106,8 @@ def _workspace_files(root: Path) -> list[str]:
 
     """
 
-    files = ["profile.ini"]
-    for name in (EFFORT_FILE, "model_choices.json"):
-        if (root / name).is_file():
-            files.append(name)
-    folders = ("sources", "target", "indexes", "logs")
+    files = [PROFILE_FILE]
+    folders = ("sources", OUTPUTS_FOLDER, TEMPLATES_FOLDER, "indexes", "logs")
     for folder in (root / name for name in folders):
         if folder.is_dir():
             files.extend(
@@ -3058,6 +3356,14 @@ def main() -> None:
                         engine.add_project_sources(command["sources"])
                     elif action == "remove_project_sources":
                         engine.remove_project_sources(command["paths"])
+                    elif action == "edit_folder":
+                        arguments = dict(command)
+                        del arguments["action"]
+                        engine.edit_folder(
+                            str(arguments.pop("folder", "")),
+                            str(arguments.pop("operation", "")),
+                            **arguments,
+                        )
                     elif action == "rename_project":
                         engine.rename_project(command["name"])
                     elif action == "reset":

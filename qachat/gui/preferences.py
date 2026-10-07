@@ -1,48 +1,43 @@
-"""Default settings and app-wide preferences of the desktop app.
+"""Default settings of the desktop app, in one file.
 
-Every default setting of the desktop app is in one file,
-``qachat/gui/defaults.json``: the appearance, the five effort levels (names
-and models) per backend, the search depth, the intent router and embedding
-models per backend, the embedding query format, and the answer settings.
-Edit that file to change what everyone starts with; restart QAChat after.
+Every default setting of the desktop app is in ``qachat/gui/defaults.json``:
+the appearance, the five effort levels (names and models) per backend, the
+search depth, the intent router and embedding models per backend, the
+embedding query format, and the answer settings. Edit that file to change
+what new projects start with; restart QAChat after. The app writes to it
+only for app-wide choices: the appearance, "Use installed models", and
+settings edited while no project is open.
 
-Each user's own changes are kept apart, in ``qachat/gui/preferences.json``
-(git-ignored), and only where they differ from the defaults. New projects
-start from the defaults plus these preferences; each project then keeps
-its own copy (``profile.ini`` and ``effort_levels.json``).
-
-The core library has its own defaults for notebooks
-(``qachat.model_defaults``); ``defaults.json`` decides what the desktop
-app uses.
+Each project then keeps all of its own settings in its ``profile.ini``, so
+a project never changes when the defaults change. The core library has its
+own defaults for notebooks (``qachat.model_defaults``).
 
 Key Features
 ------------
 
-- **One place for defaults**: ``defaults.json``, validated on first use; a
+- **One place for defaults**: ``defaults.json``, validated when read; a
   mistake names the setting.
-- **Personal overrides**: ``read_preferences`` and ``write_preferences``
-  keep only values that differ from the defaults.
 - **Shared validation**: ``validate_model_id``, ``validate_effort_levels``,
   and ``validate_search_depth`` also check project settings.
-- **Required models**: ``required_models`` lists what the preferences use,
-  so the first-run check asks only for those.
+- **Required models**: ``required_models`` lists what the defaults use, so
+  the first-run check asks only for those.
 
 Module Structure
 ----------------
 
-- ``DEFAULTS_FILE`` and ``built_in_defaults``
+- ``DEFAULTS_FILE``, ``defaults_file``, ``built_in_defaults``, and
+  ``write_defaults``
 - ``default_effort_levels``, ``default_search_depth``,
-  ``default_router_model``, ``default_embedding_model``, and
+  ``default_router_model``, ``default_embedding_model``,
+  ``default_query_format``, ``default_appearance``, and
   ``default_answer_settings``
-- ``preferences_file``, ``read_preferences``, and ``write_preferences``
-- ``preferred_*`` and ``required_models``
+- ``required_models``
 
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from functools import lru_cache
 import json
 import os
 from pathlib import Path
@@ -54,39 +49,31 @@ from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "APPEARANCE_CHOICES",
+    "DEFAULTS_ENVIRONMENT",
     "DEFAULTS_FILE",
     "LEVEL_COUNT",
     "MAX_LEVEL_NAME",
     "MAX_SEARCH_DEPTH",
-    "PREFERENCES_ENVIRONMENT",
-    "PREFERENCES_FILE",
     "built_in_defaults",
     "default_answer_settings",
+    "default_appearance",
     "default_effort_levels",
     "default_embedding_model",
+    "default_query_format",
     "default_router_model",
     "default_search_depth",
-    "preferences_file",
-    "preferred_appearance",
-    "preferred_effort_levels",
-    "preferred_embedding_model",
-    "preferred_query_format",
-    "preferred_router_model",
-    "preferred_search_depth",
-    "read_preferences",
+    "defaults_file",
     "required_models",
     "validate_effort_levels",
     "validate_model_id",
     "validate_search_depth",
-    "write_preferences",
+    "write_defaults",
 ]
 
-# The shipped defaults: edit this file to change what everyone starts with.
+# The defaults: edit this file to change what new projects start with.
 DEFAULTS_FILE: Final[Path] = Path(__file__).with_name("defaults.json")
-# Each user's own changes, written by the app.
-PREFERENCES_FILE: Final[Path] = Path(__file__).with_name("preferences.json")
-# Tests and special installs can point QAChat at another preferences file.
-PREFERENCES_ENVIRONMENT: Final[str] = "QACHAT_PREFERENCES_FILE"
+# Tests point QAChat at a copy, so they never change the real defaults.
+DEFAULTS_ENVIRONMENT: Final[str] = "QACHAT_DEFAULTS_FILE"
 # The page's appearance choices; "system" follows the operating system.
 APPEARANCE_CHOICES: Final[tuple[str, ...]] = ("system", "light", "dark")
 LEVEL_COUNT: Final[int] = 5
@@ -237,20 +224,50 @@ def _choice(options: tuple[str, ...]) -> Callable:
     return checked
 
 
-@lru_cache(maxsize=None)
-def built_in_defaults(path: Path = DEFAULTS_FILE) -> dict[str, object]:
-    """Read and validate the shipped defaults.
+# Validated contents per file, with the modification time they were read at.
+_CACHE: dict[Path, tuple[float, dict[str, object]]] = {}
+
+
+def defaults_file() -> Path:
+    """Return the defaults file location.
+
+    Returns
+    -------
+    pathlib.Path
+        ``$QACHAT_DEFAULTS_FILE`` when set (tests use a copy), otherwise
+        ``qachat/gui/defaults.json``.
+
+    """
+
+    override = os.environ.get(DEFAULTS_ENVIRONMENT)
+    return Path(override) if override else DEFAULTS_FILE
+
+
+def _checks() -> dict[str, Callable[[object], object]]:
+    return {
+        "appearance": _choice(APPEARANCE_CHOICES),
+        "effort_levels": _per_backend(validate_effort_levels),
+        "search_depth": validate_search_depth,
+        "router_models": _per_backend(validate_model_id),
+        "embedding_models": _per_backend(validate_model_id),
+        "query_format": _choice(_QUERY_FORMATS),
+        "answers": _validate_answers,
+    }
+
+
+def built_in_defaults(path: Path | None = None) -> dict[str, object]:
+    """Read and validate the defaults.
 
     Parameters
     ----------
-    path: pathlib.Path, optional
-        Defaults file. Defaults to ``DEFAULTS_FILE``.
+    path: pathlib.Path | None, optional
+        Defaults file. Defaults to ``defaults_file()``.
 
     Returns
     -------
     dict[str, object]
-        Every default setting; cached for the process (restart QAChat after
-        editing the file).
+        Every default setting. The file is read again when it changed, so
+        edits apply to the next new project.
 
     Raises
     ------
@@ -260,28 +277,101 @@ def built_in_defaults(path: Path = DEFAULTS_FILE) -> dict[str, object]:
 
     """
 
+    path = Path(path or defaults_file())
+    modified = path.stat().st_mtime
+    cached = _CACHE.get(path)
+    if cached is not None and cached[0] == modified:
+        return cached[1]
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ValueError(f"{path} is not valid JSON: {error}") from error
-    checks = {
-        "appearance": _choice(APPEARANCE_CHOICES),
-        "effort_levels": _per_backend(validate_effort_levels),
-        "search_depth": validate_search_depth,
-        "router_models": _per_backend(validate_model_id),
-        "embedding_models": _per_backend(validate_model_id),
-        "query_format": _choice(_QUERY_FORMATS),
-        "answers": _validate_answers,
-    }
     defaults: dict[str, object] = {}
-    for name, check in checks.items():
+    for name, check in _checks().items():
         if name not in data:
             raise ValueError(f"{path} needs the setting {name!r}.")
         try:
             defaults[name] = check(data[name])
         except (ValueError, TypeError) as error:
             raise ValueError(f"{path} setting {name!r}: {error}") from error
+    _CACHE[path] = (modified, defaults)
     return defaults
+
+
+def write_defaults(
+    changes: dict[str, object], path: Path | None = None
+) -> dict[str, object]:
+    """Save app-wide choices into the defaults file.
+
+    Parameters
+    ----------
+    changes: dict[str, object]
+        Any of ``appearance``, ``query_format``, ``search_depth``, and
+        ``effort_levels``, ``router_models``, or ``embedding_models`` as
+        ``{backend: value}``.
+    path: pathlib.Path | None, optional
+        Defaults file. Defaults to ``defaults_file()``.
+
+    Returns
+    -------
+    dict[str, object]
+        The defaults now saved.
+
+    Raises
+    ------
+    ValueError
+        If a value is invalid; nothing is written then.
+
+    """
+
+    path = Path(path or defaults_file())
+    saved = json.loads(json.dumps(built_in_defaults(path)))
+    checks = _checks()
+    for key, value in changes.items():
+        if key in ("effort_levels", "router_models", "embedding_models"):
+            if not isinstance(value, dict):
+                raise ValueError(f"{key} must map backends to values.")
+            for backend, entry in value.items():
+                if backend not in _BACKENDS:
+                    raise ValueError(f"Unknown backend {backend!r}.")
+                check = {
+                    "effort_levels": validate_effort_levels,
+                }.get(key, validate_model_id)
+                saved[key][backend] = check(entry)
+        elif key in ("appearance", "query_format", "search_depth"):
+            try:
+                saved[key] = checks[key](value)
+            except (ValueError, TypeError) as error:
+                raise ValueError(f"{key}: {error}") from error
+        else:
+            raise ValueError(f"Unknown default setting {key!r}.")
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(_format(saved) + "\n", encoding="utf-8")
+    temporary.replace(path)
+    _CACHE.pop(path, None)
+    return built_in_defaults(path)
+
+
+def _format(value: object, indent: int = 0) -> str:
+    """JSON with short lists and objects on one line, as the file is kept."""
+
+    inline = json.dumps(value, ensure_ascii=False)
+    nested = isinstance(value, dict) and any(
+        isinstance(item, (dict, list)) for item in value.values()
+    )
+    if not isinstance(value, (dict, list)) or (
+        not nested and len(inline) + indent <= 76
+    ):
+        return inline
+    pad = " " * (indent + 2)
+    if isinstance(value, dict):
+        items = [
+            f"{pad}{json.dumps(key)}: {_format(item, indent + 2)}"
+            for key, item in value.items()
+        ]
+        return "{\n" + ",\n".join(items) + "\n" + " " * indent + "}"
+    items = [f"{pad}{_format(item, indent + 2)}" for item in value]
+    return "[\n" + ",\n".join(items) + "\n" + " " * indent + "]"
 
 
 def default_effort_levels(backend: str) -> list[dict[str, object]]:
@@ -322,222 +412,31 @@ def default_embedding_model(backend: str) -> str:
     return str(built_in_defaults()["embedding_models"][backend])
 
 
+def default_query_format() -> str:
+    """Return the default embedding query format."""
+
+    return str(built_in_defaults()["query_format"])
+
+
+def default_appearance() -> str:
+    """Return the appearance: system, light, or dark."""
+
+    return str(built_in_defaults()["appearance"])
+
+
 def default_answer_settings() -> dict[str, object]:
     """Return the default temperature, thinking, and longest answer."""
 
     return dict(built_in_defaults()["answers"])
 
 
-def preferences_file() -> Path:
-    """Return the preferences file location.
-
-    Returns
-    -------
-    pathlib.Path
-        ``$QACHAT_PREFERENCES_FILE`` when set (tests use it), otherwise
-        ``qachat/gui/preferences.json``.
-
-    """
-
-    override = os.environ.get(PREFERENCES_ENVIRONMENT)
-    return Path(override) if override else PREFERENCES_FILE
-
-
-def read_preferences(path: Path | None = None) -> dict[str, object]:
-    """Read the user's saved preferences, keeping only valid entries.
-
-    Parameters
-    ----------
-    path: pathlib.Path | None, optional
-        Preferences file. Defaults to ``preferences_file()``.
-
-    Returns
-    -------
-    dict[str, object]
-        Valid saved entries; empty when the file is missing or unreadable.
-
-    """
-
-    try:
-        value = json.loads(
-            Path(path or preferences_file()).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(value, dict):
-        return {}
-    clean: dict[str, object] = {}
-    if value.get("appearance") in APPEARANCE_CHOICES:
-        clean["appearance"] = value["appearance"]
-    if value.get("query_format") in _QUERY_FORMATS:
-        clean["query_format"] = value["query_format"]
-    try:
-        if "search_depth" in value:
-            clean["search_depth"] = validate_search_depth(
-                value["search_depth"]
-            )
-    except ValueError:
-        pass
-    for key, check in (
-        ("effort_levels", validate_effort_levels),
-        ("router_models", validate_model_id),
-        ("embedding_models", validate_model_id),
-    ):
-        entries = value.get(key)
-        if not isinstance(entries, dict):
-            continue
-        kept = {}
-        for backend in _BACKENDS:
-            if backend in entries:
-                try:
-                    kept[backend] = check(entries[backend])
-                except (ValueError, TypeError):
-                    continue
-        if kept:
-            clean[key] = kept
-    return clean
-
-
-def write_preferences(
-    changes: dict[str, object], path: Path | None = None
-) -> dict[str, object]:
-    """Merge changes into the preferences, dropping default values.
-
-    Parameters
-    ----------
-    changes: dict[str, object]
-        Any of ``appearance``, ``query_format``, ``search_depth``, and
-        ``effort_levels``, ``router_models``, or ``embedding_models`` as
-        ``{backend: value}``.
-    path: pathlib.Path | None, optional
-        Preferences file. Defaults to ``preferences_file()``.
-
-    Returns
-    -------
-    dict[str, object]
-        The preferences now saved; the file is removed when none differ
-        from the defaults.
-
-    Raises
-    ------
-    ValueError
-        If a value is invalid; nothing is written then.
-
-    """
-
-    path = Path(path or preferences_file())
-    defaults = built_in_defaults()
-    saved = read_preferences(path)
-    for key, options in (
-        ("appearance", APPEARANCE_CHOICES),
-        ("query_format", _QUERY_FORMATS),
-    ):
-        if key in changes:
-            if changes[key] not in options:
-                raise ValueError(
-                    f"Choose a supported {key.replace('_', ' ')}."
-                )
-            saved[key] = changes[key]
-            if saved[key] == defaults[key]:
-                saved.pop(key)
-    if "search_depth" in changes:
-        depth = validate_search_depth(changes["search_depth"])
-        saved["search_depth"] = depth
-        if depth == defaults["search_depth"]:
-            saved.pop("search_depth")
-    for key, check in (
-        ("effort_levels", validate_effort_levels),
-        ("router_models", validate_model_id),
-        ("embedding_models", validate_model_id),
-    ):
-        entries = changes.get(key)
-        if not isinstance(entries, dict):
-            continue
-        kept = dict(saved.get(key) or {})
-        for backend, value in entries.items():
-            if backend not in _BACKENDS:
-                raise ValueError(f"Unknown backend {backend!r}.")
-            value = check(value)
-            if value == defaults[key][backend]:
-                kept.pop(backend, None)
-            else:
-                kept[backend] = value
-        if kept:
-            saved[key] = kept
-        else:
-            saved.pop(key, None)
-    if saved:
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(saved, indent=2) + "\n", encoding="utf-8"
-        )
-        temporary.replace(path)
-    else:
-        path.unlink(missing_ok=True)
-    return saved
-
-
-def _preferred(key: str, path: Path | None) -> object:
-    return read_preferences(path).get(key)
-
-
-def preferred_effort_levels(
-    backend: str, path: Path | None = None
-) -> list[dict[str, object]]:
-    """Return the effort levels new projects start from."""
-
-    levels = (_preferred("effort_levels", path) or {}).get(backend)
-    return levels or default_effort_levels(backend)
-
-
-def preferred_search_depth(path: Path | None = None) -> list[int]:
-    """Return the search depth new projects start from."""
-
-    return _preferred("search_depth", path) or default_search_depth()
-
-
-def preferred_router_model(backend: str, path: Path | None = None) -> str:
-    """Return the intent router model new projects start from."""
-
-    routers = _preferred("router_models", path) or {}
-    return routers.get(backend) or default_router_model(backend)
-
-
-def preferred_embedding_model(
-    backend: str, path: Path | None = None
-) -> str:
-    """Return the embedding model new projects start from."""
-
-    models = _preferred("embedding_models", path) or {}
-    return models.get(backend) or default_embedding_model(backend)
-
-
-def preferred_query_format(path: Path | None = None) -> str:
-    """Return the embedding query format new projects start from."""
-
-    return str(
-        _preferred("query_format", path)
-        or built_in_defaults()["query_format"]
-    )
-
-
-def preferred_appearance(path: Path | None = None) -> str:
-    """Return the appearance: system, light, or dark."""
-
-    return str(
-        _preferred("appearance", path) or built_in_defaults()["appearance"]
-    )
-
-
-def required_models(backend: str, path: Path | None = None) -> list[str]:
-    """List the models the preferences use, for the first-run check.
+def required_models(backend: str) -> list[str]:
+    """List the models the defaults use, for the first-run check.
 
     Parameters
     ----------
     backend: str
         Computation backend.
-    path: pathlib.Path | None, optional
-        Preferences file. Defaults to ``preferences_file()``.
 
     Returns
     -------
@@ -547,10 +446,7 @@ def required_models(backend: str, path: Path | None = None) -> list[str]:
 
     """
 
-    models = [
-        str(level["model"])
-        for level in preferred_effort_levels(backend, path)
-    ]
-    models.append(preferred_router_model(backend, path))
-    models.append(preferred_embedding_model(backend, path))
+    models = [str(level["model"]) for level in default_effort_levels(backend)]
+    models.append(default_router_model(backend))
+    models.append(default_embedding_model(backend))
     return list(dict.fromkeys(models))

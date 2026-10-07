@@ -35,11 +35,7 @@ Key Features
 - **generate_paper_summary**
 
     Summarize one paper with a report template (for example a research
-    briefing), check its structure, and save it to ``target/``.
-
-- **qachat_help**
-
-    Answer questions about QAChat itself from its own documentation.
+    briefing), check its structure, and save it to ``outputs/``.
 
 - **Planning**
 
@@ -77,13 +73,13 @@ Module Structure
 
     Template-checked paper summaries; the custom-tool reference example.
 
-- ``load_target``
+- ``outputs``
 
-    The never-indexed ``target/`` folder.
+    The never-indexed ``outputs/`` folder.
 
-- ``qachat_help``
+- ``report_template``
 
-    QAChat self-knowledge, from its documentation.
+    Markdown report templates and the checks against them.
 
 - ``planning``
 
@@ -99,7 +95,12 @@ from qachat.tools.batch_classify import (
     ClassifySettings,
     Label,
 )
-from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
+from qachat.tools.contract import (
+    EarlierTurn,
+    ToolContext,
+    ToolRequest,
+    ToolResult,
+)
 from qachat.tools.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
@@ -120,7 +121,6 @@ from qachat.tools.registry import (
     TOOL_CHOICES,
     TOOL_GENERATE_PAPER_SUMMARY,
     TOOL_PROJECT_INVENTORY,
-    TOOL_QACHAT_HELP,
     TOOL_REGISTRY,
     TOOL_SCAN_AND_LIST,
     Tool,
@@ -138,6 +138,7 @@ from qachat.tools.scan_and_list import (
 )
 
 __all__ = [
+    "EarlierTurn",
     "CANDIDATE_CHOICES",
     "CANDIDATES_MENTIONS",
     "CONFIRMATION_ALWAYS",
@@ -154,7 +155,6 @@ __all__ = [
     "TOOL_CHOICES",
     "TOOL_GENERATE_PAPER_SUMMARY",
     "TOOL_PROJECT_INVENTORY",
-    "TOOL_QACHAT_HELP",
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
     "UNCLEAR",

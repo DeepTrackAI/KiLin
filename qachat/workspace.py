@@ -64,7 +64,7 @@ import json
 from pathlib import Path
 import shutil
 from time import perf_counter
-from typing import Mapping, Sequence
+from typing import Final, Mapping, Sequence
 
 from qachat.project import (
     PROJECT_KIND_CHOICES,
@@ -78,6 +78,10 @@ from qachat.repository import scan_repository
 from qachat.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = ["prepare_sources_workspace"]
+
+# Workspace folders whose files may be copied into the sources: what QAChat
+# wrote (qachat.tools.outputs) and the report templates.
+_COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
 
 
 def prepare_sources_workspace(
@@ -103,7 +107,7 @@ def prepare_sources_workspace(
         although the annotation is Sequence. Entries are resolved,
         deduplicated, and checked against the destination workspace.
     kind: ProjectKind
-        Project type ID from ``qachat/project_types.json``.
+        Project type ID from ``qachat/project_types/``.
     workspace_directory: str | pathlib.Path
         Destination managed workspace, new/empty or already containing a
         compatible profile.ini. Relative paths use the current working
@@ -190,7 +194,14 @@ def prepare_sources_workspace(
         source = source.resolve(strict=True)
         if not source.is_file() and not source.is_dir():
             raise ValueError(f"Choose a regular file or folder: {source}")
-        if source == workspace or source.is_relative_to(workspace):
+        # A file QAChat wrote (outputs/) or a template may become a source;
+        # the rest of the workspace (sources, indexes, logs) may not.
+        inside = source == workspace or source.is_relative_to(workspace)
+        if inside and not any(
+            source.is_relative_to(workspace / folder)
+            and source != workspace / folder
+            for folder in _COPYABLE_WORKSPACE_FOLDERS
+        ):
             raise ValueError("Do not add the workspace as its own source.")
         if source not in chosen:
             chosen.append(source)

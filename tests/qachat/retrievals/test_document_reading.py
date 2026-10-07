@@ -120,6 +120,28 @@ class TestDocumentReading(unittest.TestCase):
         self.assertEqual(selection.functions, ("fit",))
         self.assertEqual(list(selection.chunks), fit)
 
+    def test_papers_named_by_author_or_author_year(self) -> None:
+        from qachat.retrievals.document_reading import named_paths
+
+        papers = [
+            Path(f"repo/{name}.pdf")
+            for name in ("yao25connecting", "patil25deep", "mijalkov17braph")
+        ]
+
+        def named(question):
+            return [path.stem for path in named_paths(
+                question, papers, authors=True
+            )]
+
+        self.assertEqual(named("a very short summary on yao25"),
+                         ["yao25connecting"])
+        self.assertEqual(named("what does Yao's paper say"),
+                         ["yao25connecting"])
+        self.assertEqual(named("turn patil25 into a briefing"),
+                         ["patil25deep"])
+        self.assertEqual(named("can you summarize the paper"), [])
+        self.assertEqual(named("the 2025 papers"), [])
+
     def test_nothing_to_read(self) -> None:
         self.assertIsNone(
             read_document("q", [], _EMPTY_GRAPH, [], max_tokens=1_000)

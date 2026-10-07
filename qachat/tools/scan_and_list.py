@@ -66,7 +66,8 @@ import re
 from typing import Final
 
 from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import dominant_path, named_paths
+from qachat.retrievals.document_reading import dominant_path
+from qachat.tools.choose_document import document_scope
 from qachat.tools.contract import (
     ToolContext,
     ToolRequest,
@@ -357,7 +358,9 @@ Examples:
 "list all mentions of gradient descent" -> \
 {{"terms": ["gradient descent"], "document": null}}
 "how often does the Smith paper say MRI?" -> \
-{{"terms": ["MRI"], "document": "the Smith paper"}}"""
+{{"terms": ["MRI"], "document": "the Smith paper"}}
+"go through that paper and tell me if MRI is mentioned" -> \
+{{"terms": ["MRI"], "document": "that paper"}}"""
     if categories:
         user += """
 "which uses of MRI in the Smith paper are clinical and which are research?" \
@@ -753,15 +756,28 @@ def collect_mentions(
 
     trace = context.trace
     context.progress("Finding the terms to scan")
-    system, prompt = terms_prompt(request.text, categories=categories)
-    try:
-        reply = context.ask_router(system, prompt, 160 if categories else 96)
-    except Exception as error:  # Explain instead of failing.
-        reply = f"failed: {error}"
+
+    def ask(text: str) -> str:
+        system, prompt = terms_prompt(text, categories=categories)
+        try:
+            return context.ask_router(
+                system, prompt, 160 if categories else 96
+            )
+        except Exception as error:  # Explain instead of failing.
+            return f"failed: {error}"
+
+    # Terms come from the question itself; earlier questions are used only
+    # when it names none ("list every mention of it").
+    words = request.question
+    reply = ask(words)
     quoted = quoted_terms(request.question)
-    terms = quoted or validated_terms(reply, request.text)
+    terms = quoted or validated_terms(reply, words)
+    if not terms and request.text != request.question:
+        words = request.text
+        reply = ask(words)
+        terms = validated_terms(reply, words)
     source = "quoted" if quoted else "router"
-    document = validated_document(reply, request.text) or document_phrase(
+    document = validated_document(reply, words) or document_phrase(
         request.question
     )
     extracted: dict[str, object] = {
@@ -793,7 +809,7 @@ def collect_mentions(
         )
 
     indexed = list(dict.fromkeys(chunk.path for chunk in context.chunks))
-    named = named_paths(request.question, indexed)
+    named, scoped_by = document_scope(request, context, indexed)
 
     def names_file(term: str, path: Path) -> bool:
         return term.casefold() in (path.name.casefold(), path.stem.casefold())
@@ -815,8 +831,9 @@ def collect_mentions(
     scope_note = None
     if scope:
         scope_note = (
-            f"Scanned only {', '.join(p.name for p in scope)}, named in "
-            "the question."
+            f"Scanned only {', '.join(p.name for p in scope)}, {scoped_by}."
+            + ("" if scoped_by == "named in the question" else
+               " Name the file to scan a different one.")
         )
     elif document:
         # A described document ("the Smith paper") is the file that
@@ -987,7 +1004,15 @@ def _units(chunks: object) -> list[_Unit]:
 def _term_pattern(
     term: str, case_sensitive: bool, whole_words: bool
 ) -> re.Pattern[str]:
-    body = r"\s+".join(re.escape(word) for word in term.split())
+    """Match a term flexibly: "BRAPH2", "BRAPH 2", "braph-2" are one term.
+
+    Letters, digits, and other characters are split into pieces; between
+    pieces, spaces, hyphens, and underscores are optional.
+
+    """
+
+    pieces = re.findall(r"[^\W\d_]+|\d+|[^\w\s-]+", term)
+    body = r"[\s_-]*".join(re.escape(piece) for piece in pieces)
     if whole_words:
         if re.match(r"\w", term):
             body = rf"(?<!\w){body}"

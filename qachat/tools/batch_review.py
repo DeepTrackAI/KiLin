@@ -57,7 +57,12 @@ from time import perf_counter
 from typing import Final
 
 from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import estimate_tokens, read_document
+from qachat.retrievals.document_reading import (
+    DOCUMENT_REASON_SEARCH,
+    estimate_tokens,
+    read_document,
+)
+from qachat.tools.choose_document import choose_document
 from qachat.tools.contract import (
     ToolContext,
     ToolRequest,
@@ -419,6 +424,27 @@ def run(
         top=context.retrieval_count,
     )
     summary: dict[str, object] = {"name": "batch_review"}
+    if selection is not None and selection.reason == DOCUMENT_REASON_SEARCH:
+        # Only a search guessed the file: use the earlier turns, or ask.
+        chosen = choose_document(
+            request,
+            context,
+            question="Which document should I read in full?",
+            example="read smith2020.pdf and say which software it uses",
+        )
+        if isinstance(chosen, str):
+            context.done("No document chosen", evidence_count=0)
+            return ToolResult(chosen, (), summary)
+        summary["chosen"] = chosen[1]
+        selection = read_document(
+            request.text,
+            context.chunks,
+            context.graph,
+            ranked,
+            max_tokens=10**9,
+            top=context.retrieval_count,
+            path=chosen[0],
+        )
     if selection is None:
         context.done("No document found to read", evidence_count=0)
         return ToolResult(

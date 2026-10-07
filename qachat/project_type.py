@@ -1,4 +1,4 @@
-"""Load project types from ``qachat/project_types/<type>.json``.
+"""Load project types from the JSON files in ``qachat/project_types/``.
 
 A project type (for example a code repository or a literature collection)
 decides which files a new project reads by default, which intents the
@@ -12,10 +12,10 @@ Key Features
 
 - **One file per type**
 
-    ``code.json`` and ``literature.json`` sit next to this module; the file
-    name is the type's ID, and types are listed in file-name order. The
-    built-in ``code`` and ``literature`` types must stay; add a file to add
-    a type.
+    ``code.json`` and ``literature.json`` sit in ``qachat/project_types/``,
+    a folder that holds only data. The file name is the type's ID, and
+    types are listed in file-name order. The built-in ``code`` and
+    ``literature`` types must stay; add a file to add a type.
 
 - **Tools by name**
 
@@ -43,7 +43,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.project_types import project_type
+>>> from qachat.project_type import project_type
 >>> project_type("code").display_name
 'Code repository'
 
@@ -69,7 +69,7 @@ __all__ = [
 ]
 
 # One JSON file per project type; the file name is the type's ID.
-PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent
+PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
 _KIND_PATTERN = re.compile(r"[a-z][a-z0-9_-]{0,31}")
 
 # Which earlier turns an intent includes as conversation history.

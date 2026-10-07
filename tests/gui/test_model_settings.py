@@ -8,10 +8,10 @@ from unittest.mock import patch
 
 from qachat.gui.engine import ChatEngine
 from qachat.gui.model_settings import (
-    default_effort_levels,
     read_effort_levels,
     write_effort_levels,
 )
+from qachat.gui.preferences import default_effort_levels
 from qachat.project import open_project
 from qachat.workspace import prepare_sources_workspace
 
@@ -190,6 +190,45 @@ class TestModelSettings(unittest.TestCase):
         self.engine.resume_project(str(self.project.root))
         self.assertEqual(self.engine.session.indexes, incremental)
 
+    def test_only_new_or_changed_files_are_read_again(self):
+        import qachat.rag as rag
+
+        reads = []
+        original = rag.read_repository_files
+
+        def counting(report, **options):
+            reads.append(list(report["selected_files"]))
+            return original(report, **options)
+
+        new_file = self.root / "new.txt"
+        new_file.write_text("Added document about feature elimination.")
+        with patch.object(rag, "read_repository_files", counting):
+            self.engine.add_project_sources([str(new_file)])
+            # The unchanged file's text comes from the cache.
+            self.assertEqual(reads[-1], ["new.txt"])
+            # Same name, other content: read again and indexed again.
+            copy = self.project.source / "one.txt"
+            copy.write_text("Rewritten document about attention.")
+            self.engine.resume_project(str(self.project.root))
+            self.assertEqual(reads[-1], ["one.txt"])
+        texts = " ".join(chunk.text for chunk in self.engine.session.chunks)
+        self.assertIn("Rewritten document about attention.", texts)
+        self.assertNotIn("Original document about memory.", texts)
+
+    def test_outputs_file_can_become_a_source(self):
+        summary = self.project.root / "outputs" / "paper_summary.md"
+        summary.parent.mkdir(exist_ok=True)
+        summary.write_text("# Briefing\n\nA summary about memory.")
+        self.engine.add_project_sources([str(summary)])
+        self.assertEqual(self.events[-1]["event"], "opened")
+        self.assertTrue(
+            (self.project.source / "paper_summary.md").is_file()
+        )
+        # The rest of the workspace still cannot become a source.
+        self.engine.add_project_sources([str(self.project.root / "logs")])
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIn("own source", self.events[-1]["message"])
+
     def test_remove_source_deletes_copy_and_reindexes(self):
         new_file = self.root / "new.txt"
         new_file.write_text("Added document about feature elimination.")
@@ -221,56 +260,296 @@ class TestModelSettings(unittest.TestCase):
                 self.assertTrue(self.project.source.is_dir())
         self.assertIsNotNone(self.engine.session)
 
-    def test_project_keeps_every_setting(self):
+    def _as_earlier_version(self):
+        """Remove the GUI sections, as a project of an earlier version."""
+
+        from configparser import ConfigParser
+
+        path = self.project.root / "profile.ini"
+        profile = ConfigParser(interpolation=None)
+        profile.read(path)
+        for section in ("effort.mlx", "effort.torch", "search", "router"):
+            profile.remove_section(section)
+        with path.open("w") as stream:
+            profile.write(stream)
+
+    def test_project_keeps_every_setting_in_profile_ini(self):
         import json
 
         from qachat.gui.model_settings import (
-            EFFORT_FILE,
             read_router_model,
             read_search_depth,
             save_project_settings,
         )
-        from qachat.gui.preferences import (
-            preferences_file,
-            write_preferences,
-        )
+        from qachat.gui.preferences import defaults_file, write_defaults
 
         root = self.project.root
-        # Opening the project saved all settings, changed or not.
-        saved = json.loads((root / EFFORT_FILE).read_text())
-        self.assertEqual(saved["mlx"], default_effort_levels("mlx"))
-        self.assertEqual(saved["torch"], default_effort_levels("torch"))
-        self.assertEqual(saved["search_depth"], [5, 5, 10, 10, 15])
-        self.assertEqual(set(saved["router"]), {"mlx", "torch"})
+        # Opening the project saved all settings in profile.ini.
+        text = (root / "profile.ini").read_text()
+        for section in ("[effort.mlx]", "[effort.torch]", "[search]",
+                        "[router]"):
+            self.assertIn(section, text)
+        light = default_effort_levels("mlx")[0]
+        self.assertIn(f"level1 = {light['name']} | {light['model']}", text)
+        self.assertIn("depth = 5, 5, 10, 10, 15", text)
+        self.assertFalse((root / "effort_levels.json").exists())
         self.assertFalse(save_project_settings(root))
-        # Later preference changes do not reach an existing project.
+        # The core library still reads the profile.
+        self.assertEqual(open_project(root).profile.kind, "literature")
+        # Later changes to the defaults do not reach an existing project.
+        backup = defaults_file().read_text()
+        self.addCleanup(defaults_file().write_text, backup)
         levels = default_effort_levels("mlx")
         levels[4]["model"] = "example/other"
-        write_preferences(
-            {"effort_levels": {"mlx": levels}, "search_depth": [1] * 5}
+        write_defaults({"effort_levels": {"mlx": levels}})
+        self.assertNotEqual(read_effort_levels(root, "mlx"), levels)
+        # A project of an earlier version moves effort_levels.json in.
+        self._as_earlier_version()
+        old = default_effort_levels("mlx")
+        old[0]["name"] = "Quick"
+        (root / "effort_levels.json").write_text(
+            json.dumps(
+                {
+                    "mlx": old,
+                    "search_depth": [3, 3, 6, 6, 9],
+                    "router": {"mlx": "example/router"},
+                }
+            )
         )
-        try:
-            self.assertEqual(
-                read_effort_levels(root, "mlx"), default_effort_levels("mlx")
+        self.assertTrue(save_project_settings(root))
+        self.assertFalse((root / "effort_levels.json").exists())
+        self.assertEqual(read_effort_levels(root, "mlx")[0]["name"], "Quick")
+        self.assertEqual(read_search_depth(root), [3, 3, 6, 6, 9])
+        self.assertEqual(read_router_model(root, "mlx"), "example/router")
+
+    def test_settings_without_a_project_become_the_defaults(self):
+        from qachat.gui.preferences import defaults_file
+
+        backup = defaults_file().read_text()
+        self.addCleanup(defaults_file().write_text, backup)
+        self.engine.close()
+        levels = default_effort_levels(self.backend)
+        levels[0]["model"] = "example/new-chat"
+        self.engine.apply_model_settings(
+            {**self.request, "effort_levels": levels, "backend": self.backend}
+        )
+        self.assertEqual(self.events[-1]["event"], "models_applied")
+        self.assertEqual(default_effort_levels(self.backend), levels)
+
+    def test_answer_settings_belong_to_the_project(self):
+        from qachat.project import open_project
+
+        def ask(temperature, thinking=False):
+            with patch.object(
+                self.engine.session,
+                "ask",
+                side_effect=RuntimeError("stop before generation"),
+            ):
+                self.engine.ask(
+                    "test",
+                    generation_settings={
+                        "temperature": temperature,
+                        "thinking": thinking,
+                        "max_new_tokens": 300,
+                    },
+                )
+
+        first = self.engine.active_conversation.conversation_id
+        ask(0.4, thinking=True)
+        profile = open_project(self.project.root).profile
+        self.assertEqual(
+            (profile.temperature, profile.thinking, profile.max_new_tokens),
+            (0.4, True, 300),
+        )
+        # A new chat and a switch back keep the project's settings.
+        self.engine.create_conversation()
+        chat = self.engine.session.chat_session
+        self.assertEqual((chat.temperature, chat.thinking), (0.4, True))
+        ask(0.7)
+        self.engine.select_conversation(first)
+        chat = self.engine.session.chat_session
+        self.assertEqual((chat.temperature, chat.thinking), (0.7, False))
+        self.assertEqual(self.events[-1]["temperature"], 0.7)
+
+    def test_tools_get_the_chain_of_earlier_turns(self):
+        from qachat.answering import RouteDecision
+        from qachat.rag import ConversationTurn, Evidence
+
+        def turn(question, related, path=None):
+            evidence = (
+                (Evidence(1, path, 1, 2, None, "text", None),)
+                if path
+                else ()
             )
-            self.assertEqual(read_search_depth(root), [5, 5, 10, 10, 15])
-            # A project saved by an earlier version starts from them once.
-            (root / EFFORT_FILE).unlink()
-            self.assertTrue(save_project_settings(root))
-            self.assertEqual(read_effort_levels(root, "mlx"), levels)
-            self.assertEqual(read_search_depth(root), [1] * 5)
-            self.assertEqual(
-                read_router_model(root, "mlx"),
-                saved["router"]["mlx"],
+            return ConversationTurn(
+                "now", question, "A", evidence,
+                {"related_turn_ids": related},
             )
-        finally:
-            preferences_file().unlink(missing_ok=True)
+
+        session = self.engine.session
+        session.turns = [
+            turn("hi", []),
+            turn("what is memory capacity", [], "m.pdf"),
+            turn("walk me through Tiunn's paper", [], "t.pdf"),
+            turn("turn that into a summary report", [2, 3], "t.pdf"),
+        ]
+        earlier = session._earlier_turns(
+            RouteDecision(intent="x", standalone=False, related_turn_ids=(4,))
+        )
+        self.assertEqual([t.number for t in earlier], [4, 3, 2])
+        self.assertEqual(earlier[1].question, "walk me through Tiunn's paper")
+        self.assertEqual(earlier[1].paths, (Path("t.pdf"),))
+        # Pointing back without related turns means the last turn.
+        pointing = session._earlier_turns(
+            RouteDecision(intent="x", standalone=True, refers_back=True)
+        )
+        self.assertEqual([t.number for t in pointing], [4, 3, 2])
+
+    def test_tool_choice_waits_for_an_option(self):
+        commands = iter(
+            [
+                {"action": "new_conversation"},
+                {"action": "plan_choice", "choice": "option:1"},
+                {"action": "plan_choice", "choice": "option:7"},
+                {"action": "plan_choice", "choice": "cancel"},
+            ]
+        )
+        self.engine.read_command = lambda: next(commands, None)
+        options = ("a.pdf", "b.pdf")
+        self.assertEqual(self.engine._choose_option("Which?", options), 1)
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIsNone(self.engine._choose_option("Which?", options))
+        self.assertIsNone(self.engine._choose_option("Which?", options))
+        self.assertIsNone(self.engine._choose_option("Which?", options))
+
+    def test_token_usage_per_answer_chat_and_project(self):
+        import json
+
+        from qachat.rag import ConversationTurn
+
+        session = self.engine.session
+        chat = session.chat_session
+        chat.input_token_total, chat.output_token_total = 100, 10
+        mark = session.usage_mark()
+        chat.input_token_total += 2500
+        chat.output_token_total += 300
+        self.assertEqual(
+            session.usage_since(mark),
+            {"input_tokens": 2500, "output_tokens": 300},
+        )
+
+        def turn(question, read, written):
+            return ConversationTurn(
+                timestamp=f"2026-10-07T{question}",
+                question=question,
+                answer="A",
+                evidence=(),
+                parameters={
+                    "usage": {"input_tokens": read, "output_tokens": written}
+                },
+            )
+
+        session.turns = [turn("one", 2000, 200)]
+        # Another chat, deleted later, shares the first turn (a branch).
+        deleted = self.project.root / "logs" / "traces" / "deleted"
+        deleted.mkdir(parents=True, exist_ok=True)
+        (deleted / "conversation_old.json").write_text(
+            json.dumps(
+                {
+                    "conversation": {
+                        "turns": [
+                            {
+                                "timestamp": "2026-10-07Tone",
+                                "question": "one",
+                                "parameters": {
+                                    "usage": {
+                                        "input_tokens": 2000,
+                                        "output_tokens": 200,
+                                    }
+                                },
+                            },
+                            {
+                                "timestamp": "2026-10-07Ttwo",
+                                "question": "two",
+                                "parameters": {
+                                    "usage": {
+                                        "input_tokens": 500,
+                                        "output_tokens": 50,
+                                    }
+                                },
+                            },
+                        ]
+                    }
+                }
+            )
+        )
+        totals = self.engine._usage_totals()
+        self.assertEqual(
+            totals["chat"],
+            {"input_tokens": 2000, "output_tokens": 200, "answers": 1},
+        )
+        self.assertEqual(
+            totals["project"],
+            {"input_tokens": 2500, "output_tokens": 250, "answers": 2},
+        )
+
+    def test_folder_edits_never_reindex(self):
+        root = self.project.root
+        session = self.engine.session
+        indexes = {
+            path: path.stat().st_mtime_ns
+            for path in (root / "indexes").rglob("*")
+            if path.is_file()
+        }
+        paper = self.root / "paper.md"
+        paper.write_text("# Draft\n\nFirst version.")
+        other = self.root / "other.md"
+        other.write_text("# Draft\n\nSecond version.")
+        self.engine.edit_folder("outputs", "add", paths=[str(paper)])
+        self.assertEqual(self.events[-1]["event"], "folder_changed")
+        self.assertIn("outputs/paper.md", self.events[-1]["workspace_files"])
+        # A taken name is kept and the copy numbered, unless replacing.
+        self.engine.edit_folder("outputs", "add", paths=[str(paper)])
+        self.assertEqual(self.events[-1]["paths"], ["outputs/paper-2.md"])
+        self.engine.edit_folder(
+            "outputs", "replace", path="outputs/paper.md", source=str(other)
+        )
+        self.assertIn(
+            "Second", (root / "outputs" / "paper.md").read_text()
+        )
+        self.engine.edit_folder(
+            "outputs",
+            "remove",
+            paths=["outputs/paper.md", "outputs/paper-2.md"],
+        )
+        self.assertFalse((root / "outputs" / "paper.md").exists())
+        # Templates are edited the same way.
+        self.engine.edit_folder("templates", "add", paths=[str(other)])
+        self.assertTrue((root / "templates" / "other.md").is_file())
+        # Paths outside the folder, and other folders, are refused.
+        self.engine.edit_folder("outputs", "remove", paths=["sources/one.txt"])
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.engine.edit_folder("sources", "remove", paths=["sources/one.txt"])
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertTrue((root / "sources" / "one.txt").exists())
+        # The session stayed open and nothing was embedded or rewritten.
+        self.assertIs(self.engine.session, session)
+        self.assertEqual(self.embedded, [])
+        self.assertEqual(
+            {
+                path: path.stat().st_mtime_ns
+                for path in (root / "indexes").rglob("*")
+                if path.is_file()
+            },
+            indexes,
+        )
 
     def test_earlier_model_choices_migrate(self):
+        from qachat.gui.model_settings import save_project_settings
+
         light = "Qwen/Qwen3-0.6B-MLX-4bit"
         root = self.project.root
-        # As saved by an earlier version: no effort levels yet.
-        (root / "effort_levels.json").unlink(missing_ok=True)
+        self._as_earlier_version()
         legacy = root / "model_choices.json"
         legacy.write_text(
             '{"retired/preset": "example/old", "%s": "example/new"}' % light
@@ -278,18 +557,17 @@ class TestModelSettings(unittest.TestCase):
         # Earlier per-preset replacements migrate; retired presets are ignored.
         levels = read_effort_levels(root, "mlx")
         self.assertEqual(levels[0]["model"], "example/new")
-        self.assertEqual(
-            levels[1:], default_effort_levels("mlx")[1:]
-        )
-        write_effort_levels(root, "mlx", default_effort_levels("mlx"))
+        self.assertEqual(levels[1:], default_effort_levels("mlx")[1:])
+        save_project_settings(root)
         self.assertFalse(legacy.exists())
-        self.assertTrue((root / "effort_levels.json").exists())
+        self.assertEqual(read_effort_levels(root, "mlx"), levels)
         levels[0]["name"] = "Quick"
         write_effort_levels(root, "mlx", levels)
         self.assertEqual(read_effort_levels(root, "mlx")[0]["name"], "Quick")
-        self.assertEqual(
-            read_effort_levels(root, "torch"), default_effort_levels("torch")
-        )
+        with self.assertRaisesRegex(ValueError, "'\\|'"):
+            write_effort_levels(
+                root, "mlx", [{**level, "name": "A|B"} for level in levels]
+            )
 
     def test_effort_uses_saved_model_and_search_depth(self):
         levels = default_effort_levels(self.backend)
@@ -317,26 +595,23 @@ class TestModelSettings(unittest.TestCase):
         import json
 
         from qachat.gui.model_settings import (
-            default_search_depth,
-            EFFORT_FILE,
             read_search_depth,
-            validate_search_depth,
             write_search_depth,
+        )
+        from qachat.gui.preferences import (
+            default_search_depth,
+            validate_search_depth,
         )
 
         root = self.project.root
-        (root / EFFORT_FILE).unlink(missing_ok=True)
+        self._as_earlier_version()
         self.assertEqual(read_search_depth(None), [5, 5, 10, 10, 15])
         self.assertEqual(read_search_depth(root), default_search_depth())
         with self.assertRaisesRegex(ValueError, "Search depth"):
             validate_search_depth([5, 5, 0, 10, 15])
         write_search_depth(root, [1, 2, 3, 4, 5])
         self.assertEqual(read_search_depth(root), [1, 2, 3, 4, 5])
-        write_search_depth(root, default_search_depth())
-        self.assertEqual(
-            json.loads((root / EFFORT_FILE).read_text())["search_depth"],
-            default_search_depth(),
-        )
+        self._as_earlier_version()
 
         def old_file(counts):
             levels = [
@@ -345,7 +620,9 @@ class TestModelSettings(unittest.TestCase):
                     default_effort_levels("mlx"), counts
                 )
             ]
-            (root / EFFORT_FILE).write_text(json.dumps({"mlx": levels}))
+            (root / "effort_levels.json").write_text(
+                json.dumps({"mlx": levels})
+            )
 
         # Earlier versions' default counts become the new defaults ...
         old_file([5, 20, 20, 50, 50])
@@ -518,14 +795,16 @@ class TestModelSettings(unittest.TestCase):
         self.assertEqual(parameters["intent"], "question_answering")
         self.assertEqual(searches, ["And how is it measured?"])
 
-    def test_standalone_question_gets_no_history(self):
+    def test_standalone_question_sees_only_the_previous_turn(self):
         searches, seen, parameters = self._follow_up(
             '{"intent": "compare_sources", "standalone": true, '
             '"related_turns": []}'
         )
-        self.assertEqual(parameters["history_turn_ids"], [])
-        self.assertEqual(len(seen["history"]), 1)
+        # The previous turn's question and answer, never its evidence.
+        self.assertEqual(parameters["history_turn_ids"], [1])
+        self.assertEqual(len(seen["history"]), 3)
         self.assertIn("Compare the sources", seen["history"][0]["content"])
+        # The search still uses only the question as typed.
         self.assertEqual(searches, ["And how is it measured?"])
 
     def test_follow_up_reuses_evidence_from_several_turns(self):
