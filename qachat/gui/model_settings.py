@@ -3,8 +3,13 @@
 Each backend has five effort levels; a level has a display name and the
 chat model it answers with. Search depth is a separate vector of five
 steps, each the number of passages retrieved for an answer. The composer
-picks an effort level and a search-depth step independently. The file is
-written only when a project differs from the defaults.
+picks an effort level and a search-depth step independently.
+
+Each project keeps all of these settings, changed or not, in its own
+``effort_levels.json``, so it resumes exactly as it was set up even when
+``defaults.json`` or the app-wide preferences change later.
+``save_project_settings`` writes them when a project is created or first
+opened by this version, starting from the preferences.
 
 The defaults themselves, and the validation shared with the app-wide
 preferences, live in ``qachat.gui.preferences`` (``defaults.json``); they
@@ -22,11 +27,14 @@ from qachat.gui.preferences import (
     default_effort_levels,
     default_router_model,
     default_search_depth,
+    preferred_effort_levels,
+    preferred_router_model,
+    preferred_search_depth,
     validate_effort_levels,
     validate_model_id,
     validate_search_depth,
 )
-from qachat.runtime import BACKEND_MLX
+from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "DEFAULT_LEVEL",
@@ -42,6 +50,7 @@ __all__ = [
     "read_effort_levels",
     "read_router_model",
     "read_search_depth",
+    "save_project_settings",
     "validate_effort_levels",
     "validate_model_id",
     "validate_search_depth",
@@ -75,8 +84,7 @@ def read_search_depth(root: Path | None) -> list[int]:
     -------
     list[int]
         Five steps. Projects saved with per-level reference counts keep
-        their customized counts as steps; the old defaults become the new
-        defaults.
+        their customized counts as steps; otherwise the preferences.
 
     """
 
@@ -84,11 +92,11 @@ def read_search_depth(root: Path | None) -> list[int]:
     saved = saved if isinstance(saved, dict) else {}
     if SEARCH_DEPTH_KEY in saved:
         return validate_search_depth(saved[SEARCH_DEPTH_KEY])
-    return _legacy_depth(saved) or default_search_depth()
+    return _legacy_depth(saved) or preferred_search_depth()
 
 
 def write_search_depth(root: Path, steps: list[int]) -> None:
-    """Save search-depth steps, or drop them when they are the defaults.
+    """Save a project's search-depth steps.
 
     Parameters
     ----------
@@ -103,10 +111,7 @@ def write_search_depth(root: Path, steps: list[int]) -> None:
     path = root / EFFORT_FILE
     saved = _read_json(path)
     saved = dict(saved) if isinstance(saved, dict) else {}
-    if steps == default_search_depth():
-        saved.pop(SEARCH_DEPTH_KEY, None)
-    else:
-        saved[SEARCH_DEPTH_KEY] = steps
+    saved[SEARCH_DEPTH_KEY] = steps
     _write_json(path, saved)
 
 
@@ -145,7 +150,7 @@ def read_router_model(root: Path | None, backend: str) -> str:
     Returns
     -------
     str
-        The saved model ID, or ``default_router_model(backend)``.
+        The saved model ID, or the preferred router model.
 
     """
 
@@ -153,11 +158,11 @@ def read_router_model(root: Path | None, backend: str) -> str:
     routers = saved.get(ROUTER_KEY) if isinstance(saved, dict) else None
     if isinstance(routers, dict) and isinstance(routers.get(backend), str):
         return validate_model_id(routers[backend])
-    return default_router_model(backend)
+    return preferred_router_model(backend)
 
 
 def write_router_model(root: Path, backend: str, model_id: str) -> None:
-    """Save a backend's router model, or drop it when it is the default.
+    """Save a project's router model for one backend.
 
     Parameters
     ----------
@@ -175,14 +180,8 @@ def write_router_model(root: Path, backend: str, model_id: str) -> None:
     saved = _read_json(path)
     saved = dict(saved) if isinstance(saved, dict) else {}
     routers = dict(saved.get(ROUTER_KEY) or {})
-    if model_id == default_router_model(backend):
-        routers.pop(backend, None)
-    else:
-        routers[backend] = model_id
-    if routers:
-        saved[ROUTER_KEY] = routers
-    else:
-        saved.pop(ROUTER_KEY, None)
+    routers[backend] = model_id
+    saved[ROUTER_KEY] = routers
     _write_json(path, saved)
 
 
@@ -218,13 +217,12 @@ def read_effort_levels(
     Returns
     -------
     list[dict[str, object]]
-        The project's saved levels, or the current defaults from
-        ``qachat/gui/defaults.json`` when it saved none (with replacements
-        from an earlier ``model_choices.json`` applied).
+        The project's saved levels, or the preferences when it saved none
+        (with replacements from an earlier ``model_choices.json`` applied).
 
     """
 
-    levels = default_effort_levels(backend)
+    levels = preferred_effort_levels(backend)
     if root is None:
         return levels
     saved = _read_json(root / EFFORT_FILE)
@@ -244,7 +242,7 @@ def read_effort_levels(
 def write_effort_levels(
     root: Path, backend: str, levels: list[dict[str, object]]
 ) -> None:
-    """Save a backend's levels, or drop them when they match defaults.
+    """Save a project's levels for one backend.
 
     Parameters
     ----------
@@ -257,8 +255,7 @@ def write_effort_levels(
 
     Notes
     -----
-    The file is removed when no backend differs from its defaults, and the
-    earlier ``model_choices.json`` is removed once migrated.
+    The earlier ``model_choices.json`` is removed once migrated.
 
     """
 
@@ -270,10 +267,44 @@ def write_effort_levels(
     if legacy and SEARCH_DEPTH_KEY not in saved:
         # Keep customized counts of earlier versions as search depth.
         saved[SEARCH_DEPTH_KEY] = legacy
-    if levels == default_effort_levels(backend):
-        saved.pop(backend, None)
-    else:
-        saved[backend] = levels
+    saved[backend] = levels
     _write_json(path, saved)
     # Migrated into effort levels; the old file is no longer read.
     (root / LEGACY_FILE).unlink(missing_ok=True)
+
+
+def save_project_settings(root: Path) -> bool:
+    """Write every setting a project does not keep yet.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Project workspace.
+
+    Returns
+    -------
+    bool
+        Whether anything was written. Saved values are never changed;
+        missing ones are filled from what the project uses now (the
+        preferences, or settings migrated from earlier versions), so the
+        project no longer follows later changes to the defaults.
+
+    """
+
+    path = root / EFFORT_FILE
+    saved = _read_json(path)
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    before = json.dumps(saved, sort_keys=True)
+    routers = dict(saved.get(ROUTER_KEY) or {})
+    for backend in (BACKEND_MLX, BACKEND_TORCH):
+        if backend not in saved:
+            saved[backend] = read_effort_levels(root, backend)
+        routers.setdefault(backend, read_router_model(root, backend))
+    saved[ROUTER_KEY] = routers
+    if SEARCH_DEPTH_KEY not in saved:
+        saved[SEARCH_DEPTH_KEY] = read_search_depth(root)
+    if json.dumps(saved, sort_keys=True) == before:
+        return False
+    _write_json(path, saved)
+    (root / LEGACY_FILE).unlink(missing_ok=True)
+    return True

@@ -210,9 +210,15 @@ models are classified as language or embedding models by preset, by an
 A selected model that is not downloaded shows a Download button. On PyTorch
 every level uses one chat model; search depth still applies.
 
-Levels that differ from the defaults are saved per backend in
-effort_levels.json, and a customized search depth under "search_depth";
-with defaults, no file is kept. Per-level reference counts saved by earlier
+Each project keeps all its settings, changed or not, in its own
+effort_levels.json: the levels per backend, the search depth under
+"search_depth", and the intent model under "router". They are written when
+the project is created (from the preferences below) or first opened by
+this version, so a project resumes exactly as it was set up; later changes
+to defaults.json or the preferences apply only to new projects. The model
+names, embedding model, and answer settings stay in profile.ini. To make an
+existing project follow new defaults, change its levels in Settings, or
+delete its effort_levels.json and reopen it. Per-level reference counts saved by earlier
 versions become the search depth (the old defaults become the new ones). An older
 model_choices.json is migrated on first read and removed on the next save.
 Changing a language model does not rebuild the index; changing the embedding
@@ -224,7 +230,7 @@ The Intent model section, after Embedding model, chooses the router model
 that classifies each question's intent and writes chat titles (default: the
 8B chat model). A change applies at once: a separately loaded router model is
 released and the new one loads when first needed. It is saved per backend in
-effort_levels.json under "router", only when it differs from the default.
+effort_levels.json under "router".
 
 **All default settings are in one file, `qachat/gui/defaults.json`:** the
 appearance, the five effort levels (names and models) per backend, the
@@ -239,7 +245,8 @@ by git; `QACHAT_PREFERENCES_FILE` points elsewhere, as the tests do): the
 appearance, and the effort levels, router model, embedding model, query
 format, and search depth that new projects start from. Settings edited with
 no project open are saved there; with a project open they apply to that
-project. Only values that differ from the built-in defaults are written,
+project only. Precedence: defaults.json < preferences.json < the project's
+own settings. Only values that differ from the built-in defaults are written,
 so restoring defaults removes them. The first-run check asks for the models
 these preferences use. When some are missing but installed models of the
 same role exist, **Use installed models** switches to the closest installed

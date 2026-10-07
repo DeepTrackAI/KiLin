@@ -103,6 +103,7 @@ from qachat.report_templates import (
 )
 from qachat.tools.load_target import target_folder
 from qachat.gui.model_settings import (
+    EFFORT_FILE,
     DEFAULT_LEVEL,
     LEVEL_COUNT,
     default_effort_levels,
@@ -113,6 +114,7 @@ from qachat.gui.model_settings import (
     validate_effort_levels,
     validate_search_depth,
     validate_model_id,
+    save_project_settings,
     write_effort_levels,
     write_search_depth,
     write_router_model,
@@ -1075,11 +1077,7 @@ class ChatEngine:
                 root = self.session.project.root
                 old_profile = self.session.project.profile
                 old_backend = self.session.backend
-                old_levels = read_effort_levels(
-                    root,
-                    self.session.backend,
-                    old_profile.chat_model(self.session.backend),
-                )
+                old_levels = read_effort_levels(root, self.session.backend)
                 old_router = read_router_model(root, self.session.backend)
                 profile_text = (root / "profile.ini").read_text()
                 conversation_id = self.active_conversation.conversation_id
@@ -1567,6 +1565,14 @@ class ChatEngine:
         options["trace"] = self.project_trace
         if self.conversation_store is None:
             raise RuntimeError("Conversation store is not open.")
+        # The project keeps every setting from now on, so it resumes as it
+        # was set up even when the defaults or preferences change.
+        if save_project_settings(project.root):
+            self.active_trace.emit(
+                "gui.project.settings.saved",
+                component="gui_engine",
+                data={"path": str(project.root / EFFORT_FILE)},
+            )
         options["conversation_path"] = self.conversation_store.state_path(
             conversation
         )
@@ -1879,11 +1885,7 @@ class ChatEngine:
                 generation_settings.pop("_title_question", question)
             )
             backend = self.session.backend
-            levels = read_effort_levels(
-                self.session.project.root,
-                backend,
-                self.session.project.profile.chat_model(backend),
-            )
+            levels = read_effort_levels(self.session.project.root, backend)
             indexes = _effort_indexes(effort)
             is_mlx = self.session.chat_session.backend == BACKEND_MLX
             # Name a new chat after its first answer, from question and answer.
@@ -2804,8 +2806,9 @@ def _workspace_files(root: Path) -> list[str]:
     """
 
     files = ["profile.ini"]
-    if (root / "model_choices.json").is_file():
-        files.append("model_choices.json")
+    for name in (EFFORT_FILE, "model_choices.json"):
+        if (root / name).is_file():
+            files.append(name)
     folders = ("sources", "target", "indexes", "logs")
     for folder in (root / name for name in folders):
         if folder.is_dir():
@@ -2847,7 +2850,7 @@ def _effort_levels_by_backend(
     if root is None:
         return _preference_payload()["effort_levels"]
     return {
-        backend: read_effort_levels(root, backend, profile.chat_model(backend))
+        backend: read_effort_levels(root, backend)
         for backend in (BACKEND_MLX, BACKEND_TORCH)
     }
 

@@ -221,21 +221,69 @@ class TestModelSettings(unittest.TestCase):
                 self.assertTrue(self.project.source.is_dir())
         self.assertIsNotNone(self.engine.session)
 
-    def test_effort_levels_file_holds_only_customized_levels(self):
+    def test_project_keeps_every_setting(self):
+        import json
+
+        from qachat.gui.model_settings import (
+            EFFORT_FILE,
+            read_router_model,
+            read_search_depth,
+            save_project_settings,
+        )
+        from qachat.gui.preferences import (
+            preferences_file,
+            write_preferences,
+        )
+
+        root = self.project.root
+        # Opening the project saved all settings, changed or not.
+        saved = json.loads((root / EFFORT_FILE).read_text())
+        self.assertEqual(saved["mlx"], default_effort_levels("mlx"))
+        self.assertEqual(saved["torch"], default_effort_levels("torch"))
+        self.assertEqual(saved["search_depth"], [5, 5, 10, 10, 15])
+        self.assertEqual(set(saved["router"]), {"mlx", "torch"})
+        self.assertFalse(save_project_settings(root))
+        # Later preference changes do not reach an existing project.
+        levels = default_effort_levels("mlx")
+        levels[4]["model"] = "example/other"
+        write_preferences(
+            {"effort_levels": {"mlx": levels}, "search_depth": [1] * 5}
+        )
+        try:
+            self.assertEqual(
+                read_effort_levels(root, "mlx"), default_effort_levels("mlx")
+            )
+            self.assertEqual(read_search_depth(root), [5, 5, 10, 10, 15])
+            # A project saved by an earlier version starts from them once.
+            (root / EFFORT_FILE).unlink()
+            self.assertTrue(save_project_settings(root))
+            self.assertEqual(read_effort_levels(root, "mlx"), levels)
+            self.assertEqual(read_search_depth(root), [1] * 5)
+            self.assertEqual(
+                read_router_model(root, "mlx"),
+                saved["router"]["mlx"],
+            )
+        finally:
+            preferences_file().unlink(missing_ok=True)
+
+    def test_earlier_model_choices_migrate(self):
         light = "Qwen/Qwen3-0.6B-MLX-4bit"
         root = self.project.root
+        # As saved by an earlier version: no effort levels yet.
+        (root / "effort_levels.json").unlink(missing_ok=True)
         legacy = root / "model_choices.json"
         legacy.write_text(
             '{"retired/preset": "example/old", "%s": "example/new"}' % light
         )
         # Earlier per-preset replacements migrate; retired presets are ignored.
         levels = read_effort_levels(root, "mlx")
+        self.assertEqual(levels[0]["model"], "example/new")
         self.assertEqual(
-            [level["model"] for level in levels[:2]], ["example/new"] * 2
+            levels[1:], default_effort_levels("mlx")[1:]
         )
         write_effort_levels(root, "mlx", default_effort_levels("mlx"))
         self.assertFalse(legacy.exists())
-        self.assertFalse((root / "effort_levels.json").exists())
+        self.assertTrue((root / "effort_levels.json").exists())
         levels[0]["name"] = "Quick"
         write_effort_levels(root, "mlx", levels)
         self.assertEqual(read_effort_levels(root, "mlx")[0]["name"], "Quick")
@@ -277,6 +325,7 @@ class TestModelSettings(unittest.TestCase):
         )
 
         root = self.project.root
+        (root / EFFORT_FILE).unlink(missing_ok=True)
         self.assertEqual(read_search_depth(None), [5, 5, 10, 10, 15])
         self.assertEqual(read_search_depth(root), default_search_depth())
         with self.assertRaisesRegex(ValueError, "Search depth"):
@@ -284,7 +333,10 @@ class TestModelSettings(unittest.TestCase):
         write_search_depth(root, [1, 2, 3, 4, 5])
         self.assertEqual(read_search_depth(root), [1, 2, 3, 4, 5])
         write_search_depth(root, default_search_depth())
-        self.assertFalse((root / EFFORT_FILE).exists())
+        self.assertEqual(
+            json.loads((root / EFFORT_FILE).read_text())["search_depth"],
+            default_search_depth(),
+        )
 
         def old_file(counts):
             levels = [
@@ -761,10 +813,13 @@ class TestModelSettings(unittest.TestCase):
         self.assertEqual(
             self.events[-1]["router_models"][self.backend], "example/new-chat"
         )
-        # Restoring the default leaves no saved entry behind.
+        # Restoring the default is saved like any other choice.
         self.request["router_model"] = default_router_model(self.backend)
         self.engine.apply_model_settings(self.request)
-        self.assertFalse((root / "effort_levels.json").exists())
+        self.assertEqual(
+            read_router_model(root, self.backend),
+            default_router_model(self.backend),
+        )
         self.assertEqual(
             self.engine.session.router_model,
             default_router_model(self.backend),

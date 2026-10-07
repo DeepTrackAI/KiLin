@@ -287,6 +287,11 @@ class TestPolishUI(unittest.TestCase):
 
         test_profile = asdict(default_project_profile("literature"))
         cached_ids = [choice.model_id for choice in MODEL_CHOICES]
+        cached_ids += [
+            str(level["model"])
+            for level in default_effort_levels("mlx")
+            if level["model"] not in cached_ids
+        ]
         cached_ids.append("example/other-cached")
         settings = {
             "event": "settings",
