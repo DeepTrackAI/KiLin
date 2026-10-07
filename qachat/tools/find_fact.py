@@ -258,17 +258,20 @@ def fact_prompt(
         f"{name}:\n" + ("\n".join(lines) if lines else "NOTHING FOUND")
         for name, lines in notes
     )
-    user = f"""Question: {question}
-
-{material.capitalize()} by document:
+    user = f"""{material.capitalize()} by document:
 
 {blocks}
 
-Answer the question. When it asks for a list, include every item
-the {material} state, each once, with its citation. With several
-documents, give the answer for each document, and say plainly when a
-document does not state it.\
-{f" {guidance}" if guidance else ""}"""
+Answer only what the question asks, directly. The {material} often repeat
+the same fact from different parts of a document: state each fact once and
+cite every passage that supports it together, like [6, 64]. Leave out
+details the question does not ask for. When it asks for a list, include
+every distinct item once. With several documents, give the answer for each
+document, and say plainly when a document does not state it. Follow any
+length or format the question asks for.\
+{f" {guidance}" if guidance else ""}
+
+Question: {question}"""
     return system, user
 
 
