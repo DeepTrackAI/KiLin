@@ -1601,7 +1601,7 @@ class ChatEngine:
             preferences=_preference_payload(),
             usage=self._usage_totals(),
             index_status=session.index_status,
-            turns=[asdict(turn) for turn in session.turns],
+            turns=_turn_payloads(session.turns, project.root),
             workspace_files=_workspace_files(project.root),
             retrieval_count=(
                 session.turns[-1].parameters.get(
@@ -2169,6 +2169,40 @@ class ChatEngine:
             stopped.set()
             ticker.join(timeout=1.0)
 
+    def save_answer_timeline(self, timestamp: str, timeline: object) -> None:
+        """Keep how long an answer took, as the page showed it.
+
+        Parameters
+        ----------
+        timestamp: str
+            The answered turn's timestamp, which identifies it.
+        timeline: object
+            ``elapsed_ms`` and ``steps`` (each a ``label`` and ``ms``) from
+            the page; anything else is ignored.
+
+        Notes
+        -----
+        The timing is presentation only: it is not part of the
+        conversation record, and a missing or unreadable file only means
+        resumed answers show their tokens without the time.
+
+        """
+
+        if self.session is None or not timestamp:
+            return
+
+        if not _valid_timeline(timeline):
+            return
+
+        root = self.session.project.root
+        timelines = _read_answer_timelines(root)
+        timelines[timestamp] = timeline
+        path = root / "logs" / _ANSWER_TIMELINES
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(timelines), encoding="utf-8")
+        temporary.replace(path)
+
     def _usage_totals(self) -> dict[str, dict[str, int]]:
         """Tokens used by the open chat and by the whole project.
 
@@ -2690,7 +2724,7 @@ class ChatEngine:
         )
         self._send_conversations(
             "conversation_opened",
-            turns=[asdict(turn) for turn in turns],
+            turns=_turn_payloads(turns, self.session.project.root),
             retrieval_count=(
                 turns[-1].parameters.get(
                     "retrieval_count",
@@ -3039,6 +3073,84 @@ _LEGACY_GUIDE_MARKER: Final[str] = (
 )
 # Workspace folders the user may edit directly; neither is indexed.
 _EDITABLE_FOLDERS: Final[tuple[str, ...]] = (OUTPUTS_FOLDER, TEMPLATES_FOLDER)
+# How long each answer took, as the page showed it, by turn timestamp; kept
+# per project so resumed and branched chats show it again.
+_ANSWER_TIMELINES: Final[str] = "answer_timelines.json"
+
+
+def _read_answer_timelines(root: Path) -> dict[str, dict]:
+    """Return the saved answer timings of a project, by turn timestamp.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Project folder.
+
+    Returns
+    -------
+    dict[str, dict]
+        Timings saved by ``ChatEngine.save_answer_timeline``; empty when
+        none are saved or the file cannot be read.
+
+    """
+
+    try:
+        data = json.loads(
+            (root / "logs" / _ANSWER_TIMELINES).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def _turn_payloads(turns: list, root: Path) -> list[dict]:
+    """Return turns for the page, each with its saved timing if any.
+
+    Parameters
+    ----------
+    turns: list[ConversationTurn]
+        Turns of the open conversation.
+    root: pathlib.Path
+        Project folder holding the saved timings.
+
+    Returns
+    -------
+    list[dict]
+        The turns as dictionaries; a turn whose timing was saved has it
+        under ``timeline``.
+
+    """
+
+    timelines = _read_answer_timelines(root)
+    payloads = []
+    for turn in turns:
+        payload = asdict(turn)
+        timeline = timelines.get(getattr(turn, "timestamp", ""))
+        if _valid_timeline(timeline):
+            payload["timeline"] = timeline
+        payloads.append(payload)
+
+    return payloads
+
+
+def _valid_timeline(timeline: object) -> bool:
+    """Whether a timeline from the page has the expected shape."""
+
+    if not isinstance(timeline, dict):
+        return False
+
+    steps = timeline.get("steps")
+    return (
+        isinstance(timeline.get("elapsed_ms"), int)
+        and isinstance(steps, list)
+        and all(
+            isinstance(step, dict)
+            and isinstance(step.get("label"), str)
+            and isinstance(step.get("ms"), int)
+            for step in steps
+        )
+    )
 
 
 def _path_list(value: object) -> list[str]:
@@ -3372,6 +3484,11 @@ def main() -> None:
                         )
                     elif action == "rename_project":
                         engine.rename_project(command["name"])
+                    elif action == "save_answer_timeline":
+                        engine.save_answer_timeline(
+                            str(command.get("timestamp", "")),
+                            command.get("timeline"),
+                        )
                     elif action == "reset":
                         engine.reset()
                     elif action == "plan_choice":

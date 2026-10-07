@@ -209,6 +209,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: 8px; }
 .conversation-item { width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-item:hover:not(:disabled), .conversation-item.active { background: var(--selected); }
+.conversation-rename { width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--surface); font-size: 13px; }
+.tree-count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .conversation-delete { width: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0; color: var(--muted); background: transparent; opacity: 0; }
 .conversation-row:hover .conversation-delete,
 .conversation-delete:focus-visible,

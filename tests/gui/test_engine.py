@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, MagicMock, patch
 
-from qachat.gui.engine import ChatEngine, _reference_context
+from qachat.gui.engine import ChatEngine, _reference_context, _turn_payloads
 from qachat.gui.model_catalog import MODEL_CHOICES
 from qachat.project import open_project
 from qachat.rag import Evidence
@@ -27,6 +27,7 @@ class SavedTurn:
     answer: str
     evidence: tuple[()] = ()
     parameters: dict[str, object] = field(default_factory=dict)
+    timestamp: str = "2026-10-07T10:00:00+00:00"
 
 
 class TestChatEngine(unittest.TestCase):
@@ -554,6 +555,53 @@ class TestReferencePreview(unittest.TestCase):
             self.assertTrue(
                 all(line["highlighted"] for line in events[-1]["lines"])
             )
+
+
+class TestAnswerTimelines(unittest.TestCase):
+    """A resumed chat shows how long each answer took, as it did live."""
+
+    def test_saved_timelines_return_with_their_turns(self) -> None:
+        with TemporaryDirectory() as folder:
+            root = Path(folder)
+            engine = ChatEngine(root, lambda event: None)
+            first = SimpleNamespace(timestamp="2026-10-07T10:00:00+00:00")
+            second = SimpleNamespace(timestamp="2026-10-07T10:05:00+00:00")
+            engine.session = SimpleNamespace(
+                project=SimpleNamespace(root=root), turns=[first, second]
+            )
+            timeline = {
+                "elapsed_ms": 4200,
+                "steps": [{"label": "Identifying intent", "ms": 1200}],
+            }
+            engine.save_answer_timeline(first.timestamp, timeline)
+            # A malformed timeline from the page is ignored.
+            engine.save_answer_timeline(second.timestamp, {"steps": "x"})
+
+            with patch(
+                "qachat.gui.engine.asdict",
+                side_effect=lambda turn: {"timestamp": turn.timestamp},
+            ):
+                payloads = _turn_payloads([first, second], root)
+
+            self.assertEqual(payloads[0]["timeline"], timeline)
+            self.assertNotIn("timeline", payloads[1])
+            self.assertTrue((root / "logs" / "answer_timelines.json").exists())
+
+    def test_without_saved_timelines_turns_are_unchanged(self) -> None:
+        with TemporaryDirectory() as folder:
+            engine = ChatEngine(Path(folder), lambda event: None)
+            engine.session = SimpleNamespace(
+                project=SimpleNamespace(root=Path(folder)), turns=[]
+            )
+            turn = SimpleNamespace(timestamp="t")
+            with patch(
+                "qachat.gui.engine.asdict",
+                side_effect=lambda turn: {"timestamp": turn.timestamp},
+            ):
+                self.assertEqual(
+                    _turn_payloads([turn], Path(folder)),
+                    [{"timestamp": "t"}],
+                )
 
 
 if __name__ == "__main__":

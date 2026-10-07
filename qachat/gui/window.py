@@ -576,6 +576,28 @@ class ChatBridge(QObject):
             }
         )
 
+    @Slot(str, str)
+    def saveAnswerTimeline(self, timestamp: str, timeline_json: str) -> None:
+        """Keep how long an answer took, so a resumed chat shows it again.
+
+        Parameters
+        ----------
+        timestamp: str
+            The answered turn's timestamp, which identifies it.
+        timeline_json: str
+            JSON object with ``elapsed_ms`` and ``steps`` (each a ``label``
+            and ``ms``), as the page displayed them.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "save_answer_timeline",
+                "timestamp": timestamp,
+                "timeline": json.loads(timeline_json),
+            }
+        )
+
     @Slot(str)
     def deleteConversation(self, conversation_id: str) -> None:
         """Archive a conversation and remove it from the visible catalog."""

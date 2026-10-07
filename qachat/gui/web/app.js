@@ -94,6 +94,8 @@ let activeConversationId = "";
 let lastConversationData = null;
 let askingConversation = null;
 let pendingTurn = null;
+// A stopped answer's partial text, shown again after the engine restarts.
+let stoppedTurn = null;
 let phaseTimer = null;
 let answerTimer = null;
 // Tokens used by the open chat and the project, from the engine; the
@@ -287,6 +289,29 @@ function previewSources() {
 }
 
 /**
+ * Add "(1 folder, 25 files)" after a workspace folder's name: what the
+ * folder directly contains, not its nested levels.
+ *
+ * @param folder A tree-folder element built by branch().
+ */
+function showFolderCount(folder) {
+  const summary = folder.querySelector(":scope > summary");
+  const name = [...summary.childNodes].find((node) => node.nodeType === Node.TEXT_NODE);
+  if (!name) return;
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const folders = Number(folder.dataset.folders || 0);
+  const files = Number(folder.dataset.files || 0);
+  const parts = [
+    folders ? plural(folders, "folder") : "",
+    files ? plural(files, "file") : "",
+  ].filter(Boolean);
+  const count = document.createElement("span");
+  count.className = "tree-count";
+  count.textContent = ` (${parts.join(", ") || "empty"})`;
+  name.after(count);
+}
+
+/**
  * Build a nested selection tree with tri-state folder checkboxes.
  *
  * @param name Displayed folder label.
@@ -309,6 +334,9 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   });
   // Root-relative trees (the workspace) can recover the folder's own path.
   if (paths[0]) details.dataset.path = paths[0].split("/").slice(0, depth + 1).join("/");
+  // Direct contents only (not nested levels), shown by the workspace tree.
+  details.dataset.folders = String(children.directories.size);
+  details.dataset.files = String(children.files.length);
   const summary = document.createElement("summary");
   const checkbox = document.createElement("input");
   checkbox.type = "checkbox";
@@ -1061,6 +1089,7 @@ function renderWorkspace(paths) {
       item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
     });
     item.querySelectorAll("input").forEach((input) => input.remove());
+    [item, ...item.querySelectorAll(".tree-folder")].forEach(showFolderCount);
     item.querySelectorAll(".tree-file").forEach((line) => {
       line.tabIndex = 0;
       line.setAttribute("role", "button");
@@ -1453,9 +1482,12 @@ function setBusy(value, message = "") {
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
   byId("question-form").setAttribute("aria-busy", String(value));
-  for (const id of ["question", "attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range"]) {
+  for (const id of ["attach-button", "attach-files", "attach-folder", "effort-button", "effort-model-range", "effort-depth-range"]) {
     byId(id).disabled = value || !ready;
   }
+  // The next question can be typed while an answer is generated; sending
+  // waits until it is done (the submit handler checks busy).
+  byId("question").disabled = !ready || (value && !answering);
   if (value) {
     showNativeSourceDrag(false);
     byId("attach-menu").classList.add("hidden");
@@ -1480,6 +1512,7 @@ function setBusy(value, message = "") {
     byId("activity-detail").textContent = "";
   }
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();
+  if (!value) focusComposer();
 }
 
 /**
@@ -1916,7 +1949,9 @@ function addTurn(turn) {
     }
   });
   renderAnswer(answer, turn, item);
-  item.append(question, answer);
+  // A saved answer shows the timing and tokens it showed when it arrived.
+  const timeline = renderTimeline(turn.timeline || null, turn);
+  item.append(...[question, timeline, answer].filter(Boolean));
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
@@ -1952,12 +1987,23 @@ function renderConversations(data) {
     button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}${provisional ? " provisional" : ""}`;
     button.dataset.conversationId = item.conversation_id;
     button.textContent = name;
-    button.title = name;
+    let opening = null;
     button.addEventListener("click", () => {
       if (busy || item.conversation_id === activeConversationId) return;
-      setBusy(true, "Opening conversation…");
-      bridge.selectConversation(item.conversation_id);
+      // Wait briefly so a double-click renames instead of opening.
+      clearTimeout(opening);
+      opening = setTimeout(() => {
+        if (busy) return;
+        setBusy(true, "Opening conversation…");
+        bridge.selectConversation(item.conversation_id);
+      }, RENAME_CLICK_DELAY_MS);
     });
+    button.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      clearTimeout(opening);
+      if (!busy && !provisional) renameInSidebar(row, button, item);
+    });
+    button.title = `${name}\nDouble-click to rename`;
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "conversation-delete";
@@ -1974,6 +2020,73 @@ function renderConversations(data) {
   }
   byId("conversation-name").textContent = activeEmpty ? "" : activeName;
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
+}
+
+/**
+ * Keep the text an answer had generated when the user pressed Stop.
+ *
+ * Stop restarts the engine, so the partial answer is never saved; it stays
+ * on screen, marked as stopped, until the user opens another chat.
+ *
+ * @param current The pending turn that was stopped.
+ */
+function keepStoppedTurn(current) {
+  stoppedTurn = null;
+  if (!current) return;
+  if (!current.streaming || !current.body?.textContent.trim()) {
+    current.item.remove();
+    return;
+  }
+  const elapsed = current.elapsedMs ?? performance.now() - current.started;
+  current.item.classList.remove("pending");
+  current.item.classList.add("stopped");
+  current.answer.classList.remove("answer-phase", "streaming");
+  current.durationLine.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  stoppedTurn = { item: current.item, conversationId: activeConversationId };
+}
+
+/**
+ * Show the stopped answer again after the restarted engine redraws its chat.
+ */
+function restoreStoppedTurn() {
+  const kept = stoppedTurn;
+  stoppedTurn = null;
+  if (kept && kept.conversationId === activeConversationId) conversation.append(kept.item);
+}
+
+/**
+ * Rename a conversation in place in the sidebar: Enter or clicking away
+ * saves, Escape cancels.
+ *
+ * @param row The conversation's sidebar row.
+ * @param button The row's conversation button, replaced while editing.
+ * @param item The conversation record from the backend.
+ */
+function renameInSidebar(row, button, item) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "conversation-rename";
+  input.value = item.name;
+  input.setAttribute("aria-label", `Rename ${item.name}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    if (save && name && name !== item.name && !busy) {
+      bridge.renameConversation(item.conversation_id, name);
+    }
+    // The backend's conversation list redraws the sidebar after a rename.
+    input.replaceWith(button);
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  button.replaceWith(input);
+  input.focus();
+  input.select();
 }
 
 /**
@@ -2123,6 +2236,8 @@ function stopPhaseAnimation() {
 // steps at once; they queue (oldest dropped past the limit) and finish well
 // within the time the model spends reading before it writes.
 const ANSWER_STAGE_DURATION_MS = 450;
+// A click on another chat waits this long, so a double-click renames it.
+const RENAME_CLICK_DELAY_MS = 250;
 const ANSWER_STAGE_QUEUE_LIMIT = 8;
 
 function resetAnswerStages() {
@@ -2170,42 +2285,66 @@ function markTimelineStep(label) {
 }
 
 /**
- * Build the collapsed "Took Ns" line; expanding it lists each step and how
- * long it took.
+ * Record how long a completed answer took and how long each step took.
+ *
+ * The record is saved with the project, so a resumed conversation shows the
+ * same "Took Ns" line and step list as when the answer arrived.
  *
  * @param current The pending turn being completed.
  * @param turn Saved turn with its routing parameters.
  * @param totalMs Time from Ask to the complete answer.
+ * @returns The total time and each step's label and duration.
  */
-function renderTimeline(current, turn, totalMs) {
+function timelineRecord(current, turn, totalMs) {
+  const end = current.started + totalMs;
+  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
+  const query = turn.parameters?.retrieval_query;
+  return {
+    elapsed_ms: Math.round(totalMs),
+    steps: steps.map((step, index) => ({
+      label: query && /semantic search/i.test(step.label)
+        ? `${step.label} for “${query}”`
+        : step.label,
+      ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+    })),
+  };
+}
+
+/**
+ * Build the collapsed "Took Ns · Xk tokens" line; expanding it lists each
+ * step and how long it took.
+ *
+ * @param record Saved timing from timelineRecord, or null for an answer
+ *   saved before timings were kept (then only its tokens are shown).
+ * @param turn Saved turn with its token usage.
+ * @returns The line, or null when there is neither a timing nor tokens.
+ */
+function renderTimeline(record, turn) {
+  const usage = turn.parameters?.usage;
+  const tokens = usageSum(usage);
+  if (!record && !tokens) return null;
   const details = document.createElement("details");
   details.className = "answer-duration";
   const summary = document.createElement("summary");
-  const usage = turn.parameters?.usage;
-  const tokens = usageSum(usage);
-  summary.textContent = `Took ${formatDuration(totalMs)}`
-    + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
+  summary.textContent = [
+    record ? `Took ${formatDuration(record.elapsed_ms)}` : "",
+    tokens ? `${formatTokens(tokens)} tokens` : "",
+  ].filter(Boolean).join(" · ");
   if (tokens) {
     summary.title = `${usage.input_tokens.toLocaleString()} tokens read, ${usage.output_tokens.toLocaleString()} written`;
   }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
-  const end = current.started + totalMs;
-  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
-  const query = turn.parameters?.retrieval_query;
-  steps.forEach((step, index) => {
-    const next = steps[index + 1]?.at ?? end;
+  for (const step of record?.steps || []) {
     const row = document.createElement("li");
     const label = document.createElement("span");
     label.textContent = step.label;
-    if (query && /semantic search/i.test(step.label)) label.textContent += ` for “${query}”`;
     const time = document.createElement("span");
     time.className = "timeline-time";
-    const ms = Math.max(0, next - step.at);
-    time.textContent = ms < 100 ? "<0.1s" : `${(ms / 1000).toFixed(1)}s`;
+    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
     row.append(label, time);
     list.append(row);
-  });
+  }
   if (tokens) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
@@ -2494,11 +2633,14 @@ function completePendingTurn(turn) {
   pendingTurn = null;
   current.item.classList.remove("pending");
   // "Took Ns" only; expanding it shows the routing steps and their times.
-  const timeline = renderTimeline(
+  const record = timelineRecord(
     current, turn, current.elapsedMs ?? performance.now() - current.started);
+  const timeline = renderTimeline(record, turn);
   if (current.durationLine) current.durationLine.replaceWith(timeline);
   else current.item.insertBefore(timeline, current.answer);
   current.durationLine = timeline;
+  // Keep the timing with the project so a resumed chat shows it too.
+  if (bridge && turn.timestamp) bridge.saveAnswerTimeline(turn.timestamp, JSON.stringify(record));
   // The text was shown live as it was generated; now add citation links.
   current.answer.classList.remove("answer-phase", "streaming");
   current.answer.replaceChildren();
@@ -2507,6 +2649,20 @@ function completePendingTurn(turn) {
   selectTurn(current.item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
   setBusy(false);
+}
+
+/**
+ * Put the cursor back in the message box when QAChat is free again, unless
+ * the user is typing somewhere else (a rename, a field) or Settings is open.
+ */
+function focusComposer() {
+  const question = byId("question");
+  const active = document.activeElement;
+  const elsewhere = active && active !== question && active !== document.body
+    && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+  const settingsOpen = !byId("models-panel").classList.contains("hidden");
+  if (!ready || question.disabled || elsewhere || settingsOpen) return;
+  question.focus();
 }
 
 /**
@@ -2929,6 +3085,7 @@ function onEvent(raw) {
     clearReferences();
     renderConversations(data);
     data.turns.forEach(addTurn);
+    restoreStoppedTurn();
     if (!data.turns.length) renderConversationEmpty();
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
@@ -2955,6 +3112,7 @@ function onEvent(raw) {
     clearReferences();
     renderConversations(data);
     data.turns.forEach(addTurn);
+    restoreStoppedTurn();
     if (!data.turns.length) {
       renderConversationEmpty();
       showWorkspace(false);
@@ -3002,7 +3160,7 @@ function onEvent(raw) {
       resumeAfterStop = false;
       stopPhaseAnimation();
       resetAnswerStages();
-      pendingTurn?.item.remove();
+      keepStoppedTurn(pendingTurn);
       pendingTurn = null;
       ready = false;
       setBusy(true, "Reopening project after interruption…");
