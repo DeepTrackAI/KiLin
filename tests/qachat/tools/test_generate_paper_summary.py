@@ -39,7 +39,7 @@ Why the work was done.
 ## Findings
 What it found.
 """
-_JONES = "Jones, B. Raman spectroscopy of leaves. Plant J. 12, 3 (2019)."
+_JONES = "Jones, B. infrared spectroscopy of leaves. Plant J. 12, 3 (2019)."
 _LEE = "Lee, C. Deep learning for spectra. Nat. Methods 18, 9 (2021)."
 
 
@@ -240,7 +240,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
                 "p.pdf",
                 [
                     "References",
-                    "1. Jones, B. Raman spectro-",
+                    "1. Jones, B. infrared spectro-",
                     "scopy of leaves. Plant J. 12, 3 (2019).",
                     "[2] Lee, C. Deep learning for spectra. Nat. Methods",
                     "18, 9 (2021).",
@@ -256,14 +256,14 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(reference_entries((paper[0],)), [])
 
     def test_running_heads_stay_out_of_reference_entries(self) -> None:
-        head = ["I.-u. Tiunn et al.", "SoftwareX 35 (2026) 102791"]
+        head = ["I.-u. Park et al.", "SoftwareX 35 (2026) 102791"]
         paper = tuple(
             chunk("p.pdf", head + [f"Body text of page {n}."], start=n * 10)
             for n in range(1, 4)
         ) + (
             chunk(
                 "p.pdf",
-                ["References", "1. Jones, B. Raman spectroscopy of",
+                ["References", "1. Jones, B. infrared spectroscopy of",
                  *head, "leaves. Plant J. 12, 3 (2019).",
                  f"2. {_LEE}"],
                 start=50,
@@ -293,7 +293,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         writer.add_metadata(
             {
                 "/Title": "Deep spectra of stressed plants",
-                "/Author": "Anoop C. Patil; Yu-Wei Chang",
+                "/Author": "Jane A. Kim; Alex B. Doe",
             }
         )
         pdf = self.root / "paper.pdf"
@@ -305,7 +305,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         )
         self.assertEqual(
             paper_citation(pdf, (first,)),
-            "Patil, A. C. et al. Deep spectra of stressed plants. "
+            "Kim, J. A. et al. Deep spectra of stressed plants. "
             "https://doi.org/10.1000/xyz123 (2025).",
         )
         self.assertEqual(
@@ -328,27 +328,27 @@ class TestGeneratePaperSummary(unittest.TestCase):
         return run(SummarySettings(), request, built), asked
 
     def test_this_follows_the_chain_back_to_the_named_paper(self) -> None:
-        # The user's conversation: walk through Tiunn's paper, summarize
+        # The user's conversation: walk through Park's paper, summarize
         # "that" (evidence split over two papers), then "turn this into a
-        # research briefing". Patil's paper matches the words best.
-        tiunn, mijalkov = Path("repo/tiunn26.pdf"), Path("repo/mijalkov25.pdf")
+        # research briefing". Kim's paper matches the words best.
+        park, chen = Path("repo/park26.pdf"), Path("repo/chen25.pdf")
         chunks = [
-            chunk("repo/tiunn26.pdf", ["BRAPH 2 software."]),
-            chunk("repo/mijalkov25.pdf", ["Memory capacity."]),
-            chunk("repo/patil25deep.pdf", ["Research on plant stress."]),
+            chunk("repo/park26.pdf", ["XYZ 2 software."]),
+            chunk("repo/chen25.pdf", ["Memory capacity."]),
+            chunk("repo/kim25deep.pdf", ["Research on plant stress."]),
         ]
         request = ToolRequest(
             "turn this into research briefing",
             "turn this into research briefing",
             earlier=(
                 EarlierTurn(4, "can you turn that into a summary report",
-                            (tiunn,) * 7 + (mijalkov,) * 7),
-                EarlierTurn(3, "can you walk me through Tiunn's paper",
-                            (tiunn,) * 36),
+                            (park,) * 7 + (chen,) * 7),
+                EarlierTurn(3, "can you walk me through Park's paper",
+                            (park,) * 36),
             ),
         )
         result, _ = self.paper_for(chunks, request)
-        self.assertEqual(result.summary["paper"], "repo/tiunn26.pdf")
+        self.assertEqual(result.summary["paper"], "repo/park26.pdf")
         self.assertEqual(result.summary["reason"], "named in turn 3")
 
     def test_this_means_the_paper_an_earlier_turn_used(self) -> None:
@@ -531,11 +531,11 @@ class TestGeneratePaperSummary(unittest.TestCase):
     def test_inline_section_is_one_line_without_its_label(self) -> None:
         section = next(s for s in _BRIEFING.sections if s.inline)
         reply = (
-            "**This is a summary of:** Patil, A. C. et al. Deep spectra.\n"
+            "**This is a summary of:** Kim, J. A. et al. Deep spectra.\n"
             "More text the model added."
         )
         self.assertEqual(
-            _content(reply, section), "Patil, A. C. et al. Deep spectra."
+            _content(reply, section), "Kim, J. A. et al. Deep spectra."
         )
 
     def test_file_text_keeps_title_first(self) -> None:

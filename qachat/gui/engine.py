@@ -1980,7 +1980,13 @@ class ChatEngine:
         fallback = re.sub(
             r"^what (?:is|are)\s+", "Understanding ", fallback, flags=re.I
         )
-        if not title or re.search(r"\bunderstand(?:ing)? me\b", title, re.I):
+        # A reply longer than a title (a sentence) would be cut mid-phrase;
+        # the question makes a better title then.
+        if (
+            not title
+            or len(title.split()) > 6
+            or re.search(r"\bunderstand(?:ing)? me\b", title, re.I)
+        ):
             title = fallback
         title = " ".join(title.split()[:6])[:80]
         if not title:

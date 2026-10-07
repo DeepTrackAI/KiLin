@@ -1,4 +1,4 @@
-"""The contract between QAChat and its tools.
+"""Define what QAChat gives a tool and what the tool returns.
 
 A tool performs one explicit operation for an intent, such as listing every
 mention of a term. An intent in a project type names its tool and settings
@@ -11,14 +11,22 @@ the evidence it cites, and a summary saved with the turn.
 Tools never import ``qachat.rag``. Everything they may use (indexed
 chunks, ranking, the router and answering models, progress, confirmation,
 tracing) arrives through the context, so a tool can be tested with plain
-functions in place of models.
+functions in place of models. The context does not check what a tool does
+with these services; a tool is trusted code registered in
+``qachat.tools.registry``.
+
+The settings checks raise ``ValueError`` with the intent location and the
+field name, so a mistake in a project type file points at its line of
+configuration. They check types and ranges only; each tool decides which
+settings it has.
 
 Key Features
 ------------
 
 - **Request**
 
-    The question and the user's own words to take terms from.
+    The question and the user's own words to take terms from, with the
+    earlier turns the question points back to.
 
 - **Context**
 
@@ -30,19 +38,51 @@ Key Features
 
 - **Settings checks**
 
-    ``check_bool``, ``check_int``, ``check_choice``, and
-    ``reject_unknown`` give configuration errors that name the field.
+    Configuration errors that name the field, so typos are not silently
+    ignored.
 
 Module Structure
 ----------------
 
+- ``EarlierTurn``
+
+    An earlier turn the question points back to.
+
 - ``ToolRequest``
+
+    What the user asked.
+
 - ``ToolContext``
+
+    QAChat's services, as a tool may use them.
+
 - ``ToolResult``
-- ``check_bool``
-- ``check_int``
-- ``check_choice``
+
+    What a tool returns.
+
 - ``reject_unknown``
+
+    Reject settings a tool does not have.
+
+- ``check_bool``
+
+    Return a true/false setting, or its default.
+
+- ``check_int``
+
+    Return a whole-number setting within a range, or its default.
+
+- ``check_choice``
+
+    Return a setting that must be one of fixed values, or its default.
+
+Examples
+--------
+>>> from qachat.tools.contract import ToolRequest, check_int
+>>> question = "list every mention of MRI"
+>>> request = ToolRequest(question, question)
+>>> check_int("code.intents.x.tool", {"max_calls": 5}, "max_calls", 10, 1, 50)
+5
 
 """
 
@@ -81,14 +121,32 @@ class EarlierTurn:
         One-based turn number in the chat.
     question: str
         The question asked in that turn.
-    paths: tuple[pathlib.Path, ...]
+    paths: tuple[pathlib.Path, ...], optional
         Paths of the evidence that turn used, one per evidence passage.
+        Defaults to ``()``.
+    texts: tuple[str, ...], optional
+        The evidence passages' texts, in the same order. Defaults to
+        ``()``.
+    lines: tuple[int, ...], optional
+        The evidence passages' first lines, in the same order. Defaults to
+        ``()``.
+    linked: bool, optional
+        True when the router related the question to this turn (or to a
+        turn related to it); False for the last turn added only because
+        "that paper" usually means the paper just discussed. Defaults to
+        ``True``.
+    answer: str, optional
+        The answer given in that turn. Defaults to ``""``.
 
     """
 
     number: int
     question: str
     paths: tuple[Path, ...] = ()
+    texts: tuple[str, ...] = ()
+    lines: tuple[int, ...] = ()
+    linked: bool = True
+    answer: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,14 +160,14 @@ class ToolRequest:
     text: str
         The user's own words a tool may take values from: the question,
         followed by the questions of earlier turns it points back to.
-    guidance: str | None
+    guidance: str | None, optional
         Answer guidance (such as a length target) for tools whose answer
-        the model writes.
-    earlier: tuple[EarlierTurn, ...]
+        the model writes. Defaults to ``None``.
+    earlier: tuple[EarlierTurn, ...], optional
         The earlier turns the question points back to, newest first,
         including the turns those turns pointed back to ("turn this into a
         briefing" after "summarize that" after "walk me through Smith's
-        paper").
+        paper"). Defaults to ``()``.
 
     """
 
@@ -160,18 +218,19 @@ class ToolContext:
     confirm: Callable[[ToolPlan], str] | None
         Asks the user to confirm a plan and returns ``continue``,
         ``quick``, or ``cancel``; None runs every plan.
-    write_pdf: Callable[..., int] | None
-        ``write_pdf(markdown, path, label=...)`` writes a one-page PDF and
-        returns its page count; None where no PDF writer is available
-        (for example notebooks without Qt).
-    choose: Callable[[str, tuple[str, ...]], int | None] | None
-        ``choose(question, options)`` asks the user to pick one option and
-        returns its index, or None when they cancel; None where nobody can
-        be asked (notebooks), so tools fall back to their best guess.
     trace: TraceSink
         The conversation's trace; emit events with ``trace_turn_id``.
     trace_turn_id: str | None
         The turn the tool runs for.
+    write_pdf: Callable[..., int] | None, optional
+        ``write_pdf(markdown, path, label=...)`` writes a one-page PDF and
+        returns its page count; None where no PDF writer is available
+        (for example notebooks without Qt). Defaults to ``None``.
+    choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
+        ``choose(question, options)`` asks the user to pick one option and
+        returns its index, or None when they cancel; None where nobody can
+        be asked (notebooks), so tools fall back to their best guess.
+        Defaults to ``None``.
 
     """
 
@@ -209,9 +268,9 @@ class ToolResult:
         ``text`` must be exact source lines so previews can locate it.
     summary: dict[str, object]
         JSON-compatible facts saved with the turn under ``"tool"``.
-    streamed: bool
+    streamed: bool, optional
         True when the answer already reached the user through
-        ``ToolContext.write``.
+        ``ToolContext.write``. Defaults to ``False``.
 
     """
 
@@ -241,6 +300,7 @@ def reject_unknown(where: str, data: dict, known: Collection[str]) -> None:
     """
 
     unknown = sorted(set(data) - set(known))
+
     if unknown:
         raise ValueError(
             f"{where!r} has unknown settings: {', '.join(unknown)}."
@@ -276,6 +336,7 @@ def check_bool(where: str, data: dict, name: str, default: bool) -> bool:
     value = data.get(name, default)
     if type(value) is not bool:
         raise ValueError(f"{where!r} {name} must be true or false.")
+
     return value
 
 
@@ -316,6 +377,7 @@ def check_int(
         raise ValueError(
             f"{where!r} {name} must be a whole number from {low} to {high}."
         )
+
     return value
 
 
@@ -354,4 +416,5 @@ def check_choice(
         raise ValueError(
             f"{where!r} {name} must be one of: {', '.join(choices)}."
         )
+
     return value

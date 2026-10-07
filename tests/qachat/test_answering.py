@@ -91,7 +91,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
         greeting.parameters = {"intent": "small_talk"}
         self.turns = [
             greeting,
-            _turn("what is DIVA", "DIVA analyses Raman spectra [1]."),
+            _turn("what is NOVA", "NOVA analyses infrared spectra [1]."),
         ]
 
     def _route(self, question: str, related: str) -> tuple:
@@ -119,7 +119,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
         self.assertIn("ignores the conversation", decision.dropped_turns[0][1])
         # Small talk is not offered to the router at all.
         self.assertNotIn("Turn 1:", prompt)
-        self.assertIn("what is DIVA", prompt)
+        self.assertIn("what is NOVA", prompt)
         self.assertEqual(
             search_text("what is RFE", self.turns, decision), "what is RFE"
         )
@@ -127,12 +127,12 @@ class TestRelatedTurnChecks(unittest.TestCase):
     def test_shared_term_keeps_a_turn_without_extending_the_search(
         self,
     ) -> None:
-        decision, _ = self._route("what are DIVA's limitations", "[2]")
+        decision, _ = self._route("what are NOVA's limitations", "[2]")
         self.assertEqual(decision.related_turn_ids, (2,))
         self.assertFalse(decision.refers_back)
         self.assertEqual(
-            search_text("what are DIVA's limitations", self.turns, decision),
-            "what are DIVA's limitations",
+            search_text("what are NOVA's limitations", self.turns, decision),
+            "what are NOVA's limitations",
         )
 
     def test_pointing_back_adds_the_related_question_to_the_search(
@@ -142,7 +142,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
         self.assertEqual(decision.related_turn_ids, (2,))
         self.assertEqual(
             search_text("how do I install it?", self.turns, decision),
-            "how do I install it? what is DIVA",
+            "how do I install it? what is NOVA",
         )
 
     def test_refers_back_cues(self) -> None:
@@ -158,7 +158,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
             self.assertTrue(refers_back(question), question)
         for question in (
             "what is RFE",
-            "why DIV A not DIVA?",
+            "why NOV A not NOVA?",
             "can you explain recursive feature elimination",
         ):
             self.assertFalse(refers_back(question), question)

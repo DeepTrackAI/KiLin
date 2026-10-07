@@ -8,7 +8,15 @@ tool are unchanged.
 
 Each tool is one module with a settings dataclass, ``parse_settings``, and
 ``run``; ``registry`` lists the tools that exist, and ``contract`` defines
-what a tool receives and returns.
+what a tool receives and returns. Shared modules settle which document a
+request is about (``choose_document``), plan and confirm expensive runs
+(``planning``), and read and write the project's ``outputs/`` folder
+(``outputs``, ``long_lists``, ``report_template``).
+
+This package re-exports the contract, the planning vocabulary, the
+registry, and the names other modules use from ``batch_classify`` and
+``scan_and_list``. Other tools and helpers are reached through their own
+submodules.
 
 Key Features
 ------------
@@ -32,6 +40,30 @@ Key Features
 
     Read one whole document in parts with notes, then answer from them.
 
+- **filter_results**
+
+    Judge each item an earlier answer listed and keep those that match a
+    follow-up.
+
+- **find_fact**
+
+    Find a fact, or a complete list, by reading every passage of one paper
+    or of every paper.
+
+- **find_passages**
+
+    List every sentence in scope about a topic, copied word for word.
+
+- **paper_overview**
+
+    Summarize one paper in the chat, asking which paper when it is
+    unclear.
+
+- **show_source**
+
+    Show the sentence an earlier answer cited, with its neighbours, and
+    explain it without searching again.
+
 - **generate_paper_summary**
 
     Summarize one paper with a report template (for example a research
@@ -45,45 +77,81 @@ Key Features
 Module Structure
 ----------------
 
-- ``contract``
+- ``EarlierTurn``, ``ToolRequest``, ``ToolContext``, and ``ToolResult``
 
-    ``ToolRequest``, ``ToolContext``, ``ToolResult``, settings checks.
+    What a tool receives and returns (from ``contract``).
 
-- ``registry``
+- ``CONFIRMATION_ALWAYS``, ``CONFIRMATION_WHEN_LARGE``,
+  ``CONFIRMATION_NEVER``, ``CONFIRMATION_CHOICES``, and
+  ``ConfirmationPolicy``
 
-    Tool names, ``TOOL_REGISTRY``, ``parse_tool``, ``run_tool``.
+    When a tool asks the user before running (from ``planning``).
 
-- ``project_inventory``
+- ``PLAN_CHOICE_CONTINUE``, ``PLAN_CHOICE_QUICK``, ``PLAN_CHOICE_CANCEL``,
+  ``PLAN_CHOICE_CHOICES``, and ``PlanChoice``
 
-    Exact facts about the project's files.
+    The user's answer to a plan (from ``planning``).
 
-- ``scan_and_list``
+- ``ToolPlan``
 
-    Exhaustive mention listing.
+    The work a tool would do, for the user to confirm.
 
-- ``batch_classify``
+- ``needs_confirmation``
 
-    Batched classification of mentions.
+    Tell whether a plan must be confirmed before it runs.
 
-- ``batch_review``
+- ``TOOL_BATCH_CLASSIFY``, ``TOOL_BATCH_REVIEW``,
+  ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PROJECT_INVENTORY``,
+  ``TOOL_SCAN_AND_LIST``, ``TOOL_CHOICES``, and ``ToolName``
 
-    Part-by-part reading of one document.
+    Registered tool names (from ``registry``; the other ``TOOL_*`` names
+    are in ``qachat.tools.registry``).
 
-- ``generate_paper_summary``
+- ``TOOL_REGISTRY``
 
-    Template-checked paper summaries; the custom-tool reference example.
+    Map from each tool name to its registered tool.
 
-- ``outputs``
+- ``Tool`` and ``ToolUse``
 
-    The never-indexed ``outputs/`` folder.
+    One registered tool, and an intent's tool with validated settings.
 
-- ``report_template``
+- ``parse_tool`` and ``run_tool``
 
-    Markdown report templates and the checks against them.
+    Validate an intent's ``tool`` object, and run it.
 
-- ``planning``
+- ``CANDIDATES_MENTIONS``, ``CANDIDATE_CHOICES``, and ``CandidateSource``
 
-    Plans, confirmation policy, and the user's choice.
+    How ``batch_classify`` collects the items it labels.
+
+- ``ClassifySettings``
+
+    Settings of ``batch_classify`` in a project type.
+
+- ``UNCLEAR`` and ``Label``
+
+    The always-offered category, and the category given to one mention.
+
+- ``MAX_TERMS``
+
+    Most terms ``scan_and_list`` scans for in one question.
+
+- ``ScanSettings``
+
+    Settings of ``scan_and_list`` in a project type.
+
+- ``Mention`` and ``MentionScan``
+
+    One occurrence of a term, and all mentions found.
+
+- ``scan_mentions``
+
+    Find every occurrence of the terms in the indexed text.
+
+Examples
+--------
+>>> from qachat.tools import TOOL_REGISTRY, TOOL_SCAN_AND_LIST
+>>> print(TOOL_REGISTRY[TOOL_SCAN_AND_LIST].summary)
+List and count every exact mention of the question's terms.
 
 """
 
@@ -138,9 +206,8 @@ from qachat.tools.scan_and_list import (
 )
 
 __all__ = [
-    "EarlierTurn",
-    "CANDIDATE_CHOICES",
     "CANDIDATES_MENTIONS",
+    "CANDIDATE_CHOICES",
     "CONFIRMATION_ALWAYS",
     "CONFIRMATION_CHOICES",
     "CONFIRMATION_NEVER",
@@ -161,6 +228,7 @@ __all__ = [
     "CandidateSource",
     "ClassifySettings",
     "ConfirmationPolicy",
+    "EarlierTurn",
     "Label",
     "Mention",
     "MentionScan",

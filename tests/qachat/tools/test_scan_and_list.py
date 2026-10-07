@@ -48,13 +48,13 @@ class TestScan(unittest.TestCase):
 
     def test_pdf_pages_restart_line_numbers(self) -> None:
         chunks = [
-            _chunk("p.pdf", 1, ["DIVA on page one"], section="Page 1"),
-            _chunk("p.pdf", 1, ["DIVA again, page two"], section="Page 2"),
+            _chunk("p.pdf", 1, ["NOVA on page one"], section="Page 1"),
+            _chunk("p.pdf", 1, ["NOVA again, page two"], section="Page 2"),
         ]
-        scan = scan_mentions(chunks, ["diva"])
+        scan = scan_mentions(chunks, ["nova"])
         self.assertEqual(
             [(m.section, m.line, m.text) for m in scan.mentions],
-            [("Page 1", 1, "DIVA"), ("Page 2", 1, "DIVA")],
+            [("Page 1", 1, "NOVA"), ("Page 2", 1, "NOVA")],
         )
 
     def test_phrase_across_a_line_break_and_whole_words(self) -> None:
@@ -63,20 +63,20 @@ class TestScan(unittest.TestCase):
                 "b.md",
                 10,
                 [
-                    "We used BRAPH",
-                    "2 and BRAPH 2.0.",
-                    "BRAPH 20 differs; RFEs",
+                    "We used XYZ",
+                    "2 and XYZ 2.0.",
+                    "XYZ 20 differs; RFEs",
                 ],
             )
         ]
-        scan = scan_mentions(chunks, ["BRAPH 2", "RFE"], context_lines=0)
+        scan = scan_mentions(chunks, ["XYZ 2", "RFE"], context_lines=0)
         found = [(m.term, m.line, m.end_line) for m in scan.mentions]
-        # "BRAPH 2.0" counts (a period is not a word character); "BRAPH 20"
+        # "XYZ 2.0" counts (a period is not a word character); "XYZ 20"
         # and "RFEs" do not.
-        self.assertEqual(found, [("BRAPH 2", 10, 11), ("BRAPH 2", 11, 11)])
+        self.assertEqual(found, [("XYZ 2", 10, 11), ("XYZ 2", 11, 11)])
         partial = scan_mentions(chunks, ["RFE"], whole_words=False)
         self.assertEqual(len(partial.mentions), 1)
-        exact_case = scan_mentions(chunks, ["braph 2"], case_sensitive=True)
+        exact_case = scan_mentions(chunks, ["xyz 2"], case_sensitive=True)
         self.assertEqual(exact_case.mentions, ())
 
     def test_scope_and_evidence_lines(self) -> None:
@@ -130,7 +130,7 @@ class TestScan(unittest.TestCase):
         report = mention_report(
             scan_mentions(chunks, ["MATLAB"]),
             limit=5,
-            scope_note="Scanned only p.pdf, the best match for “DIVA”.",
+            scope_note="Scanned only p.pdf, the best match for “NOVA”.",
         )
         self.assertIn("Found **1 mention** of “MATLAB” in **p.pdf**", report)
         self.assertIn("Scanned only p.pdf", report)
@@ -143,26 +143,26 @@ class TestTerms(unittest.TestCase):
 
     def test_quoted_terms(self) -> None:
         self.assertEqual(
-            quoted_terms('list "BRAPH 2" and `fit` and “RFE”, DIVA\'s'),
-            ("BRAPH 2", "fit", "RFE"),
+            quoted_terms('list "XYZ 2" and `fit` and “RFE”, NOVA\'s'),
+            ("XYZ 2", "fit", "RFE"),
         )
 
     def test_model_terms_must_occur_in_the_question(self) -> None:
-        text = "list all mentions of braph 2 in the papers"
+        text = "list all mentions of xyz 2 in the papers"
         self.assertEqual(
-            validated_terms('{"terms": ["BRAPH  2", "network"]}', text),
-            ("BRAPH 2",),
+            validated_terms('{"terms": ["XYZ  2", "network"]}', text),
+            ("XYZ 2",),
         )
-        self.assertEqual(validated_terms("BRAPH 2", text), ())
+        self.assertEqual(validated_terms("XYZ 2", text), ())
 
     def test_document_phrase_must_occur_in_the_question(self) -> None:
-        text = "how many times does the DIVA paper say MATLAB?"
+        text = "how many times does the NOVA paper say MATLAB?"
         self.assertEqual(
-            validated_document('{"document": "the DIVA paper"}', text),
-            "the DIVA paper",
+            validated_document('{"document": "the NOVA paper"}', text),
+            "the NOVA paper",
         )
         self.assertIsNone(
-            validated_document('{"document": "patil25deep.pdf"}', text)
+            validated_document('{"document": "kim25deep.pdf"}', text)
         )
         self.assertIsNone(validated_document('{"document": null}', text))
 

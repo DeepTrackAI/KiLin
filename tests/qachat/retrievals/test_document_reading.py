@@ -42,11 +42,11 @@ class TestDocumentReading(unittest.TestCase):
 
     def setUp(self) -> None:
         self.paper = [
-            _chunk("papers/patil25deep.pdf", n, f"DIVA part {n}. " * 20)
+            _chunk("papers/kim25deep.pdf", n, f"NOVA part {n}. " * 20)
             for n in range(1, 6)
         ]
         self.other = [
-            _chunk("papers/mijalkov17braph.pdf", n, f"BRAPH part {n}. " * 20)
+            _chunk("papers/chen17xyz.pdf", n, f"XYZ part {n}. " * 20)
             for n in range(1, 4)
         ]
         self.chunks = self.paper + self.other
@@ -54,13 +54,13 @@ class TestDocumentReading(unittest.TestCase):
     def test_dominant_file_is_read_whole_in_source_order(self) -> None:
         ranked = _ranked(self.paper[3], self.other[0], self.paper[1])
         selection = read_document(
-            "check the DIVA paper entirely",
+            "check the NOVA paper entirely",
             self.chunks,
             _EMPTY_GRAPH,
             ranked,
             max_tokens=10_000,
         )
-        self.assertEqual(selection.path, Path("papers/patil25deep.pdf"))
+        self.assertEqual(selection.path, Path("papers/kim25deep.pdf"))
         self.assertEqual(selection.reason, "search")
         self.assertTrue(selection.complete)
         self.assertEqual(list(selection.chunks), self.paper)
@@ -68,13 +68,13 @@ class TestDocumentReading(unittest.TestCase):
     def test_named_file_wins_over_search_results(self) -> None:
         ranked = _ranked(self.paper[0], self.paper[1], self.other[2])
         selection = read_document(
-            "read mijalkov17braph from start to end",
+            "read chen17xyz from start to end",
             self.chunks,
             _EMPTY_GRAPH,
             ranked,
             max_tokens=10_000,
         )
-        self.assertEqual(selection.path, Path("papers/mijalkov17braph.pdf"))
+        self.assertEqual(selection.path, Path("papers/chen17xyz.pdf"))
         self.assertEqual(selection.reason, "named_file")
         self.assertEqual(list(selection.chunks), self.other)
 
@@ -82,7 +82,7 @@ class TestDocumentReading(unittest.TestCase):
         size = estimate_tokens(self.paper[0].text)
         ranked = _ranked(self.paper[4], self.paper[1], self.paper[0])
         selection = read_document(
-            "which language does the DIVA paper use",
+            "which language does the NOVA paper use",
             self.chunks,
             _EMPTY_GRAPH,
             ranked,
@@ -125,7 +125,7 @@ class TestDocumentReading(unittest.TestCase):
 
         papers = [
             Path(f"repo/{name}.pdf")
-            for name in ("yao25connecting", "patil25deep", "mijalkov17braph")
+            for name in ("lee25networks", "kim25deep", "chen17xyz")
         ]
 
         def named(question):
@@ -133,12 +133,12 @@ class TestDocumentReading(unittest.TestCase):
                 question, papers, authors=True
             )]
 
-        self.assertEqual(named("a very short summary on yao25"),
-                         ["yao25connecting"])
-        self.assertEqual(named("what does Yao's paper say"),
-                         ["yao25connecting"])
-        self.assertEqual(named("turn patil25 into a briefing"),
-                         ["patil25deep"])
+        self.assertEqual(named("a very short summary on lee25"),
+                         ["lee25networks"])
+        self.assertEqual(named("what does Lee's paper say"),
+                         ["lee25networks"])
+        self.assertEqual(named("turn kim25 into a briefing"),
+                         ["kim25deep"])
         self.assertEqual(named("can you summarize the paper"), [])
         self.assertEqual(named("the 2025 papers"), [])
 

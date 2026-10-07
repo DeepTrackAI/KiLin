@@ -3,37 +3,75 @@
 The registry is the controlled boundary between configuration and code. A
 project type names a tool (``"tool": {"name": "scan_and_list", ...}``); the
 name must be in ``TOOL_REGISTRY``, and the tool's own ``parse_settings``
-checks the rest. Configuration never imports arbitrary Python paths.
+checks the rest. Configuration never imports arbitrary Python paths, so a
+project type file can choose among these tools but cannot add code.
 
 Adding a tool means writing one module in ``qachat/tools`` with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
-context)`` (see ``qachat.tools.contract``), then adding it here.
+context)`` (see ``qachat.tools.contract``), then adding it here. A tool
+marked ``follows_up`` works on an earlier answer, so routing relates a
+question sent to it to an earlier turn even when the router named none.
 
 Key Features
 ------------
 
 - **Names**
 
-    ``ToolName`` and ``TOOL_*`` constants: the tools that exist.
+    The tools that exist, as a ``Literal`` type and ``Final`` constants.
 
 - **Registry**
 
-    ``TOOL_REGISTRY`` maps each name to its settings parser and runner.
+    One entry per tool with its summary, settings parser, and runner.
 
 - **Configuration**
 
-    ``parse_tool`` validates an intent's ``tool`` object into a
-    ``ToolUse``; ``run_tool`` runs it.
+    Validate an intent's ``tool`` object and run the tool it names.
 
 Module Structure
 ----------------
 
+- ``TOOL_PROJECT_INVENTORY``, ``TOOL_SCAN_AND_LIST``,
+  ``TOOL_BATCH_CLASSIFY``, ``TOOL_BATCH_REVIEW``, ``TOOL_FILTER_RESULTS``,
+  ``TOOL_FIND_FACT``, ``TOOL_FIND_PASSAGES``,
+  ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PAPER_OVERVIEW``, and
+  ``TOOL_SHOW_SOURCE``
+
+    Canonical string values of the registered tool names.
+
+- ``TOOL_CHOICES``
+
+    Ordered collection of the registered tool names.
+
 - ``ToolName``
+
+    Type alias for the registered tool names.
+
 - ``Tool``
+
+    One registered tool.
+
 - ``ToolUse``
+
+    An intent's tool with its validated settings.
+
 - ``TOOL_REGISTRY``
+
+    Map from each tool name to its registered tool.
+
 - ``parse_tool``
+
+    Validate an intent's ``tool`` object.
+
 - ``run_tool``
+
+    Run an intent's tool.
+
+Examples
+--------
+>>> from qachat.tools.registry import TOOL_SCAN_AND_LIST, parse_tool
+>>> use = parse_tool("code.intents.list", {"name": TOOL_SCAN_AND_LIST})
+>>> use.name
+'scan_and_list'
 
 """
 
@@ -46,24 +84,30 @@ from typing import Final, Literal, TypeAlias
 from qachat.tools import (
     batch_classify,
     batch_review,
+    filter_results,
+    find_fact,
     find_passages,
     generate_paper_summary,
     paper_overview,
     project_inventory,
     scan_and_list,
+    show_source,
 )
 from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
 
 __all__ = [
     "TOOL_BATCH_CLASSIFY",
     "TOOL_BATCH_REVIEW",
-    "TOOL_FIND_PASSAGES",
     "TOOL_CHOICES",
+    "TOOL_FILTER_RESULTS",
+    "TOOL_FIND_FACT",
+    "TOOL_FIND_PASSAGES",
     "TOOL_GENERATE_PAPER_SUMMARY",
     "TOOL_PAPER_OVERVIEW",
     "TOOL_PROJECT_INVENTORY",
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
+    "TOOL_SHOW_SOURCE",
     "Tool",
     "ToolName",
     "ToolUse",
@@ -71,31 +115,40 @@ __all__ = [
     "run_tool",
 ]
 
-# The tools that exist. The interface mirrors these values.
+# The tools that exist. Project type files name tools by these values.
 ToolName: TypeAlias = Literal[
     "project_inventory",
     "scan_and_list",
     "batch_classify",
     "batch_review",
+    "filter_results",
+    "find_fact",
     "find_passages",
     "generate_paper_summary",
     "paper_overview",
+    "show_source",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
 TOOL_BATCH_CLASSIFY: Final[ToolName] = "batch_classify"
 TOOL_BATCH_REVIEW: Final[ToolName] = "batch_review"
+TOOL_FILTER_RESULTS: Final[ToolName] = "filter_results"
+TOOL_FIND_FACT: Final[ToolName] = "find_fact"
 TOOL_FIND_PASSAGES: Final[ToolName] = "find_passages"
 TOOL_GENERATE_PAPER_SUMMARY: Final[ToolName] = "generate_paper_summary"
 TOOL_PAPER_OVERVIEW: Final[ToolName] = "paper_overview"
+TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
     TOOL_BATCH_CLASSIFY,
     TOOL_BATCH_REVIEW,
+    TOOL_FILTER_RESULTS,
+    TOOL_FIND_FACT,
     TOOL_FIND_PASSAGES,
     TOOL_GENERATE_PAPER_SUMMARY,
     TOOL_PAPER_OVERVIEW,
+    TOOL_SHOW_SOURCE,
 )
 
 
@@ -113,6 +166,9 @@ class Tool:
         Validates the tool's settings from a project type.
     run: Callable[[object, ToolRequest, ToolContext], ToolResult]
         Runs the tool with validated settings.
+    follows_up: bool
+        True when the tool works on an earlier answer, so a question
+        routed to it always relates to an earlier turn.
 
     """
 
@@ -120,6 +176,7 @@ class Tool:
     summary: str
     parse_settings: Callable[[dict, str], object]
     run: Callable[[object, ToolRequest, ToolContext], ToolResult]
+    follows_up: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +224,21 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         batch_review.parse_settings,
         batch_review.run,
     ),
+    TOOL_FILTER_RESULTS: Tool(
+        TOOL_FILTER_RESULTS,
+        "Judge each item an earlier answer listed and keep those that match "
+        "a follow-up.",
+        filter_results.parse_settings,
+        filter_results.run,
+        follows_up=True,
+    ),
+    TOOL_FIND_FACT: Tool(
+        TOOL_FIND_FACT,
+        "Find a specific fact in one paper or every paper by reading every "
+        "passage; the user can choose a quick answer instead.",
+        find_fact.parse_settings,
+        find_fact.run,
+    ),
     TOOL_FIND_PASSAGES: Tool(
         TOOL_FIND_PASSAGES,
         "Read every sentence in scope and list the ones about a topic, "
@@ -180,6 +252,14 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "unclear.",
         paper_overview.parse_settings,
         paper_overview.run,
+    ),
+    TOOL_SHOW_SOURCE: Tool(
+        TOOL_SHOW_SOURCE,
+        "Show the sentence an earlier answer cited, with the sentences "
+        "around it, and explain it without searching again.",
+        show_source.parse_settings,
+        show_source.run,
+        follows_up=True,
     ),
     TOOL_GENERATE_PAPER_SUMMARY: Tool(
         TOOL_GENERATE_PAPER_SUMMARY,
@@ -216,12 +296,14 @@ def parse_tool(where: str, data: object) -> ToolUse:
 
     if not isinstance(data, dict):
         raise ValueError(f"Intent {where!r} tool must be an object.")
+
     name = data.get("name")
     if name not in TOOL_REGISTRY:
         raise ValueError(
             f"Intent {where!r} tool name must be one of: "
             f"{', '.join(TOOL_CHOICES)}."
         )
+
     settings = {key: value for key, value in data.items() if key != "name"}
     return ToolUse(
         name, TOOL_REGISTRY[name].parse_settings(settings, f"{where}.tool")

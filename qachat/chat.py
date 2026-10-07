@@ -207,6 +207,9 @@ class ChatSession:
     output_token_total: int
         Tokens this session has generated, over all replies; it grows while
         a reply streams, so callers can show usage live.
+    last_finish_reason: str | None
+        Why the latest generation stopped, such as ``"stop"`` or
+        ``"length"``. Set by the first reply; MLX can also report None.
     trace: TraceSink
         Trace sink used by the session.
 
@@ -570,6 +573,7 @@ class ChatSession:
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has
             exhausted the model context.
+            Also raised when ``token_callback`` is not callable.
 
         Notes
         -----
@@ -588,6 +592,7 @@ class ChatSession:
 
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
+
         if token_callback is not None and not callable(token_callback):
             raise ValueError("token_callback must be callable or None.")
 
@@ -710,7 +715,8 @@ class ChatSession:
                 else:
                     answer = self._torch_reply(tokens, token_budget)
                 if token_callback is not None and isinstance(answer, str):
-                    # PyTorch generation is not streamed here.
+                    # PyTorch generation is not streamed, so the callback
+                    # receives the whole reply at once.
                     token_callback(answer)
         generation_duration_ms = (
             perf_counter() - generation_started_at
@@ -851,12 +857,18 @@ class ChatSession:
         str
             Decoded model output.
 
+        Notes
+        -----
+        Updates ``output_token_total`` after each token and records the
+        generated token count and ``last_finish_reason``.
+
         """
 
         mlx_lm = import_module("mlx_lm")
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
-        parts = []
+
+        parts: list[str] = []
         generated = 0
         for response in mlx_lm.stream_generate(
             self._model,
@@ -873,6 +885,7 @@ class ChatSession:
             self.last_finish_reason = response.finish_reason
             if token_callback is not None and response.text:
                 token_callback(response.text)
+
         self._last_generation_output_token_count = generated
         self._last_generation_token_count_source = "generated_tokens"
         return "".join(parts)
@@ -924,16 +937,19 @@ class ChatSession:
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
         self.output_token_total += len(generated)
+
+        # A reply cut by the token budget did not end with an end-of-sequence
+        # token; the model's generation config may list several of them.
         eos = getattr(
             getattr(model, "generation_config", None), "eos_token_id", None
         )
         if eos is None:
             eos = tokenizer.eos_token_id
         eos_ids = set(eos if isinstance(eos, (list, tuple)) else [eos])
+        ended_with_eos = bool(generated) and generated[-1] in eos_ids
+        reached_budget = len(generated) >= token_budget
         self.last_finish_reason = (
-            "stop"
-            if generated and generated[-1] in eos_ids
-            else "length" if len(generated) >= token_budget else "stop"
+            "length" if reached_budget and not ended_with_eos else "stop"
         )
         self._last_generation_output_token_count = len(generated)
         self._last_generation_token_count_source = "generated_token_ids"

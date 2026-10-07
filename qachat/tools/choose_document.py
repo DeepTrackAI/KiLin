@@ -12,8 +12,8 @@ uses, in order:
 1. a file the question names, by path, name, stem, or author ("Smith's
    paper", "smith20" for ``smith2020.pdf``);
 2. the earlier turns the question points back to, newest first: a file
-   named in that turn's question, or the file that clearly dominates its
-   evidence (at least three passages and 60% of them). The router model
+   named in that turn's question, or the file its evidence comes from
+   (all of it, or at least three passages and 60% of them). The router model
    confirms that the request means that same file; when it asks for a
    different one ("another paper", "a different study", "the next one"),
    the files of the earlier turns are left out;
@@ -22,19 +22,75 @@ uses, in order:
    cancels, the answer asks them to name the file. Where nobody can be
    asked (notebooks), the best match is used and marked as a guess.
 
+``document_scope`` uses the same first two steps, but the router model
+chooses between the whole project (ALL), the earlier file (SAME), and a
+different file (DIFFERENT); anything but a clear SAME means the whole
+project, and it never asks the user.
+
+The router model only confirms or rejects a file found by these rules; it
+never names a file itself. When the router call fails, ``choose_document``
+keeps the earlier file and ``document_scope`` searches the whole project.
+
+Key Features
+------------
+
+- **Named files first**
+
+    A file the question names settles the choice without a model call.
+
+- **Earlier turns**
+
+    "That paper" means the file an earlier turn named or clearly
+    discussed, when the router model agrees.
+
+- **Asking instead of guessing**
+
+    When the file is unclear, the user picks from a short list; only
+    callers that cannot ask receive a marked guess.
+
 Module Structure
 ----------------
 
 - ``choose_document``
-- ``document_scope``
+
+    Choose one indexed source file for a request.
+
 - ``earlier_file``
+
+    Return the file the newest earlier turn names or clearly discusses.
+
 - ``means_same_file``
+
+    Ask the router model whether a request means an earlier file.
+
+- ``document_scope``
+
+    Return the documents a request is limited to, if any.
+
+Examples
+--------
+>>> from qachat.tools.choose_document import choose_document
+>>> chosen = choose_document(
+...     request,
+...     context,
+...     question="Which paper should I turn into a research briefing?",
+...     example="turn smith2020.pdf into a research briefing",
+...     prefer=(".pdf",),
+... )
+>>> if isinstance(chosen, str):
+...     answer = chosen
+... else:
+...     path, reason, guessed = chosen
+
+``request`` and ``context`` are the ``ToolRequest`` and ``ToolContext`` a
+tool's ``run`` receives.
 
 """
 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -55,6 +111,15 @@ _DOMINANT_PASSAGES: Final[int] = 3
 _DOMINANT_SHARE: Final[float] = 0.6
 # Most files offered when the user is asked to choose.
 _MAX_CHOICES: Final[int] = 4
+# Reason for a file the question names; options with it are never left out.
+_NAMED_IN_QUESTION: Final[str] = "named in the question"
+# Router reply words. The prompts below ask for exactly these words, so
+# change both together.
+_REPLY_ALL: Final[str] = "ALL"
+_REPLY_SAME: Final[str] = "SAME"
+_REPLY_DIFFERENT: Final[str] = "DIFFERENT"
+# Longest router reply; one word is expected.
+_ROUTER_REPLY_TOKENS: Final[int] = 8
 
 
 def choose_document(
@@ -101,9 +166,10 @@ def choose_document(
     known = set(sources)
     hits = named_paths(request.question, sources, authors=True)
     if len(hits) == 1:
-        return hits[0], "named in the question", False
+        return hits[0], _NAMED_IN_QUESTION, False
+
     candidates: list[tuple[Path, str]] = [
-        (path, "named in the question") for path in hits
+        (path, _NAMED_IN_QUESTION) for path in hits
     ]
     if not hits:
         earlier = earlier_file(request, sources, known)
@@ -114,38 +180,47 @@ def choose_document(
             avoid = avoid | {
                 path for turn in request.earlier for path in turn.paths
             }
+
         for turn in request.earlier:
             counts = Counter(path for path in turn.paths if path in known)
             candidates += [
                 (path, f"used in turn {turn.number}")
                 for path, _ in counts.most_common(2)
             ]
+
         ranked = context.rank(request.text) if context.chunks else []
         top = ranked[: context.retrieval_count]
-        preferred = [p for p in sources if p.suffix.lower() in prefer]
+        preferred = [
+            path for path in sources if path.suffix.lower() in prefer
+        ]
         best = dominant_path(top, preferred or None) or dominant_path(top)
         if best is not None:
             candidates.append((best, "best match for the question"))
         matches = [result.chunk.path for result in top]
         matches.sort(key=lambda path: path.suffix.lower() not in prefer)
         candidates += [(path, "matches the question") for path in matches]
+
     options: list[tuple[Path, str]] = []
     for path, why in candidates:
-        if path in avoid and why != "named in the question":
+        if path in avoid and why != _NAMED_IN_QUESTION:
             continue
         if path not in {chosen for chosen, _ in options}:
             options.append((path, why))
+
     if len(options) < _MAX_CHOICES and not hits:
         # Fill the list with other files of the preferred types, so the
         # user always has something to pick from.
         listed = {path for path, _ in options}
         options += [
             (path, "in this project")
-            for path in sorted(sources, key=lambda p: p.name.casefold())
+            for path in sorted(
+                sources, key=lambda source: source.name.casefold()
+            )
             if path not in listed
             and path not in avoid
             and (not prefer or path.suffix.lower() in prefer)
         ]
+
     options = options[:_MAX_CHOICES]
     names = ", ".join(path.name for path, _ in options)
     if not options:
@@ -153,6 +228,7 @@ def choose_document(
             f"I couldn't tell which file you mean. Name it, for example: "
             f"{example}."
         )
+
     if context.choose is not None:
         index = ask_choice(
             question,
@@ -167,6 +243,7 @@ def choose_document(
             )
         path, why = options[index]
         return path, f"chosen by you ({why})", False
+
     path, why = options[0]
     return path, why, True
 
@@ -196,14 +273,18 @@ def earlier_file(
         named = named_paths(turn.question, sources, authors=True)
         if len(named) == 1:
             return named[0], f"named in turn {turn.number}"
+
         counts = Counter(path for path in turn.paths if path in known)
         if not counts:
             continue
         path, count = counts.most_common(1)[0]
-        if count >= _DOMINANT_PASSAGES and (
-            count >= _DOMINANT_SHARE * sum(counts.values())
+        # All of a turn's evidence from one file, or most of plenty of it.
+        if len(counts) == 1 or (
+            count >= _DOMINANT_PASSAGES
+            and count >= _DOMINANT_SHARE * sum(counts.values())
         ):
             return path, f"the file discussed in turn {turn.number}"
+
     return None
 
 
@@ -241,14 +322,17 @@ New request: {question}
 Does the new request mean {path.name} (SAME), or ask for a different
 document (DIFFERENT)?"""
     try:
-        reply = context.ask_router(system, prompt, 8)
+        reply = context.ask_router(system, prompt, _ROUTER_REPLY_TOKENS)
     except Exception:  # Keep the earlier file when the router fails.
         return True
-    return "DIFFERENT" not in reply.upper()
+
+    return _REPLY_DIFFERENT not in reply.upper()
 
 
 def document_scope(
-    request: ToolRequest, context: ToolContext, sources: list[Path]
+    request: ToolRequest,
+    ask_router: Callable[[str, str, int], str],
+    sources: list[Path],
 ) -> tuple[list[Path], str | None]:
     """Return the documents a request is limited to, if any.
 
@@ -256,8 +340,9 @@ def document_scope(
     ----------
     request: ToolRequest
         The question, with the earlier turns it points back to.
-    context: ToolContext
-        QAChat's services (``ask_router``).
+    ask_router: Callable[[str, str, int], str]
+        Asks the router model (``ToolContext.ask_router``); the answering
+        session passes its own, so answers and tools decide alike.
     sources: list[pathlib.Path]
         Indexed files.
 
@@ -273,25 +358,32 @@ def document_scope(
 
     named = named_paths(request.question, sources, authors=True)
     if named:
-        return named, "named in the question"
+        return named, _NAMED_IN_QUESTION
+
     earlier = earlier_file(request, sources, set(sources))
     if earlier is None:
         return [], None
+
     path, why = earlier
     system = (
         "You decide which documents a request is about. You reply with "
-        "SAME, DIFFERENT, or ALL only."
+        "ALL, SAME, or DIFFERENT only."
     )
     prompt = f"""The conversation was just about {path.name}.
 
 New request: {request.question}
 
-Is the request about {path.name} (SAME), about a different particular
-document (DIFFERENT), or about all documents in the project (ALL)?"""
+Is the request about all documents in the project (ALL), about
+{path.name} (SAME), or about a different particular document
+(DIFFERENT)? Answer ALL when it asks about the project, all papers, or
+does not point at one document; SAME only when it points at that document,
+for example with "that paper", "this paper", or "it"."""
     try:
-        reply = context.ask_router(system, prompt, 8).upper()
+        reply = ask_router(system, prompt, _ROUTER_REPLY_TOKENS).upper()
     except Exception:  # Without an answer, search the whole project.
         return [], None
-    if "SAME" in reply:
+
+    if _REPLY_SAME in reply and _REPLY_ALL not in reply:
         return [path], why
+
     return [], None

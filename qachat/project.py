@@ -179,9 +179,12 @@ def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
             "qachat/project_types/ must keep the built-in types: "
             f"{', '.join(missing)}."
         )
+
     return tuple(types)
 
 
+# Loading fails at import when a project type file is malformed or a
+# built-in type is missing, so no project opens with a partial set.
 PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = _check_built_in_kinds(
     load_project_types()
 )
@@ -193,7 +196,8 @@ _PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
 _DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
     kind: item.max_file_bytes for kind, item in load_project_types().items()
 }
-_KIND_CHOICE_TEXT = ", ".join(PROJECT_KIND_CHOICES)
+# Accepted kinds as listed in error messages.
+_KIND_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_KIND_CHOICES)
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}

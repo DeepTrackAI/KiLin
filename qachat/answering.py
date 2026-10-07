@@ -45,14 +45,77 @@ Key Features
 Module Structure
 ----------------
 
+- ``MACHINE_STATE_ANSWERING``
+
+    Canonical string value ``"answering"`` for the only machine state.
+
+- ``MACHINE_STATE_CHOICES``
+
+    Ordered collection of the machine states.
+
+- ``MachineState``
+
+    Type alias for ``"answering"``.
+
+- ``HISTORY_CITATION_MARKER``
+
+    Text that replaces citation numbers in earlier answers.
+
+- ``MAX_LISTED_TURNS``
+
+    Most earlier turns the router sees.
+
+- ``MAX_RELATED_TURNS``
+
+    Most earlier turns the router may mark as related.
+
 - ``RouteDecision``
-- ``route_question``
-- ``refers_back``
-- ``search_text``
-- ``select_history``
-- ``history_messages``
+
+    What the router decided for one question.
+
+- ``strip_thinking``
+
+    Remove thinking text from model output.
+
 - ``turn_representation``
+
+    Summarize a turn compactly, without a model.
+
 - ``side_reply``
+
+    Ask a chat model a side question, then restore its conversation.
+
+- ``route_question``
+
+    Classify a question with the router model and check its related turns.
+
+- ``refers_back``
+
+    Tell whether a question's wording depends on earlier turns.
+
+- ``search_text``
+
+    Build the search query from the user's own words.
+
+- ``select_history``
+
+    Choose which earlier turns enter the prompt.
+
+- ``history_messages``
+
+    Return selected turns as user and assistant messages.
+
+Private helpers build the router prompt, parse its reply, and compare
+terms; they are not part of the public API.
+
+Examples
+--------
+>>> from qachat.answering import RouteDecision, select_history
+>>> decision = RouteDecision(
+...     "question_answering", standalone=False, related_turn_ids=(2,)
+... )
+>>> select_history(5, "relevant", 2, decision)
+[2, 4, 5]
 
 """
 
@@ -71,12 +134,17 @@ from qachat.project_type import (
     RETRIEVAL_MODE_NONE,
     RETRIEVAL_MODE_REUSE,
     HistoryPolicy,
+    ProjectType,
 )
+from qachat.tools.registry import TOOL_REGISTRY
 
 __all__ = [
+    "HISTORY_CITATION_MARKER",
     "MACHINE_STATE_ANSWERING",
     "MACHINE_STATE_CHOICES",
+    "MAX_LISTED_TURNS",
     "MAX_RELATED_TURNS",
+    "MachineState",
     "RouteDecision",
     "history_messages",
     "refers_back",
@@ -100,11 +168,22 @@ MACHINE_STATE_CHOICES: Final[tuple[MachineState, ...]] = (
 MAX_RELATED_TURNS: Final[int] = 3
 # How many earlier turns the router sees, newest last.
 MAX_LISTED_TURNS: Final[int] = 30
+# Reply length for the router; one line of JSON fits easily.
 _ROUTER_MAX_TOKENS: Final[int] = 64
+# Length limits of a turn representation, so that 30 listed turns keep the
+# router prompt short.
+_REPRESENTATION_MAX_CHARACTERS: Final[int] = 200
+_REPRESENTATION_MAX_SOURCES: Final[int] = 5
+# Citation groups such as " [1]" or " [2, 3]" in an answer.
+_CITATION: Final[re.Pattern[str]] = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
+# Earlier answers keep a neutral marker where they cited. Removing citations
+# taught the model to stop citing; old numbers would point at evidence that
+# is no longer in the prompt.
+HISTORY_CITATION_MARKER: Final[str] = "[source]"
 # Words and phrases showing that a question depends on earlier turns:
 # pronouns, ordinal references, explicit pointers back, and elliptical
 # openings such as "and for X?".
-_REFERS_BACK = re.compile(
+_REFERS_BACK: Final[re.Pattern[str]] = re.compile(
     r"\b(it|its|itself|this|that|these|those|they|them|their|theirs"
     r"|he|she|him|her|his|hers|such|same|former|latter"
     r"|above|earlier|before|previous|previously|again|so far"
@@ -133,17 +212,22 @@ _COMMON_WORDS: Final[frozenset[str]] = frozenset(
 
 
 class _Chat(Protocol):
+    """The part of ``ChatSession`` that side questions use."""
+
     messages: list[dict[str, str]]
     thinking: bool
     temperature: float
 
-    def restore_history(self, messages: list[dict[str, str]]) -> None: ...
+    def restore_history(self, messages: list[dict[str, str]]) -> None:
+        """Replace the in-memory conversation with ``messages``."""
 
-    def configure_generation(self, settings: dict[str, object]) -> None: ...
+    def configure_generation(self, settings: dict[str, object]) -> None:
+        """Update generation settings such as thinking and temperature."""
 
     def reply(
         self, message: str, *, max_new_tokens: int | None = None
-    ) -> str: ...
+    ) -> str:
+        """Generate, return, and retain one assistant reply."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,23 +284,22 @@ def strip_thinking(text: str) -> str:
     """
 
     text = re.sub(r"<think>.*?</think>", "", str(text), flags=re.S)
+    # A template that opens <think> itself leaves only the closing tag.
     if "</think>" in text:
         text = text.split("</think>", 1)[1]
+
     return text.split("<think>", 1)[0].strip()
 
 
-_CITATION = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
-# Earlier answers keep a neutral marker where they cited. Removing citations
-# taught the model to stop citing; old numbers would point at evidence that
-# is no longer in the prompt.
-HISTORY_CITATION_MARKER: Final[str] = "[source]"
-
-
 def _without_citations(text: str) -> str:
+    """Remove citation groups such as ``[1]`` or ``[2, 3]``."""
+
     return _CITATION.sub("", text)
 
 
 def _neutral_citations(text: str) -> str:
+    """Replace citation groups with ``HISTORY_CITATION_MARKER``."""
+
     return _CITATION.sub(f" {HISTORY_CITATION_MARKER}", text)
 
 
@@ -240,13 +323,15 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
 
     answer = _without_citations(strip_thinking(getattr(turn, "answer", "")))
     first = re.split(r"(?<=[.!?])\s+", " ".join(answer.split()), maxsplit=1)
-    cited = set(
-        int(number)
+
+    # Only cited evidence is listed; an answer without citations lists all.
+    cited = {
+        int(citation)
         for group in re.findall(
             r"\[(\d+(?:\s*,\s*\d+)*)\]", str(getattr(turn, "answer", ""))
         )
-        for number in re.split(r"\s*,\s*", group)
-    )
+        for citation in re.split(r"\s*,\s*", group)
+    }
     sources: list[str] = []
     for item in getattr(turn, "evidence", ()) or ():
         if cited and getattr(item, "citation", None) not in cited:
@@ -256,15 +341,23 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
         label = f"{name}:{symbol}" if symbol else name
         if label and label not in sources:
             sources.append(label)
+
+    question = " ".join(str(getattr(turn, "question", "")).split())
     return {
         "turn_id": number,
-        "question": " ".join(str(getattr(turn, "question", "")).split())[:200],
-        "sources": sources[:5],
-        "summary": first[0][:200] if first and first[0] else "",
+        "question": question[:_REPRESENTATION_MAX_CHARACTERS],
+        "sources": sources[:_REPRESENTATION_MAX_SOURCES],
+        "summary": (
+            first[0][:_REPRESENTATION_MAX_CHARACTERS]
+            if first and first[0]
+            else ""
+        ),
     }
 
 
 def _representation_line(representation: dict[str, object]) -> str:
+    """Write a turn representation as one line of the router prompt."""
+
     sources = ", ".join(representation.get("sources") or []) or "none"
     return (
         f"Turn {representation['turn_id']}: Q: {representation['question']}"
@@ -309,6 +402,8 @@ def side_reply(
 
     history = [dict(message) for message in chat.messages]
     previous = {"thinking": chat.thinking, "temperature": chat.temperature}
+
+    # Restore the conversation and settings even when the reply fails.
     try:
         chat.restore_history([{"role": SYSTEM_ROLE, "content": system}])
         chat.configure_generation({"thinking": False, "temperature": 0.0})
@@ -319,14 +414,37 @@ def side_reply(
     finally:
         chat.restore_history(history)
         chat.configure_generation(previous)
+
     return strip_thinking(reply)
 
 
 def _router_prompt(
-    project: object,
+    project: ProjectType,
     representations: list[dict[str, object]],
     question: str,
 ) -> tuple[str, str]:
+    """Build the router's system and user prompts.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    representations: list[dict[str, object]]
+        One representation per earlier turn; those marked ``skip`` (small
+        talk) are left out, and only the last ``MAX_LISTED_TURNS`` are
+        listed.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    tuple[str, str]
+        System prompt and user prompt. When the type has an intent that
+        reuses evidence and earlier turns are listed, the user prompt ends
+        with a second example pointing at the last listed turn.
+
+    """
+
     intents = "\n".join(
         f"- {intent_id}: {intent.description}"
         for intent_id, intent in project.intents.items()
@@ -382,7 +500,31 @@ Example: "just in two sentences" after turn {last} -> {{"intent": \
     return system, user
 
 
-def _parse_route(raw: str, project: object, turn_count: int) -> RouteDecision:
+def _parse_route(
+    raw: str, project: ProjectType, turn_count: int
+) -> RouteDecision:
+    """Validate the router's reply.
+
+    Parameters
+    ----------
+    raw: str
+        The router's reply; the first ``{...}`` in it is read as JSON.
+    project: ProjectType
+        Current project type with its intents.
+    turn_count: int
+        Number of earlier turns, which bounds the related turn numbers.
+
+    Returns
+    -------
+    RouteDecision
+        The decision. An unknown intent becomes the default intent, a
+        missing ``standalone`` is true only for a first question, related
+        turn numbers outside the conversation are dropped, and at most the
+        newest ``MAX_RELATED_TURNS`` are kept. ``fallback`` says what was
+        replaced.
+
+    """
+
     default = RouteDecision(
         intent=project.default_intent,
         standalone=turn_count == 0,
@@ -397,6 +539,7 @@ def _parse_route(raw: str, project: object, turn_count: int) -> RouteDecision:
         return RouteDecision(
             **{**_fields(default), "fallback": "reply was not JSON"}
         )
+
     fallback = None
     intent = value.get("intent")
     if intent not in project.intents:
@@ -405,11 +548,13 @@ def _parse_route(raw: str, project: object, turn_count: int) -> RouteDecision:
     standalone = value.get("standalone")
     if not isinstance(standalone, bool):
         standalone = turn_count == 0
+
     related: list[int] = []
     for item in value.get("related_turns") or []:
         if type(item) is int and 1 <= item <= turn_count:
             if item not in related:
                 related.append(item)
+
     return RouteDecision(
         intent=intent,
         standalone=standalone and not related,
@@ -420,6 +565,8 @@ def _parse_route(raw: str, project: object, turn_count: int) -> RouteDecision:
 
 
 def _fields(decision: RouteDecision) -> dict[str, object]:
+    """Return the fields a checked decision copies from the router's."""
+
     return {
         "intent": decision.intent,
         "standalone": decision.standalone,
@@ -430,7 +577,7 @@ def _fields(decision: RouteDecision) -> dict[str, object]:
 
 def route_question(
     chat: _Chat,
-    project: object,
+    project: ProjectType,
     turns: list[object],
     question: str,
 ) -> RouteDecision:
@@ -474,6 +621,7 @@ def route_question(
                     standalone=True,
                     shortcut=pattern.pattern,
                 )
+
     representations = [
         {
             **_stored_representation(turn, index + 1),
@@ -483,6 +631,7 @@ def route_question(
     ]
     pointing = refers_back(question)
     system, prompt = _router_prompt(project, representations, question)
+
     try:
         raw = side_reply(
             chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
@@ -495,6 +644,8 @@ def route_question(
             refers_back=pointing,
         )
     decision = _parse_route(raw, project, len(turns))
+
+    # Keep a related turn only when the question gives a sign of it.
     terms = _content_terms(question)
     kept: list[int] = []
     dropped: list[tuple[int, str]] = []
@@ -509,14 +660,22 @@ def route_question(
                 (number, "question neither points back nor shares a term")
             )
     standalone = decision.standalone or (bool(dropped) and not kept)
+
     intent = project.intents.get(decision.intent)
     if (
         not kept
         and intent is not None
-        and intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+        and (
+            intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+            or (
+                intent.tool is not None
+                and TOOL_REGISTRY[intent.tool.name].follows_up
+            )
+        )
     ):
-        # An intent that reuses earlier evidence always refers to a turn:
-        # without one named, it is the last turn that is not small talk.
+        # An intent that reuses earlier evidence, or a tool that works on
+        # an earlier answer, always refers to a turn: without one named,
+        # it is the last turn that is not small talk.
         last = next(
             (
                 item["turn_id"]
@@ -527,6 +686,7 @@ def route_question(
         )
         if last is not None:
             kept, standalone = [last], False
+
     return RouteDecision(
         **{
             **_fields(decision),
@@ -588,6 +748,7 @@ def search_text(
 
     if not (decision.refers_back and decision.related_turn_ids):
         return question
+
     earlier = [
         " ".join(str(getattr(turns[number - 1], "question", "")).split())
         for number in decision.related_turn_ids
@@ -597,6 +758,13 @@ def search_text(
 
 
 def _content_terms(text: str) -> set[str]:
+    """Return the distinctive terms of a text.
+
+    Lowercase words of three or more characters that are not common words,
+    plus capitalized acronyms and short names, such as ``MRI``.
+
+    """
+
     words = {
         word
         for word in re.findall(r"[a-z0-9][a-z0-9_-]+", text.lower())
@@ -608,6 +776,8 @@ def _content_terms(text: str) -> set[str]:
 
 
 def _representation_text(representation: dict[str, object]) -> str:
+    """Join a representation's question, sources, and summary as words."""
+
     sources = " ".join(
         re.sub(r"[._:/]", " ", str(source))
         for source in representation.get("sources") or []
@@ -621,7 +791,15 @@ def _representation_text(representation: dict[str, object]) -> str:
     )
 
 
-def _ignores_conversation(turn: object, project: object) -> bool:
+def _ignores_conversation(turn: object, project: ProjectType) -> bool:
+    """Whether a turn's intent neither reads history nor retrieves.
+
+    Such turns (small talk) are not listed to the router and are never
+    related turns. A turn with an unknown intent does not ignore the
+    conversation.
+
+    """
+
     parameters = getattr(turn, "parameters", None) or {}
     intent = project.intents.get(parameters.get("intent"))
     return (
@@ -633,6 +811,13 @@ def _ignores_conversation(turn: object, project: object) -> bool:
 
 
 def _stored_representation(turn: object, number: int) -> dict[str, object]:
+    """Return the representation saved with a turn, or build one.
+
+    The saved representation keeps its content but takes the turn's
+    current number.
+
+    """
+
     parameters = getattr(turn, "parameters", None) or {}
     stored = parameters.get("representation")
     if isinstance(stored, dict) and stored.get("question"):
@@ -672,11 +857,14 @@ def select_history(
 
     if policy == HISTORY_POLICY_NONE or turn_count == 0:
         return []
+
     recent = list(range(max(1, turn_count - recent_turns + 1), turn_count + 1))
     if policy == HISTORY_POLICY_RECENT:
         return recent
+
     if decision.standalone:
         return [turn_count]
+
     return sorted(set(recent) | set(decision.related_turn_ids))
 
 
@@ -708,4 +896,5 @@ def history_messages(
         answer = _neutral_citations(strip_thinking(turn.answer)).strip()
         messages.append({"role": USER_ROLE, "content": str(turn.question)})
         messages.append({"role": ASSISTANT_ROLE, "content": answer})
+
     return messages

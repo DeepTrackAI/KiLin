@@ -11,38 +11,82 @@ come back as a "source", and it is read only when a tool asks for it.
 code) and splits it into numbered passages with the same chunker, so tools
 can cite passages exactly as they cite indexed evidence.
 
+Saving never replaces an existing file: a taken name gets a numbered
+suffix. The check and the write are separate steps, so two writers saving
+the same name at the same moment are not protected against each other.
+Reading rejects absolute paths and ``..``; the shared source reader also
+rejects symbolic links and files outside the folder.
+
 Key Features
 ------------
 
 - **Folder**
 
-    ``output_folder`` returns (and creates) ``<project>/outputs``, moving a
-    ``target/`` folder of earlier versions there; ``output_files`` lists
-    readable files in it.
+    Create ``<project>/outputs`` on first use, moving a ``target/`` folder
+    of earlier versions there, and list the readable files in it.
 
 - **Choosing a file**
 
-    ``find_output`` picks the file a question names, or the only file.
+    Pick the file a question names, or the only file.
 
 - **Loading**
 
-    ``load_output`` returns an ``OutputDocument`` with passages.
+    Read one file into numbered passages that tools can cite.
 
 - **Saving**
 
-    ``save_output_file`` never replaces an existing file.
+    Write a generated file under a name no file uses yet.
 
 Module Structure
 ----------------
 
 - ``OUTPUTS_FOLDER``
+
+    Name of the outputs folder inside a project.
+
+- ``READABLE_SUFFIXES``
+
+    File types ``load_output`` can read.
+
 - ``OutputDocument``
+
+    One file in ``outputs/``, read and split into passages.
+
 - ``output_folder``
+
+    Return ``<project>/outputs``, creating it when missing.
+
 - ``output_files``
+
+    List readable files in the outputs folder.
+
 - ``find_output``
+
+    Pick the file in ``outputs/`` a question is about.
+
 - ``load_output``
+
+    Read one file in ``outputs/`` and split it into passages.
+
 - ``save_output_file``
+
+    Write a generated file into the outputs folder without overwriting.
+
 - ``free_output_path``
+
+    Return a path in the outputs folder that no file uses yet.
+
+Examples
+--------
+>>> from pathlib import Path
+>>> from qachat.tools.outputs import load_output, save_output_file
+>>> root = Path("/path/to/project")
+>>> saved = save_output_file(root, "notes.md", "# Notes\n\nMRI results.\n")
+>>> document = load_output(root, saved.name)
+>>> len(document.passages)
+1
+
+The path is illustrative; saving creates ``outputs/`` in that project.
 
 """
 
@@ -58,8 +102,8 @@ from qachat.sources import extract_source_units, read_repository_files
 
 __all__ = [
     "OUTPUTS_FOLDER",
-    "OutputDocument",
     "READABLE_SUFFIXES",
+    "OutputDocument",
     "find_output",
     "free_output_path",
     "load_output",
@@ -119,10 +163,12 @@ def output_folder(project_root: Path) -> Path:
 
     """
 
-    folder = Path(project_root) / OUTPUTS_FOLDER
-    legacy = Path(project_root) / _LEGACY_FOLDER
+    root = Path(project_root)
+    folder = root / OUTPUTS_FOLDER
+    legacy = root / _LEGACY_FOLDER
     if not folder.exists() and legacy.is_dir():
         legacy.rename(folder)
+
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 
@@ -184,8 +230,10 @@ def find_output(
     named = named_paths(question, files)
     if len(named) == 1:
         return named[0]
+
     if not named and len(files) == 1:
         return files[0]
+
     return None
 
 
@@ -218,17 +266,22 @@ def load_output(project_root: Path, name: Path | str) -> OutputDocument:
     relative = Path(name)
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError("Files must stay inside the outputs folder.")
+
     if relative.suffix.lower() not in READABLE_SUFFIXES:
         raise ValueError(
             f"{relative.name} cannot be read; supported types: "
             f"{', '.join(READABLE_SUFFIXES)}."
         )
+
     if not (folder / relative).is_file():
-        available = ", ".join(str(p) for p in output_files(project_root))
+        available = ", ".join(
+            str(path) for path in output_files(project_root)
+        )
         raise FileNotFoundError(
             f"{OUTPUTS_FOLDER}/{relative.as_posix()} does not exist. Files "
             f"in {OUTPUTS_FOLDER}/: {available or 'none'}."
         )
+
     files = read_repository_files(
         {"repository": str(folder), "selected_files": [relative.as_posix()]}
     )
@@ -241,6 +294,7 @@ def load_output(project_root: Path, name: Path | str) -> OutputDocument:
             f"{relative.name} has no readable text (a scanned PDF needs OCR "
             "first)."
         )
+
     shown = Path(OUTPUTS_FOLDER) / relative
     passages = tuple(
         Chunk(
@@ -259,7 +313,9 @@ def load_output(project_root: Path, name: Path | str) -> OutputDocument:
     return OutputDocument(
         path=shown,
         passages=passages,
-        estimated_tokens=sum(estimate_tokens(c.text) for c in passages),
+        estimated_tokens=sum(
+            estimate_tokens(passage.text) for passage in passages
+        ),
     )
 
 

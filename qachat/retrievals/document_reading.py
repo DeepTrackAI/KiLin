@@ -14,6 +14,10 @@ target is longer than the token budget, its chunks most relevant to the
 question are kept, still in source order, and the selection is marked
 incomplete.
 
+Only text already in the index is read; nothing is loaded from disk.
+Token counts are estimates, so a selection can be slightly larger or
+smaller than the model's real count. The budget is not model-specific.
+
 Key Features
 ------------
 
@@ -35,12 +39,47 @@ Key Features
 Module Structure
 ----------------
 
+- ``DOCUMENT_REASON_NAMED_FUNCTION``, ``DOCUMENT_REASON_NAMED_FILE``, and
+  ``DOCUMENT_REASON_SEARCH``
+
+    Canonical string values for why a document was chosen.
+
+- ``DOCUMENT_REASON_CHOICES``
+
+    Ordered collection of the document reasons.
+
 - ``DocumentReason``
+
+    Type alias for ``"named_function"``, ``"named_file"``, or ``"search"``.
+
 - ``DocumentSelection``
-- ``dominant_path``
+
+    The document chosen for reading and the chunks supplied from it.
+
 - ``estimate_tokens``
-- ``named_paths``
+
+    Estimate the token count of text without a tokenizer.
+
 - ``read_document``
+
+    Choose one document for a question and fit it to a token budget.
+
+- ``named_paths``
+
+    Return the files a question names.
+
+- ``dominant_path``
+
+    Return the file that dominates a ranking.
+
+Examples
+--------
+>>> from pathlib import Path
+>>> from qachat.retrievals import estimate_tokens, named_paths
+>>> estimate_tokens("one two three")
+4
+>>> named_paths("summarize smith2020", [Path("papers/smith2020.pdf")])
+[PosixPath('papers/smith2020.pdf')]
 
 """
 
@@ -87,6 +126,7 @@ DOCUMENT_REASON_CHOICES: Final[tuple[DocumentReason, ...]] = (
     DOCUMENT_REASON_NAMED_FILE,
     DOCUMENT_REASON_SEARCH,
 )
+
 # Characters per token for the estimate; measured on a 31-page paper with
 # the Qwen3 tokenizer (107,912 characters, 26,986 tokens).
 _CHARACTERS_PER_TOKEN: Final[int] = 4
@@ -187,6 +227,8 @@ def read_document(
 
     if not chunks:
         return None
+
+    # A named function is read alone.
     plan = plan_retrieval(question, graph)
     if plan.functions:
         target = expand_retrieval_context(
@@ -210,17 +252,26 @@ def read_document(
                 functions=plan.functions,
                 reason=DOCUMENT_REASON_NAMED_FUNCTION,
             )
+
+    # Otherwise a named file, or the file dominating the search results;
+    # among several named files the search results decide.
     paths = list(dict.fromkeys(chunk.path for chunk in chunks))
     named = [path] if path is not None else named_paths(question, paths)
-    path = dominant_path(ranked[:top], named or None)
+    target_path = dominant_path(ranked[:top], named or None)
     reason = DOCUMENT_REASON_NAMED_FILE if named else DOCUMENT_REASON_SEARCH
-    if path is None and named:
-        path = named[0]
-    if path is None:
+    if target_path is None and named:
+        target_path = named[0]
+    if target_path is None:
         return None
-    target = [chunk for chunk in chunks if chunk.path == path]
+
+    target = [chunk for chunk in chunks if chunk.path == target_path]
     return _fit(
-        target, ranked, max_tokens, path=path, functions=(), reason=reason
+        target,
+        ranked,
+        max_tokens,
+        path=target_path,
+        functions=(),
+        reason=reason,
     )
 
 
@@ -246,7 +297,7 @@ def named_paths(
         file stem of at least four characters ("smith2020"); otherwise,
         with ``authors``, by a name that starts an author-year file stem
         ("smith", "Smith's paper", or "smith20" for ``smith2020.pdf``;
-        "yao25" for ``yao25connecting.pdf``). Matching ignores case and
+        "lee25" for ``lee25networks.pdf``). Matching ignores case and
         needs a boundary on both sides.
 
     """
@@ -255,9 +306,11 @@ def named_paths(
     full = [path for path in paths if path.as_posix().casefold() in text]
     if full:
         return full
+
     names = [path for path in paths if _mentions(text, path.name.casefold())]
     if names:
         return names
+
     stems = [
         path
         for path in paths
@@ -266,6 +319,9 @@ def named_paths(
     ]
     if stems or not authors:
         return stems
+
+    # Candidate author names: words of three or more letters, optionally
+    # followed by digits ("lee25").
     words = set(re.findall(r"(?<![a-z0-9])[a-z]{3,}\d*(?![a-z])", text))
     return [path for path in paths if _starts_stem(path.stem, words)]
 
@@ -273,23 +329,31 @@ def named_paths(
 def _starts_stem(stem: str, words: set[str]) -> bool:
     """Whether a word starts an author-year stem.
 
-    A name ends where the year starts ("smith" in smith2020); a name with
-    its year ("yao25" in yao25connecting) may be followed by anything.
+    A name ends where the year starts ("smith" in smith2020) or at ``_``
+    or ``-``; a name with its year ("lee25" in lee25networks) may be
+    followed by anything.
 
     """
 
     stem = stem.casefold()
     for word in words:
-        if stem.startswith(word):
-            rest = stem[len(word) :]
-            if word[-1].isdigit() or not rest or rest[0].isdigit() or (
-                rest[0] in "_-"
-            ):
-                return True
+        if not stem.startswith(word):
+            continue
+        rest = stem[len(word) :]
+        if (
+            word[-1].isdigit()
+            or not rest
+            or rest[0].isdigit()
+            or rest[0] in "_-"
+        ):
+            return True
+
     return False
 
 
 def _mentions(text: str, name: str) -> bool:
+    """Whether ``text`` contains ``name`` as a whole word or file name."""
+
     return bool(
         re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", text)
     )
@@ -323,6 +387,7 @@ def dominant_path(
             scores[path] = scores.get(path, 0.0) + result.score
     if not scores:
         return None
+
     return max(scores, key=lambda path: scores[path])
 
 
@@ -335,7 +400,32 @@ def _fit(
     functions: tuple[str, ...],
     reason: DocumentReason,
 ) -> DocumentSelection:
-    """Keep the whole target, or its most relevant chunks within budget."""
+    """Keep the whole target, or its most relevant chunks within budget.
+
+    Parameters
+    ----------
+    target: Sequence[Chunk]
+        Every chunk of the chosen document or function, in source order.
+    ranked: Sequence[HybridResult]
+        Fused search results, best first; they decide which chunks to keep
+        when the target exceeds the budget.
+    max_tokens: int
+        Evidence budget in estimated tokens.
+    path: pathlib.Path
+        File that holds the target.
+    functions: tuple[str, ...]
+        Functions read, or empty for a whole file.
+    reason: "named_function" | "named_file" | "search"
+        Why the target was chosen.
+
+    Returns
+    -------
+    DocumentSelection
+        Selected chunks in source order. Over budget, chunks are taken in
+        ranking order (unranked chunks last), and a chunk that does not fit
+        is skipped while smaller later ones may still fit.
+
+    """
 
     sizes = {chunk.identifier: estimate_tokens(chunk.text) for chunk in target}
     chosen: set[str] = set(sizes)
@@ -357,6 +447,7 @@ def _fit(
             if used + sizes[identifier] <= max_tokens:
                 chosen.add(identifier)
                 used += sizes[identifier]
+
     selected = tuple(chunk for chunk in target if chunk.identifier in chosen)
     return DocumentSelection(
         path=path,
@@ -364,6 +455,6 @@ def _fit(
         reason=reason,
         chunks=selected,
         total_chunks=len(target),
-        estimated_tokens=sum(sizes[c.identifier] for c in selected),
+        estimated_tokens=sum(sizes[chunk.identifier] for chunk in selected),
         complete=len(selected) == len(target),
     )

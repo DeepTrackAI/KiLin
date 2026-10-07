@@ -5,12 +5,15 @@ in papers", or "which files could not be read?" are about the project, not
 its content. Ranked retrieval cannot count, and a model guessing from a few
 passages gets them wrong. This tool answers from the source manifest (every
 selected file and its size) and the index (which files have searchable
-text, and in how many parts), and Python writes the answer.
+text, and in how many parts), and Python writes the answer. No model is
+called.
 
 The question can narrow the listing: file types it names ("PDFs",
 "markdown", "notebooks", ".py") and folders it names ("in papers"). Counts
 are of files; the answer says so, because a folder of PDFs may hold
-tutorials as well as papers.
+tutorials as well as papers. Type and folder words are matched literally;
+the tool does not understand other descriptions of files ("the long
+ones", "last year's").
 
 Key Features
 ------------
@@ -32,9 +35,29 @@ Module Structure
 ----------------
 
 - ``InventorySettings``
+
+    Settings of ``project_inventory`` in a project type.
+
 - ``parse_settings``
-- ``run``
+
+    Validate ``project_inventory`` settings from a project type.
+
 - ``file_types_in``
+
+    Return the file suffixes a question names.
+
+- ``run``
+
+    Answer a question about the project's files from exact counts.
+
+Private helpers write the answer's sections and name types, folders, and
+sizes; they are not part of the public API.
+
+Examples
+--------
+>>> from qachat.tools.project_inventory import file_types_in
+>>> file_types_in("list the PDFs and notebooks")
+('.pdf', '.ipynb')
 
 """
 
@@ -78,6 +101,7 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "script": (".py", ".m"),
     "scripts": (".py", ".m"),
 }
+# How the answer names each suffix.
 _TYPE_NAMES: Final[dict[str, str]] = {
     ".pdf": "PDF",
     ".md": "Markdown",
@@ -87,12 +111,13 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".m": "MATLAB",
 }
 # Questions about files that could not be read list only those files.
-_UNREADABLE_WORDS = re.compile(
+_UNREADABLE_WORDS: Final[re.Pattern[str]] = re.compile(
     r"\b(no (searchable )?text|not (been )?indexed|unindexed|failed|"
     r"could ?n[o']t be read|unreadable|missing text|empty)\b",
     flags=re.I,
 )
-_LIST_WORDS = re.compile(
+# Questions with these words get a file list even when not narrowed.
+_LIST_WORDS: Final[re.Pattern[str]] = re.compile(
     r"\b(list|which|what files|show|name|names|enumerate)\b", flags=re.I
 )
 
@@ -137,6 +162,7 @@ def parse_settings(data: dict, where: str) -> InventorySettings:
     """
 
     reject_unknown(where, data, ("max_listed", "max_folders"))
+
     defaults = InventorySettings()
     return InventorySettings(
         max_listed=check_int(
@@ -166,14 +192,17 @@ def file_types_in(question: str) -> tuple[str, ...]:
 
     found: list[str] = []
     text = question.casefold()
+
     # "text" alone is too common ("searchable text"); "text files" counts.
     if re.search(r"\btext files?\b", text):
         found.append(".txt")
+
     for word in re.findall(r"\.?[a-z]+", text):
         if word.startswith(".") and word in _TYPE_NAMES:
             found.append(word)
         for suffix in _TYPE_WORDS.get(word.lstrip("."), ()):
             found.append(suffix)
+
     return tuple(dict.fromkeys(found))
 
 
@@ -203,74 +232,45 @@ def run(
     context.progress("Counting the project's files")
     sizes = context.source_files()
     parts = Counter(chunk.path for chunk in context.chunks)
-    files = sorted(set(sizes) | set(parts), key=lambda path: str(path))
-    types = file_types_in(request.question)
-    folders = _folders(files)
-    named_folders = [
-        folder
-        for folder in folders
-        if re.search(
-            rf"(?<![\w/]){re.escape(folder.casefold())}(?![\w])",
-            request.question.casefold(),
-        )
-    ]
-    selected = [
-        path
-        for path in files
-        if (not types or path.suffix.lower() in types)
-        and (not named_folders or _folder(path) in named_folders)
-    ]
+    files = sorted(set(sizes) | set(parts), key=str)
     unsearchable = [path for path in files if not parts.get(path)]
+    type_counts = Counter(path.suffix.lower() for path in files)
+    folder_counts = Counter(_folder(path) for path in files)
+
+    types = file_types_in(request.question)
+    named_folders = _named_folders(request.question, _folders(files))
     unreadable_question = bool(_UNREADABLE_WORDS.search(request.question))
+    if unreadable_question:
+        # The "No searchable text" section already lists them.
+        selected = unsearchable
+    else:
+        selected = [
+            path
+            for path in files
+            if (not types or path.suffix.lower() in types)
+            and (not named_folders or _folder(path) in named_folders)
+        ]
+
     lines = [_headline(files, unsearchable)]
     lines += ["", "**By type**", ""]
     lines += [
         f"- {_type_name(suffix)}: {count}"
-        for suffix, count in Counter(
-            path.suffix.lower() for path in files
-        ).most_common()
+        for suffix, count in type_counts.most_common()
     ]
-    folder_counts = Counter(_folder(path) for path in files)
     if len(folder_counts) > 1:
-        lines += ["", "**By folder**", ""]
-        for folder, count in folder_counts.most_common(settings.max_folders):
-            kinds = Counter(
-                _type_name(path.suffix.lower())
-                for path in files
-                if _folder(path) == folder
-            )
-            detail = ", ".join(f"{n} {kind}" for kind, n in kinds.items())
-            lines.append(f"- {folder or '(top level)'}: {count} ({detail})")
-        if len(folder_counts) > settings.max_folders:
-            lines.append(
-                f"- and {len(folder_counts) - settings.max_folders} more "
-                "folders"
-            )
+        lines += _folder_lines(files, folder_counts, settings.max_folders)
     if unsearchable:
         names = short_names(files)
         lines += ["", "**No searchable text**", ""]
         lines += [f"- {names[path]}" for path in unsearchable]
+
     narrowed = bool(types or named_folders)
-    if unreadable_question:
-        # The "No searchable text" section above already lists them.
-        selected = unsearchable
-    elif narrowed or _LIST_WORDS.search(request.question):
+    if not unreadable_question and (
+        narrowed or _LIST_WORDS.search(request.question)
+    ):
         names = short_names(files)
-        what = " ".join(
-            filter(
-                None,
-                [
-                    ", ".join(_type_name(suffix) for suffix in types),
-                    "files",
-                    (
-                        "in " + ", ".join(named_folders)
-                        if named_folders
-                        else ""
-                    ),
-                ],
-            )
-        )
-        lines += ["", f"**{len(selected)} {what}**", ""]
+        title = _selection_title(types, named_folders)
+        lines += ["", f"**{len(selected)} {title}**", ""]
         for path in selected[: settings.max_listed]:
             size = _size(sizes.get(path))
             count = parts.get(path, 0)
@@ -280,17 +280,19 @@ def run(
             lines.append(
                 f"- and {len(selected) - settings.max_listed} more"
             )
+
     lines += [
         "",
         "Counts are of files QAChat selected for this project; a folder of "
         "PDFs can hold tutorials as well as papers.",
     ]
+
     summary: dict[str, object] = {
         "name": "project_inventory",
         "files": len(files),
         "searchable_files": len(files) - len(unsearchable),
         "unsearchable_files": [path.as_posix() for path in unsearchable],
-        "types": dict(Counter(path.suffix.lower() for path in files)),
+        "types": dict(type_counts),
         "folders": dict(folder_counts),
         "filter_types": list(types),
         "filter_folders": named_folders,
@@ -308,6 +310,8 @@ def run(
 
 
 def _headline(files: Sequence[Path], unsearchable: Sequence[Path]) -> str:
+    """Write the first line: how many files, and how many are searchable."""
+
     total = len(files)
     noun = "file" if total == 1 else "files"
     line = f"This project has **{total} source {noun}**"
@@ -316,7 +320,72 @@ def _headline(files: Sequence[Path], unsearchable: Sequence[Path]) -> str:
             f"{line}; {total - len(unsearchable)} have searchable text and "
             f"{len(unsearchable)} do not."
         )
+
     return f"{line}, all with searchable text."
+
+
+def _folder_lines(
+    files: Sequence[Path], folder_counts: Counter[str], max_folders: int
+) -> list[str]:
+    """Write the "By folder" section: the largest folders and their types.
+
+    Parameters
+    ----------
+    files: Sequence[pathlib.Path]
+        Every project file.
+    folder_counts: Counter[str]
+        Files per top-level folder ("" for files at the top level).
+    max_folders: int
+        Folders shown; the rest are counted in one closing line.
+
+    Returns
+    -------
+    list[str]
+        Markdown lines, starting with a blank line.
+
+    """
+
+    lines = ["", "**By folder**", ""]
+    for folder, count in folder_counts.most_common(max_folders):
+        kinds = Counter(
+            _type_name(path.suffix.lower())
+            for path in files
+            if _folder(path) == folder
+        )
+        detail = ", ".join(f"{n} {kind}" for kind, n in kinds.items())
+        lines.append(f"- {folder or '(top level)'}: {count} ({detail})")
+
+    if len(folder_counts) > max_folders:
+        lines.append(
+            f"- and {len(folder_counts) - max_folders} more folders"
+        )
+
+    return lines
+
+
+def _selection_title(
+    types: Sequence[str], named_folders: Sequence[str]
+) -> str:
+    """Name the listed files, such as "PDF files in papers"."""
+
+    words = [", ".join(_type_name(suffix) for suffix in types), "files"]
+    if named_folders:
+        words.append("in " + ", ".join(named_folders))
+
+    return " ".join(word for word in words if word)
+
+
+def _named_folders(question: str, folders: Sequence[str]) -> list[str]:
+    """Return the folders whose names the question uses as whole words."""
+
+    text = question.casefold()
+    return [
+        folder
+        for folder in folders
+        if re.search(
+            rf"(?<![\w/]){re.escape(folder.casefold())}(?![\w])", text
+        )
+    ]
 
 
 def _folder(path: Path) -> str:
@@ -327,17 +396,25 @@ def _folder(path: Path) -> str:
 
 
 def _folders(files: Sequence[Path]) -> list[str]:
+    """Return the sorted top-level folders that hold any of the files."""
+
     return sorted({_folder(path) for path in files} - {""})
 
 
 def _type_name(suffix: str) -> str:
+    """Name a suffix for the answer, such as "PDF" for ``.pdf``."""
+
     return _TYPE_NAMES.get(suffix, suffix or "no extension")
 
 
 def _size(size: int | None) -> str:
+    """Write a file size such as ", 2.0 kB"; "" when unknown or zero."""
+
     if not size:
         return ""
+
     for unit, scale in (("GB", 2**30), ("MB", 2**20), ("kB", 2**10)):
         if size >= scale:
             return f", {size / scale:.1f} {unit}"
+
     return f", {size} B"

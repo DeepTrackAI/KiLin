@@ -390,20 +390,32 @@ class TestModelSettings(unittest.TestCase):
         session.turns = [
             turn("hi", []),
             turn("what is memory capacity", [], "m.pdf"),
-            turn("walk me through Tiunn's paper", [], "t.pdf"),
+            turn("walk me through Park's paper", [], "t.pdf"),
             turn("turn that into a summary report", [2, 3], "t.pdf"),
         ]
         earlier = session._earlier_turns(
             RouteDecision(intent="x", standalone=False, related_turn_ids=(4,))
         )
         self.assertEqual([t.number for t in earlier], [4, 3, 2])
-        self.assertEqual(earlier[1].question, "walk me through Tiunn's paper")
+        self.assertEqual(earlier[1].question, "walk me through Park's paper")
         self.assertEqual(earlier[1].paths, (Path("t.pdf"),))
         # Pointing back without related turns means the last turn.
         pointing = session._earlier_turns(
             RouteDecision(intent="x", standalone=True, refers_back=True)
         )
         self.assertEqual([t.number for t in pointing], [4, 3, 2])
+        # An older turn on the same topic: the last turn is still included,
+        # unlinked, so "that paper" can mean the paper just discussed.
+        older = session._earlier_turns(
+            RouteDecision(intent="x", standalone=False, related_turn_ids=(2,))
+        )
+        self.assertEqual([t.number for t in older], [4, 2])
+        self.assertEqual([t.linked for t in older], [False, True])
+        # A standalone question does not point back at all.
+        alone = session._earlier_turns(
+            RouteDecision(intent="x", standalone=True)
+        )
+        self.assertEqual(alone, ())
 
     def test_tool_choice_waits_for_an_option(self):
         commands = iter(
@@ -912,7 +924,7 @@ class TestModelSettings(unittest.TestCase):
 
         session = self.engine.session
         session.turns = []
-        lines = "BRAPH 2 is used.\nWe extend BRAPH\n2 here.\n"
+        lines = "XYZ 2 is used.\nWe extend XYZ\n2 here.\n"
         session.chunks = [
             Chunk("c1", Path("notes.md"), lines, 1, 3, "text", None, None),
             Chunk("c2", Path("other.md"), "No match.\n", 1, 1, "text",
@@ -921,7 +933,7 @@ class TestModelSettings(unittest.TestCase):
         replies = iter(
             [
                 '{"intent": "mention_listing", "standalone": true}',
-                '{"terms": ["BRAPH 2"]}',
+                '{"terms": ["XYZ 2"]}',
             ]
         )
         with (
@@ -937,17 +949,17 @@ class TestModelSettings(unittest.TestCase):
                 side_effect=lambda *a, **k: next(replies),
             ),
         ):
-            self.engine.ask("list all mentions of BRAPH 2")
+            self.engine.ask("list all mentions of XYZ 2")
         retrieve.assert_not_called()
         reply.assert_not_called()
         turn = self.events[-1]["turn"]
-        self.assertIn("Found **2 mentions** of “BRAPH 2”", turn["answer"])
+        self.assertIn("Found **2 mentions** of “XYZ 2”", turn["answer"])
         self.assertEqual(
             [(e["citation"], e["start_line"]) for e in turn["evidence"]],
             [(1, 1), (2, 1)],
         )
         tool = turn["parameters"]["tool"]
-        self.assertEqual(tool["terms"], ["BRAPH 2"])
+        self.assertEqual(tool["terms"], ["XYZ 2"])
         self.assertEqual(tool["terms_from"], "router")
         self.assertEqual(tool["total_mentions"], 2)
         self.assertEqual(tool["files_scanned"], 2)
@@ -957,11 +969,11 @@ class TestModelSettings(unittest.TestCase):
         replies = iter(
             [
                 '{"intent": "mention_listing", "standalone": true}',
-                '{"terms": ["BRAPH 2", "other"], "document": null}',
+                '{"terms": ["XYZ 2", "other"], "document": null}',
             ]
         )
         session.chunks.append(
-            Chunk("c3", Path("other.md"), "BRAPH 2 once.\n", 2, 2, "text",
+            Chunk("c3", Path("other.md"), "XYZ 2 once.\n", 2, 2, "text",
                   None, None)
         )
         session.turns = []
@@ -977,10 +989,10 @@ class TestModelSettings(unittest.TestCase):
                 side_effect=lambda *a, **k: next(replies),
             ),
         ):
-            self.engine.ask("where is BRAPH 2 mentioned in other")
+            self.engine.ask("where is XYZ 2 mentioned in other")
         reply.assert_not_called()
         tool = self.events[-1]["turn"]["parameters"]["tool"]
-        self.assertEqual(tool["terms"], ["BRAPH 2"])
+        self.assertEqual(tool["terms"], ["XYZ 2"])
         self.assertEqual(tool["terms_as_scope"], ["other"])
         self.assertEqual(tool["scope"], ["other.md"])
         self.assertEqual(tool["total_mentions"], 1)
@@ -1109,17 +1121,17 @@ class TestModelSettings(unittest.TestCase):
 
         session = self.engine.session
         earlier = (
-            Evidence(1, Path("diva.pdf"), 1, 2, None, "We propose DIVA."),
+            Evidence(1, Path("nova.pdf"), 1, 2, None, "We propose NOVA."),
             Evidence(2, Path("other.pdf"), 1, 2, None, "Unrelated."),
         )
         session.turns = [
             ConversationTurn(
-                "t", "What is Raman?", "DIVA uses it [1].", earlier, {}
+                "t", "What is infrared?", "NOVA uses it [1].", earlier, {}
             )
         ]
         fresh = (
             Evidence(1, Path("new.pdf"), 1, 1, None, "Fresh."),
-            Evidence(2, Path("diva.pdf"), 1, 2, None, "We propose DIVA."),
+            Evidence(2, Path("nova.pdf"), 1, 2, None, "We propose NOVA."),
         )
         with (
             patch.object(session, "use_chat_model"),
@@ -1132,19 +1144,19 @@ class TestModelSettings(unittest.TestCase):
                 '"standalone": false, "related_turns": [1]}',
             ),
         ):
-            self.engine.ask("why DIV A not DIVA?")
+            self.engine.ask("why NOV A not NOVA?")
         turn = self.events[-1]["turn"]
         # The cited chunk was already found again, so nothing is duplicated;
         # the uncited earlier chunk is not added.
         self.assertEqual(
             [(e["citation"], str(e["path"])) for e in turn["evidence"]],
-            [(1, "new.pdf"), (2, "diva.pdf")],
+            [(1, "new.pdf"), (2, "nova.pdf")],
         )
         self.assertEqual(turn["parameters"]["related_evidence_count"], 0)
 
         session.turns = [
             ConversationTurn(
-                "t", "What is Raman?", "DIVA uses it [1].", earlier, {}
+                "t", "What is infrared?", "NOVA uses it [1].", earlier, {}
             )
         ]
         only_new = (Evidence(1, Path("new.pdf"), 1, 1, None, "Fresh."),)
@@ -1159,11 +1171,11 @@ class TestModelSettings(unittest.TestCase):
                 '"standalone": false, "related_turns": [1]}',
             ),
         ):
-            self.engine.ask("why DIV A not DIVA?")
+            self.engine.ask("why NOV A not NOVA?")
         turn = self.events[-1]["turn"]
         self.assertEqual(
             [(e["citation"], str(e["path"])) for e in turn["evidence"]],
-            [(1, "new.pdf"), (2, "diva.pdf")],
+            [(1, "new.pdf"), (2, "nova.pdf")],
         )
         self.assertEqual(turn["parameters"]["related_evidence_count"], 1)
         self.assertEqual(turn["parameters"]["evidence_from_turns"], [1])

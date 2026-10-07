@@ -278,10 +278,14 @@ button:disabled { opacity: .62; cursor: default; }
 .answer-phase-header { display: flex; align-items: baseline; gap: 10px; }
 .answer-phase-label { min-width: 7.5em; }
 .tool-plan { margin-top: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); color: var(--text); cursor: default; }
-.tool-plan-summary { margin: 0 0 6px; font-weight: 600; }
-.tool-plan ul { margin: 0 0 10px; padding-left: 18px; color: var(--muted); font-size: 13px; }
-.tool-plan-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.tool-plan-actions button { padding: 6px 12px; border-radius: 8px; font: inherit; font-size: 13px; cursor: pointer; }
+.tool-plan-summary { margin: 0 0 4px; font-size: 14px; font-weight: 600; line-height: 1.4; }
+.tool-plan-facts { margin: 0 0 12px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.tool-plan-actions { display: grid; gap: 6px; }
+.tool-plan-option { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: 100%; min-height: 0; padding: 8px 12px; border-radius: 8px; font: inherit; text-align: left; cursor: pointer; }
+.tool-plan-option-title { font-size: 13px; font-weight: 600; }
+.tool-plan-option-note { font-size: 12px; opacity: .75; }
+.tool-plan-cancel { justify-self: start; min-height: 0; margin-top: 2px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
+.tool-plan-cancel:hover { color: var(--text); background: var(--surface); }
 .answer-phase-timer, .answer-duration { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .answer-duration { margin: 0 0 4px; }
 .answer-phase-detail { width: fit-content; margin-top: 8px; color: transparent; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 42%, color-mix(in srgb, var(--muted) 55%, white) 50%, var(--muted) 58%, var(--muted) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; font-size: 13px; animation: stage-shimmer 1.6s linear infinite; }

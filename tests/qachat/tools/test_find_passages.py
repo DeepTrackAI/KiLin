@@ -72,12 +72,13 @@ class TestFindPassages(unittest.TestCase):
         built, _ = context(
             self.chunks(),
             router=lambda system, prompt, tokens: (
-                '{"topic": "braph2 as an analysis tool", "document": null}'
+                '{"topic": "xyz2 as an analysis tool", "document": null, '
+                '"list": "files"}'
             ),
             model=model,
         )
         question = (
-            "i want a list of files that are using braph2 as analysis tool"
+            "i want a list of files that are using xyz2 as analysis tool"
         )
         result = run(PassageSettings(), ToolRequest(question, question), built)
         # The judgement follows the user's request, not only the topic.
@@ -85,6 +86,64 @@ class TestFindPassages(unittest.TestCase):
         self.assertIn("**1 of 2 files** match", result.answer)
         self.assertIn("- **one.md** (2 sentences)", result.answer)
         self.assertNotIn("two.md", result.answer)
+
+    def test_one_file_in_scope_lists_its_sentences(self) -> None:
+        built, _ = context(
+            self.chunks(),
+            router=lambda system, prompt, tokens: (
+                '{"topic": "networks", "document": null, "list": "files"}'
+            ),
+            model=lambda system, prompt, tokens: "1, 2, 3",
+        )
+        question = "which sentences of one.md are about networks"
+        result = run(PassageSettings(), ToolRequest(question, question), built)
+        # Every matching sentence is shown, not one per file.
+        self.assertIn("Found **3 sentences**", result.answer)
+        self.assertEqual(result.answer.count("\n- “"), 3)
+
+    def test_a_passage_starting_inside_a_sentence_is_not_cut(self) -> None:
+        first = chunk("repo/a.pdf", ["The analysis used XYZ 2 software."])
+        second = chunk(
+            "repo/a.pdf", ["tion for deep learning was carried out.",
+                           "Results were robust across all subjects."],
+            start=2,
+        )
+        texts = [s.text for s in split_sentences([first, second])]
+        self.assertEqual(
+            texts,
+            ["The analysis used XYZ 2 software.",
+             "Results were robust across all subjects."],
+        )
+
+    def test_quick_is_an_exact_match_without_the_model(self) -> None:
+        def model(system, prompt, tokens):
+            raise AssertionError("no model call expected")
+
+        def router(system, prompt, tokens):
+            if "search terms" in system:
+                return '{"terms": ["network"], "document": null}'
+            return (
+                '{"topic": "network", "document": null, '
+                '"list": "sentences"}'
+            )
+
+        plans = []
+        built, _ = context(
+            self.chunks(), router=router, model=model,
+            confirm=lambda plan: plans.append(plan) or "quick",
+        )
+        question = "list the sentences that are about network"
+        settings = PassageSettings(confirmation="always")
+        result = run(settings, ToolRequest(question, question), built)
+        self.assertEqual(plans[0].quick_label, "Exact matches only")
+        self.assertRegex(plans[0].quick_note, r"^\d+ sentences? mentions?")
+        self.assertEqual(plans[0].quick_seconds, 0.0)
+        self.assertIn(f"“{_ONE[2]}”", result.answer)
+        # Whole words, as exact matching is: "networks" is another word.
+        self.assertNotIn(_TWO[1], result.answer)
+        self.assertNotIn("MATLAB", result.answer)
+        self.assertIn("Found **1 sentence** about", result.answer)
+        self.assertIn("Exact match", result.answer)
 
     def test_topic_falls_back_to_the_question(self) -> None:
         built, _ = context(
@@ -102,16 +161,16 @@ class TestTermsFromTheQuestion(unittest.TestCase):
     """Exact-term search uses the question's words, and spelling variants."""
 
     def test_earlier_terms_are_not_added(self) -> None:
-        chunks = [chunk("repo/a.md", ["BRAPH2 does network analysis."])]
+        chunks = [chunk("repo/a.md", ["XYZ2 does network analysis."])]
         built, _ = context(
             chunks,
             router=lambda system, prompt, tokens: (
-                '{"terms": ["network analysis", "BRAPH2"], "document": null}'
+                '{"terms": ["network analysis", "XYZ2"], "document": null}'
             ),
         )
         request = ToolRequest(
             "list every mention of network analysis",
-            "list every mention of network analysis what is BRAPH2",
+            "list every mention of network analysis what is XYZ2",
         )
         found = collect_mentions(
             ScanSettings(), request, built, tool="scan_and_list"
@@ -122,12 +181,12 @@ class TestTermsFromTheQuestion(unittest.TestCase):
         chunks = [
             chunk(
                 "repo/a.md",
-                ["BRAPH2 and BRAPH 2 and braph-2 are one tool.",
-                 "BRAPH 20 is a different number."],
+                ["XYZ2 and XYZ 2 and xyz-2 are one tool.",
+                 "XYZ 20 is a different number."],
             )
         ]
-        scan = scan_mentions(chunks, ["braph2"])
-        self.assertEqual(scan.term_counts(), {"braph2": 3})
+        scan = scan_mentions(chunks, ["xyz2"])
+        self.assertEqual(scan.term_counts(), {"xyz2": 3})
         self.assertIn(Path("repo/a.md"), scan.counts())
 
 

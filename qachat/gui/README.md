@@ -173,7 +173,7 @@ is loaded, and unknown settings are rejected. The tools are:
   bibliographic is written by the model: the citation comes from the PDF's
   metadata and first page (or the file name), and reference items are
   entries of the paper's own reference list, which the model only chooses
-  by number. A paper can be named by file name or first author ("Patil's
+  by number. A paper can be named by file name or first author ("Smith's
   paper"); a guessed paper is always confirmed first.
 
 Tools that call the model many times (`batch_classify`, `batch_review`,

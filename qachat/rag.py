@@ -7,6 +7,13 @@ expands explicitly requested context, and formats evidence into the model's
 user prompt. Returned ``Evidence`` records identify the supplied excerpts;
 the module does not independently verify the generated answer or citations.
 
+Before retrieval, a router chat model (by default the answering model)
+assigns each question one of the project type's configured intents. The
+intent's configuration, not the router, then selects the history policy,
+the retrieval mode (search, one document, reused evidence, or none), and
+optionally a tool that writes the answer itself. An unusable router reply
+falls back to the project type's default intent.
+
 Conversation turns retain questions, answers, evidence, and effective turn
 parameters. One authoritative conversation JSON path stores resumable state.
 When tracing is enabled for a RAG session, its trace output is required to use
@@ -58,6 +65,21 @@ Key Features
     Emit stage callbacks and structured events, with content retention
     controlled by trace settings.
 
+- **Intent routing and tools**
+
+    Route each question to a configured intent that chooses history,
+    retrieval mode, and an optional tool that writes the answer.
+
+- **Incremental indexing**
+
+    Reuse the extracted text, chunks, and vectors of unchanged files so only
+    new or changed files are read and embedded again.
+
+- **Token usage**
+
+    Count the prompt and generated tokens of the answering and router models
+    for each answer.
+
 Module Structure
 ----------------
 
@@ -107,18 +129,28 @@ The workspace and model dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from math import isfinite
 from pathlib import Path
-import re
 import platform
+import re
 import sys
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
+from qachat.answering import (
+    MACHINE_STATE_ANSWERING,
+    RouteDecision,
+    history_messages,
+    route_question,
+    search_text as answering_search_text,
+    select_history,
+    side_reply,
+    turn_representation,
+)
 from qachat.chat import (
     ASSISTANT_ROLE,
     SYSTEM_ROLE,
@@ -128,22 +160,13 @@ from qachat.chat import (
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
 from qachat.conversation_format import conversation_state
-from qachat.project import QAProject, open_project
-from qachat.answering import (
-    MACHINE_STATE_ANSWERING,
-    RouteDecision,
-    history_messages,
-    route_question,
-    select_history,
-    side_reply,
-    turn_representation,
-)
-from qachat.answering import search_text as answering_search_text
+from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
+    ProjectType,
     project_type,
 )
 from qachat.query_formats import (
@@ -157,8 +180,10 @@ from qachat.repository import (
 )
 from qachat.retrievals import (
     CodeGraph,
+    DocumentSelection,
     HybridResult,
     PersistentIndexes,
+    SemanticIndex,
     build_code_graph,
     build_lexical_index,
     build_semantic_index,
@@ -169,15 +194,10 @@ from qachat.retrievals import (
     load_indexes,
     plan_retrieval,
     prepare_persistent_indexes,
+    read_document,
     save_indexes,
     semantic_search,
 )
-from qachat.retrievals.document_reading import (
-    DocumentSelection,
-    named_paths,
-    read_document,
-)
-from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
 from qachat.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from qachat.sources import (
     SourceFile,
@@ -185,15 +205,6 @@ from qachat.sources import (
     read_repository_files,
 )
 from qachat.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
-from qachat.trace_logging import (
-    TRACE_EVENT_PROGRESS_UPDATED,
-    TRACE_MODE_FORENSIC,
-    NullTraceLogger,
-    TraceConfig,
-    TraceSink,
-    create_trace_logger,
-    trace_text_preview,
-)
 from qachat.tools import (
     EarlierTurn,
     ToolContext,
@@ -203,13 +214,26 @@ from qachat.tools import (
     ToolUse,
     run_tool,
 )
+from qachat.tools.choose_document import document_scope
+from qachat.trace_logging import (
+    TRACE_EVENT_PROGRESS_UPDATED,
+    TRACE_MODE_FORENSIC,
+    NullTraceLogger,
+    TraceConfig,
+    TraceSink,
+    create_trace_logger,
+    trace_text_preview,
+)
 
 __all__ = [
     "ANSWER_PHASE_CHOICES",
     "ANSWER_PHASE_COMPLETED",
     "ANSWER_PHASE_EVIDENCE_READY",
     "ANSWER_PHASE_GENERATING",
+    "ANSWER_PHASE_PROCESSING",
     "ANSWER_PHASE_RETRIEVING",
+    "ANSWER_PHASE_ROUTED",
+    "ANSWER_PHASE_ROUTING",
     "ANSWER_PHASE_SAVING",
     "AnswerPhase",
     "ConversationTurn",
@@ -259,6 +283,24 @@ _SYSTEM_PROMPT = (
     "reference list or copy bibliographic text. Say when evidence "
     "is insufficient."
 )
+# File in the index folder caching each source file's extracted text with the
+# SHA-256 of its bytes, so unchanged files (slow PDFs above all) are not read
+# again when sources are re-indexed.
+_TEXT_CACHE: Final[str] = "source_text.json"
+# Most items a reused-evidence answer keeps; the oldest are dropped first.
+_MAX_REUSED_EVIDENCE: Final[int] = 40
+# Most items earlier related answers add to freshly retrieved evidence.
+_MAX_RELATED_EVIDENCE: Final[int] = 10
+# Items taken from a related answer that cited none of its evidence.
+_UNCITED_RELATED_EVIDENCE: Final[int] = 3
+# Earlier turns a tool may look back through for what "this" refers to.
+_MAX_EARLIER_TURNS: Final[int] = 6
+# A citation group in an answer, such as "[2]" or "[1, 3]".
+_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
+    r"\[(\d+(?:\s*,\s*\d+)*)\]"
+)
+# The separator between numbers inside one citation group.
+_CITATION_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,6 +509,9 @@ class RAGSession:
         start at the project root; None chooses a new path under logs/traces.
         When tracing is enabled, writes go through the sink, so configure its
         output path consistently with this path. Defaults to ``None``.
+    router_model: str | None, optional
+        Chat model that classifies each question's intent. None uses the
+        profile's chat model. Defaults to ``None``.
 
     Attributes
     ----------
@@ -492,6 +537,9 @@ class RAGSession:
     source_changes: dict[str, object]
         Selected-source manifest comparison, including configuration-change
         information when provided.
+    router_model: str
+        Chat model that classifies intents; it is loaded separately only when
+        it differs from the answering model.
 
     Methods
     -------
@@ -503,6 +551,18 @@ class RAGSession:
         Archive the active conversation and clear it from memory.
     close()
         Release both models while keeping indexes and logs on disk.
+    refresh_sources(project)
+        Update the indexes after sources were added, changed, or removed.
+    use_chat_model(model_id)
+        Switch the answering model while preserving conversation state.
+    use_router_model(model_id)
+        Change the router model, releasing the previous one if separate.
+    router_reply(system, prompt, *, max_new_tokens)
+        Ask the router model a side question, such as a chat title.
+    usage_mark()
+        Remember the token totals of the loaded model sessions.
+    usage_since(mark)
+        Return the tokens read and generated since ``usage_mark``.
 
     Raises
     ------
@@ -894,74 +954,6 @@ class RAGSession:
             eta_seconds=eta,
         )
 
-    def use_chat_model(self: RAGSession, model_id: str) -> None:
-        """Switch the generation model while preserving conversation state.
-
-        The embedding model and retrieval indexes are left unchanged. The old
-        model is released before the replacement is loaded, except the router
-        model, which stays loaded for routing and is reused when it becomes
-        the answering model again.
-
-        """
-
-        if self._closed:
-            raise RuntimeError("This RAG session is closed.")
-        if self.backend != BACKEND_MLX:
-            raise RuntimeError("GUI effort presets currently require MLX.")
-        if self.chat_session.model_id == model_id:
-            return
-        old = self.chat_session
-        old_model_id = old.model_id
-        messages = [dict(message) for message in old.messages]
-        settings = {
-            "thinking": old.thinking,
-            "temperature": old.temperature,
-            "max_new_tokens": old.max_new_tokens,
-        }
-        keep_old = old_model_id == getattr(self, "router_model", None)
-        if not keep_old:
-            old.close()
-        router = getattr(self, "_router_session", None)
-        try:
-            if router is not None and router.model_id == model_id:
-                replacement = router
-                replacement.configure_generation(settings)
-            else:
-                replacement = ChatSession(
-                    model_id,
-                    backend=self.backend,
-                    system_prompt=self._system_prompt(),
-                    allow_download=self.project.profile.allow_download,
-                    trace=self.trace,
-                    **settings,
-                )
-        except Exception:
-            if keep_old:
-                self.chat_session = old
-            else:
-                self.chat_session = ChatSession(
-                    old_model_id,
-                    backend=self.backend,
-                    system_prompt=self._system_prompt(),
-                    allow_download=self.project.profile.allow_download,
-                    trace=self.trace,
-                    **settings,
-                )
-                self.chat_session.restore_history(messages)
-            raise
-        if replacement is router:
-            self._router_session = None
-        if keep_old:
-            # The router model stays loaded for the next question.
-            self._router_session = old
-        replacement.restore_history(messages)
-        self.chat_session = replacement
-        self.trace.emit(
-            "chat.model.switched",
-            component="rag",
-            data={"from": old_model_id, "to": model_id},
-        )
-
     def ask(
         self: RAGSession,
         question: str,
@@ -986,6 +978,12 @@ class RAGSession:
         explicit file/function context may expand the final evidence.
         Generation settings supplied here persist on the loaded chat session
         after validation.
+
+        Each question is first routed to one of the project type's intents.
+        The intent decides which earlier turns are sent as history and
+        whether evidence is searched, read from one document, reused from
+        earlier turns, or skipped. An intent with a tool lets the tool write
+        the answer instead of the answering model.
 
         Parameters
         ----------
@@ -1031,7 +1029,7 @@ class RAGSession:
             PDF and returns its page count; tools that save reports also
             save a PDF when it is given (the desktop app passes a Qt
             writer). Defaults to ``None``.
-        choice_callback: Callable[[str, tuple[str, ...]], int | None] | None
+        choice_callback: Callable[..., int | None] | None, optional
             ``choice_callback(question, options)`` asks the user to pick one
             option and returns its index, or None to cancel; tools use it
             when they cannot tell what the user means (for example which
@@ -1049,6 +1047,8 @@ class RAGSession:
             If the session is closed.
         ValueError
             If the question is empty.
+            Also if an optional argument has the wrong type or value, or
+            ``reuse_evidence`` is True before any answered turn.
 
         Notes
         -----
@@ -1189,6 +1189,7 @@ class RAGSession:
                 data=effective,
                 turn_id=turn_id,
             )
+
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
             kind = project_type(self.project.profile.kind)
@@ -1199,6 +1200,7 @@ class RAGSession:
             mode = intent.retrieval_mode
             if reuse_evidence:
                 mode = RETRIEVAL_MODE_REUSE
+
             with trace.span(
                 "history.selection",
                 component="rag",
@@ -1236,6 +1238,8 @@ class RAGSession:
             evidence: tuple[Evidence, ...] = ()
             source_turns: list[int] = []
             if mode == RETRIEVAL_MODE_REUSE:
+                # Reuse the related turns' evidence, or the last turn's
+                # when the router related none.
                 candidates = list(decision.related_turn_ids) or [
                     len(self.turns)
                 ]
@@ -1246,10 +1250,11 @@ class RAGSession:
                     and self.turns[number - 1].evidence
                 ]
                 if not source_turns:
-                    mode = RETRIEVAL_MODE_SEARCH  # Nothing to reuse.
+                    # Nothing to reuse, so search instead.
+                    mode = RETRIEVAL_MODE_SEARCH
+
             search_text = None
             if mode in (RETRIEVAL_MODE_SEARCH, RETRIEVAL_MODE_DOCUMENT):
-                search_text = question
                 if retrieval_query is not None:
                     search_text = retrieval_query.strip()
                 else:
@@ -1258,6 +1263,7 @@ class RAGSession:
                     search_text = answering_search_text(
                         question, self.turns, decision
                     )
+
             effective.update(
                 {
                     "machine_state": MACHINE_STATE_ANSWERING,
@@ -1286,6 +1292,7 @@ class RAGSession:
                 },
                 turn_id=turn_id,
             )
+
             retrieval_started = perf_counter()
             if mode == RETRIEVAL_MODE_REUSE:
                 evidence = _merge_evidence(
@@ -1309,6 +1316,18 @@ class RAGSession:
                     ANSWER_PHASE_RETRIEVING,
                     message="Retrieving evidence",
                 )
+                # A document the question names, or the one the earlier
+                # turns discussed, limits the search (see ``_retrieve``).
+                # The candidates are the indexed files in index order.
+                scope, _ = document_scope(
+                    ToolRequest(
+                        question,
+                        search_text,
+                        earlier=self._earlier_turns(decision),
+                    ),
+                    self._ask_router,
+                    list(dict.fromkeys(chunk.path for chunk in self.chunks)),
+                )
                 evidence = self._retrieve(
                     search_text,
                     retrieval_count,
@@ -1316,6 +1335,7 @@ class RAGSession:
                     status_callback=lambda message: report_phase(
                         ANSWER_PHASE_RETRIEVING, message=message
                     ),
+                    scope=scope,
                 )
                 found = len(evidence)
                 related_turns = [
@@ -1358,13 +1378,7 @@ class RAGSession:
                 else:
                     evidence = _document_evidence(selection)
                     effective["document"] = {
-                        "path": selection.path.as_posix(),
-                        "functions": list(selection.functions),
-                        "reason": selection.reason,
-                        "total_chunks": selection.total_chunks,
-                        "selected_chunks": len(selection.chunks),
-                        "estimated_tokens": selection.estimated_tokens,
-                        "complete": selection.complete,
+                        **_document_data(selection),
                         "max_tokens": intent.max_tokens,
                     }
                 report_phase(
@@ -1380,6 +1394,7 @@ class RAGSession:
                     evidence_count=0,
                     skipped=True,
                 )
+
             trace.emit(
                 "retrieval.result",
                 component="rag",
@@ -1423,6 +1438,9 @@ class RAGSession:
                 system_prompt = (
                     f"{kind.system_prompt}\n\n{intent.system_prompt}"
                 )
+                # The model sees only the selected turns (questions and
+                # answers, without their evidence), so the history is
+                # rebuilt for every question.
                 self.chat_session.restore_history(
                     [
                         {"role": SYSTEM_ROLE, "content": system_prompt},
@@ -1455,11 +1473,15 @@ class RAGSession:
                 if token_callback is not None:
                     reply_options["token_callback"] = token_callback
                 answer = self.chat_session.reply(prompt, **reply_options)
+
+                # "length" marks an answer cut off by the token limit. Other
+                # values, or a session without the attribute, record nothing.
                 finish_reason = getattr(
                     self.chat_session, "last_finish_reason", None
                 )
                 if finish_reason in ("length", "stop"):
                     effective["finish_reason"] = finish_reason
+
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
             turn = ConversationTurn(
@@ -1652,6 +1674,224 @@ class RAGSession:
             if getattr(self, "_owns_trace", False):
                 trace.close()
 
+    def refresh_sources(self: RAGSession, project: QAProject) -> None:
+        """Update the indexes after sources were added, changed, or removed.
+
+        The loaded models and the conversation stay; only the indexes are
+        prepared again, and files that did not change keep their chunks and
+        vectors, so only new or changed files are embedded.
+
+        Parameters
+        ----------
+        project: QAProject
+            The project reopened after its sources changed.
+
+        Notes
+        -----
+        The new project replaces the old one before indexing starts, so a
+        failure while indexing leaves the new project with the previous
+        chunks and indexes.
+
+        """
+
+        self.project = project
+        with self.trace.span(
+            "indexing",
+            component="rag",
+            data={"project_directory": str(project.root), "refresh": True},
+        ):
+            chunks, indexes, status, source_changes = (
+                self._prepare_retrieval(self.embedding_session)
+            )
+        self.chunks = chunks
+        self.indexes = indexes
+        self.index_status = status
+        self.source_changes = source_changes
+
+    def use_chat_model(self: RAGSession, model_id: str) -> None:
+        """Switch the answering model while preserving conversation state.
+
+        The embedding model and retrieval indexes are left unchanged. The old
+        model is released before the replacement is loaded, except the router
+        model, which stays loaded for routing and is reused when it becomes
+        the answering model again. Generation settings and chat history move
+        to the new model.
+
+        Parameters
+        ----------
+        model_id: str
+            Hugging Face model ID or local model directory of the new
+            answering model. The current model ID returns without change.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed or the backend is not MLX.
+        Exception
+            Any error loading the new model is raised again after the old
+            model is restored (reloaded if it had been released).
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if self.backend != BACKEND_MLX:
+            raise RuntimeError("GUI effort presets currently require MLX.")
+        if self.chat_session.model_id == model_id:
+            return
+
+        old = self.chat_session
+        old_model_id = old.model_id
+        messages = [dict(message) for message in old.messages]
+        settings = {
+            "thinking": old.thinking,
+            "temperature": old.temperature,
+            "max_new_tokens": old.max_new_tokens,
+        }
+        # Release the old model first so two large models are never loaded
+        # together, unless it is also the router, which must stay loaded.
+        keep_old = old_model_id == getattr(self, "router_model", None)
+        if not keep_old:
+            old.close()
+
+        router = getattr(self, "_router_session", None)
+        try:
+            if router is not None and router.model_id == model_id:
+                replacement = router
+                replacement.configure_generation(settings)
+            else:
+                replacement = self._new_chat_session(model_id, **settings)
+        except Exception:
+            # Leave a working answering model behind before re-raising.
+            if keep_old:
+                self.chat_session = old
+            else:
+                self.chat_session = self._new_chat_session(
+                    old_model_id, **settings
+                )
+                self.chat_session.restore_history(messages)
+            raise
+
+        # The router session now answers, so it is no longer kept apart.
+        if replacement is router:
+            self._router_session = None
+        if keep_old:
+            # The router model stays loaded for the next question.
+            self._router_session = old
+        replacement.restore_history(messages)
+        self.chat_session = replacement
+        self.trace.emit(
+            "chat.model.switched",
+            component="rag",
+            data={"from": old_model_id, "to": model_id},
+        )
+
+    def use_router_model(self: RAGSession, model_id: str) -> None:
+        """Change the router model, releasing the previous one if separate.
+
+        Parameters
+        ----------
+        model_id: str
+            Chat model that classifies intents from the next question on.
+            It is loaded when first needed, or shared with the answering
+            model when both are the same.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        if model_id == self.router_model:
+            return
+
+        # A router shared with the answering model is not in
+        # ``_router_session``, so the answering model is never closed here.
+        if self._router_session is not None:
+            self._router_session.close()
+            self._router_session = None
+        self.trace.emit(
+            "router.model.changed",
+            component="rag",
+            data={"from": self.router_model, "to": model_id},
+        )
+        self.router_model = model_id
+
+    def router_reply(
+        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int
+    ) -> str:
+        """Ask the router model a side question, such as a chat title.
+
+        Parameters
+        ----------
+        system: str
+            System instruction for the side question only.
+        prompt: str
+            The side question.
+        max_new_tokens: int
+            Maximum length of the reply.
+
+        Returns
+        -------
+        str
+            The reply. The answering model's conversation is not changed.
+
+        """
+
+        return side_reply(
+            self._router_chat(),
+            system,
+            prompt,
+            max_new_tokens=max_new_tokens,
+        )
+
+    def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
+        """Remember the token totals of the loaded model sessions.
+
+        Returns
+        -------
+        dict[int, tuple[int, int]]
+            Prompt and generated token totals per model session, for
+            ``usage_since``.
+
+        """
+
+        return {
+            id(chat): (chat.input_token_total, chat.output_token_total)
+            for chat in self._model_sessions()
+        }
+
+    def usage_since(
+        self: RAGSession, mark: dict[int, tuple[int, int]]
+    ) -> dict[str, int]:
+        """Return the tokens read and generated since ``usage_mark``.
+
+        Parameters
+        ----------
+        mark: dict[int, tuple[int, int]]
+            Totals from ``usage_mark``. A session loaded since then counts
+            from zero.
+
+        Returns
+        -------
+        dict[str, int]
+            ``input_tokens`` (prompts the models read: questions, evidence,
+            instructions, and history) and ``output_tokens`` (text they
+            generated), over the answer model, the router, and any tool
+            calls. Safe to call while an answer is being generated.
+
+        """
+
+        read = written = 0
+        for chat in self._model_sessions():
+            before_read, before_written = mark.get(id(chat), (0, 0))
+            read += max(0, chat.input_token_total - before_read)
+            written += max(0, chat.output_token_total - before_written)
+        return {"input_tokens": read, "output_tokens": written}
+
     def _prepare_source(
         self: RAGSession,
         embedding_session: EmbeddingSession,
@@ -1668,6 +1908,10 @@ class RAGSession:
         report: dict[str, object] | None, optional
             Optional existing scan report. None causes a scan using the project
             profile. Defaults to ``None``.
+        cached_chunks: dict[pathlib.Path, list[Chunk]] | None, optional
+            Chunks of unchanged files from the saved index, by path; these
+            files are not chunked again. Defaults to ``None`` (chunk every
+            file).
 
         Returns
         -------
@@ -1680,6 +1924,12 @@ class RAGSession:
         embedding tokenizer, and builds the heuristic code graph. A supplied
         incomplete scan is not rejected here.
 
+        Extracted text is cached in ``_TEXT_CACHE`` under the index folder
+        with the SHA-256 of each file's bytes; a file whose bytes are
+        unchanged reuses its text instead of being read again. Every selected
+        file is still hashed, and every file's text is still extracted into
+        units because the code graph needs all of them.
+
         """
 
         profile = self.project.profile
@@ -1691,7 +1941,8 @@ class RAGSession:
             )
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
-        graph = project_type(profile.kind).code_graph is not False
+        use_code_graph = project_type(profile.kind).code_graph is not False
+
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
         # reading is slow for PDFs. A file with the same name but other
@@ -1708,6 +1959,7 @@ class RAGSession:
             for name in selected
             if texts.get(name, {}).get("sha256") == hashes[name]
         }
+        # Only files without reusable text are passed on to the reader.
         report = {
             **report,
             "selected_files": [
@@ -1745,6 +1997,7 @@ class RAGSession:
                     )
                 ),
             )
+        # Rewriting the cache from the selected files drops removed files.
         read = {source.path.as_posix(): source for source in source_files}
         _write_text_cache(
             self.project.indexes,
@@ -1812,6 +2065,7 @@ class RAGSession:
                 ),
             )
 
+        # Files with chunks from the saved index are not chunked again.
         changed_units = [
             unit for unit in units if unit.path not in cached_chunks
         ]
@@ -1854,6 +2108,8 @@ class RAGSession:
                     )
                 ),
             )
+
+        # Merge reused and new chunks in the scan's file order.
         fresh_by_path: dict[Path, list[Chunk]] = {}
         for chunk in chunks:
             fresh_by_path.setdefault(chunk.path, []).append(chunk)
@@ -1886,40 +2142,13 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            if not graph or not source_files:
-                # Nothing to read means no code files: an empty graph.
+            if not use_code_graph or not source_files:
+                # A project type without a code graph, or a project without
+                # files, gets an empty graph; retrieval then skips it.
                 code_graph = CodeGraph((), ())
             else:
                 code_graph = build_code_graph(source_files, units)
         return chunks, code_graph
-
-    def refresh_sources(self: RAGSession, project: QAProject) -> None:
-        """Update the indexes after sources were added or removed.
-
-        The loaded models and the conversation stay; only the indexes are
-        prepared again, and files that did not change keep their chunks and
-        vectors, so only new or changed files are embedded.
-
-        Parameters
-        ----------
-        project: QAProject
-            The project reopened after its sources changed.
-
-        """
-
-        self.project = project
-        with self.trace.span(
-            "indexing",
-            component="rag",
-            data={"project_directory": str(project.root), "refresh": True},
-        ):
-            chunks, indexes, status, source_changes = (
-                self._prepare_retrieval(self.embedding_session)
-            )
-        self.chunks = chunks
-        self.indexes = indexes
-        self.index_status = status
-        self.source_changes = source_changes
 
     def _prepare_retrieval(
         self: RAGSession,
@@ -1989,6 +2218,8 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
+        # The resolved snapshot or folder changes when the same model ID
+        # resolves to other weights, whose vectors are not comparable.
         model_source = getattr(embedding_session, "model_source", None)
         if isinstance(model_source, str):
             expected_metadata["embedding_model_source"] = model_source
@@ -2099,14 +2330,19 @@ class RAGSession:
                     data={"index_path": str(index_path)},
                 )
 
-        previous = None
+        # With the same configuration, unchanged files keep their saved
+        # chunks and vectors, so only new or changed files are embedded.
+        # Any problem with the saved index means embedding everything.
         cached_chunks: dict[Path, list[Chunk]] = {}
-        cached_vectors = {}
+        cached_vectors: dict[str, tuple[Chunk, tuple[float, ...]]] = {}
         if not configuration_changed and saved_manifest is not None:
             try:
-                previous = load_indexes(index_path)
-                vectors = previous.semantic.embeddings
-                old_chunks = previous.semantic.chunks
+                saved = load_indexes(index_path)
+                vectors = saved.semantic.embeddings
+                old_chunks = saved.semantic.chunks
+                # Saved vectors are mixed with new ones only when each chunk
+                # has one, all have the same nonzero size, and all values
+                # are finite.
                 dimensions = {len(vector) for vector in vectors}
                 if (
                     len(vectors) != len(old_chunks)
@@ -2119,6 +2355,7 @@ class RAGSession:
                     )
                 ):
                     raise ValueError("Saved embedding vectors are invalid.")
+
                 changed_paths = set(changes["added"]) | set(
                     changes["modified"]
                 )
@@ -2129,14 +2366,15 @@ class RAGSession:
                         cached_chunks[chunk.path].append(chunk)
                         cached_vectors[chunk.identifier] = (chunk, vector)
             except (OSError, ValueError, TypeError, KeyError):
-                previous = None
                 cached_chunks = {}
                 cached_vectors = {}
+
         chunks, code_graph = self._prepare_source(
             embedding_session,
             report=report,
             cached_chunks=cached_chunks,
         )
+        # A chunk is embedded unless an identical saved chunk has a vector.
         pending_chunks = [
             chunk
             for chunk in chunks
@@ -2193,6 +2431,8 @@ class RAGSession:
                 if pending_chunks
                 else SemanticIndex((), ())
             )
+
+        # Join new and saved vectors in the final chunk order.
         fresh_vectors = {
             chunk.identifier: vector
             for chunk, vector in zip(
@@ -2275,6 +2515,7 @@ class RAGSession:
         *,
         trace_turn_id: str | None = None,
         status_callback: Callable[[str], None] | None = None,
+        scope: Sequence[Path] = (),
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -2289,6 +2530,14 @@ class RAGSession:
         trace_turn_id: str | None, optional
             Optional identifier associating trace events with one conversation
             turn. Defaults to ``None``.
+        status_callback: Callable[[str], None] | None, optional
+            Receives a short message before and after each search step, for
+            progress display. Defaults to ``None``.
+        scope: Sequence[pathlib.Path], optional
+            Documents the question is limited to, from ``document_scope``.
+            When it holds exactly one path, only that document's passages
+            are kept (if it has any); otherwise every document is searched.
+            Defaults to ``()``.
 
         Returns
         -------
@@ -2303,9 +2552,15 @@ class RAGSession:
         capped by retrieval_count. Trace details use previews; the evidence
         records keep full chunk text.
 
+        A one-document scope ranks every chunk again (see
+        ``_rank_everything``) so that document's best passages are found even
+        when they are outside the project-wide top results.
+
         """
 
         def report(message: str) -> None:
+            """Pass a progress message to the status callback, if any."""
+
             if status_callback is not None:
                 status_callback(message)
 
@@ -2378,10 +2633,11 @@ class RAGSession:
         ):
             report(
                 "Searching the code graph"
-                if self.project.profile.kind == "code"
+                if self.project.profile.kind == PROJECT_KIND_CODE
                 else "Checking structured relationships"
             )
-            # Without code the graph is empty; skip the search.
+            # The graph is empty without code files or when the project type
+            # turns it off; there is nothing to search then.
             code = (
                 code_search(
                     self.indexes.code_graph,
@@ -2403,7 +2659,7 @@ class RAGSession:
         )
         report(
             f"Code graph search ranked {len(code)} results"
-            if self.project.profile.kind == "code"
+            if self.project.profile.kind == PROJECT_KIND_CODE
             else f"Structured relationship search found {len(code)} results"
         )
         report("Combining and ranking search results")
@@ -2423,13 +2679,10 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         report(f"Hybrid ranking kept {len(combined)} results")
-        # A question about one named file ("a short summary of yao25")
-        # ranks that file's passages only.
-        named = named_paths(
-            question,
-            list(dict.fromkeys(chunk.path for chunk in self.chunks)),
-            authors=True,
-        )
+
+        # A question about one document ("in this paper", "in smith2020")
+        # ranks that document's passages only.
+        named = list(scope)
         if len(named) == 1:
             focused = [
                 result
@@ -2445,6 +2698,7 @@ class RAGSession:
                     data={"path": str(named[0]), "count": len(focused)},
                     turn_id=trace_turn_id,
                 )
+
         plan = plan_retrieval(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
@@ -2576,9 +2830,10 @@ class RAGSession:
             Asked to confirm an expensive plan. Defaults to ``None``.
         pdf_writer: Callable[..., int] | None, optional
             Writes reports as PDF. Defaults to ``None``.
-        choice_callback: Callable[[str, tuple[str, ...]], int | None] | None
-            Asks the user to pick one option (for example which paper to
-            summarize). Defaults to ``None``.
+        choice_callback: Callable[..., int | None] | None, optional
+            ``choice_callback(question, options)`` asks the user to pick one
+            option (for example which paper to summarize). Defaults to
+            ``None``.
         token_callback: Callable[[str], None] | None, optional
             Receives an answer the tool writes with the model, as it is
             generated. Defaults to ``None``.
@@ -2595,10 +2850,14 @@ class RAGSession:
         trace = getattr(self, "trace", NullTraceLogger())
 
         def ask(chat: object) -> Callable[[str, str, int], str]:
+            """Return ``ask(system, prompt, tokens)`` for one chat session."""
+
             return lambda system, prompt, tokens: side_reply(
                 chat, system, prompt, max_new_tokens=tokens
             )
 
+        # ``ask_model`` answers silently; ``write`` streams a tool's final
+        # answer to the caller through ``token_callback``.
         context = ToolContext(
             project_root=Path(self.project.root),
             chunks=self.chunks,
@@ -2607,9 +2866,7 @@ class RAGSession:
             retrieval_count=self.project.profile.retrieval_count,
             unsearchable=self._unsearchable_sources,
             source_files=self._source_files,
-            ask_router=lambda system, prompt, tokens: side_reply(
-                self._router_chat(), system, prompt, max_new_tokens=tokens
-            ),
+            ask_router=self._ask_router,
             ask_model=ask(self.chat_session),
             write=lambda system, prompt, tokens: side_reply(
                 self.chat_session,
@@ -2634,6 +2891,7 @@ class RAGSession:
             write_pdf=pdf_writer,
             choose=choice_callback,
         )
+
         request = ToolRequest(
             question=question,
             text=answering_search_text(question, self.turns, decision),
@@ -2645,19 +2903,35 @@ class RAGSession:
     def _earlier_turns(
         self: RAGSession, decision: RouteDecision
     ) -> tuple[EarlierTurn, ...]:
-        """The turns a question points back to, and theirs, newest first.
+        """Return the turns a question points back to, newest first.
 
         The router's related turns are followed through the turns they
         were related to in turn, so "turn this into a briefing" after
         "summarize that" still reaches "walk me through Smith's paper". A
         question that points back without related turns uses the last
-        turn. At most ``_MAX_EARLIER_TURNS`` turns are returned.
+        turn. The last turn is always included (``linked=False`` when the
+        router did not relate it), because "that paper" usually means the
+        paper just discussed even when the router relates an older turn on
+        the same topic.
+
+        Parameters
+        ----------
+        decision: RouteDecision
+            The checked routing decision for the new question.
+
+        Returns
+        -------
+        tuple[EarlierTurn, ...]
+            At most ``_MAX_EARLIER_TURNS`` turns with their questions,
+            answers, and evidence; empty when the question points back to
+            nothing.
 
         """
 
         pending = list(decision.related_turn_ids)
         if not pending and decision.refers_back and self.turns:
             pending = [len(self.turns)]
+
         found: set[int] = set()
         while pending:
             number = pending.pop()
@@ -2668,20 +2942,39 @@ class RAGSession:
                 "related_turn_ids"
             )
             if isinstance(related, list):
-                pending.extend(n for n in related if isinstance(n, int))
-        return tuple(
-            EarlierTurn(
-                number=number,
-                question=self.turns[number - 1].question,
-                paths=tuple(
-                    Path(item.path) for item in self.turns[number - 1].evidence
-                ),
+                pending.extend(
+                    related_number
+                    for related_number in related
+                    if isinstance(related_number, int)
+                )
+
+        linked = set(found)
+        if found:
+            found.add(len(self.turns))
+
+        earlier: list[EarlierTurn] = []
+        for number in sorted(found, reverse=True)[:_MAX_EARLIER_TURNS]:
+            turn = self.turns[number - 1]
+            earlier.append(
+                EarlierTurn(
+                    number=number,
+                    question=turn.question,
+                    answer=turn.answer,
+                    paths=tuple(Path(item.path) for item in turn.evidence),
+                    texts=tuple(item.text for item in turn.evidence),
+                    lines=tuple(item.start_line for item in turn.evidence),
+                    linked=number in linked,
+                )
             )
-            for number in sorted(found, reverse=True)[:_MAX_EARLIER_TURNS]
-        )
+        return tuple(earlier)
 
     def _source_files(self: RAGSession) -> dict[Path, int]:
-        """Return selected source files and sizes from the source manifest."""
+        """Return selected source files and sizes from the source manifest.
+
+        A missing or unreadable manifest gives an empty mapping; tools use
+        the result only for inventories and coverage reports.
+
+        """
 
         manifest = self.project.indexes / "source_manifest.json"
         try:
@@ -2696,7 +2989,20 @@ class RAGSession:
     def _unsearchable_sources(
         self: RAGSession, indexed: list[Path]
     ) -> list[Path]:
-        """Return selected source files that have no indexed text."""
+        """Return selected source files that are not among ``indexed``.
+
+        Parameters
+        ----------
+        indexed: list[pathlib.Path]
+            Paths that have chunks in the index.
+
+        Returns
+        -------
+        list[pathlib.Path]
+            Selected files without indexed text, such as scanned PDFs, in
+            manifest order.
+
+        """
 
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
@@ -2806,15 +3112,7 @@ class RAGSession:
             data=(
                 {"path": None}
                 if selection is None
-                else {
-                    "path": selection.path.as_posix(),
-                    "functions": list(selection.functions),
-                    "reason": selection.reason,
-                    "total_chunks": selection.total_chunks,
-                    "selected_chunks": len(selection.chunks),
-                    "estimated_tokens": selection.estimated_tokens,
-                    "complete": selection.complete,
-                }
+                else _document_data(selection)
             ),
             turn_id=trace_turn_id,
         )
@@ -2927,104 +3225,6 @@ class RAGSession:
         )
         return decision
 
-    def router_reply(
-        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int
-    ) -> str:
-        """Ask the router model a side question, such as a chat title.
-
-        Parameters
-        ----------
-        system: str
-            System instruction for the side question only.
-        prompt: str
-            The side question.
-        max_new_tokens: int
-            Maximum length of the reply.
-
-        Returns
-        -------
-        str
-            The reply. The answering model's conversation is not changed.
-
-        """
-
-        return side_reply(
-            self._router_chat(),
-            system,
-            prompt,
-            max_new_tokens=max_new_tokens,
-        )
-
-    def use_router_model(self: RAGSession, model_id: str) -> None:
-        """Change the router model, releasing the previous one if separate.
-
-        Parameters
-        ----------
-        model_id: str
-            Chat model that classifies intents from the next question on.
-            It is loaded when first needed, or shared with the answering
-            model when both are the same.
-
-        """
-
-        if self._closed:
-            raise RuntimeError("This RAG session is closed.")
-        if model_id == self.router_model:
-            return
-        if self._router_session is not None:
-            self._router_session.close()
-            self._router_session = None
-        self.trace.emit(
-            "router.model.changed",
-            component="rag",
-            data={"from": self.router_model, "to": model_id},
-        )
-        self.router_model = model_id
-
-    def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
-        """Remember the token totals of the loaded model sessions.
-
-        Returns
-        -------
-        dict[int, tuple[int, int]]
-            Prompt and generated token totals per model session, for
-            ``usage_since``.
-
-        """
-
-        return {
-            id(chat): (chat.input_token_total, chat.output_token_total)
-            for chat in self._model_sessions()
-        }
-
-    def usage_since(
-        self: RAGSession, mark: dict[int, tuple[int, int]]
-    ) -> dict[str, int]:
-        """Return the tokens read and generated since ``usage_mark``.
-
-        Parameters
-        ----------
-        mark: dict[int, tuple[int, int]]
-            Totals from ``usage_mark``. A session loaded since then counts
-            from zero.
-
-        Returns
-        -------
-        dict[str, int]
-            ``input_tokens`` (prompts the models read: questions, evidence,
-            instructions, and history) and ``output_tokens`` (text they
-            generated), over the answer model, the router, and any tool
-            calls. Safe to call while an answer is being generated.
-
-        """
-
-        read = written = 0
-        for chat in self._model_sessions():
-            before_read, before_written = mark.get(id(chat), (0, 0))
-            read += max(0, chat.input_token_total - before_read)
-            written += max(0, chat.output_token_total - before_written)
-        return {"input_tokens": read, "output_tokens": written}
-
     def _model_sessions(self: RAGSession) -> list[ChatSession]:
         """The answer model's session and, when separate, the router's."""
 
@@ -3041,15 +3241,66 @@ class RAGSession:
 
         if self.chat_session.model_id == self.router_model:
             return self.chat_session
+
         if self._router_session is None:
-            self._router_session = ChatSession(
-                self.router_model,
-                backend=self.backend,
-                system_prompt=self._system_prompt(),
-                allow_download=self.project.profile.allow_download,
-                trace=self.trace,
-            )
+            self._router_session = self._new_chat_session(self.router_model)
         return self._router_session
+
+    def _ask_router(
+        self: RAGSession, system: str, prompt: str, max_new_tokens: int
+    ) -> str:
+        """Ask the router model a side question, in the tools' call form.
+
+        Tools and ``document_scope`` call ``ask(system, prompt, tokens)``
+        with the token limit as a positional argument. The router is
+        looked up on each call, so it is loaded only when a tool asks.
+
+        Parameters
+        ----------
+        system: str
+            System instruction for the side question only.
+        prompt: str
+            The side question.
+        max_new_tokens: int
+            Maximum length of the reply.
+
+        Returns
+        -------
+        str
+            The router model's reply.
+
+        """
+
+        return self.router_reply(system, prompt, max_new_tokens=max_new_tokens)
+
+    def _new_chat_session(
+        self: RAGSession, model_id: str, **settings: object
+    ) -> ChatSession:
+        """Load a chat model with this project's system prompt and trace.
+
+        Parameters
+        ----------
+        model_id: str
+            Hugging Face model ID or local model directory.
+        **settings: object
+            Optional ``thinking``, ``temperature``, and ``max_new_tokens``
+            passed to ``ChatSession``.
+
+        Returns
+        -------
+        ChatSession
+            The loaded chat session, without conversation history.
+
+        """
+
+        return ChatSession(
+            model_id,
+            backend=self.backend,
+            system_prompt=self._system_prompt(),
+            allow_download=self.project.profile.allow_download,
+            trace=self.trace,
+            **settings,
+        )
 
     def _index_metadata(self: RAGSession) -> dict[str, object]:
         """Return settings that determine reusable index compatibility.
@@ -3477,10 +3728,6 @@ def _check_conversation_trace(
         )
 
 
-# Extracted text of each source file, by path, with the SHA-256 of its bytes.
-_TEXT_CACHE = "source_text.json"
-
-
 def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
     """The cached text of source files; empty when missing or unreadable."""
 
@@ -3509,14 +3756,6 @@ def _write_text_cache(
     temporary.replace(path)
 
 
-_MAX_REUSED_EVIDENCE = 40
-
-
-_MAX_RELATED_EVIDENCE = 10
-# Earlier turns a tool may look back through for what "this" refers to.
-_MAX_EARLIER_TURNS = 6
-
-
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
     """Number a document's selected chunks in source order."""
 
@@ -3532,6 +3771,33 @@ def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
         )
         for number, chunk in enumerate(selection.chunks, start=1)
     )
+
+
+def _document_data(selection: DocumentSelection) -> dict[str, object]:
+    """Describe a document selection for the turn parameters and trace.
+
+    Parameters
+    ----------
+    selection: DocumentSelection
+        The document read and its selected chunks.
+
+    Returns
+    -------
+    dict[str, object]
+        JSON-ready ``path``, ``functions``, ``reason``, ``total_chunks``,
+        ``selected_chunks``, ``estimated_tokens``, and ``complete``.
+
+    """
+
+    return {
+        "path": selection.path.as_posix(),
+        "functions": list(selection.functions),
+        "reason": selection.reason,
+        "total_chunks": selection.total_chunks,
+        "selected_chunks": len(selection.chunks),
+        "estimated_tokens": selection.estimated_tokens,
+        "complete": selection.complete,
+    }
 
 
 def _document_message(selection: DocumentSelection | None) -> str:
@@ -3578,14 +3844,12 @@ def _add_related_evidence(
     for turn in reversed(turns):
         cited = {
             int(number)
-            for group in re.findall(
-                r"\[(\d+(?:\s*,\s*\d+)*)\]", str(turn.answer)
-            )
-            for number in re.split(r"\s*,\s*", group)
+            for group in _CITATION_GROUP.findall(str(turn.answer))
+            for number in _CITATION_SEPARATOR.split(group)
         }
         chosen = [item for item in turn.evidence if item.citation in cited]
         if not cited:
-            chosen = list(turn.evidence[:3])
+            chosen = list(turn.evidence[:_UNCITED_RELATED_EVIDENCE])
         for item in chosen:
             key = (str(item.path), item.start_line, item.end_line)
             if key not in seen and len(extra) < _MAX_RELATED_EVIDENCE:
@@ -3674,6 +3938,11 @@ def _answer_prompt(
     )
     if isinstance(guidance, str) and guidance.strip():
         sections[-1] += " " + guidance.strip()
+    # The question again, last, so its own length or format wins.
+    sections.append(
+        "Answer this question as asked, including any length or format it "
+        f"requests:\n{question}"
+    )
     return "\n\n".join(sections)
 
 

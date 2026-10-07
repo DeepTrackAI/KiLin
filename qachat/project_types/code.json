@@ -10,7 +10,7 @@
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
   "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
-  "answer_guidance": "Keep the answer concise: about 150-300 words, unless the question asks for more detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+  "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
     "code_graph": true
   },
@@ -29,6 +29,24 @@
         "mode": "search",
         "strategy": "hybrid",
         "include_related_evidence": true
+      }
+    },
+    "fact_finding": {
+      "description": "A specific fact, or a complete list of specific things, from one file or from the whole repository: a value, a setting, or the names of the libraries, models, files, or options involved ('what learning rate does train.py use?', 'which plotting library does each script use?', 'give a full list of the command-line options in that script', 'list all the dependencies the project uses'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explaining how code works (code_explanation), and not for listing passages or files.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_fact",
+        "part_tokens": 6000,
+        "note_tokens": 300,
+        "answer_tokens": 1024,
+        "max_model_calls": 200,
+        "confirmation": "always",
+        "large_batches": 0
       }
     },
     "code_generation": {
@@ -57,7 +75,7 @@
       }
     },
     "file_reading": {
-      "description": "Read one whole file, script, or function to answer from all of it: the user asks to check, read, review, or go through an entire file or function ('go through train.py', 'review the whole fit function').",
+      "description": "Answer from one whole file, script, or function read in full, when the user asks to read, search, check, review, or go through a particular file or function, including to find something in it ('go through train.py', 'review the whole fit function', 'search through that script for the learning rate it uses').",
       "history": {
         "policy": "relevant"
       },
@@ -75,7 +93,7 @@
       }
     },
     "project_inventory": {
-      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?').",
+      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing).",
       "history": {
         "policy": "none"
       },
@@ -89,7 +107,7 @@
       }
     },
     "mention_listing": {
-      "description": "List or count every place an exact name or text appears in the code ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does or sorting occurrences into groups.",
+      "description": "List or count every place an exact name or text appears in the code, and the lines that contain it ('find every use of load_data', 'list all TODO comments', 'how many files mention matplotlib?'). Exhaustive and exact; not for explaining what code does or sorting occurrences into groups.",
       "history": {
         "policy": "none"
       },
@@ -105,7 +123,7 @@
       }
     },
     "topic_listing": {
-      "description": "Only when the user asks for the matching comments, passages, or files themselves, judged by meaning rather than exact names: 'list the comments that discuss caching', 'which files handle authentication?'. Reads every passage. Not for explaining code, and not for an exact name or text (mention_listing).",
+      "description": "Only when the user asks for the matching comments, passages, or files themselves, judged by meaning rather than exact names: 'list the comments that discuss X', 'which files handle X?'. Also counts such files ('how many of the files are related to X?'). Reads every passage. Not for explaining code, and not for the places that contain an exact name or text (mention_listing).",
       "history": {
         "policy": "none"
       },
@@ -143,6 +161,35 @@
         "large_batches": 2
       }
     },
+    "refine_results": {
+      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those uses, which are in tests?', 'of these functions, which write files?'). Judges each listed item.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "filter_results",
+        "batch_tokens": 2500,
+        "item_characters": 400
+      }
+    },
+    "source_context": {
+      "description": "Show the exact source behind an earlier answer: the lines or passage it cited, word for word, with the text around it, and what it is doing ('show me that line', 'where exactly does it set that?', 'what is that comment about?', 'show me the context of that snippet'). Reads only the cited passages and their neighbours; no new search.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "show_source",
+        "context_sentences": 2,
+        "max_passages": 3,
+        "answer_tokens": 400
+      }
+    },
     "conversation_followup": {
       "description": "A follow-up about earlier answers, including ones several turns back: their details, or the terms and names they used (for example 'why is it called X?'), or the conversation itself (an opinion, a recap, 'what do you think so far?'), that the evidence already found for those turns can answer.",
       "system_prompt": "Answer the follow-up using the earlier answers and their evidence, and connect it to what was already discussed.",
@@ -154,7 +201,7 @@
       }
     },
     "rephrase_previous": {
-      "description": "Rephrase, simplify, shorten, expand, summarize, or translate the previous answer without needing new information.",
+      "description": "Rephrase, simplify, shorten, expand, summarize, or translate the previous answer, or change its length or format ('in two sentences', 'as a list', 'in simpler words'), without needing new information.",
       "system_prompt": "Rework the previous answer as the user asks. Keep its meaning and its source numbers; do not add claims that its evidence does not support.",
       "history": {
         "policy": "relevant"
@@ -195,9 +242,10 @@
     "Review the whole … file",
     "Write a function that …",
     "Why does … fail?",
-    "How many Python files are there?",
-    "Find every use of …",
-    "List every comment about …",
-    "Classify uses of …"
+    "Which libraries does each script use?",
+    "Show every line that uses …",
+    "Which files mention …?",
+    "Show every comment that discusses …",
+    "How many Python files are in this project?"
   ]
 }

@@ -129,8 +129,12 @@ class TestAnswerGuidance(unittest.TestCase):
         guided = _answer_prompt("What is memory?", evidence, "Be brief.")
 
         self.assertNotIn("Be brief.", plain)
-        self.assertTrue(guided.startswith(plain))
-        self.assertTrue(guided.endswith(" Be brief."))
+        self.assertIn("Do not repeat the source text or write a "
+                      "bibliography. Be brief.", guided)
+        # The question comes last, so its own length or format wins.
+        self.assertTrue(guided.endswith(
+            "including any length or format it requests:\nWhat is memory?"
+        ))
         self.assertEqual(
             _answer_prompt("What is memory?", evidence, None), plain
         )

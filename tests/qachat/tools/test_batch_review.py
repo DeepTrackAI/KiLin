@@ -164,5 +164,58 @@ class TestBatchReview(unittest.TestCase):
         run(ReviewSettings(), ToolRequest(question, question), built)
         self.assertEqual(asked, [])
 
+    def test_quick_reads_only_passages_that_mention_the_term(self) -> None:
+        paper = [
+            chunk("repo/smith2020.pdf", [f"Part {n}. " + "x" * 1000],
+                  start=n)
+            for n in range(1, 5)
+        ] + [chunk("repo/smith2020.pdf", ["We analysed it with XYZ 2."],
+                   start=9)]
+        plans, read = [], []
+
+        def model(system, prompt, tokens):
+            read.append(prompt)
+            return "- Uses XYZ 2 [5]"
+
+        built, _ = context(
+            paper,
+            router=lambda system, prompt, tokens: (
+                '{"terms": ["XYZ2"], "document": null}'
+            ),
+            model=model,
+            write=lambda system, prompt, tokens: "Yes, with XYZ 2 [5].",
+            rank=lambda text: _ranked(paper[0]),
+            confirm=lambda plan: plans.append(plan) or "quick",
+        )
+        question = "read Smith's paper: does it use xyz2 to analyse data?"
+        settings = ReviewSettings(confirmation="always")
+        result = run(settings, ToolRequest(question, question), built)
+        self.assertEqual(plans[0].quick_label, "Exact matches only")
+        self.assertEqual(plans[0].quick_note, "1 passage mentions “XYZ2”")
+        self.assertEqual(len(read), 1)  # One part: the matching passage.
+        self.assertIn("We analysed it with XYZ 2.", read[0])
+        self.assertNotIn("Part 1.", read[0])
+        self.assertIn("those that mention XYZ2", result.answer)
+
+    def test_quick_without_mentions_answers_without_the_model(self) -> None:
+        def model(system, prompt, tokens):
+            raise AssertionError("no model call expected")
+
+        built, _ = context(
+            self.paper,
+            router=lambda system, prompt, tokens: (
+                '{"terms": ["XYZ2"], "document": null}'
+            ),
+            model=model,
+            write=model,
+            rank=lambda text: _ranked(self.paper[0]),
+            confirm=lambda plan: "quick",
+        )
+        question = "read Smith's paper: does it use xyz2?"
+        settings = ReviewSettings(confirmation="always")
+        result = run(settings, ToolRequest(question, question), built)
+        self.assertIn("No passage of smith2020.pdf mentions “XYZ2”",
+                      result.answer)
+
 if __name__ == "__main__":
     unittest.main()

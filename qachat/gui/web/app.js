@@ -2372,33 +2372,43 @@ function showToolPlan(plan) {
   const summary = document.createElement("p");
   summary.className = "tool-plan-summary";
   summary.textContent = plan.summary;
-  const facts = document.createElement("ul");
+  const facts = document.createElement("p");
+  facts.className = "tool-plan-facts";
+  facts.textContent = [plan.scope, ...(plan.details || [])].join(" · ");
+  const duration = (seconds) => (seconds < 1 ? "instant" : `about ${formatDuration(seconds * 1000)}`);
   const calls = plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
-  for (const line of [plan.scope, `${calls}, about ${formatDuration(plan.estimated_seconds * 1000)}`, ...(plan.details || [])]) {
-    const item = document.createElement("li");
-    item.textContent = line;
-    facts.append(item);
-  }
   const actions = document.createElement("div");
   actions.className = "tool-plan-actions";
   const choices = [
-    [PLAN_CHOICE_CONTINUE, "primary", "Continue"],
-    [PLAN_CHOICE_QUICK, "secondary",
-      `Quick sample (${plan.quick_items}, about ${formatDuration(plan.quick_seconds * 1000)})`],
-    [PLAN_CHOICE_CANCEL, "secondary", "Cancel"],
+    [PLAN_CHOICE_CONTINUE, "primary", "Read everything", `${calls} · ${duration(plan.estimated_seconds)}`],
+    [PLAN_CHOICE_QUICK, "secondary", plan.quick_label || "Quick sample",
+      `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
   ];
-  for (const [choice, style, label] of choices) {
+  const choose = (choice) => {
+    card.remove();
+    queueAnswerStage(`choice:${choice}`, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting");
+    bridge.choosePlan(choice);
+  };
+  for (const [choice, style, label, note] of choices) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = style;
-    button.textContent = label;
-    button.addEventListener("click", () => {
-      card.remove();
-      queueAnswerStage(`choice:${choice}`, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting");
-      bridge.choosePlan(choice);
-    });
+    button.className = `tool-plan-option ${style}`;
+    const title = document.createElement("span");
+    title.className = "tool-plan-option-title";
+    title.textContent = label;
+    const detail = document.createElement("span");
+    detail.className = "tool-plan-option-note";
+    detail.textContent = note;
+    button.append(title, detail);
+    button.addEventListener("click", () => choose(choice));
     actions.append(button);
   }
+  const cancel = document.createElement("button");
+  cancel.type = "button";
+  cancel.className = "tool-plan-cancel";
+  cancel.textContent = "Cancel";
+  cancel.addEventListener("click", () => choose(PLAN_CHOICE_CANCEL));
+  actions.append(cancel);
   card.append(summary, facts, actions);
   pendingTurn.answer.append(card);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;

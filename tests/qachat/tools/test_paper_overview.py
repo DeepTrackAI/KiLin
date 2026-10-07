@@ -14,7 +14,7 @@ from tests.qachat.tools.helpers import chunk, context
 def _papers():
     return [
         chunk(f"repo/{name}.pdf", [f"{name} title.", "Abstract text."])
-        for name in ("tiunn26braph2", "yao25connecting", "patil25deep")
+        for name in ("park26xyz2", "lee25networks", "kim25deep")
     ]
 
 
@@ -43,16 +43,16 @@ class TestPaperOverview(unittest.TestCase):
         return run(OverviewSettings(), request, built), written
 
     def test_a_named_paper_is_summarized_from_its_own_passages(self) -> None:
-        result, written = self.summarize("a short summary of yao25")
-        self.assertEqual(result.summary["paper"], "repo/yao25connecting.pdf")
-        self.assertIn("Passages of yao25connecting.pdf", written[0])
-        self.assertNotIn("tiunn26braph2 title", written[0])
+        result, written = self.summarize("a short summary of lee25")
+        self.assertEqual(result.summary["paper"], "repo/lee25networks.pdf")
+        self.assertIn("Passages of lee25networks.pdf", written[0])
+        self.assertNotIn("park26xyz2 title", written[0])
         self.assertTrue(result.streamed)
 
     def test_another_paper_in_any_wording_is_asked(self) -> None:
         earlier = [
-            EarlierTurn(1, "turn Tiunn's paper into a briefing",
-                        (Path("repo/tiunn26braph2.pdf"),) * 5)
+            EarlierTurn(1, "turn Park's paper into a briefing",
+                        (Path("repo/park26xyz2.pdf"),) * 5)
         ]
         for question in (
             "i want another short summary for another paper",
@@ -69,15 +69,15 @@ class TestPaperOverview(unittest.TestCase):
                     router=lambda system, prompt, tokens: "DIFFERENT",
                 )
                 options, = asked
-                self.assertFalse(any("tiunn26braph2" in o for o in options))
+                self.assertFalse(any("park26xyz2" in o for o in options))
                 self.assertNotEqual(
-                    result.summary["paper"], "repo/tiunn26braph2.pdf"
+                    result.summary["paper"], "repo/park26xyz2.pdf"
                 )
 
     def test_the_same_paper_is_used_without_asking(self) -> None:
         earlier = [
-            EarlierTurn(1, "turn Tiunn's paper into a briefing",
-                        (Path("repo/tiunn26braph2.pdf"),) * 5)
+            EarlierTurn(1, "turn Park's paper into a briefing",
+                        (Path("repo/park26xyz2.pdf"),) * 5)
         ]
         asked = []
         result, _ = self.summarize(
@@ -87,7 +87,7 @@ class TestPaperOverview(unittest.TestCase):
             router=lambda system, prompt, tokens: "SAME",
         )
         self.assertEqual(asked, [])
-        self.assertEqual(result.summary["paper"], "repo/tiunn26braph2.pdf")
+        self.assertEqual(result.summary["paper"], "repo/park26xyz2.pdf")
 
     def test_cancel_asks_the_user_to_name_the_paper(self) -> None:
         result, written = self.summarize(

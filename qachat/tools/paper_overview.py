@@ -1,25 +1,64 @@
-"""Tool ``paper_overview``: a short summary of one paper, in the chat.
+"""Summarize one paper, chosen first, from its own passages.
 
 "Give me a short summary of the Smith paper" or "summarize another paper"
 is about one paper. A plain search mixes passages from several papers and
-cannot tell which one "another paper" means, so this tool first settles
-the paper with ``choose_document``: a paper the question names, the paper
-the earlier turns discussed, or, when that is unclear, the user's choice.
-A request for another paper, in any wording, leaves out the papers already
-discussed (the router model judges it).
+cannot tell which one "another paper" means, so this tool first settles the
+paper with ``choose_document``: a paper the question names, the paper the
+earlier turns discussed, or, when that is unclear, the user's choice. A
+request for another paper, in any wording, leaves out the papers already
+discussed; the router model judges the wording.
 
-It then answers from that paper only: its first passages (title,
-abstract, introduction) and its passages most relevant to the question,
-in reading order, within a token budget. The answer streams, and its
-passage citations are checked.
+The answer is written from that paper only: its opening passages (title,
+abstract, introduction) and its passages most relevant to the question, in
+reading order, within ``max_tokens`` estimated tokens. The answer streams,
+and citations to passages that do not exist are counted in the summary.
+Where nobody can be asked (notebooks, scripts), a guessed paper is named
+at the end of the answer.
+
+Passages that do not fit the token budget are left out, so a long paper is
+summarized from part of its text. The first passage is always included,
+even when it alone is larger than the budget.
+
+Key Features
+------------
+
+- **One paper, settled first**
+
+    ``choose_document`` names, infers, or asks for the paper.
+
+- **Opening and relevant passages**
+
+    The opening passages and the best-ranked passages of the paper, in
+    reading order, within a token budget.
 
 Module Structure
 ----------------
 
 - ``OverviewSettings``
+
+    Settings of ``paper_overview`` in a project type.
+
 - ``parse_settings``
-- ``run``
+
+    Validate ``paper_overview`` settings from a project type.
+
 - ``overview_prompt``
+
+    Prompts that summarize one paper from its passages.
+
+- ``run``
+
+    Summarize the paper the question means, asking when unclear.
+
+Examples
+--------
+``context`` is the ``ToolContext`` that QAChat passes to a tool:
+
+>>> from qachat.tools import ToolRequest
+>>> from qachat.tools.paper_overview import OverviewSettings, run
+>>> question = "give me a short summary of smith2020.pdf"
+>>> request = ToolRequest(question, question)
+>>> result = run(OverviewSettings(), request, context)
 
 """
 
@@ -48,7 +87,8 @@ __all__ = [
     "run",
 ]
 
-# The opening passages always included (title, abstract, introduction).
+# Opening passages offered first (title, abstract, introduction); like
+# the ranked ones, they are left out when they do not fit the budget.
 _OPENING_PASSAGES: Final[int] = 2
 
 
@@ -92,6 +132,7 @@ def parse_settings(data: dict, where: str) -> OverviewSettings:
     """
 
     reject_unknown(where, data, ("max_tokens", "answer_tokens"))
+
     defaults = OverviewSettings()
     return OverviewSettings(
         max_tokens=check_int(
@@ -137,15 +178,16 @@ def overview_prompt(
     listed = "\n\n".join(
         f"[{number}] {chunk.text.strip()}" for number, chunk in passages
     )
-    user = f"""Question: {question}
-
-Passages of {name}, in reading order:
+    user = f"""Passages of {name}, in reading order:
 
 {listed}
 
-Answer the question about this paper. Unless the question asks for more,
-keep it short: a few sentences on what the paper does, how, and what it
-finds.{f" {guidance}" if guidance else ""}"""
+Answer the question below about this paper. If it asks for a length or
+format (for example "in two sentences"), follow it exactly; otherwise keep
+it short: a few sentences on what the paper does, how, and what it finds.\
+{f" {guidance}" if guidance else ""}
+
+Question: {question}"""
     return system, user
 
 
@@ -187,6 +229,9 @@ def run(
     summary.update(
         {"paper": path.as_posix(), "reason": reason, "guessed": guessed}
     )
+
+    # The opening passages first, then the best-ranked ones, while they fit
+    # the budget; the first passage is always taken.
     paper = [chunk for chunk in context.chunks if chunk.path == path]
     order = {chunk.identifier: index for index, chunk in enumerate(paper)}
     ranked = [
@@ -209,6 +254,7 @@ def run(
         f"Read {len(chunks)} passages of {path.name}",
         evidence_count=len(chunks),
     )
+
     system, prompt = overview_prompt(
         request.question,
         path.name,
@@ -218,8 +264,10 @@ def run(
     answer = context.write(system, prompt, settings.answer_tokens)
     summary["invalid_citations"] = check_citations(answer, len(chunks))
     if guessed:
-        answer += f"\n\n*This is about {path.name}; name the paper if you "
-        answer += "meant another one.*"
+        answer += (
+            f"\n\n*This is about {path.name}; name the paper if you "
+            "meant another one.*"
+        )
     evidence = tuple(
         {
             "citation": number,

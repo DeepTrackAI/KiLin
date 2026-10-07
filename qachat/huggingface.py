@@ -297,6 +297,7 @@ def download_model(
     ------
     ValueError
         If ``model_id`` is not a non-empty string.
+        Also raised when ``progress_callback`` is not callable.
     RuntimeError
         If Hugging Face does not return the snapshot path as a string.
 
@@ -319,6 +320,7 @@ def download_model(
     if progress_callback is not None and not callable(progress_callback):
         raise ValueError("progress_callback must be callable or None.")
 
+    # Without a callback, the Hub client keeps its own progress display.
     options: dict[str, object] = {}
     if progress_callback is not None:
         options["tqdm_class"] = _progress_tqdm(progress_callback)
@@ -338,12 +340,35 @@ def download_model(
 def _progress_tqdm(
     callback: Callable[[int, int], None],
 ) -> type[_HubTqdm]:
-    """Build a silent Hub progress class that reports aggregate bytes."""
+    """Build a silent Hub progress class that reports aggregate bytes.
+
+    The Hub client creates several progress bars during a snapshot
+    download. Only the aggregate byte bar (described as "Reconstructing"
+    with unit ``B``) reports to ``callback``; the others stay silent.
+
+    Parameters
+    ----------
+    callback: collections.abc.Callable[[int, int], None]
+        Receives completed and expected byte counts.
+
+    Returns
+    -------
+    type[huggingface_hub.utils.tqdm]
+        Progress class to pass to ``snapshot_download`` as ``tqdm_class``.
+
+    Notes
+    -----
+    This depends on the Hub client's description of its aggregate bar. If
+    a later version renames it, downloads still work but report no bytes.
+
+    """
 
     class DownloadProgress(_HubTqdm):
         """Forward aggregate snapshot completion without terminal output."""
 
         def __init__(self, *args: object, **kwargs: object) -> None:
+            """Disable terminal output and report the starting counts."""
+
             self._qachat_reports_bytes = (
                 str(kwargs.get("desc", "")).startswith("Reconstructing")
                 and kwargs.get("unit") == "B"
@@ -353,17 +378,22 @@ def _progress_tqdm(
             self._qachat_report()
 
         def update(self, n: int | float | None = 1) -> bool | None:
+            """Advance the counter by ``n`` and report the new counts."""
+
             # tqdm skips its counter entirely while disabled. Keep the counter
             # ourselves so GUI downloads stay silent but still expose bytes.
             if self.disable:
                 self.n += n or 0
                 self._qachat_report()
                 return True
+
             result = super().update(n)
             self._qachat_report()
             return result
 
         def _qachat_report(self) -> None:
+            """Send completed and expected bytes for the aggregate bar."""
+
             if self._qachat_reports_bytes:
                 callback(int(self.n), int(self.total or 0))
 

@@ -63,6 +63,7 @@ from qachat.retrievals.document_reading import (
     read_document,
 )
 from qachat.tools.choose_document import choose_document
+from qachat.tools.term_filter import term_hits, term_label
 from qachat.tools.contract import (
     ToolContext,
     ToolRequest,
@@ -466,7 +467,18 @@ def run(
         for result in ranked
         if result.chunk.identifier in order
     ]
-    quick = sorted(_fit(relevant, texts, settings.part_tokens))
+    # Quick: the passages that mention the question's exact terms, when it
+    # names any; otherwise the most relevant passages that fit one part.
+    terms, hits = term_hits(request.question, context, passages)
+    quick_parts = (
+        [[hits[i] for i in part] for part in plan_parts(
+            [passages[i] for i in hits], settings.part_tokens
+        )]
+        if terms
+        else [sorted(_fit(relevant, texts, settings.part_tokens))]
+    )
+    quick = [index for part in quick_parts for index in part]
+    label, note = term_label(terms, hits) if terms else ("", "")
     plan = ToolPlan(
         tool="batch_review",
         summary=(
@@ -483,13 +495,20 @@ def run(
         ),
         quick_items=len(quick),
         quick_seconds=round(
-            _estimate([quick], texts, settings) + _answer_seconds(settings),
+            (
+                _estimate(quick_parts, texts, settings)
+                + _answer_seconds(settings)
+            )
+            if quick
+            else 0.0,
             1,
         ),
         details=(
             f"About {selection.estimated_tokens:,} tokens",
             f"Model: {context.model_id}",
         ),
+        quick_label=label,
+        quick_note=note,
     )
     choice, asked = confirm_plan(
         plan, settings.confirmation, settings.large_batches, context
@@ -513,7 +532,19 @@ def run(
             summary,
         )
 
-    runs = [quick] if choice == PLAN_CHOICE_QUICK else to_read
+    if choice == PLAN_CHOICE_QUICK and terms and not hits:
+        # No passage mentions the terms: answered without the model.
+        quoted = " or ".join(f"“{term}”" for term in terms)
+        context.done(f"No passage mentions {quoted}", evidence_count=0)
+        summary.update({"terms": list(terms), "term_hits": 0})
+        return ToolResult(
+            f"No passage of {name} mentions {quoted}; all {len(passages)} "
+            "passages were checked for these words. Ask again and choose "
+            "Continue to read it in full for related wording.",
+            (),
+            summary,
+        )
+    runs = quick_parts if choice == PLAN_CHOICE_QUICK else to_read
     started = perf_counter()
     notes = take_notes(
         request.question,
@@ -545,7 +576,11 @@ def run(
         answer += (
             f"\n\n*Read {len(read)} of {len(passages)} passages of {name}"
             + (
-                " (the most relevant ones)."
+                (
+                    f" (those that mention {' or '.join(terms)})."
+                    if terms
+                    else " (the most relevant ones)."
+                )
                 if choice == PLAN_CHOICE_QUICK
                 else " (the model-call limit was reached)."
             )

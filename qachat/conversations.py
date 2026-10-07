@@ -164,6 +164,10 @@ class ConversationStore:
         Normalize and persist a conversation display name.
     touch(conversation_id)
         Update and persist the last-modified timestamp of a conversation.
+    is_empty(conversation_id)
+        Return whether a conversation has no saved turns.
+    archive(conversation_id)
+        Move a conversation's file aside and select another conversation.
     state_path(conversation)
         Resolve the registered file path of a conversation.
 
@@ -438,13 +442,32 @@ class ConversationStore:
         return updated
 
     def is_empty(self, conversation_id: str) -> bool:
-        """Return whether a conversation has no saved turns."""
+        """Return whether a conversation has no saved turns.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation already discovered or created by this
+            store.
+
+        Returns
+        -------
+        bool
+            True when the saved resume state has no turns.
+
+        Raises
+        ------
+        ValueError
+            If the identifier, the saved file, or its turn list is invalid.
+
+        """
 
         item = self._require(conversation_id)
         record = conversation_state(_read_json(self.state_path(item)))
         turns = record.get("turns", [])
         if not isinstance(turns, list):
             raise ValueError("The saved conversation is invalid.")
+
         return not turns
 
     def archive(
@@ -453,8 +476,36 @@ class ConversationStore:
         """Remove a conversation from the catalog and retain its JSON.
 
         The record is moved into ``logs/traces/deleted`` so deletion remains
-        recoverable. When the last conversation is archived, a new empty
-        conversation is created automatically.
+        recoverable; an existing file of the same name there is kept, and
+        the moved file gets a ``_2``, ``_3``, ... suffix. When the last
+        conversation is archived, a new empty conversation is created
+        automatically. When the active conversation is archived, the most
+        recently updated remaining one becomes active.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation already discovered or created by this
+            store.
+
+        Returns
+        -------
+        tuple[ConversationInfo, pathlib.Path]
+            The active conversation afterwards, and the archived file path.
+
+        Raises
+        ------
+        ValueError
+            If the identifier is invalid or the deleted-conversations folder
+            is a symbolic link.
+        OSError
+            If the folder cannot be created or the file cannot be moved.
+
+        Notes
+        -----
+        The move and the registry update are not one transaction, and no
+        inter-process lock is taken.
+
         """
 
         item = self._require(conversation_id)
@@ -465,6 +516,7 @@ class ConversationStore:
             raise ValueError(
                 "The deleted-conversations folder must not be a link."
             )
+
         destination = deleted / source.name
         number = 2
         while destination.exists():
@@ -473,8 +525,10 @@ class ConversationStore:
         source.rename(destination)
         self._items.pop(conversation_id)
         self._paths.pop(conversation_id)
+
         if not self._items:
             return self.create(), destination
+
         if self._active_id == conversation_id:
             replacement = max(
                 self._items.values(),
@@ -484,6 +538,7 @@ class ConversationStore:
                 ),
             )
             self._active_id = replacement.conversation_id
+
         return self.active(), destination
 
     def state_path(self, conversation: ConversationInfo | str) -> Path:
