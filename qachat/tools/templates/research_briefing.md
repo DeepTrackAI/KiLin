@@ -1,8 +1,8 @@
 ---
 title: Research Briefing
-description: A one-page overview of one research paper for a broad scientific audience, in the Research Briefing format of Nature-family journals.
+description: Decision-oriented scientific briefing on one paper for researchers across disciplines.
 max_words: 750
-reference: Structure follows the Research Briefing format that Nature-family journals have used since 2022 (https://www.nature.com/articles/s41561-022-01011-3); word limits follow Nature's Research Briefing author template.
+reference: QAChat single-paper research briefing.
 ---
 
 # Headline (max 90 characters)
@@ -10,35 +10,41 @@ reference: Structure follows the Research Briefing format that Nature-family jou
 Different from the paper's title; highlights the key finding; short, catchy,
 and accessible to non-specialists.
 
-**This is a summary of:** {citation}
+**Source paper:** {citation}
 
-## The Bio (60–150 words)
+## Executive Takeaway (70-100 words)
 
-The story behind the project, using only what the paper states (motivation,
-hurdles and how they were solved). This section belongs to the authors:
-start with "Draft for the authors:", write in the third person, and never
-invent personal experiences.
+Identify the research question, principal result, and why the finding matters.
+State the level of evidence and the most important qualification.
 
-## The Reason (120–150 words)
+## Why This Study Matters (90-130 words)
 
-The broader scientific problem and why this gap matters to society or other
-fields, without jargon.
+Explain the prior knowledge, unresolved question, and specific contribution.
+Avoid unverified priority or novelty claims.
 
-## The Discovery (200–300 words)
+## Study Design in Brief (100-140 words)
 
-Two short paragraphs: what the authors did, then what they found and how it
-advances the field. Keep technical terms to a minimum and keep key numbers.
+Describe the system studied, the essential experimental or computational
+approach, and the critical controls or comparisons. Include sample size and
+conditions when reported, without turning this into a methods manual.
 
-## The Graphic (30–70 words)
+## Findings and Supporting Evidence (180-240 words)
 
-Name the one figure, from the paper's own figure captions, that best shows
-the main finding, then a standalone caption of about 50 words explaining its
-takeaway without mentioning panel letters.
+Present two or three central findings and the observations or analyses that
+support each. Include informative quantitative results and uncertainties.
+Separate measured outcomes from the authors' explanations.
 
-## The Future (70–100 words)
+## Strength of Evidence and Caveats (110-160 words)
 
-Where the research goes next: open questions and immediate applications the
-paper points to.
+Assess how directly the evidence supports the central claim. Note scope,
+uncertainty, alternative explanations, and stated limitations. Clearly
+separate authors' caveats from analytical observations; do not invent flaws.
+
+## Implications for Research (80-120 words)
+
+Explain what the study changes for the field and which questions it leaves
+open. Distinguish demonstrated conclusions from proposed applications or
+future research directions.
 
 ## Related Reviews and Literature (2–3 items)
 
