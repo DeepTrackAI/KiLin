@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1700" height="360" viewBox="0 0 1700 360" role="img" aria-labelledby="title desc">
+  <title id="title">QAChat tool execution flow</title>
+  <desc id="desc">Project type to selected intent to registered tool to ToolRequest and ToolContext to ToolResult.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L10,5 L0,10 z" fill="#555"/>
+    </marker>
+    <style>
+      .heading { font: 700 24px Arial, Helvetica, sans-serif; fill: #172033; }
+      .body { font: 17px Arial, Helvetica, sans-serif; fill: #303846; }
+      .arrow { stroke: #555; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .box { stroke-width: 2; }
+    </style>
+  </defs>
+
+  <rect width="1700" height="360" fill="#ffffff"/>
+
+  <rect class="box" x="30" y="70" width="270" height="220" rx="18" fill="#eef6ff" stroke="#80aee0"/>
+  <text class="heading" x="165" y="120" text-anchor="middle">Project type</text>
+  <text class="body" x="165" y="178" text-anchor="middle">
+    <tspan x="165">Defines the available</tspan>
+    <tspan x="165" dy="25">intents and overall</tspan>
+    <tspan x="165" dy="25">configuration.</tspan>
+  </text>
+
+  <path class="arrow" d="M310 180 H355"/>
+
+  <rect class="box" x="370" y="70" width="270" height="220" rx="18" fill="#eef9ef" stroke="#79ae7d"/>
+  <text class="heading" x="505" y="120" text-anchor="middle">Selected intent</text>
+  <text class="body" x="505" y="190" text-anchor="middle">
+    <tspan x="505">Identifies the operation</tspan>
+    <tspan x="505" dy="25">to perform.</tspan>
+  </text>
+
+  <path class="arrow" d="M650 180 H695"/>
+
+  <rect class="box" x="710" y="70" width="270" height="220" rx="18" fill="#f5f0ff" stroke="#9270c5"/>
+  <text class="heading" x="845" y="120" text-anchor="middle">Registered tool</text>
+  <text class="body" x="845" y="178" text-anchor="middle">
+    <tspan x="845">Implements the operation</tspan>
+    <tspan x="845" dy="25">in registered Python</tspan>
+    <tspan x="845" dy="25">code.</tspan>
+  </text>
+
+  <path class="arrow" d="M990 180 H1035"/>
+
+  <rect class="box" x="1050" y="50" width="330" height="260" rx="18" fill="#fff8e8" stroke="#d8ad50"/>
+  <text class="heading" x="1215" y="105" text-anchor="middle">
+    <tspan x="1215">ToolRequest +</tspan>
+    <tspan x="1215" dy="30">ToolContext</tspan>
+  </text>
+  <text class="body" x="1215" y="185" text-anchor="middle">
+    <tspan x="1215">Supplies request data,</tspan>
+    <tspan x="1215" dy="25">project context, and services</tspan>
+    <tspan x="1215" dy="25">such as the model, retrieval,</tspan>
+    <tspan x="1215" dy="25">and files.</tspan>
+  </text>
+
+  <path class="arrow" d="M1390 180 H1435"/>
+
+  <rect class="box" x="1450" y="70" width="220" height="220" rx="18" fill="#fff0f0" stroke="#d98282"/>
+  <text class="heading" x="1560" y="120" text-anchor="middle">ToolResult</text>
+  <text class="body" x="1560" y="178" text-anchor="middle">
+    <tspan x="1560">Returns content,</tspan>
+    <tspan x="1560" dy="25">files, and metadata</tspan>
+    <tspan x="1560" dy="25">to QAChat.</tspan>
+  </text>
+</svg>
