@@ -2,26 +2,26 @@
   "appearance": "system",
   "effort_levels": {
     "mlx": [
-      {"name": "Light", "model": "Qwen/Qwen3-0.6B-MLX-4bit"},
-      {"name": "Instant", "model": "Qwen/Qwen3-8B-MLX-4bit"},
-      {"name": "Lagom", "model": "Qwen/Qwen3-14B-MLX-4bit"},
+      {"name": "Instant", "model": "Qwen/Qwen3-1.7B-MLX-4bit"},
+      {"name": "Light", "model": "Qwen/Qwen3-4B-MLX-4bit"},
+      {"name": "Lagom", "model": "Qwen/Qwen3-8B-MLX-4bit"},
       {"name": "Thorough", "model": "Qwen/Qwen3-14B-MLX-4bit"},
       {"name": "Deep", "model": "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly"}
     ],
     "torch": [
-      {"name": "Light", "model": "Qwen/Qwen3-8B"},
-      {"name": "Instant", "model": "Qwen/Qwen3-8B"},
+      {"name": "Instant", "model": "Qwen/Qwen3-1.7B"},
+      {"name": "Light", "model": "Qwen/Qwen3-4B"},
       {"name": "Lagom", "model": "Qwen/Qwen3-8B"},
-      {"name": "Thorough", "model": "Qwen/Qwen3-8B"},
-      {"name": "Deep", "model": "Qwen/Qwen3-8B"}
+      {"name": "Thorough", "model": "Qwen/Qwen3-14B"},
+      {"name": "Deep", "model": "Qwen/Qwen3-32B"}
     ]
   },
-  "search_depth": [5, 5, 10, 10, 15],
-  "router_models": {"mlx": "Qwen/Qwen3-8B-MLX-4bit", "torch": "Qwen/Qwen3-8B"},
+  "search_depth": [5, 8, 10, 15, 20],
+  "router_models": {"mlx": "Qwen/Qwen3-4B-MLX-4bit", "torch": "Qwen/Qwen3-4B"},
   "embedding_models": {
     "mlx": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
     "torch": "Qwen/Qwen3-Embedding-0.6B"
   },
   "query_format": "qwen3",
-  "answers": {"temperature": 0.0, "thinking": false, "max_new_tokens": 2048}
+  "answers": {"temperature": 0.0, "thinking": true, "max_new_tokens": 2048}
 }
