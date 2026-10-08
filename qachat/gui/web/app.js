@@ -66,7 +66,7 @@ let draftLevels = [];
 let defaultEmbeddings = {};
 // Search depth: passages retrieved at each of five steps (project-wide).
 let savedDepth = null;
-let defaultDepth = [5, 5, 10, 10, 15];
+let defaultDepth = [5, 8, 10, 15, 20];
 let draftDepth = [];
 // Intent router model per backend: saved, built-in, and unsaved choice.
 let savedRouters = {};
