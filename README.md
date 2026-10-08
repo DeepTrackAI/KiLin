@@ -6,7 +6,7 @@ with citations to your files and customizable project types, intents, and tools.
 ## Setup
 
 After downloading the code, open a terminal in the QAChat folder and run
-one setup command for your operating system.
+the setup command for your operating system.
 
 macOS or Linux:
 
@@ -20,15 +20,19 @@ Windows (PowerShell):
 powershell -NoProfile -ExecutionPolicy Bypass -File setup/setup.ps1
 ```
 
-Open the desktop GUI:
+For notebooks, select the project's
+`.venv` Python kernel.
+
+## Graphical User Interface
+
+To open the desktop GUI, run the command:
 
 ```sh
 uv run qachat --gui
 ```
 
 The launcher installs missing GUI/backend dependencies; follow the setup
-panel to download the required models. For notebooks, select the project's
-`.venv` Python kernel.
+panel to download the required models.
 
 ## Tests and formatting
 
@@ -51,7 +55,7 @@ uv run --no-sync ruff check qachat setup tests
 To check formatting without changing files, add `--check` to the Black
 command. Format only the files you changed when preserving existing style.
 
-## Tutorial schedule
+## Tutorials
 
 Follow these notebooks in order, or open the one you need.
 
@@ -70,4 +74,4 @@ Follow these notebooks in order, or open the one you need.
 - [130 · Project chat](tutorials/130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
 - [140 · Execution traces](tutorials/140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
 - [150 · Project types](tutorials/150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [160 · Custom tools](tutorials/160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool, with real-model testing optional.
+- [160 · Custom tools](tutorials/160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
