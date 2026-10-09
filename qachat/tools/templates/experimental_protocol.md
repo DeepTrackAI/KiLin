@@ -1,7 +1,7 @@
 ---
 title: Experimental Protocol Extract
 description: Source-grounded extraction of an experimental procedure reported in one paper, not a validated standalone laboratory protocol.
-max_words: 1550
+max_words: 1500
 reference: QAChat single-paper methods extraction; verification required before use.
 ---
 
