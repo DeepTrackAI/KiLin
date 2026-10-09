@@ -713,7 +713,23 @@ def take_notes(
 def _fit(
     order: Sequence[int], texts: Sequence[str], part_tokens: int
 ) -> list[int]:
-    """The leading indices of ``order`` that fit one part."""
+    """The leading indices of ``order`` that fit one part.
+
+    Parameters
+    ----------
+    order: Sequence[int]
+        Order in which items should be examined.
+    texts: Sequence[str]
+        Text passages or fields to inspect.
+    part_tokens: int
+        Token budget for a single batch.
+
+    Returns
+    -------
+    list[int]
+        Leading item indexes that fit within one token budget.
+
+    """
 
     chosen: list[int] = []
     used = 0
@@ -731,7 +747,23 @@ def _estimate(
     texts: Sequence[str],
     settings: ReviewSettings,
 ) -> float:
-    """Approximate seconds to take notes on the parts."""
+    """Approximate seconds to take notes on the parts.
+
+    Parameters
+    ----------
+    parts: Sequence[Sequence[int]]
+        Parts of the document to process.
+    texts: Sequence[str]
+        Text passages or fields to inspect.
+    settings: ReviewSettings
+        Settings used to configure the operation.
+
+    Returns
+    -------
+    float
+        Estimated seconds needed to process the supplied parts.
+
+    """
 
     total = 0.0
     for part in parts:
@@ -744,6 +776,18 @@ def _estimate(
 
 
 def _answer_seconds(settings: ReviewSettings) -> float:
-    """Approximate seconds for the final answer."""
+    """Approximate seconds for the final answer.
+
+    Parameters
+    ----------
+    settings: ReviewSettings
+        Settings used to configure the operation.
+
+    Returns
+    -------
+    float
+        Estimated seconds for final answer generation.
+
+    """
 
     return 2.0 + settings.answer_tokens / 3 / _REPLY_TOKENS_PER_SECOND

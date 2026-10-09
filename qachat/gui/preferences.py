@@ -188,6 +188,25 @@ def validate_search_depth(value: object) -> list[int]:
 
 
 def _validate_answers(value: object) -> dict[str, object]:
+    """Validate the temperature, thinking mode, and token limit settings.
+
+    Parameters
+    ----------
+    value: object
+        Dictionary of answer-generation settings to validate.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated answer settings with normalized values.
+
+    Raises
+    ------
+    ValueError
+        If answer settings have invalid types or values.
+
+    """
+
     if not isinstance(value, dict):
         raise ValueError("must be an object.")
     temperature = value.get("temperature")
@@ -207,7 +226,40 @@ def _validate_answers(value: object) -> dict[str, object]:
 
 
 def _per_backend(check: Callable[[object], object]) -> Callable:
+    """Create a validator for per-backend settings dictionaries.
+
+    Parameters
+    ----------
+    check: Callable[[object], object]
+        Validation function for each backend-specific entry.
+
+    Returns
+    -------
+    Callable
+        Validator for dictionaries with one entry per backend.
+
+    """
+
     def checked(value: object) -> dict[str, object]:
+        """Validate each configured backend using the supplied validator.
+
+        Parameters
+        ----------
+        value: object
+            Value to validate or convert.
+
+        Returns
+        -------
+        dict[str, object]
+            Validated values indexed by the two supported backends.
+
+        Raises
+        ------
+        ValueError
+            If the mapping omits a backend or contains extra keys.
+
+        """
+
         if not isinstance(value, dict) or set(value) != set(_BACKENDS):
             raise ValueError("give exactly one value for mlx and torch.")
         return {backend: check(value[backend]) for backend in _BACKENDS}
@@ -216,7 +268,40 @@ def _per_backend(check: Callable[[object], object]) -> Callable:
 
 
 def _choice(options: tuple[str, ...]) -> Callable:
+    """Create a validator accepting exactly the given string choices.
+
+    Parameters
+    ----------
+    options: tuple[str, ...]
+        Permitted string choices for the returned validator.
+
+    Returns
+    -------
+    Callable
+        Validator that permits only the supplied choices.
+
+    """
+
     def checked(value: object) -> str:
+        """Return an allowed choice or reject an unsupported value.
+
+        Parameters
+        ----------
+        value: object
+            Value to validate or convert.
+
+        Returns
+        -------
+        str
+            The accepted choice as a string.
+
+        Raises
+        ------
+        ValueError
+            If the value is not one of the supported choices.
+
+        """
+
         if value not in options:
             raise ValueError(f"choose one of: {', '.join(options)}.")
         return str(value)
@@ -244,6 +329,15 @@ def defaults_file() -> Path:
 
 
 def _checks() -> dict[str, Callable[[object], object]]:
+    """Map each application preference name to its validator.
+
+    Returns
+    -------
+    dict[str, Callable[[object], object]]
+        Mapping of setting names to validation functions.
+
+    """
+
     return {
         "appearance": _choice(APPEARANCE_CHOICES),
         "effort_levels": _per_backend(validate_effort_levels),
@@ -353,7 +447,21 @@ def write_defaults(
 
 
 def _format(value: object, indent: int = 0) -> str:
-    """JSON with short lists and objects on one line, as the file is kept."""
+    """JSON with short lists and objects on one line, as the file is kept.
+
+    Parameters
+    ----------
+    value: object
+        Value to validate or convert.
+    indent: int, optional
+        Indentation depth for serialized output. Defaults to ``0``.
+
+    Returns
+    -------
+    str
+        Formatted JSON string for the preferences file.
+
+    """
 
     inline = json.dumps(value, ensure_ascii=False)
     nested = isinstance(value, dict) and any(
@@ -395,37 +503,89 @@ def default_effort_levels(backend: str) -> list[dict[str, object]]:
 
 
 def default_search_depth() -> list[int]:
-    """Return the default search-depth steps (a fresh copy)."""
+    """Return the default search-depth steps (a fresh copy).
+
+    Returns
+    -------
+    list[int]
+        the default search-depth steps (a fresh copy).
+
+    """
 
     return list(built_in_defaults()["search_depth"])
 
 
 def default_router_model(backend: str) -> str:
-    """Return the default intent router model for a backend."""
+    """Return the default intent router model for a backend.
+
+    Parameters
+    ----------
+    backend: str
+        Model backend for which settings are requested.
+
+    Returns
+    -------
+    str
+        the default intent router model for a backend.
+
+    """
 
     return str(built_in_defaults()["router_models"][backend])
 
 
 def default_embedding_model(backend: str) -> str:
-    """Return the default embedding model for a backend."""
+    """Return the default embedding model for a backend.
+
+    Parameters
+    ----------
+    backend: str
+        Model backend for which settings are requested.
+
+    Returns
+    -------
+    str
+        the default embedding model for a backend.
+
+    """
 
     return str(built_in_defaults()["embedding_models"][backend])
 
 
 def default_query_format() -> str:
-    """Return the default embedding query format."""
+    """Return the default embedding query format.
+
+    Returns
+    -------
+    str
+        the default embedding query format.
+
+    """
 
     return str(built_in_defaults()["query_format"])
 
 
 def default_appearance() -> str:
-    """Return the appearance: system, light, or dark."""
+    """Return the appearance: system, light, or dark.
+
+    Returns
+    -------
+    str
+        the appearance: system, light, or dark.
+
+    """
 
     return str(built_in_defaults()["appearance"])
 
 
 def default_answer_settings() -> dict[str, object]:
-    """Return the default temperature, thinking, and longest answer."""
+    """Return the default temperature, thinking, and longest answer.
+
+    Returns
+    -------
+    dict[str, object]
+        the default temperature, thinking, and longest answer.
+
+    """
 
     return dict(built_in_defaults()["answers"])
 

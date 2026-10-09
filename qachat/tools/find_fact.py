@@ -514,6 +514,26 @@ def _notes(
     Files without parts are left out. ``whole`` is False for a quick
     reading of only some passages, which changes the progress messages.
 
+    Parameters
+    ----------
+    question: str
+        Question or request to analyze.
+    parts_by_file: Sequence[tuple[Path, list[list[int]]]]
+        Selected text parts grouped by source file.
+    texts: Sequence[str]
+        Text passages or fields to inspect.
+    settings: FactSettings
+        Settings used to configure the operation.
+    context: ToolContext
+        Tool context for the current request.
+    whole: bool
+        Whether to use the complete source text.
+
+    Returns
+    -------
+    list[tuple[str, list[str]]]
+        Per-file summaries and their extracted note lines.
+
     """
 
     material: list[tuple[str, list[str]]] = []
@@ -552,6 +572,18 @@ def _cited(answer: str, count: int) -> set[int]:
 
     Citations may list numbers ([3, 5]) or ranges ([3-5]).
 
+    Parameters
+    ----------
+    answer: str
+        Answer text to inspect.
+    count: int
+        Maximum numbered passage to include.
+
+    Returns
+    -------
+    set[int]
+        the passage numbers cited in an answer, from 1 to ``count``.
+
     """
 
     numbers: set[int] = set()
@@ -577,6 +609,20 @@ def _estimate(
     """Return the approximate seconds of the notes calls and the answer.
 
     Replies are assumed to use half their token limit.
+
+    Parameters
+    ----------
+    parts: list[list[int]]
+        Parts of the document to process.
+    texts: list[str]
+        Text passages or fields to inspect.
+    settings: FactSettings
+        Settings used to configure the operation.
+
+    Returns
+    -------
+    float
+        the approximate seconds of the notes calls and the answer.
 
     """
 

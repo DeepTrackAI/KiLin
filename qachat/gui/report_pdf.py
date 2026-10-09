@@ -47,7 +47,19 @@ _APPLICATION: list[object] = []
 
 
 def _inline(text: str) -> str:
-    """Escape text and apply bold, italic, and code markup."""
+    """Escape text and apply bold, italic, and code markup.
+
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+
+    Returns
+    -------
+    str
+        HTML-escaped text with supported inline formatting.
+
+    """
 
     text = html.escape(text, quote=False)
     text = re.sub(r"`([^`]+)`", r"<code>\1</code>", text)
@@ -89,6 +101,10 @@ def markdown_to_html(
     ordered = False
 
     def flush() -> None:
+        """Append pending Markdown paragraphs and lists as HTML blocks.
+
+        """
+
         nonlocal ordered
         if paragraph:
             text = " ".join(paragraph)
@@ -243,6 +259,20 @@ def write_report_pdf(
 
 
 def _title(markdown: str) -> str:
+    """Extract the first Markdown level-one heading as the report title.
+
+    Parameters
+    ----------
+    markdown: str
+        Report Markdown whose top-level heading is inspected.
+
+    Returns
+    -------
+    str
+        First top-level heading, or ``"QAChat report"`` if absent.
+
+    """
+
     for line in markdown.splitlines():
         if line.startswith("# "):
             return line[2:].strip()

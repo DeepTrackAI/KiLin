@@ -145,6 +145,11 @@ def write_effort_levels(
     levels: list[dict[str, object]]
         Five levels to validate and save. A name may not contain ``|``.
 
+    Raises
+    ------
+    ValueError
+        If a level is invalid or a name contains the separator ``|``.
+
     """
 
     levels = validate_effort_levels(levels)
@@ -176,6 +181,11 @@ def read_search_depth(root: Path | None) -> list[int]:
     list[int]
         Five steps from ``profile.ini``; for a project that has not saved
         them yet, from an earlier version's files, otherwise the defaults.
+
+    Raises
+    ------
+    ValueError
+        If saved search-depth values cannot be parsed or validated.
 
     """
 
@@ -310,12 +320,37 @@ def save_project_settings(root: Path) -> bool:
 
 def _read(root: Path) -> ConfigParser:
     # No interpolation: model IDs and level names are taken literally.
+    """Read the project profile without interpolating its values.
+
+    Parameters
+    ----------
+    root: Path
+        Directory holding the project profile.
+
+    Returns
+    -------
+    ConfigParser
+        Parser loaded from the current project profile.
+
+    """
+
     profile = ConfigParser(interpolation=None)
     profile.read(Path(root) / PROFILE_FILE, encoding="utf-8")
     return profile
 
 
 def _write(root: Path, profile: ConfigParser) -> None:
+    """Write the project profile using an atomic replacement.
+
+    Parameters
+    ----------
+    root: Path
+        Project or workspace root directory.
+    profile: ConfigParser
+        Profile contents to write to disk.
+
+    """
+
     path = Path(root) / PROFILE_FILE
     temporary = path.with_suffix(".ini.tmp")
     with temporary.open("w", encoding="utf-8") as stream:
@@ -324,20 +359,63 @@ def _write(root: Path, profile: ConfigParser) -> None:
 
 
 def _read_json(path: Path) -> object:
+    """Read a JSON file, returning None if the file is absent.
+
+    Parameters
+    ----------
+    path: Path
+        Optional JSON file to parse.
+
+    Returns
+    -------
+    object
+        Parsed JSON object, or None when the file does not exist.
+
+    Raises
+    ------
+    json.JSONDecodeError
+        If the file does not contain valid JSON.
+
+    """
+
     if not path.is_file():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _legacy(root: Path) -> dict:
-    """The ``effort_levels.json`` an earlier version kept, if any."""
+    """The ``effort_levels.json`` an earlier version kept, if any.
+
+    Parameters
+    ----------
+    root: Path
+        Project or workspace root directory.
+
+    Returns
+    -------
+    dict
+        Earlier-version effort settings, or an empty mapping.
+
+    """
 
     saved = _read_json(root / _LEGACY_EFFORT_FILE)
     return saved if isinstance(saved, dict) else {}
 
 
 def _legacy_depth(saved: dict) -> list[int] | None:
-    """Customized per-level counts saved by even earlier versions."""
+    """Customized per-level counts saved by even earlier versions.
+
+    Parameters
+    ----------
+    saved: dict
+        Settings loaded from an earlier profile format.
+
+    Returns
+    -------
+    list[int] | None
+        Earlier per-level retrieval counts, or None when unavailable.
+
+    """
 
     for key, levels in saved.items():
         if key in ("router", "search_depth") or not isinstance(levels, list):

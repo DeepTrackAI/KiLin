@@ -274,6 +274,18 @@ def _batches(
 
     An item larger than ``tokens`` gets a batch of its own.
 
+    Parameters
+    ----------
+    items: Sequence[tuple[int, str]]
+        Numbered item texts to pack into batches.
+    tokens: int
+        Approximate token budget or limit.
+
+    Returns
+    -------
+    list[list[tuple[int, str]]]
+        Consecutive item batches within the approximate token budget.
+
     """
 
     batches: list[list[tuple[int, str]]] = []

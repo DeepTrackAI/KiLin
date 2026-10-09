@@ -606,6 +606,18 @@ def _topic(
     question; otherwise the topic is the question without its request
     words. The document phrase is kept only when the question contains it.
 
+    Parameters
+    ----------
+    question: str
+        Question or request to analyze.
+    context: ToolContext
+        Tool context providing router data and sources.
+
+    Returns
+    -------
+    tuple[str, str | None, bool]
+        the topic, any document phrase, and whether files are wanted.
+
     """
 
     system, prompt = topic_prompt(question)
@@ -633,6 +645,18 @@ def _batches(sentences: list[Sentence], tokens: int) -> list[list[Sentence]]:
 
     A sentence larger than ``tokens`` gets a batch of its own.
 
+    Parameters
+    ----------
+    sentences: list[Sentence]
+        Sentences to arrange or render.
+    tokens: int
+        Approximate token budget or limit.
+
+    Returns
+    -------
+    list[list[Sentence]]
+        Consecutive sentence batches respecting the token budget.
+
     """
 
     batches: list[list[Sentence]] = []
@@ -649,7 +673,19 @@ def _batches(sentences: list[Sentence], tokens: int) -> list[list[Sentence]]:
 
 
 def _estimate(batches: list[list[Sentence]]) -> float:
-    """Return the approximate seconds to judge the batches."""
+    """Return the approximate seconds to judge the batches.
+
+    Parameters
+    ----------
+    batches: list[list[Sentence]]
+        Consecutive sentence groups to evaluate.
+
+    Returns
+    -------
+    float
+        the approximate seconds to judge the batches.
+
+    """
 
     total = 0.0
     for batch in batches:
@@ -672,6 +708,22 @@ def _judge(
 
     A failed batch is recorded in the trace and skipped. Numbers in a reply
     that are not in the batch are ignored.
+
+    Parameters
+    ----------
+    topic: str
+        Topic against which sentence batches are classified.
+    batches: Sequence[Sequence[Sentence]]
+        Consecutive sentence groups to evaluate.
+    question: str
+        Question or request to analyze.
+    context: ToolContext
+        Tool context for the current request.
+
+    Returns
+    -------
+    list[Sentence]
+        the sentences the model judges to be about the topic.
 
     """
 
@@ -709,6 +761,11 @@ def _evidence(
     found: Sequence[Sentence],
 ) -> tuple[dict[str, int], list[dict[str, object]]]:
     """Number the passages of the sentences, in order of first use.
+
+    Parameters
+    ----------
+    found: Sequence[Sentence]
+        Sentences selected as evidence.
 
     Returns
     -------

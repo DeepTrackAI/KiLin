@@ -367,7 +367,16 @@ def _progress_tqdm(
         """Forward aggregate snapshot completion without terminal output."""
 
         def __init__(self, *args: object, **kwargs: object) -> None:
-            """Disable terminal output and report the starting counts."""
+            """Disable terminal output and report the starting counts.
+
+            Parameters
+            ----------
+            args: object
+                Additional positional arguments forwarded to the sink.
+            kwargs: object
+                Additional keyword arguments forwarded to the sink.
+
+            """
 
             self._qachat_reports_bytes = (
                 str(kwargs.get("desc", "")).startswith("Reconstructing")
@@ -378,7 +387,19 @@ def _progress_tqdm(
             self._qachat_report()
 
         def update(self, n: int | float | None = 1) -> bool | None:
-            """Advance the counter by ``n`` and report the new counts."""
+            """Advance the counter by ``n`` and report the new counts.
+
+            Parameters
+            ----------
+            n: int | float | None, optional
+                Number of progress steps completed. Defaults to ``1``.
+
+            Returns
+            -------
+            bool | None
+                The progress-bar update status.
+
+            """
 
             # tqdm skips its counter entirely while disabled. Keep the counter
             # ourselves so GUI downloads stay silent but still expose bytes.

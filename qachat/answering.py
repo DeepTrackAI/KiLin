@@ -219,15 +219,44 @@ class _Chat(Protocol):
     temperature: float
 
     def restore_history(self, messages: list[dict[str, str]]) -> None:
-        """Replace the in-memory conversation with ``messages``."""
+        """Replace the in-memory conversation with ``messages``.
+
+        Parameters
+        ----------
+        messages: list[dict[str, str]]
+            Conversation messages replacing the current history.
+
+        """
 
     def configure_generation(self, settings: dict[str, object]) -> None:
-        """Update generation settings such as thinking and temperature."""
+        """Update generation settings such as thinking and temperature.
+
+        Parameters
+        ----------
+        settings: dict[str, object]
+            Settings used to configure the operation.
+
+        """
 
     def reply(
         self, message: str, *, max_new_tokens: int | None = None
     ) -> str:
-        """Generate, return, and retain one assistant reply."""
+        """Generate, return, and retain one assistant reply.
+
+        Parameters
+        ----------
+        message: str
+            Message passed to the current session.
+        max_new_tokens: int | None, optional
+            Maximum generated tokens, or None for the default. Defaults to
+            ``None``.
+
+        Returns
+        -------
+        str
+            Assistant reply generated for the supplied user message.
+
+        """
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,13 +321,37 @@ def strip_thinking(text: str) -> str:
 
 
 def _without_citations(text: str) -> str:
-    """Remove citation groups such as ``[1]`` or ``[2, 3]``."""
+    """Remove citation groups such as ``[1]`` or ``[2, 3]``.
+
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+
+    Returns
+    -------
+    str
+        Text with numbered citation groups removed.
+
+    """
 
     return _CITATION.sub("", text)
 
 
 def _neutral_citations(text: str) -> str:
-    """Replace citation groups with ``HISTORY_CITATION_MARKER``."""
+    """Replace citation groups with ``HISTORY_CITATION_MARKER``.
+
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+
+    Returns
+    -------
+    str
+        Text with citation groups replaced by the history marker.
+
+    """
 
     return _CITATION.sub(f" {HISTORY_CITATION_MARKER}", text)
 
@@ -356,7 +409,19 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
 
 
 def _representation_line(representation: dict[str, object]) -> str:
-    """Write a turn representation as one line of the router prompt."""
+    """Write a turn representation as one line of the router prompt.
+
+    Parameters
+    ----------
+    representation: dict[str, object]
+        Stored summary of a conversation turn.
+
+    Returns
+    -------
+    str
+        Single-line router prompt text for this conversation turn.
+
+    """
 
     sources = ", ".join(representation.get("sources") or []) or "none"
     return (
@@ -565,7 +630,19 @@ def _parse_route(
 
 
 def _fields(decision: RouteDecision) -> dict[str, object]:
-    """Return the fields a checked decision copies from the router's."""
+    """Return the fields a checked decision copies from the router's.
+
+    Parameters
+    ----------
+    decision: RouteDecision
+        Router decision whose fields are extracted.
+
+    Returns
+    -------
+    dict[str, object]
+        the fields a checked decision copies from the router's.
+
+    """
 
     return {
         "intent": decision.intent,
@@ -763,6 +840,16 @@ def _content_terms(text: str) -> set[str]:
     Lowercase words of three or more characters that are not common words,
     plus capitalized acronyms and short names, such as ``MRI``.
 
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+
+    Returns
+    -------
+    set[str]
+        Distinctive normalized content words.
+
     """
 
     words = {
@@ -776,7 +863,19 @@ def _content_terms(text: str) -> set[str]:
 
 
 def _representation_text(representation: dict[str, object]) -> str:
-    """Join a representation's question, sources, and summary as words."""
+    """Join a representation's question, sources, and summary as words.
+
+    Parameters
+    ----------
+    representation: dict[str, object]
+        Stored summary of a conversation turn.
+
+    Returns
+    -------
+    str
+        Question, source names, and summary joined for term matching.
+
+    """
 
     sources = " ".join(
         re.sub(r"[._:/]", " ", str(source))
@@ -798,6 +897,18 @@ def _ignores_conversation(turn: object, project: ProjectType) -> bool:
     related turns. A turn with an unknown intent does not ignore the
     conversation.
 
+    Parameters
+    ----------
+    turn: object
+        Conversation turn to inspect.
+    project: ProjectType
+        Current project and its associated metadata.
+
+    Returns
+    -------
+    bool
+        True if the turn neither uses history nor retrieves evidence.
+
     """
 
     parameters = getattr(turn, "parameters", None) or {}
@@ -815,6 +926,18 @@ def _stored_representation(turn: object, number: int) -> dict[str, object]:
 
     The saved representation keeps its content but takes the turn's
     current number.
+
+    Parameters
+    ----------
+    turn: object
+        Conversation turn to inspect.
+    number: int
+        Current number assigned to the conversation turn.
+
+    Returns
+    -------
+    dict[str, object]
+        Saved or reconstructed representation with the current turn number.
 
     """
 

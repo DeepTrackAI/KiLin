@@ -173,7 +173,14 @@ class ChatBridge(QObject):
     appearanceChanged = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
-        """Keep only the currently opened project path on the UI side."""
+        """Keep only the currently opened project path on the UI side.
+
+        Parameters
+        ----------
+        parent: QObject | None, optional
+            Optional parent Qt widget. Defaults to ``None``.
+
+        """
 
         super().__init__(parent)
         self.project_root: Path | None = None
@@ -230,6 +237,13 @@ class ChatBridge(QObject):
         ``purpose`` is ``"add"`` (any number of files) or a path to replace
         (one file); folder and purpose are echoed back with the paths.
 
+        Parameters
+        ----------
+        folder: str
+            Name of the workspace folder whose files are requested.
+        purpose: str
+            Reason for choosing the files, supplied to the page.
+
         """
 
         if purpose == "add":
@@ -242,13 +256,29 @@ class ChatBridge(QObject):
 
     @Slot(str, list)
     def folderDropped(self, folder: str, paths: list) -> None:
-        """Offer files dropped on ``outputs`` or ``templates`` to the page."""
+        """Offer files dropped on ``outputs`` or ``templates`` to the page.
+
+        Parameters
+        ----------
+        folder: str
+            Target workspace folder for the incoming files.
+        paths: list
+            Local file paths that were dropped on the folder.
+
+        """
 
         self.folderFilesSelected.emit(folder, "add", paths)
 
     @Slot(str)
     def editFolder(self, request_json: str) -> None:
-        """Add, replace, or delete files in outputs or templates."""
+        """Add, replace, or delete files in outputs or templates.
+
+        Parameters
+        ----------
+        request_json: str
+            JSON command specifying the folder and requested edit.
+
+        """
 
         request = json.loads(request_json)
         self.commandRequested.emit({**request, "action": "edit_folder"})
@@ -600,7 +630,14 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def deleteConversation(self, conversation_id: str) -> None:
-        """Archive a conversation and remove it from the visible catalog."""
+        """Archive a conversation and remove it from the visible catalog.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of the saved conversation.
+
+        """
 
         self.commandRequested.emit(
             {
@@ -611,25 +648,55 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def applyModelSettings(self, settings_json: str) -> None:
+        """Send the JSON-decoded model settings to the backend.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON object containing the selected model settings.
+
+        """
+
         self.commandRequested.emit(
             {"action": "apply_models", "settings": json.loads(settings_json)}
         )
 
     @Slot(str)
     def setAppearance(self, mode: str) -> None:
-        """Report the page's color mode: system, light, or dark."""
+        """Report the page's color mode: system, light, or dark.
+
+        Parameters
+        ----------
+        mode: str
+            Appearance or operating mode selected by the page.
+
+        """
 
         self.appearanceChanged.emit(mode)
 
     @Slot(str)
     def setSourceDropTarget(self, bounds_json: str) -> None:
-        """Align the native drop region with the visible sources tree."""
+        """Align the native drop region with the visible sources tree.
+
+        Parameters
+        ----------
+        bounds_json: str
+            JSON bounds supplied by the web page.
+
+        """
 
         self.sourceDropTargetChanged.emit(bounds_json)
 
     @Slot(str)
     def addProjectSources(self, sources_json: str) -> None:
-        """Import sources after the page's rebuild confirmation."""
+        """Import sources after the page's rebuild confirmation.
+
+        Parameters
+        ----------
+        sources_json: str
+            JSON-encoded source paths selected in the page.
+
+        """
 
         self.commandRequested.emit(
             {
@@ -640,7 +707,14 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def removeProjectSources(self, paths_json: str) -> None:
-        """Delete confirmed workspace source copies and reindex."""
+        """Delete confirmed workspace source copies and reindex.
+
+        Parameters
+        ----------
+        paths_json: str
+            JSON-encoded paths selected in the page.
+
+        """
 
         self.commandRequested.emit(
             {
@@ -651,13 +725,27 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def renameProject(self, name: str) -> None:
-        """Ask the backend to rename the active project directory."""
+        """Ask the backend to rename the active project directory.
+
+        Parameters
+        ----------
+        name: str
+            Filename or project name to use.
+
+        """
 
         self.commandRequested.emit({"action": "rename_project", "name": name})
 
     @Slot(str)
     def openWorkspaceFile(self, relative_path: str) -> None:
-        """Open one validated project file with its desktop application."""
+        """Open one validated project file with its desktop application.
+
+        Parameters
+        ----------
+        relative_path: str
+            Path relative to the active workspace.
+
+        """
 
         if self.project_root is None:
             return
@@ -701,7 +789,14 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def listSavedProjects(self, workspace: str) -> None:
-        """List all valid saved projects without loading their models."""
+        """List all valid saved projects without loading their models.
+
+        Parameters
+        ----------
+        workspace: str
+            Workspace containing saved projects.
+
+        """
 
         self.commandRequested.emit(
             {"action": "saved_projects", "workspace": workspace}
@@ -726,7 +821,16 @@ class ChatBridge(QObject):
         directory: str,
         conversation_id: str,
     ) -> None:
-        """Reopen a project at the exact conversation active before a stop."""
+        """Reopen a project at the exact conversation active before a stop.
+
+        Parameters
+        ----------
+        directory: str
+            Directory in which to find or create the file.
+        conversation_id: str
+            Identifier of the saved conversation.
+
+        """
 
         self.commandRequested.emit(
             {
@@ -769,6 +873,15 @@ class SourceDropView(QWebEngineView):
     dragChanged = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        """Enable native file drops and initialize the drop-target regions.
+
+        Parameters
+        ----------
+        parent: QWidget | None, optional
+            Optional parent Qt widget. Defaults to ``None``.
+
+        """
+
         super().__init__(parent)
         self.setAcceptDrops(True)
         self.drop_target = QRectF()
@@ -776,9 +889,32 @@ class SourceDropView(QWebEngineView):
 
     @Slot(str)
     def set_drop_target(self, bounds_json: str) -> None:
+        """Update the native drop regions from page-provided JSON bounds.
+
+        Parameters
+        ----------
+        bounds_json: str
+            JSON bounds supplied by the web page.
+
+        """
+
         bounds = json.loads(bounds_json)
 
         def rect(item: dict) -> QRectF:
+            """Convert an object with x, y, width, and height into a rectangle.
+
+            Parameters
+            ----------
+            item: dict
+                Dictionary containing the rectangle coordinates.
+
+            Returns
+            -------
+            QRectF
+                Rectangle specified by the supplied page bounds.
+
+            """
+
             return QRectF(
                 *[
                     float(item.get(key, 0))
@@ -794,7 +930,19 @@ class SourceDropView(QWebEngineView):
         ]
 
     def _target(self, event) -> str | None:
-        """``"sources"``, a folder name, or None at the event position."""
+        """``"sources"``, a folder name, or None at the event position.
+
+        Parameters
+        ----------
+        event: object
+            Qt drag, drop, or window event.
+
+        Returns
+        -------
+        str | None
+            Target folder name, ``"sources"``, or None.
+
+        """
 
         position = event.position()
         if self.drop_target.contains(position):
@@ -805,12 +953,35 @@ class SourceDropView(QWebEngineView):
         return None
 
     def _local_drag(self, event) -> bool:
+        """Check whether the drag contains only local file URLs.
+
+        Parameters
+        ----------
+        event: object
+            Qt drag, drop, or window event.
+
+        Returns
+        -------
+        bool
+            True if every dragged URL refers to a local file.
+
+        """
+
         urls = event.mimeData().urls()
         return bool(urls) and all(url.isLocalFile() for url in urls)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         # Drags inside the page (a workspace file onto sources) are the
         # page's own.
+        """Accept a local file drag when the page has an active drop zone.
+
+        Parameters
+        ----------
+        event: QDragEnterEvent
+            Qt drag, drop, or window event.
+
+        """
+
         if not event.mimeData().hasUrls():
             super().dragEnterEvent(event)
             return
@@ -825,6 +996,15 @@ class SourceDropView(QWebEngineView):
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        """Accept a moving local file drag only above a drop target.
+
+        Parameters
+        ----------
+        event: QDragMoveEvent
+            Qt drag, drop, or window event.
+
+        """
+
         if not event.mimeData().hasUrls():
             super().dragMoveEvent(event)
             return
@@ -834,10 +1014,28 @@ class SourceDropView(QWebEngineView):
             event.ignore()
 
     def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
+        """Clear the drag indicator when a dragged item leaves the view.
+
+        Parameters
+        ----------
+        event: QDragLeaveEvent
+            Qt drag, drop, or window event.
+
+        """
+
         self.dragChanged.emit(False)
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
+        """Dispatch local files to the matching drop-target signal.
+
+        Parameters
+        ----------
+        event: QDropEvent
+            Qt drag, drop, or window event.
+
+        """
+
         self.dragChanged.emit(False)
         if not event.mimeData().hasUrls():
             super().dropEvent(event)
@@ -933,6 +1131,11 @@ class ChatWindow(QMainWindow):
         """Remember the page's color mode and refresh the app icon.
 
         The choice is saved in the app-wide preferences.
+
+        Parameters
+        ----------
+        mode: str
+            Appearance or operating mode selected by the page.
 
         """
 

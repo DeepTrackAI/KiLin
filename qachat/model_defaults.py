@@ -56,7 +56,6 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypeAlias
 
-
 __all__ = [
     "MODEL_ROLE_CHAT",
     "MODEL_ROLE_EMBEDDING",

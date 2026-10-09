@@ -334,7 +334,14 @@ class ReportCheck:
 
     @property
     def valid(self) -> bool:
-        """Whether the report follows the template (no problems found)."""
+        """Whether the report follows the template (no problems found).
+
+        Returns
+        -------
+        bool
+            True when the report follows the template (no problems found).
+
+        """
 
         return not self.problems()
 

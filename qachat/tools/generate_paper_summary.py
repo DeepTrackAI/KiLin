@@ -481,7 +481,21 @@ def choose_paper(
     def from_outputs(
         name: Path, reason: str
     ) -> tuple[Path, tuple[Chunk, ...], str, bool]:
-        """Load an ``outputs/`` file; it is never a guess."""
+        """Load an ``outputs/`` file; it is never a guess.
+
+        Parameters
+        ----------
+        name: Path
+            Filename or project name to use.
+        reason: str
+            Description of how the output file was selected.
+
+        Returns
+        -------
+        tuple[Path, tuple[Chunk, ...], str, bool]
+            Named output file, selected chunks, selection reason, and flag.
+
+        """
 
         document = load_output(root, name)
         return document.path, document.passages, reason, False

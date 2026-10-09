@@ -324,6 +324,16 @@ def _words(text: str) -> set[str]:
 
     Dropping the "s" lets "epoch" match "epochs"; three-letter words keep it.
 
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+
+    Returns
+    -------
+    set[str]
+        the words of a text, lower-case, without a final "s".
+
     """
 
     return {
@@ -338,6 +348,18 @@ def _score(texts: Sequence[str], clue: set[str]) -> list[float]:
     A word in every text says little about which one is meant, so each
     word counts ``log((len(texts) + 1) / k)``, where ``k`` is the number of
     texts that contain it.
+
+    Parameters
+    ----------
+    texts: Sequence[str]
+        Text passages or fields to inspect.
+    clue: set[str]
+        Words used to locate the requested passage.
+
+    Returns
+    -------
+    list[float]
+        Relevance scores corresponding to the input texts.
 
     """
 
@@ -354,6 +376,20 @@ def _pick(turn: EarlierTurn, clue: set[str], limit: int) -> list[int]:
 
     All items are kept when there are at most ``limit``; otherwise the
     ``limit`` best-scored ones, ties going to the earlier item.
+
+    Parameters
+    ----------
+    turn: EarlierTurn
+        Conversation turn to inspect.
+    clue: set[str]
+        Words used to locate the requested passage.
+    limit: int
+        Maximum number of items or characters to include.
+
+    Returns
+    -------
+    list[int]
+        the evidence items the follow-up means, in their order.
 
     """
 
@@ -382,6 +418,26 @@ def _window(
     and after. The focus is the cited sentence that best matches the
     clue; None when no sentence matches, and then the whole passage is
     shown.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        Indexed source chunks available for selection.
+    path: Path
+        Path to the target file or directory.
+    line: int
+        Source line around which to locate a passage.
+    text: str
+        Text to analyze or transform.
+    clue: set[str]
+        Words used to locate the requested passage.
+    around: int
+        Number of neighboring sentences to include.
+
+    Returns
+    -------
+    tuple[list[Sentence], int | None]
+        the cited passage's sentences in context, and the focus.
 
     """
 
@@ -435,7 +491,25 @@ def _window(
 def _join(
     sentences: Sequence[Sentence], focus: int | None, before: str, after: str
 ) -> str:
-    """Join sentences, marking the focus sentence with the given marks."""
+    """Join sentences, marking the focus sentence with the given marks.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        Sentences to arrange or render.
+    focus: int | None
+        Index of the sentence to emphasize, if any.
+    before: str
+        Prefix used to mark the selected sentence.
+    after: str
+        Suffix used to mark the selected sentence.
+
+    Returns
+    -------
+    str
+        Joined sentence text with the selected sentence delimited.
+
+    """
 
     return " ".join(
         f"{before}{sentence.text}{after}" if index == focus else sentence.text

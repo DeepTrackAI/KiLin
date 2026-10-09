@@ -378,7 +378,14 @@ class Mention:
 
     @property
     def context_end(self) -> int:
-        """Last line of the surrounding context."""
+        """Last line of the surrounding context.
+
+        Returns
+        -------
+        int
+            Last line number covered by the stored context text.
+
+        """
 
         return self.context_start + self.context.count("\n")
 
@@ -436,7 +443,14 @@ class MentionScan:
     whole_words: bool
 
     def counts(self) -> dict[Path, int]:
-        """Return mentions per file, in index order, files with any."""
+        """Return mentions per file, in index order, files with any.
+
+        Returns
+        -------
+        dict[Path, int]
+            mentions per file, in index order, files with any.
+
+        """
 
         totals: dict[Path, int] = {}
         for mention in self.mentions:
@@ -445,7 +459,14 @@ class MentionScan:
         return totals
 
     def term_counts(self) -> dict[str, int]:
-        """Return mentions per term, in the order the terms were given."""
+        """Return mentions per term, in the order the terms were given.
+
+        Returns
+        -------
+        dict[str, int]
+            mentions per term, in the order the terms were given.
+
+        """
 
         totals = {term: 0 for term in self.terms}
         for mention in self.mentions:
@@ -1270,13 +1291,39 @@ def _ask_terms(context: ToolContext, text: str, categories: bool) -> str:
 
 
 def _names_file(term: str, path: Path) -> bool:
-    """Whether a term is the file's name, with or without its suffix."""
+    """Whether a term is the file's name, with or without its suffix.
+
+    Parameters
+    ----------
+    term: str
+        Term to compare with the filename and stem.
+    path: Path
+        Path to the target file or directory.
+
+    Returns
+    -------
+    bool
+        True when a term is the file's name, with or without its suffix.
+
+    """
 
     return term.casefold() in (path.name.casefold(), path.stem.casefold())
 
 
 def _reply_json(reply: str) -> dict:
-    """Return the JSON object in a model reply, or {} when there is none."""
+    """Return the JSON object in a model reply, or {} when there is none.
+
+    Parameters
+    ----------
+    reply: str
+        Model reply to parse.
+
+    Returns
+    -------
+    dict
+        the JSON object in a model reply, or {} when there is none.
+
+    """
 
     match = re.search(r"\{.*\}", reply, flags=re.S)
     try:
@@ -1409,6 +1456,18 @@ def _units(chunks: Iterable[Chunk]) -> list[_Unit]:
 
 
 def _position(item: tuple[int, int, Mention]) -> tuple[int, int]:
-    """Sort key: start in the unit, then term order (never the mention)."""
+    """Sort key: start in the unit, then term order (never the mention).
+
+    Parameters
+    ----------
+    item: tuple[int, int, Mention]
+        Item to inspect or convert.
+
+    Returns
+    -------
+    tuple[int, int]
+        Start offset and term-order index for sorting mentions.
+
+    """
 
     return item[0], item[1]

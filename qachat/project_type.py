@@ -373,6 +373,20 @@ def _text(kind: str, data: dict, field: str, required: bool = True) -> str:
 def _texts(kind: str, data: dict, field: str) -> tuple[str, ...]:
     """Return a list of nonblank texts, stripped; missing reads as empty.
 
+    Parameters
+    ----------
+    kind: str
+        Project or configuration kind to validate.
+    data: dict
+        Structured input to inspect or forward.
+    field: str
+        Field name in the JSON configuration.
+
+    Returns
+    -------
+    tuple[str, ...]
+        a list of nonblank texts, stripped; missing reads as empty.
+
     Raises
     ------
     ValueError
@@ -393,6 +407,20 @@ def _texts(kind: str, data: dict, field: str) -> tuple[str, ...]:
 
 def _object(kind: str, data: dict, field: str) -> dict:
     """Return a nested JSON object; missing reads as empty.
+
+    Parameters
+    ----------
+    kind: str
+        Project or configuration kind to validate.
+    data: dict
+        Structured input to inspect or forward.
+    field: str
+        Field name in the JSON configuration.
+
+    Returns
+    -------
+    dict
+        a nested JSON object; missing reads as empty.
 
     Raises
     ------
@@ -642,6 +670,16 @@ def _unique_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
 
     ``json`` keeps only the last of duplicate keys, which would silently
     drop an intent or setting.
+
+    Parameters
+    ----------
+    pairs: list[tuple[str, object]]
+        Object key/value pairs from the JSON decoder.
+
+    Returns
+    -------
+    dict[str, object]
+        Dictionary constructed from the unique JSON key/value pairs.
 
     Raises
     ------

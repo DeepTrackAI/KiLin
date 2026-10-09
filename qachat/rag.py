@@ -2173,6 +2173,11 @@ class RAGSession:
             Tuple (chunks, indexes, index_status, source_changes), where status
             is reused or rebuilt.
 
+        Raises
+        ------
+        ValueError
+            If saved embedding vectors fail integrity validation.
+
         Notes
         -----
         A selected-source manifest and stored configuration metadata control
@@ -2559,7 +2564,14 @@ class RAGSession:
         """
 
         def report(message: str) -> None:
-            """Pass a progress message to the status callback, if any."""
+            """Pass a progress message to the status callback, if any.
+
+            Parameters
+            ----------
+            message: str
+                Message passed to the current session.
+
+            """
 
             if status_callback is not None:
                 status_callback(message)
@@ -2850,7 +2862,19 @@ class RAGSession:
         trace = getattr(self, "trace", NullTraceLogger())
 
         def ask(chat: object) -> Callable[[str, str, int], str]:
-            """Return ``ask(system, prompt, tokens)`` for one chat session."""
+            """Return ``ask(system, prompt, tokens)`` for one chat session.
+
+            Parameters
+            ----------
+            chat: object
+                Chat session to be wrapped in a generation callback.
+
+            Returns
+            -------
+            Callable[[str, str, int], str]
+                ``ask(system, prompt, tokens)`` for one chat session.
+
+            """
 
             return lambda system, prompt, tokens: side_reply(
                 chat, system, prompt, max_new_tokens=tokens
@@ -2973,6 +2997,11 @@ class RAGSession:
 
         A missing or unreadable manifest gives an empty mapping; tools use
         the result only for inventories and coverage reports.
+
+        Returns
+        -------
+        dict[Path, int]
+            selected source files and sizes from the source manifest.
 
         """
 
@@ -3149,6 +3178,11 @@ class RAGSession:
 
         Each answer adds its intent's instruction to this prompt.
 
+        Returns
+        -------
+        str
+            the project type's base system prompt.
+
         """
 
         return project_type(self.project.profile.kind).system_prompt
@@ -3161,7 +3195,27 @@ class RAGSession:
         turn_id: str,
         report_phase: Callable[..., None],
     ) -> RouteDecision:
-        """Classify a question's intent and trace the decision."""
+        """Classify a question's intent and trace the decision.
+
+        Parameters
+        ----------
+        question: str
+            Question or request to analyze.
+        kind: object
+            Normalized project kind used for routing.
+        use_router: bool
+            Whether to call the intent router.
+        turn_id: str
+            Identifier assigned to the current turn.
+        report_phase: Callable[..., None]
+            Callback reporting routing state to the frontend.
+
+        Returns
+        -------
+        RouteDecision
+            Validated router decision, with tracing recorded.
+
+        """
 
         trace = getattr(self, "trace", NullTraceLogger())
         started = perf_counter()
@@ -3226,7 +3280,14 @@ class RAGSession:
         return decision
 
     def _model_sessions(self: RAGSession) -> list[ChatSession]:
-        """The answer model's session and, when separate, the router's."""
+        """The answer model's session and, when separate, the router's.
+
+        Returns
+        -------
+        list[ChatSession]
+            Distinct loaded chat sessions that expose usage counters.
+
+        """
 
         sessions = [self.chat_session]
         router = getattr(self, "_router_session", None)
@@ -3237,7 +3298,14 @@ class RAGSession:
         ]
 
     def _router_chat(self: RAGSession) -> ChatSession:
-        """Return the router model's session, loading it once if needed."""
+        """Return the router model's session, loading it once if needed.
+
+        Returns
+        -------
+        ChatSession
+            the router model's session, loading it once if needed.
+
+        """
 
         if self.chat_session.model_id == self.router_model:
             return self.chat_session
@@ -3729,7 +3797,19 @@ def _check_conversation_trace(
 
 
 def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
-    """The cached text of source files; empty when missing or unreadable."""
+    """The cached text of source files; empty when missing or unreadable.
+
+    Parameters
+    ----------
+    indexes: Path
+        Directory containing the persistent indexes.
+
+    Returns
+    -------
+    dict[str, dict[str, str]]
+        Cached source text, or an empty dictionary if unavailable.
+
+    """
 
     try:
         data = json.loads((indexes / _TEXT_CACHE).read_text(encoding="utf-8"))
@@ -3747,7 +3827,16 @@ def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
 def _write_text_cache(
     indexes: Path, entries: dict[str, dict[str, str]]
 ) -> None:
-    """Save the text of the current source files (removed files drop out)."""
+    """Save the text of the current source files (removed files drop out).
+
+    Parameters
+    ----------
+    indexes: Path
+        Directory containing the persistent indexes.
+    entries: dict[str, dict[str, str]]
+        Cached source entries to write.
+
+    """
 
     indexes.mkdir(parents=True, exist_ok=True)
     path = indexes / _TEXT_CACHE
@@ -3757,7 +3846,19 @@ def _write_text_cache(
 
 
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
-    """Number a document's selected chunks in source order."""
+    """Number a document's selected chunks in source order.
+
+    Parameters
+    ----------
+    selection: DocumentSelection
+        Selected document, if any.
+
+    Returns
+    -------
+    tuple[Evidence, ...]
+        Numbered evidence records in source order.
+
+    """
 
     return tuple(
         Evidence(
@@ -3801,7 +3902,19 @@ def _document_data(selection: DocumentSelection) -> dict[str, object]:
 
 
 def _document_message(selection: DocumentSelection | None) -> str:
-    """Describe a document selection for the progress display."""
+    """Describe a document selection for the progress display.
+
+    Parameters
+    ----------
+    selection: DocumentSelection | None
+        Selected document, if any.
+
+    Returns
+    -------
+    str
+        Status text describing the selected document.
+
+    """
 
     if selection is None:
         return "No document found to read"
@@ -3871,6 +3984,16 @@ def _merge_evidence(
     renumbered in conversation order; a repeated chunk keeps its first
     position. At most ``_MAX_REUSED_EVIDENCE`` items are kept, dropping the
     oldest.
+
+    Parameters
+    ----------
+    groups: list[tuple[Evidence, ...]]
+        Per-turn evidence groups in conversation order.
+
+    Returns
+    -------
+    tuple[Evidence, ...]
+        Combined evidence with new consecutive citation numbers.
 
     """
 

@@ -310,7 +310,21 @@ def run(
 
 
 def _headline(files: Sequence[Path], unsearchable: Sequence[Path]) -> str:
-    """Write the first line: how many files, and how many are searchable."""
+    """Write the first line: how many files, and how many are searchable.
+
+    Parameters
+    ----------
+    files: Sequence[Path]
+        Files to inspect or summarize.
+    unsearchable: Sequence[Path]
+        Source files with no searchable text.
+
+    Returns
+    -------
+    str
+        Opening inventory sentence with file and searchability counts.
+
+    """
 
     total = len(files)
     noun = "file" if total == 1 else "files"
@@ -366,7 +380,21 @@ def _folder_lines(
 def _selection_title(
     types: Sequence[str], named_folders: Sequence[str]
 ) -> str:
-    """Name the listed files, such as "PDF files in papers"."""
+    """Name the listed files, such as "PDF files in papers".
+
+    Parameters
+    ----------
+    types: Sequence[str]
+        Types used to describe the selected items.
+    named_folders: Sequence[str]
+        Folder names explicitly mentioned in the question.
+
+    Returns
+    -------
+    str
+        Human-readable file selection title.
+
+    """
 
     words = [", ".join(_type_name(suffix) for suffix in types), "files"]
     if named_folders:
@@ -376,7 +404,21 @@ def _selection_title(
 
 
 def _named_folders(question: str, folders: Sequence[str]) -> list[str]:
-    """Return the folders whose names the question uses as whole words."""
+    """Return the folders whose names the question uses as whole words.
+
+    Parameters
+    ----------
+    question: str
+        Question or request to analyze.
+    folders: Sequence[str]
+        Available top-level folder names.
+
+    Returns
+    -------
+    list[str]
+        the folders whose names the question uses as whole words.
+
+    """
 
     text = question.casefold()
     return [
@@ -389,26 +431,74 @@ def _named_folders(question: str, folders: Sequence[str]) -> list[str]:
 
 
 def _folder(path: Path) -> str:
-    """Top-level folder below the source root, or "" for its files."""
+    """Top-level folder below the source root, or "" for its files.
+
+    Parameters
+    ----------
+    path: Path
+        Path to the target file or directory.
+
+    Returns
+    -------
+    str
+        Top-level source folder name, or an empty string.
+
+    """
 
     parts = path.parts
     return parts[1] if len(parts) > 2 else ""
 
 
 def _folders(files: Sequence[Path]) -> list[str]:
-    """Return the sorted top-level folders that hold any of the files."""
+    """Return the sorted top-level folders that hold any of the files.
+
+    Parameters
+    ----------
+    files: Sequence[Path]
+        Files to inspect or summarize.
+
+    Returns
+    -------
+    list[str]
+        the sorted top-level folders that hold any of the files.
+
+    """
 
     return sorted({_folder(path) for path in files} - {""})
 
 
 def _type_name(suffix: str) -> str:
-    """Name a suffix for the answer, such as "PDF" for ``.pdf``."""
+    """Name a suffix for the answer, such as "PDF" for ``.pdf``.
+
+    Parameters
+    ----------
+    suffix: str
+        File extension including its leading dot.
+
+    Returns
+    -------
+    str
+        Friendly name for the supplied file suffix.
+
+    """
 
     return _TYPE_NAMES.get(suffix, suffix or "no extension")
 
 
 def _size(size: int | None) -> str:
-    """Write a file size such as ", 2.0 kB"; "" when unknown or zero."""
+    """Write a file size such as ", 2.0 kB"; "" when unknown or zero.
+
+    Parameters
+    ----------
+    size: int | None
+        File size in bytes, or None if unknown.
+
+    Returns
+    -------
+    str
+        Display suffix for a known positive file size.
+
+    """
 
     if not size:
         return ""

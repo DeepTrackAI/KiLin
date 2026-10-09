@@ -174,17 +174,42 @@ class _AnswerStream:
     def __init__(
         self, send: Callable[..., None], interval: float = 0.08
     ) -> None:
+        """Initialize buffered answer text and its notification interval.
+
+        Parameters
+        ----------
+        send: Callable[..., None]
+            Callback used to emit streamed text events.
+        interval: float, optional
+            Minimum time in seconds between streamed updates. Defaults
+            to 0.08.
+
+        """
+
         self._send = send
         self._interval = interval
         self._pieces: list[str] = []
         self._last = 0.0
 
     def add(self, text: str) -> None:
+        """Buffer new answer text and emit it after the time threshold.
+
+        Parameters
+        ----------
+        text: str
+            Newly generated assistant text to append to the stream.
+
+        """
+
         self._pieces.append(text)
         if perf_counter() - self._last >= self._interval:
             self.flush()
 
     def flush(self) -> None:
+        """Emit buffered answer text and update the last-flush time.
+
+        """
+
         if self._pieces:
             self._send("answer_delta", text="".join(self._pieces))
             self._pieces.clear()
@@ -638,7 +663,29 @@ class ChatEngine:
         total: int = 1,
         overall_started: float | None = None,
     ) -> float:
-        """Download one model while emitting heartbeat and byte progress."""
+        """Download one model while emitting heartbeat and byte progress.
+
+        Parameters
+        ----------
+        model_id: str
+            Model identifier to download.
+        progress_event: str
+            Frontend event name for progress updates.
+        index: int, optional
+            One-based position of this model in the download sequence. Defaults
+            to ``1``.
+        total: int, optional
+            Total number of models in the download sequence. Defaults to ``1``.
+        overall_started: float | None, optional
+            Monotonic start time for the full download operation. Defaults to
+            ``None``.
+
+        Returns
+        -------
+        float
+            Elapsed time for the completed model download.
+
+        """
 
         model_started = perf_counter()
         overall_started = (
@@ -650,12 +697,27 @@ class ChatEngine:
         expected = 0
 
         def record_progress(current: int, byte_total: int) -> None:
+            """Record monotonic download totals under the progress lock.
+
+            Parameters
+            ----------
+            current: int
+                Bytes transferred according to the latest callback.
+            byte_total: int
+                Current reported total download size in bytes.
+
+            """
+
             nonlocal completed, expected
             with progress_lock:
                 completed = max(completed, current)
                 expected = max(expected, byte_total)
 
         def send_progress() -> None:
+            """Send current download speed and progress to the frontend.
+
+            """
+
             with progress_lock:
                 current = completed
                 byte_total = expected
@@ -683,6 +745,10 @@ class ChatEngine:
             )
 
         def heartbeat() -> None:
+            """Periodically publish download progress until the event is set.
+
+            """
+
             while not stopped.wait(0.5):
                 send_progress()
 
@@ -705,7 +771,14 @@ class ChatEngine:
         return perf_counter() - model_started
 
     def list_saved_projects(self, workspace: str) -> None:
-        """Report valid code and literature projects, newest first."""
+        """Report valid code and literature projects, newest first.
+
+        Parameters
+        ----------
+        workspace: str
+            Workspace containing saved projects.
+
+        """
 
         self._send(
             "projects",
@@ -784,7 +857,21 @@ class ChatEngine:
     def _saved_projects(
         self, workspace: str, kind: str | None = None
     ) -> list[tuple[float, Path, str]]:
-        """Return valid saved projects ordered from newest to oldest."""
+        """Return valid saved projects ordered from newest to oldest.
+
+        Parameters
+        ----------
+        workspace: str
+            Workspace containing saved projects.
+        kind: str | None, optional
+            Project or configuration kind to validate. Defaults to ``None``.
+
+        Returns
+        -------
+        list[tuple[float, Path, str]]
+            valid saved projects ordered from newest to oldest.
+
+        """
 
         if kind is not None and kind not in PROJECT_KIND_CHOICES:
             return []
@@ -1016,7 +1103,14 @@ class ChatEngine:
             )
 
     def apply_model_settings(self, request: dict[str, object]) -> None:
-        """Apply confirmed model edits and retain the active chat."""
+        """Apply confirmed model edits and retain the active chat.
+
+        Parameters
+        ----------
+        request: dict[str, object]
+            Request parameters supplied by the frontend.
+
+        """
 
         root = None
         old_profile = None
@@ -1583,7 +1677,16 @@ class ChatEngine:
     def _announce_project(
         self, project: QAProject, conversation: ConversationInfo
     ) -> None:
-        """Prepare the project folders and send the ``opened`` event."""
+        """Prepare the project folders and send the ``opened`` event.
+
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+        conversation: ConversationInfo
+            Conversation metadata included in the frontend event.
+
+        """
 
         session = self.session
         self._prepare_project_folders(project.root)
@@ -1648,7 +1751,14 @@ class ChatEngine:
         )
 
     def _save_answer_settings(self, settings: dict[str, object]) -> None:
-        """Save changed answer settings to the project's profile.ini."""
+        """Save changed answer settings to the project's profile.ini.
+
+        Parameters
+        ----------
+        settings: dict[str, object]
+            Settings used to configure the operation.
+
+        """
 
         profile = self.session.project.profile
         changes = {
@@ -1668,7 +1778,15 @@ class ChatEngine:
         )
 
     def add_project_sources(self, sources: list[str]) -> None:
-        """Add confirmed sources and restore the active chat."""
+        """Add confirmed sources and restore the active chat.
+
+        Parameters
+        ----------
+        sources: list[str]
+            New source paths approved for addition to the active
+            project.
+
+        """
 
         root = None
         conversation_id = None
@@ -1905,6 +2023,11 @@ class ChatEngine:
         Only new or changed files are chunked and embedded; the models
         stay loaded, so adding or removing a file does not reload them.
 
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+
         """
 
         self.session.refresh_sources(project)
@@ -1921,7 +2044,16 @@ class ChatEngine:
     def _reopen_project_conversation(
         self, project: QAProject, conversation_id: str
     ) -> None:
-        """Discover records before restoring a moved or updated project."""
+        """Discover records before restoring a moved or updated project.
+
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+        conversation_id: str
+            Identifier of the saved conversation.
+
+        """
 
         self._close_project_trace()
         store = ConversationStore(project.root)
@@ -1939,6 +2071,13 @@ class ChatEngine:
 
         The answer, when given, lets the model resolve abbreviations and
         jargon instead of guessing what they stand for.
+
+        Parameters
+        ----------
+        question: str
+            Question or request to analyze.
+        answer: str, optional
+            Answer text to inspect. Defaults to ``''``.
 
         """
 
@@ -2145,6 +2284,11 @@ class ChatEngine:
     def _live_usage(self) -> Iterator[None]:
         """Send the tokens used by the running answer twice a second.
 
+        Yields
+        ------
+        None
+            Control while periodic progress reporting runs.
+
         Notes
         -----
         A background thread reads the model sessions' token totals, which
@@ -2158,6 +2302,10 @@ class ChatEngine:
         stopped = Event()
 
         def tick() -> None:
+            """Periodically publish token usage while the answer is active.
+
+            """
+
             while not stopped.wait(0.5):
                 self._send("usage_progress", **session.usage_since(mark))
 
@@ -2217,6 +2365,17 @@ class ChatEngine:
         """
 
         def add(total: dict[str, int], parameters: object) -> None:
+            """Accumulate token counts and answer count from a usage record.
+
+            Parameters
+            ----------
+            total: dict[str, int]
+                Mutable token counters accumulated across records.
+            parameters: object
+                Model usage record, expected to contain a usage dictionary.
+
+            """
+
             usage = (
                 parameters.get("usage") if isinstance(parameters, dict)
                 else None
@@ -2576,6 +2735,11 @@ class ChatEngine:
         every accepted event, so deletion detaches it instead of appending a
         closing event that would rewrite a potentially large JSON document.
 
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of the saved conversation.
+
         """
 
         try:
@@ -2621,7 +2785,14 @@ class ChatEngine:
             )
 
     def rename_project(self, name: str) -> None:
-        """Rename the active workspace folder, then reopen the same chat."""
+        """Rename the active workspace folder, then reopen the same chat.
+
+        Parameters
+        ----------
+        name: str
+            Filename or project name to use.
+
+        """
 
         source = destination = None
         conversation_id = None
@@ -3010,7 +3181,19 @@ def _saved_reference_context(
 
 
 def _model_size(model_id: str) -> float:
-    """Parameter count in billions from a name such as "Qwen3-8B" (or 8)."""
+    """Parameter count in billions from a name such as "Qwen3-8B" (or 8).
+
+    Parameters
+    ----------
+    model_id: str
+        Model identifier from which to infer size.
+
+    Returns
+    -------
+    float
+        Parameter count in billions, defaulting to 8 for unknown names.
+
+    """
 
     match = re.search(r"(\d+(?:\.\d+)?)B\b", model_id)
     return float(match.group(1)) if match else 8.0
@@ -3024,6 +3207,20 @@ def _installed_replacements(
     The replacement has the same role (language or embedding), suits the
     backend (MLX models have "mlx" in their name), and is closest in size.
     Missing models without such a replacement are left out.
+
+    Parameters
+    ----------
+    missing: list[str]
+        Identifiers of models that are not available locally.
+    roles: dict[str, str]
+        Model purposes associated with the missing identifiers.
+    backend: str
+        Model backend for which settings are requested.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from missing model IDs to installed alternatives.
 
     """
 
@@ -3052,7 +3249,14 @@ def _installed_replacements(
 
 
 def _preference_payload() -> dict[str, object]:
-    """App-wide preferences for the page, by backend."""
+    """App-wide preferences for the page, by backend.
+
+    Returns
+    -------
+    dict[str, object]
+        Default GUI preferences organized by backend.
+
+    """
 
     backends = (BACKEND_MLX, BACKEND_TORCH)
     return {
@@ -3135,7 +3339,19 @@ def _turn_payloads(turns: list, root: Path) -> list[dict]:
 
 
 def _valid_timeline(timeline: object) -> bool:
-    """Whether a timeline from the page has the expected shape."""
+    """Whether a timeline from the page has the expected shape.
+
+    Parameters
+    ----------
+    timeline: object
+        Timeline data received from the frontend.
+
+    Returns
+    -------
+    bool
+        True if the timeline has the expected structure.
+
+    """
 
     if not isinstance(timeline, dict):
         return False
@@ -3154,7 +3370,24 @@ def _valid_timeline(timeline: object) -> bool:
 
 
 def _path_list(value: object) -> list[str]:
-    """Return a non-empty list of path strings, or raise ValueError."""
+    """Return a non-empty list of path strings, or raise ValueError.
+
+    Parameters
+    ----------
+    value: object
+        Value to validate or convert.
+
+    Returns
+    -------
+    list[str]
+        Nonempty list of file path strings.
+
+    Raises
+    ------
+    ValueError
+        If the input is not a nonempty list of path strings.
+
+    """
 
     if (
         not isinstance(value, list)
@@ -3166,7 +3399,28 @@ def _path_list(value: object) -> list[str]:
 
 
 def _inside_folder(root: Path, folder: Path, relative: object) -> Path:
-    """Resolve a workspace path that must lie inside ``folder``."""
+    """Resolve a workspace path that must lie inside ``folder``.
+
+    Parameters
+    ----------
+    root: Path
+        Root directory of the active project workspace.
+    folder: Path
+        Workspace subdirectory required to contain the path.
+    relative: object
+        Relative path to validate against the folder.
+
+    Returns
+    -------
+    Path
+        Validated path within the requested workspace folder.
+
+    Raises
+    ------
+    ValueError
+        If the relative path escapes the selected folder.
+
+    """
 
     if not isinstance(relative, str) or not relative:
         raise ValueError(f"Choose a file in {folder.name}/.")
@@ -3183,7 +3437,21 @@ def _inside_folder(root: Path, folder: Path, relative: object) -> Path:
 
 
 def _free_path(directory: Path, name: str) -> Path:
-    """``directory/name``, or with ``-2``, ``-3``, ... when it is taken."""
+    """``directory/name``, or with ``-2``, ``-3``, ... when it is taken.
+
+    Parameters
+    ----------
+    directory: Path
+        Directory in which to find or create the file.
+    name: str
+        Desired filename, to be suffixed if it already exists.
+
+    Returns
+    -------
+    Path
+        Available filename path in the requested directory.
+
+    """
 
     candidate = directory / name
     stem, suffix = candidate.stem, candidate.suffix
@@ -3195,7 +3463,14 @@ def _free_path(directory: Path, name: str) -> Path:
 
 
 def _remove_path(path: Path) -> None:
-    """Delete a file, symlink, or folder."""
+    """Delete a file, symlink, or folder.
+
+    Parameters
+    ----------
+    path: Path
+        Path to the target file or directory.
+
+    """
 
     if path.is_dir() and not path.is_symlink():
         shutil.rmtree(path)
@@ -3240,7 +3515,21 @@ _LEVEL_KEYS = ("light", "instant", "lagom", "thorough", "deep")
 
 
 def _answer_excerpt(answer: str, limit: int) -> str:
-    """Return answer text without thinking or citation markers."""
+    """Return answer text without thinking or citation markers.
+
+    Parameters
+    ----------
+    answer: str
+        Answer text to inspect.
+    limit: int
+        Maximum number of items or characters to include.
+
+    Returns
+    -------
+    str
+        answer text without thinking or citation markers.
+
+    """
 
     text = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.S)
     text = re.sub(r"\s*\[[0-9, ]+\]", "", text)
@@ -3248,7 +3537,19 @@ def _answer_excerpt(answer: str, limit: int) -> str:
 
 
 def _router_models_by_backend(root: Path | None) -> dict[str, str]:
-    """Return a project's router model (or the preferences) by backend."""
+    """Return a project's router model (or the preferences) by backend.
+
+    Parameters
+    ----------
+    root: Path | None
+        Project or workspace root directory.
+
+    Returns
+    -------
+    dict[str, str]
+        a project's router model (or the preferences) by backend.
+
+    """
 
     if root is None:
         return _preference_payload()["router_models"]
@@ -3261,7 +3562,21 @@ def _router_models_by_backend(root: Path | None) -> dict[str, str]:
 def _effort_levels_by_backend(
     root: Path | None, profile: object
 ) -> dict[str, list[dict[str, object]]]:
-    """Return a project's effort levels (or the preferences) by backend."""
+    """Return a project's effort levels (or the preferences) by backend.
+
+    Parameters
+    ----------
+    root: Path | None
+        Project or workspace root directory.
+    profile: object
+        Current project profile, when available.
+
+    Returns
+    -------
+    dict[str, list[dict[str, object]]]
+        a project's effort levels (or the preferences) by backend.
+
+    """
 
     if root is None:
         return _preference_payload()["effort_levels"]
@@ -3272,7 +3587,24 @@ def _effort_levels_by_backend(
 
 
 def _effort_indexes(effort: object) -> tuple[int, int] | None:
-    """Read the effort level and search-depth step chosen for one answer."""
+    """Read the effort level and search-depth step chosen for one answer.
+
+    Parameters
+    ----------
+    effort: object
+        Requested answer effort selection.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        Zero-based effort and search-depth positions, or None.
+
+    Raises
+    ------
+    ValueError
+        If the supplied effort selection is invalid or out of range.
+
+    """
 
     if effort is None:
         return None
@@ -3372,7 +3704,14 @@ def main() -> None:
     lines = iter(sys.stdin)
 
     def read_command() -> dict[str, object] | None:
-        """Return the next JSON command, or None when input ended."""
+        """Return the next JSON command, or None when input ended.
+
+        Returns
+        -------
+        dict[str, object] | None
+            the next JSON command, or None when input ended.
+
+        """
 
         for line in lines:
             try:

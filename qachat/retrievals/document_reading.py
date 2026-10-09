@@ -333,6 +333,18 @@ def _starts_stem(stem: str, words: set[str]) -> bool:
     or ``-``; a name with its year ("lee25" in lee25networks) may be
     followed by anything.
 
+    Parameters
+    ----------
+    stem: str
+        Normalized filename stem to compare.
+    words: set[str]
+        Normalized words to compare.
+
+    Returns
+    -------
+    bool
+        True when a word starts an author-year stem.
+
     """
 
     stem = stem.casefold()
@@ -352,7 +364,21 @@ def _starts_stem(stem: str, words: set[str]) -> bool:
 
 
 def _mentions(text: str, name: str) -> bool:
-    """Whether ``text`` contains ``name`` as a whole word or file name."""
+    """Whether ``text`` contains ``name`` as a whole word or file name.
+
+    Parameters
+    ----------
+    text: str
+        Text to analyze or transform.
+    name: str
+        Filename or project name to use.
+
+    Returns
+    -------
+    bool
+        True when ``text`` contains ``name`` as a whole word or file name.
+
+    """
 
     return bool(
         re.search(rf"(?<![\w.]){re.escape(name)}(?![\w])", text)

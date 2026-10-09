@@ -464,7 +464,29 @@ def _label_batch(
     indices: Sequence[int],
     context: ToolContext,
 ) -> dict[int, Label]:
-    """Label one batch of mentions; returns labels by mention index."""
+    """Label one batch of mentions; returns labels by mention index.
+
+    Parameters
+    ----------
+    question: str
+        Question or request to analyze.
+    terms: Sequence[str]
+        Search terms used to prepare the classification question.
+    categories: Sequence[str]
+        Available classification categories.
+    texts: Sequence[str]
+        Text passages or fields to inspect.
+    indices: Sequence[int]
+        Indexes of mentions included in this classification batch.
+    context: ToolContext
+        Tool context for the current request.
+
+    Returns
+    -------
+    dict[int, Label]
+        Assigned labels keyed by each mention index.
+
+    """
 
     system, prompt = classify_prompt(
         question, terms, categories, [texts[index] for index in indices]
@@ -489,7 +511,19 @@ def _label_batch(
 
 
 def _duration(seconds: float) -> str:
-    """Write an approximate duration such as "40 s" or "3 min"."""
+    """Write an approximate duration such as "40 s" or "3 min".
+
+    Parameters
+    ----------
+    seconds: float
+        Estimated duration in seconds.
+
+    Returns
+    -------
+    str
+        Approximate duration expressed in seconds or minutes.
+
+    """
 
     if seconds < 90:
         return f"{max(1, round(seconds))} s"
@@ -947,7 +981,25 @@ def _listed(
     categories: Sequence[str],
     limit: int,
 ) -> list[tuple[int, Mention]]:
-    """Labelled mentions grouped by category in display order, capped."""
+    """Labelled mentions grouped by category in display order, capped.
+
+    Parameters
+    ----------
+    scan: MentionScan
+        Scan result containing candidate items.
+    labels: dict[int, Label]
+        Assigned mention labels indexed by mention position.
+    categories: Sequence[str]
+        Available classification categories.
+    limit: int
+        Maximum number of items or characters to include.
+
+    Returns
+    -------
+    list[tuple[int, Mention]]
+        Sorted, capped list of mention indexes and their records.
+
+    """
 
     order = {category: rank for rank, category in enumerate(categories)}
     order[UNCLEAR] = len(categories)
@@ -958,4 +1010,18 @@ def _listed(
 
 
 def _plain(text: str) -> str:
+    """Replace square brackets with parentheses for plain-text output.
+
+    Parameters
+    ----------
+    text: str
+        Plain-text output that may contain bracketed labels.
+
+    Returns
+    -------
+    str
+        Text with square brackets replaced by parentheses.
+
+    """
+
     return text.replace("[", "(").replace("]", ")")
