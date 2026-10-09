@@ -1,6 +1,6 @@
 ---
 title: Popular Science Summary
-description: Narrative explanation of one scientific paper for readers without specialist training.
+description: Engaging explanation of one scientific paper for general-public readers without specialist training.
 max_words: 700
 reference: QAChat single-paper public science communication.
 ---
