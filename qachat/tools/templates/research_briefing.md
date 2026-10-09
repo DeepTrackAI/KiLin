@@ -8,7 +8,8 @@ reference: QAChat single-paper research briefing.
 # Headline (max 90 characters)
 
 Different from the paper's title; highlights the key finding; short, catchy,
-and accessible to non-specialists.
+and accessible to non-specialists. Never use a fullstop at the end of this
+title.
 
 **Source paper:** {citation}
 

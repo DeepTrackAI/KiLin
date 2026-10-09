@@ -7,7 +7,8 @@ reference: QAChat single-paper technical analysis.
 
 # Headline (max 110 characters)
 
-Identify the technical contribution and its domain or operating regime.
+Identify the technical contribution and its domain or operating regime. Never
+use a fullstop at the end of this title.
 
 **Source paper:** {citation}
 

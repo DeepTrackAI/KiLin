@@ -7,7 +7,8 @@ reference: QAChat single-paper methods extraction; verification required before 
 
 # Headline (max 110 characters)
 
-Name the experiment or measurement and the system studied.
+Name the experiment or measurement and the system studied. Never use a fullstop
+at the end of this title.
 
 **Source paper:** {citation}
 
