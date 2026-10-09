@@ -4,7 +4,7 @@ description: Narrative explanation of one scientific paper for readers without s
 max_words: 800
 reference: QAChat single-paper public science communication.
 ---
-12345678901234567890123456789012345678901234567890123456789012345678901234567890
+
 # Headline (max 100 characters)
 
 Write a clear, engaging headline about the actual finding. Avoid hype,
