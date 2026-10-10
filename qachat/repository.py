@@ -97,7 +97,6 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
-
 __all__ = [
     "build_repository_manifest",
     "compare_repository_manifests",
@@ -753,7 +752,6 @@ def compare_repository_manifests(
     }
 
 
-
 def _load_repository_manifest(
     manifest: str | Path | dict[str, object] | None,
 ) -> dict[str, object] | None:
@@ -976,6 +974,7 @@ def repository_has_changed(
         max_entries=max_entries,
     )
     return not bool(changes["matches"])
+
 
 def _manifest_files(
     manifest: dict[str, object],
