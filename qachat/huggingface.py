@@ -1,9 +1,9 @@
 """Inspect and reuse Hugging Face's model cache.
 
-This module exposes a small cache-facing API rather than a separate model
-store. Listing and availability checks inspect model repositories and cached
-revisions. Snapshot lookup resolves a local path, while download requests are
-delegated to ``huggingface_hub`` and may contact the Hub.
+This module exposes a small cache-facing API. Listing and availability checks
+inspect model repositories and cached revisions. Snapshot lookup resolves a
+local path, while download requests are delegated to ``huggingface_hub`` and
+may contact the Hub.
 
 Repository presence does not prove that a particular revision is complete or
 loadable. Offline lookup accepts a resolved snapshot only when ``config.json``
@@ -71,13 +71,14 @@ from collections.abc import Callable
 from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
-from huggingface_hub.utils import tqdm as _HubTqdm
+import huggingface_hub.utils.tqdm as _HubTqdm
 
 try:
     from huggingface_hub.errors import (
         IncompleteSnapshotError as _IncompleteSnapshotError,
     )
 except ImportError:
+
     class _IncompleteSnapshotError(Exception):
         """Compatibility placeholder for newer huggingface_hub versions."""
 
@@ -246,6 +247,7 @@ def cached_model_snapshot(
     """
 
     _check_model_id(model_id)
+
     try:
         path = snapshot_download(
             repo_id=model_id,
@@ -256,10 +258,12 @@ def cached_model_snapshot(
         path = error.snapshot_path
 
     snapshot = Path(path)
+
     if not (snapshot / "config.json").is_file():
         raise FileNotFoundError(
             f"Cached model snapshot has no config.json: {snapshot}"
         )
+
     return snapshot
 
 
@@ -317,6 +321,7 @@ def download_model(
     """
 
     _check_model_id(model_id)
+
     if progress_callback is not None and not callable(progress_callback):
         raise ValueError("progress_callback must be callable or None.")
 
