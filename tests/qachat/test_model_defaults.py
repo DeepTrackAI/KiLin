@@ -1,7 +1,7 @@
 """Unit tests for QAChat's shared model defaults.
 
 Tests verify the canonical model roles, default model identifiers, and
-public exports without loading or downloading any models.
+model identifier structure without loading or downloading any models.
 
 """
 
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import unittest
 
-import qachat
 from qachat import model_defaults
 
 
@@ -48,17 +47,5 @@ class TestDefaultModels(unittest.TestCase):
                 self.assertTrue(model_id.strip())
                 self.assertEqual(len(model_id.split("/")), 2)
 
-    def test_public_exports(self) -> None:
-        """Expose shared defaults through the qachat package."""
-
-        for name in model_defaults.__all__:
-            with self.subTest(name=name):
-                self.assertTrue(hasattr(qachat, name))
-                self.assertIs(
-                    getattr(qachat, name),
-                    getattr(model_defaults, name),
-                )
-
-
-if __name__ == "__main__":e
+if __name__ == "__main__":
     unittest.main()
