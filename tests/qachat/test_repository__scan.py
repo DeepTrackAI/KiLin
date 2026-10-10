@@ -407,7 +407,7 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         """Recheck directory safety before entering a pending child."""
 
         original = Path.is_symlink
-        child = self.root / "src"
+        child = (self.root / "src").resolve()
 
         def is_symlink(path: Path) -> bool:
             """Simulate a directory turning into a link during scanning."""
@@ -455,11 +455,12 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         """Raise an error rather than return an incomplete root inventory."""
 
         original = repository.os.scandir
+        resolved_root = self.root.resolve()
 
         def scandir(path: Path):
             """Fail when listing the selected repository root."""
 
-            if Path(path) == self.root:
+            if Path(path) == resolved_root:
                 raise PermissionError("denied")
             return original(path)
 
@@ -471,7 +472,7 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         """Preserve other entries while recording an unreadable subtree."""
 
         original = repository.os.scandir
-        blocked = self.root / "src"
+        blocked = (self.root / "src").resolve()
 
         def scandir(path: Path):
             """Reject the src directory while allowing other listings."""
