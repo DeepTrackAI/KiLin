@@ -113,11 +113,11 @@ _MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # Load packaged repository-selection defaults once at import time.
-_REPOSITORY_DEFAULTS = json.loads(
+_REPOSITORY_DEFAULTS: dict[str, list[str]] = json.loads(
     Path(__file__).with_name("qachat_defaults.json").read_text(
         encoding="utf-8"
     )
-)
+)["REPOSITORY"]
 DEFAULT_EXTENSIONS = tuple(_REPOSITORY_DEFAULTS["DEFAULT_EXTENSIONS"])
 SKIP_DIRECTORIES = set(_REPOSITORY_DEFAULTS["SKIP_DIRECTORIES"])
 SKIP_FILES = set(_REPOSITORY_DEFAULTS["SKIP_FILES"])
