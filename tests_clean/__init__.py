@@ -1,5 +1,4 @@
-"""
-QAChat test suite.
+"""QAChat test suite.
 
 This package contains tests for the QAChat framework, organized to mirror
 the structure of the qachat package.
