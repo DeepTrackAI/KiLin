@@ -93,6 +93,15 @@ print("QACHAT_API_RESULTS=" + json.dumps(results))
         self.assertEqual(set(results), set(names))
         for name, error in results.items():
             with self.subTest(module=name):
+                if (
+                    name.startswith("qachat.gui.")
+                    and error == (
+                        "ModuleNotFoundError: "
+                        "No module named 'PySide6'"
+                    )
+                ):
+                    self.skipTest("PySide6 is not installed")
+
                 self.assertIsNone(error, error)
 
     def test_root_exports(self) -> None:
