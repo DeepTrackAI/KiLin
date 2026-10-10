@@ -79,7 +79,8 @@ Create a session from a model directory compatible with the selected backend:
 ... finally:
 ...     chat.close()
 
-The path is illustrative and must identify an available compatible model.
+The path is illustrative and must identify an available compatible model. It
+can also be the model id.
 
 """
 
@@ -1156,10 +1157,10 @@ def _check_temperature(value: float) -> float:
     """
 
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("temperature must be zero or a positive number.")
+        raise ValueError("Temperature must be zero or a positive number.")
 
     if value < 0:
-        raise ValueError("temperature must be zero or a positive number.")
+        raise ValueError("Temperature must be zero or a positive number.")
 
     return float(value)
 
@@ -1193,6 +1194,7 @@ def _text_token_count(tokenizer: object, text: str) -> int | None:
     encode = getattr(tokenizer, "encode", None)
     if not callable(encode):
         return None
+
     try:
         try:
             tokens = encode(text, add_special_tokens=False)
@@ -1200,6 +1202,7 @@ def _text_token_count(tokenizer: object, text: str) -> int | None:
             tokens = encode(text)
     except (AttributeError, TypeError, ValueError):
         return None
+
     try:
         return len(tokens)
     except TypeError:
