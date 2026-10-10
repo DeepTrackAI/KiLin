@@ -120,6 +120,10 @@ class TestChatSessionInitialization(unittest.TestCase):
             {"temperature": -1},
             {"temperature": True},
             {"temperature": "0.5"},
+            {"temperature": float("nan")},
+            {"temperature": float("inf")},
+            {"temperature": float("-inf")},
+            {"temperature": 10**400},
             {"max_new_tokens": 0},
             {"max_new_tokens": True},
             {"max_new_tokens": 1.5},
@@ -337,6 +341,10 @@ class TestGenerationSettings(unittest.TestCase):
             [],
             {"backend": "mlx"},
             {"temperature": -1},
+            {"temperature": float("nan")},
+            {"temperature": float("inf")},
+            {"temperature": float("-inf")},
+            {"temperature": 10**400},
             {"thinking": "true"},
             {"max_new_tokens": 0},
             {"temperature": 0.75, "thinking": "true"},
@@ -1159,14 +1167,33 @@ class TestChatValidationHelpers(unittest.TestCase):
                     chat._check_bool(value, "flag")
 
     def test_temperature_validation(self) -> None:
-        """Normalize nonnegative numerical temperatures to float."""
+        """Accept only finite, nonnegative numerical temperatures."""
 
-        for value, expected in ((0, 0.0), (1, 1.0), (0.25, 0.25)):
+        valid = (
+            (0, 0.0),
+            (-0.0, 0.0),
+            (1, 1.0),
+            (0.25, 0.25),
+            (float("1e-300"), float("1e-300")),
+        )
+        for value, expected in valid:
             with self.subTest(value=value):
                 self.assertEqual(chat._check_temperature(value), expected)
-        for value in (-1, True, None, "0.5", 1j):
+
+        invalid = (
+            -1,
+            True,
+            None,
+            "0.5",
+            1j,
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            10**400,
+        )
+        for value in invalid:
             with self.subTest(value=value):
-                with self.assertRaises(ValueError):
+                with self.assertRaisesRegex(ValueError, "finite"):
                     chat._check_temperature(value)
 
     def test_token_limit_validation(self) -> None:

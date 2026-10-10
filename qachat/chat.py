@@ -89,6 +89,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import gc
 from importlib import import_module
+from math import isfinite
 from pathlib import Path
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
@@ -163,7 +164,7 @@ class ChatSession:
     temperature: float, optional
         Sampling temperature. Zero selects greedy decoding; positive values
         enable sampling. This is not a cross-device reproducibility guarantee.
-        The current validator does not reject NaN or positive infinity.
+        The temperature must be finite and nonnegative.
         Defaults to ``0.0``.
     max_new_tokens: int | None, optional
         Session-level maximum number of tokens generated for each reply.
@@ -296,8 +297,8 @@ class ChatSession:
         temperature: float, optional
             Sampling temperature. Zero selects greedy decoding; positive values
             enable sampling. This is not a cross-device reproducibility
-            guarantee. The current validator does not reject NaN or positive
-            infinity. Defaults to ``0.0``.
+            guarantee. The value must be finite and nonnegative.
+            Defaults to ``0.0``.
         max_new_tokens: int | None, optional
             Session-level maximum number of tokens generated for each reply.
             ``None`` uses the remaining model context unless a per-reply
@@ -1141,28 +1142,30 @@ def _check_temperature(value: float) -> float:
     Returns
     -------
     float
-        Temperature converted to ``float``.
+        Finite, nonnegative temperature converted to ``float``.
 
     Raises
     ------
     ValueError
-        If ``value`` is Boolean, non-numeric, or negative.
-
-    Notes
-    -----
-    The test rejects booleans, non-int/non-float values, and values below zero.
-    It does not check finiteness, so NaN and positive infinity currently pass
-    unchanged through float conversion.
+        If ``value`` is Boolean, nonnumeric, negative, or nonfinite, or
+        cannot be represented as a finite float.
 
     """
 
+    message = "Temperature must be a finite, nonnegative number."
+
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("Temperature must be zero or a positive number.")
+        raise ValueError(message)
 
-    if value < 0:
-        raise ValueError("Temperature must be zero or a positive number.")
+    try:
+        temperature = float(value)
+    except OverflowError:
+        raise ValueError(message) from None
 
-    return float(value)
+    if not isfinite(temperature) or temperature < 0:
+        raise ValueError(message)
+
+    return temperature
 
 
 def _text_token_count(tokenizer: object, text: str) -> int | None:
