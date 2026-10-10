@@ -286,7 +286,10 @@ class TestRepositoryChangeDetection(unittest.TestCase):
     def test_detect_wrapper_forwards_all_selection_arguments(self) -> None:
         """Pass selection limits to scan and compare the resulting manifest."""
 
-        report = {"repository": str(self.root), "selected_files": []}
+        report = {
+            "repository": str(self.root), "complete": True,
+            "selected_files": [],
+        }
         manifest = {"format_version": 1, "files": {}}
         expected = {"matches": True, "added": [], "removed": [],
                     "modified": []}
@@ -343,6 +346,22 @@ class TestRepositoryChangeDetection(unittest.TestCase):
                     exclude_paths=(),
                     max_file_bytes=10,
                     max_entries=10_000,
+                )
+
+
+    def test_incomplete_scan_prevents_change_reporting(self) -> None:
+        """Never classify inaccessible source files as removed."""
+
+        report = repository.scan_repository(self.root)
+        report["complete"] = False
+        with patch.object(
+            repository, "scan_repository", return_value=report
+        ):
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                self._changes()
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                repository.repository_has_changed(
+                    self.root, self.baseline
                 )
 
 

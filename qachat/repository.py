@@ -6,15 +6,16 @@ entry limits, and built-in skip rules. Exclusions and protected-name rules
 cannot be overridden by an inclusion. Descendant symbolic links and
 junctions are skipped rather than traversed.
 
-``build_repository_manifest`` then reads selected files to compute SHA-256
-hashes. Manifests contain relative paths, sizes, and hashes, not the absolute
-source location or modification times. Comparing manifests detects changes
-in selected content, not changes in every file in the repository.
+``build_repository_manifest`` requires a complete scan and then reads
+selected files to compute SHA-256 hashes. Manifests contain relative paths,
+sizes, and hashes, not the absolute source location or modification times.
+Comparing manifests detects changes in selected content, not changes in every
+file in the repository.
 
 These routines are not a security sandbox or an atomic filesystem snapshot.
 Manifest construction expects a trusted scan report and does not repeat all
 scan-time path checks. A scan's ``complete`` flag reports recoverable I/O
-failures; callers requiring a full snapshot must check that flag themselves.
+failures; manifest construction rejects incomplete reports.
 Relative repository paths use ``PROJECT_ROOT`` (the package's parent), while
 relative saved-manifest paths use the process working directory.
 
@@ -96,6 +97,7 @@ from hashlib import sha256
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
+
 
 __all__ = [
     "build_repository_manifest",
@@ -640,8 +642,8 @@ def build_repository_manifest(
     Raises
     ------
     ValueError
-        If report fields have the wrong expected types; individual selected
-        path strings are not fully validated.
+        If the scan is incomplete or report fields have invalid types;
+        individual selected path strings are not fully validated.
     FileNotFoundError
         If the source root or selected regular file is missing.
     OSError
@@ -649,13 +651,17 @@ def build_repository_manifest(
 
     Notes
     -----
-    This function reads every selected file in binary blocks and takes its size
-    after hashing. It does not check report["complete"], reject parent/absolute
-    path strings, or repeat scan-time link containment checks. Supply a trusted
-    complete scan report and keep the source stable when a consistent snapshot
-    is needed. Duplicate normalized path keys overwrite earlier records.
+    This function requires a complete scan and reads selected files in binary
+    blocks. It checks file metadata before and after hashing and rejects
+    detectable concurrent modifications. It does not reject parent/absolute
+    path strings or repeat scan-time link containment checks. Supply a
+    trusted scan report. Duplicate normalized path keys overwrite earlier
+    records.
 
     """
+
+    if report.get("complete") is not True:
+        raise ValueError("Cannot build a manifest from an incomplete scan.")
 
     repository_value = report.get("repository")
     selected_value = report.get("selected_files")
@@ -677,10 +683,20 @@ def build_repository_manifest(
             )
         digest = sha256()
         with path.open("rb") as stream:
+            before = os.fstat(stream.fileno())
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
+            after = os.fstat(stream.fileno())
+        identity = (
+            "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"
+        )
+        if any(getattr(before, name) != getattr(after, name)
+               for name in identity):
+            raise OSError(
+                f"Selected source file changed while hashing: {path}"
+            )
         files[relative] = {
-            "size_bytes": path.stat().st_size,
+            "size_bytes": after.st_size,
             "sha256": digest.hexdigest(),
         }
 
@@ -719,9 +735,9 @@ def compare_repository_manifests(
     Notes
     -----
     Modified records differ in size_bytes or sha256 after extra record fields
-    are discarded. Paths, nonnegative sizes, and hash syntax are not fully
-    validated. All change lists are sorted lexically; no files are read during
-    comparison.
+    are discarded. Paths must be normalized relative POSIX paths, sizes must
+    be nonnegative, and hashes must be valid SHA-256 hex digests. All change
+    lists are sorted lexically; no files are read during comparison.
 
     """
 
@@ -750,6 +766,7 @@ def compare_repository_manifests(
         "removed": removed,
         "modified": modified,
     }
+
 
 
 def _load_repository_manifest(
@@ -869,10 +886,10 @@ def detect_repository_changes(
 
     Notes
     -----
-    The wrapper scans and hashes all currently selected files. It does not
-    reject a report with complete=False, so inaccessible entries can look
-    removed. Use the same selection settings as the saved baseline to compare
-    the same scope. None or a missing manifest always means matches=False.
+    The wrapper scans and hashes all currently selected files. An incomplete
+    scan raises ValueError rather than reporting inaccessible files as removed.
+    Use the same selection settings as the saved baseline to compare the same
+    scope. None or a missing manifest always means matches=False.
 
     Examples
     --------
@@ -975,7 +992,6 @@ def repository_has_changed(
     )
     return not bool(changes["matches"])
 
-
 def _manifest_files(
     manifest: dict[str, object],
 ) -> dict[str, dict[str, object]]:
@@ -999,14 +1015,16 @@ def _manifest_files(
 
     Notes
     -----
-    Validation is structural only: file keys must be strings, sizes exact
-    integers, and digests strings. It does not require relative paths,
-    nonnegative sizes, or 64-character hexadecimal digests. Extra record keys
-    are ignored in the returned copy.
+    File keys must be normalized relative POSIX paths; sizes must be exact
+    nonnegative integers; hashes must be 64 hexadecimal characters. Hashes
+    are normalized to lowercase. Extra record keys are ignored.
 
     """
 
-    if manifest.get("format_version") != _MANIFEST_VERSION:
+    if type(manifest) is not dict or (
+        type(manifest.get("format_version")) is not int
+        or manifest["format_version"] != _MANIFEST_VERSION
+    ):
         raise ValueError("Unsupported repository manifest version.")
     files = manifest.get("files")
     if not isinstance(files, dict):
@@ -1016,12 +1034,18 @@ def _manifest_files(
     for path, record in files.items():
         if not isinstance(path, str) or not isinstance(record, dict):
             raise ValueError("Repository manifest contains invalid records.")
+        if (not path or "\\" in path or path.startswith("/")
+                or any(part in ("", ".", "..") for part in path.split("/"))
+                or PureWindowsPath(path).drive):
+            raise ValueError("Repository manifest contains invalid paths.")
         size = record.get("size_bytes")
         digest = record.get("sha256")
-        if type(size) is not int or not isinstance(digest, str):
+        if (type(size) is not int or size < 0
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None):
             raise ValueError("Repository manifest contains invalid hashes.")
         checked[path] = {
             "size_bytes": size,
-            "sha256": digest,
+            "sha256": digest.lower(),
         }
     return checked

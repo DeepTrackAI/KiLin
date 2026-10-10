@@ -166,6 +166,7 @@ class TestRepositoryManifestBuild(unittest.TestCase):
             repository.build_repository_manifest(scan)
         report = {
             "repository": str(self.root / "missing"),
+            "complete": True,
             "selected_files": [],
         }
         with self.assertRaises(FileNotFoundError):
@@ -176,6 +177,7 @@ class TestRepositoryManifestBuild(unittest.TestCase):
 
         report = {
             "repository": str(self.root),
+            "complete": True,
             "selected_files": ["src"],
         }
         with self.assertRaises(FileNotFoundError):
@@ -188,6 +190,48 @@ class TestRepositoryManifestBuild(unittest.TestCase):
         with patch.object(Path, "open", side_effect=PermissionError("no")):
             with self.assertRaises(PermissionError):
                 repository.build_repository_manifest(report)
+
+
+    def test_incomplete_scan_cannot_produce_manifest(self) -> None:
+        """Reject partial inventories before opening any source file."""
+
+        report = repository.scan_repository(self.root)
+        report["complete"] = False
+        with patch.object(Path, "open", side_effect=AssertionError):
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                repository.build_repository_manifest(report)
+
+    def test_file_change_during_hashing_is_rejected(self) -> None:
+        """Reject a file whose descriptor metadata changes while read."""
+
+        report = repository.scan_repository(self.root, extensions=[".md"])
+        original = repository.os.fstat
+        calls = 0
+
+        def changing_stat(fd: int) -> os.stat_result:
+            """Simulate a changed size on the second descriptor check."""
+
+            nonlocal calls
+            calls += 1
+            result = original(fd)
+            if calls == 2:
+                class Changed:
+                    """Return all original fields except file size."""
+
+                    def __getattr__(self, name: str) -> object:
+                        """Proxy descriptor metadata with a changed size."""
+
+                        if name == "st_size":
+                            return result.st_size + 1
+                        return getattr(result, name)
+
+                return Changed()
+            return result
+
+        with patch.object(repository.os, "fstat", side_effect=changing_stat):
+            with self.assertRaisesRegex(OSError, "changed while hashing"):
+                repository.build_repository_manifest(report)
+        self.assertEqual(calls, 2)
 
 
 class TestRepositoryManifestComparison(unittest.TestCase):
@@ -337,6 +381,48 @@ class TestRepositoryManifestComparison(unittest.TestCase):
                         self._manifest(),
                         {"format_version": 1, "files": files},
                     )
+
+
+    def test_manifest_rejects_invalid_paths_sizes_and_digests(self) -> None:
+        """Enforce the existing version-one manifest field contract."""
+
+        invalid = (
+            ("", self._record()),
+            ("/absolute.py", self._record()),
+            ("../outside.py", self._record()),
+            ("src/../file.py", self._record()),
+            ("src//file.py", self._record()),
+            ("src/./file.py", self._record()),
+            ("src\\file.py", self._record()),
+            ("C:/file.py", self._record()),
+            ("valid.py", self._record(size=-1)),
+            ("valid.py", {"size_bytes": 1, "sha256": "bad"}),
+            ("valid.py", {"size_bytes": 1, "sha256": "g" * 64}),
+        )
+        for path, record in invalid:
+            with self.subTest(path=path, record=record):
+                with self.assertRaises(ValueError):
+                    repository.compare_repository_manifests(
+                        self._manifest(),
+                        {"format_version": 1, "files": {path: record}},
+                    )
+
+    def test_uppercase_sha256_is_equivalent_to_lowercase(self) -> None:
+        """Normalize valid hexadecimal digests for comparison."""
+
+        saved = self._manifest(**{"main.py": self._record("a")})
+        current = self._manifest(**{"main.py": self._record("A")})
+        self.assertTrue(repository.compare_repository_manifests(
+            saved, current
+        )["matches"])
+
+    def test_boolean_manifest_version_is_invalid(self) -> None:
+        """Do not accept True as integer format version one."""
+
+        with self.assertRaises(ValueError):
+            repository.compare_repository_manifests(
+                self._manifest(), {"format_version": True, "files": {}}
+            )
 
 
 if __name__ == "__main__":
