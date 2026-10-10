@@ -1,0 +1,63 @@
+{
+  "DEFAULT_EXTENSIONS": [
+    ".py",
+    ".md",
+    ".txt",
+    ".rst",
+    ".m",
+    ".toml",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".ini",
+    ".cfg",
+    ".sh",
+    ".ps1",
+    ".ipynb",
+    ".pdf",
+    ".gitattributes",
+    ".gitignore",
+    ".python-version"
+  ],
+  "SKIP_DIRECTORIES": [
+    ".genrag",
+    ".git",
+    ".ipynb_checkpoints",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "env",
+    "htmlcov",
+    "logs",
+    "node_modules",
+    "venv",
+    "weights"
+  ],
+  "SKIP_FILES": [
+    ".ds_store",
+    ".env",
+    "credentials.json",
+    "id_ed25519",
+    "id_rsa",
+    "secrets.json"
+  ],
+  "BLOCKED_SUFFIXES": [
+    ".bin",
+    ".ckpt",
+    ".gguf",
+    ".incomplete",
+    ".key",
+    ".keystore",
+    ".onnx",
+    ".p12",
+    ".pem",
+    ".pfx",
+    ".pt",
+    ".pth",
+    ".safetensors"
+  ]
+}
