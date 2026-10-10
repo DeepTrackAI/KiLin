@@ -7,6 +7,8 @@ model identifier structure without loading or downloading any models.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from qachat import model_defaults
@@ -30,6 +32,27 @@ class TestModelRoles(unittest.TestCase):
 
 class TestDefaultModels(unittest.TestCase):
     """Test the shared default model identifiers."""
+
+    def test_default_models_match_packaged_json(self) -> None:
+        """Expose exactly the model IDs configured in the packaged JSON."""
+
+        config_path = Path(model_defaults.__file__).with_name(
+            "qachat_defaults.json"
+        )
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        expected_names = (
+            "DEFAULT_CHAT_MODEL_MLX",
+            "DEFAULT_CHAT_MODEL_TORCH",
+            "DEFAULT_EMBEDDING_MODEL_MLX",
+            "DEFAULT_EMBEDDING_MODEL_TORCH",
+        )
+        configured_models = config["DEFAULT_MODELS"]
+        self.assertEqual(set(configured_models), set(expected_names))
+        for name in expected_names:
+            with self.subTest(name=name):
+                self.assertEqual(
+                    getattr(model_defaults, name), configured_models[name]
+                )
 
     def test_default_model_identifiers(self) -> None:
         """Provide nonempty Hugging Face model identifiers."""

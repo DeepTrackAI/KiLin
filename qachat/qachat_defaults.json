@@ -59,5 +59,11 @@
     ".pt",
     ".pth",
     ".safetensors"
-  ]
+  ],
+  "DEFAULT_MODELS": {
+    "DEFAULT_CHAT_MODEL_MLX": "Qwen/Qwen3-8B-MLX-4bit",
+    "DEFAULT_CHAT_MODEL_TORCH": "Qwen/Qwen3-8B",
+    "DEFAULT_EMBEDDING_MODEL_MLX": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ",
+    "DEFAULT_EMBEDDING_MODEL_TORCH": "Qwen/Qwen3-Embedding-0.6B"
+  }
 }

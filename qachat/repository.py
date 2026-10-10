@@ -100,6 +100,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
+
 __all__ = [
     "build_repository_manifest",
     "compare_repository_manifests",
@@ -111,20 +112,16 @@ __all__ = [
 _MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
 # Load packaged repository-selection defaults once at import time.
-_REPOSITORY_DEFAULTS: dict[str, list[str]] = json.loads(
-    Path(__file__)
-    .with_name("qachat_defaults.json")
-    .read_text(encoding="utf-8")
+_REPOSITORY_DEFAULTS = json.loads(
+    Path(__file__).with_name("qachat_defaults.json").read_text(
+        encoding="utf-8"
+    )
 )
-
-DEFAULT_EXTENSIONS: tuple[str, ...] = tuple(
-    _REPOSITORY_DEFAULTS["DEFAULT_EXTENSIONS"]
-)
-SKIP_DIRECTORIES: set[str] = set(_REPOSITORY_DEFAULTS["SKIP_DIRECTORIES"])
-SKIP_FILES: set[str] = set(_REPOSITORY_DEFAULTS["SKIP_FILES"])
-BLOCKED_SUFFIXES: set[str] = set(_REPOSITORY_DEFAULTS["BLOCKED_SUFFIXES"])
+DEFAULT_EXTENSIONS = tuple(_REPOSITORY_DEFAULTS["DEFAULT_EXTENSIONS"])
+SKIP_DIRECTORIES = set(_REPOSITORY_DEFAULTS["SKIP_DIRECTORIES"])
+SKIP_FILES = set(_REPOSITORY_DEFAULTS["SKIP_FILES"])
+BLOCKED_SUFFIXES = set(_REPOSITORY_DEFAULTS["BLOCKED_SUFFIXES"])
 
 
 def _selection_paths(
@@ -642,15 +639,10 @@ def build_repository_manifest(
                 digest.update(block)
             after = os.fstat(stream.fileno())
         identity = (
-            "st_dev",
-            "st_ino",
-            "st_size",
-            "st_mtime_ns",
-            "st_ctime_ns",
+            "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"
         )
-        if any(
-            getattr(before, name) != getattr(after, name) for name in identity
-        ):
+        if any(getattr(before, name) != getattr(after, name)
+               for name in identity):
             raise OSError(
                 f"Selected source file changed while hashing: {path}"
             )
@@ -725,6 +717,7 @@ def compare_repository_manifests(
         "removed": removed,
         "modified": modified,
     }
+
 
 
 def _load_repository_manifest(
@@ -950,7 +943,6 @@ def repository_has_changed(
     )
     return not bool(changes["matches"])
 
-
 def _manifest_files(
     manifest: dict[str, object],
 ) -> dict[str, dict[str, object]]:
@@ -993,22 +985,15 @@ def _manifest_files(
     for path, record in files.items():
         if not isinstance(path, str) or not isinstance(record, dict):
             raise ValueError("Repository manifest contains invalid records.")
-        if (
-            not path
-            or "\\" in path
-            or path.startswith("/")
-            or any(part in ("", ".", "..") for part in path.split("/"))
-            or PureWindowsPath(path).drive
-        ):
+        if (not path or "\\" in path or path.startswith("/")
+                or any(part in ("", ".", "..") for part in path.split("/"))
+                or PureWindowsPath(path).drive):
             raise ValueError("Repository manifest contains invalid paths.")
         size = record.get("size_bytes")
         digest = record.get("sha256")
-        if (
-            type(size) is not int
-            or size < 0
-            or not isinstance(digest, str)
-            or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None
-        ):
+        if (type(size) is not int or size < 0
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None):
             raise ValueError("Repository manifest contains invalid hashes.")
         checked[path] = {
             "size_bytes": size,

@@ -83,6 +83,7 @@ class TestRepositoryScanSelection(_RepositoryFixture):
                 "SKIP_DIRECTORIES",
                 "SKIP_FILES",
                 "BLOCKED_SUFFIXES",
+                "DEFAULT_MODELS",
             },
         )
         self.assertEqual(
@@ -119,9 +120,9 @@ class TestRepositoryScanSelection(_RepositoryFixture):
         ]
         self.assertEqual(report["repository"], str(self.root.resolve()))
         self.assertEqual(report["selected_files"], expected)
-        self.assertEqual(
-            report["extensions"], list(repository.DEFAULT_EXTENSIONS)
-        )
+        self.assertEqual(report["extensions"], list(
+            repository.DEFAULT_EXTENSIONS
+        ))
         self.assertEqual(report["include_paths"], [])
         self.assertEqual(report["exclude_paths"], [])
         self.assertEqual(report["max_file_bytes"], 1_048_576)
@@ -199,7 +200,9 @@ class TestRepositoryScanSelection(_RepositoryFixture):
             include_paths=("src", "src/", "src\\main.py", "src"),
             exclude_paths=("src/helpers.py", "src/helpers.py"),
         )
-        self.assertEqual(report["include_paths"], ["src", "src/main.py"])
+        self.assertEqual(
+            report["include_paths"], ["src", "src/main.py"]
+        )
         self.assertEqual(report["exclude_paths"], ["src/helpers.py"])
         self.assertEqual(report["selected_files"], ["src/main.py"])
 
@@ -214,7 +217,9 @@ class TestRepositoryScanSelection(_RepositoryFixture):
         )
         self.assertEqual(report["extensions"], [".txt", ".tar.gz"])
         self.assertEqual(report["selected_files"], ["archive.tar.GZ"])
-        report = repository.scan_repository(self.root, extensions=[".MD"])
+        report = repository.scan_repository(
+            self.root, extensions=[".MD"]
+        )
         self.assertEqual(
             report["selected_files"], ["README.md", "docs/guide.MD"]
         )
@@ -250,7 +255,9 @@ class TestRepositoryScanSelection(_RepositoryFixture):
             rows["five.txt"]["reason"], "larger than the file-size limit"
         )
         self.assertEqual(rows["four.txt"]["size_bytes"], 4)
-        report = repository.scan_repository(self.root, extensions=[".py"])
+        report = repository.scan_repository(
+            self.root, extensions=[".py"]
+        )
         self.assertEqual(
             self._by_path(report)["empty.py"]["reason"], "empty file"
         )
@@ -267,8 +274,8 @@ class TestRepositoryScanSelection(_RepositoryFixture):
         for name, reason in cases:
             with self.subTest(name=name):
                 report = repository.scan_repository(
-                    self.root,
-                    extensions=[".env", ".local", ".json", ".safetensors"],
+                    self.root, extensions=[".env", ".local", ".json",
+                                           ".safetensors"],
                     include_paths=[name],
                 )
                 self.assertEqual(report["selected_files"], [])
@@ -296,11 +303,10 @@ class TestRepositoryScanSelection(_RepositoryFixture):
 
         report = repository.scan_repository(self.root)
         rows = self._by_path(report)
-        self.assertEqual(rows["image.png"]["reason"], "file type not selected")
-        self.assertEqual(
-            rows["cache.safetensors"]["reason"],
-            "model weights or potentially secret file",
-        )
+        self.assertEqual(rows["image.png"]["reason"],
+                         "file type not selected")
+        self.assertEqual(rows["cache.safetensors"]["reason"],
+                         "model weights or potentially secret file")
 
     def test_entry_limit_is_inclusive(self) -> None:
         """Allow exactly the visited count but reject a smaller limit."""
@@ -343,17 +349,8 @@ class TestRepositoryScanValidation(_RepositoryFixture):
         """Require a sequence of literal, valid extension strings."""
 
         cases = (
-            ".py",
-            None,
-            [None],
-            ["*"],
-            [""],
-            ["."],
-            ["py*"],
-            [".p y"],
-            ["py/file"],
-            [".py?"],
-            [".py."],
+            ".py", None, [None], ["*"], [""], ["."],
+            ["py*"], [".p y"], ["py/file"], [".py?"], [".py."],
         )
         for extensions in cases:
             with self.subTest(extensions=extensions):
@@ -369,20 +366,15 @@ class TestRepositoryScanValidation(_RepositoryFixture):
             for value in (0, -1, True, False, 1.5, "10", None):
                 with self.subTest(field=field, value=value):
                     with self.assertRaises(ValueError):
-                        repository.scan_repository(self.root, **{field: value})
+                        repository.scan_repository(
+                            self.root, **{field: value}
+                        )
 
     def test_invalid_repository_roots(self) -> None:
         """Reject remote identifiers, nonexistent paths, and files."""
 
-        for value in (
-            "",
-            "  ",
-            None,
-            5,
-            "https://site/repo",
-            "http://site/repo",
-            "git@example:repo",
-        ):
+        for value in ("", "  ", None, 5, "https://site/repo",
+                      "http://site/repo", "git@example:repo"):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     repository.scan_repository(value)
@@ -401,7 +393,9 @@ class TestRepositoryScanValidation(_RepositoryFixture):
     def test_relative_repository_paths_use_project_root(self) -> None:
         """Resolve a relative source against QAChat's project root."""
 
-        with patch.object(repository, "PROJECT_ROOT", self.root.parent):
+        with patch.object(
+            repository, "PROJECT_ROOT", self.root.parent
+        ):
             report = repository.scan_repository(self.root.name)
         self.assertEqual(report["repository"], str(self.root.resolve()))
 
@@ -419,8 +413,12 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
             (self.root / "linked-folder").symlink_to(
                 outside, target_is_directory=True
             )
-            (self.root / "linked-file.py").symlink_to(outside / "secret.py")
-            (self.root / "broken.py").symlink_to(outside / "missing.py")
+            (self.root / "linked-file.py").symlink_to(
+                outside / "secret.py"
+            )
+            (self.root / "broken.py").symlink_to(
+                outside / "missing.py"
+            )
         except (OSError, NotImplementedError) as error:
             self.skipTest(f"Filesystem does not support symlinks: {error}")
 
@@ -430,9 +428,8 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
             with self.subTest(name=name):
                 self.assertEqual(rows[name]["kind"], "link")
                 self.assertEqual(rows[name]["status"], "skipped")
-                self.assertEqual(
-                    rows[name]["reason"], "links are not followed"
-                )
+                self.assertEqual(rows[name]["reason"],
+                                 "links are not followed")
         self.assertNotIn("linked-folder/secret.py", report["selected_files"])
         self.assertTrue(report["complete"])
 
@@ -522,7 +519,8 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         self.assertNotIn("src/main.py", report["selected_files"])
         row = self._by_path(report)["src"]
         self.assertEqual(row["kind"], "folder")
-        self.assertEqual(row["reason"], "cannot list folder (PermissionError)")
+        self.assertEqual(row["reason"],
+                         "cannot list folder (PermissionError)")
 
     def test_entry_inspection_failure_marks_scan_incomplete(self) -> None:
         """Represent an unreadable entry without aborting the scan."""
@@ -542,9 +540,8 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         self.assertFalse(report["complete"])
         row = self._by_path(report)["src/main.py"]
         self.assertEqual(row["kind"], "unknown")
-        self.assertEqual(
-            row["reason"], "cannot inspect entry (PermissionError)"
-        )
+        self.assertEqual(row["reason"],
+                         "cannot inspect entry (PermissionError)")
         self.assertIn("src/helpers.py", report["selected_files"])
 
 
