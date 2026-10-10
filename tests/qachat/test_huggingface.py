@@ -21,8 +21,10 @@ class TestAvailableModels(unittest.TestCase):
 
     def test_filters_and_sorts_cached_models(self) -> None:
         """Return sorted model metadata, excluding other repository types."""
+
         def repository(repo_id, repo_type, revisions, size):
             """Construct minimal Hub repository metadata for a test."""
+
             return SimpleNamespace(
                 repo_id=repo_id,
                 repo_type=repo_type,
@@ -31,34 +33,40 @@ class TestAvailableModels(unittest.TestCase):
                 revisions=[SimpleNamespace(commit_hash=r) for r in revisions],
             )
 
-        cache = SimpleNamespace(repos=[
-            repository("z/model", "model", ["bbb", "aaa"], 123),
-            repository("a/data", "dataset", ["ccc"], 10),
-            repository("a/model", "model", [], 0),
-        ])
+        cache = SimpleNamespace(
+            repos=[
+                repository("z/model", "model", ["bbb", "aaa"], 123),
+                repository("a/data", "dataset", ["ccc"], 10),
+                repository("a/model", "model", [], 0),
+            ]
+        )
         with patch.object(
             huggingface, "scan_cache_dir", return_value=cache
         ) as scan:
             models = huggingface.available_models("/cache")
 
         scan.assert_called_once_with(cache_dir="/cache")
-        self.assertEqual(models, [
-            {
-                "model_id": "a/model",
-                "path": str(Path("/cache/a/model")),
-                "size_bytes": 0,
-                "revisions": [],
-            },
-            {
-                "model_id": "z/model",
-                "path": str(Path("/cache/z/model")),
-                "size_bytes": 123,
-                "revisions": ["aaa", "bbb"],
-            },
-        ])
+        self.assertEqual(
+            models,
+            [
+                {
+                    "model_id": "a/model",
+                    "path": str(Path("/cache/a/model")),
+                    "size_bytes": 0,
+                    "revisions": [],
+                },
+                {
+                    "model_id": "z/model",
+                    "path": str(Path("/cache/z/model")),
+                    "size_bytes": 123,
+                    "revisions": ["aaa", "bbb"],
+                },
+            ],
+        )
 
     def test_missing_cache_returns_empty_list(self) -> None:
         """Return no models when the Hub reports a missing cache."""
+
         with patch.object(
             huggingface,
             "scan_cache_dir",
@@ -68,6 +76,7 @@ class TestAvailableModels(unittest.TestCase):
 
     def test_unexpected_cache_error_propagates(self) -> None:
         """Do not suppress errors unrelated to a missing cache."""
+
         with patch.object(
             huggingface, "scan_cache_dir", side_effect=OSError("unreadable")
         ):
@@ -80,6 +89,7 @@ class TestModelIsAvailable(unittest.TestCase):
 
     def test_checks_exact_identifier_and_passes_cache_directory(self) -> None:
         """Distinguish exact IDs and forward the requested cache path."""
+
         models = [{"model_id": "group/model"}]
         with patch.object(
             huggingface, "available_models", return_value=models
@@ -95,6 +105,7 @@ class TestModelIsAvailable(unittest.TestCase):
 
     def test_rejects_invalid_model_identifiers(self) -> None:
         """Reject empty, whitespace-only, and non-string identifiers."""
+
         for model_id in ("", "  ", None, 123):
             with self.subTest(model_id=model_id):
                 with self.assertRaises(ValueError):
@@ -106,6 +117,7 @@ class TestCachedModelSnapshot(unittest.TestCase):
 
     def test_resolves_snapshot_with_config(self) -> None:
         """Accept a local snapshot containing config.json."""
+
         with TemporaryDirectory() as directory:
             snapshot = Path(directory)
             (snapshot / "config.json").write_text("{}", encoding="utf-8")
@@ -124,6 +136,7 @@ class TestCachedModelSnapshot(unittest.TestCase):
 
     def test_rejects_snapshot_without_config(self) -> None:
         """Reject incomplete snapshots, even when the Hub returns a path."""
+
         with TemporaryDirectory() as directory:
             with patch.object(
                 huggingface, "snapshot_download", return_value=directory
@@ -133,6 +146,7 @@ class TestCachedModelSnapshot(unittest.TestCase):
 
     def test_legacy_incomplete_snapshot_uses_same_validation(self) -> None:
         """Apply config validation to older Hub partial-snapshot errors."""
+
         class PartialSnapshotError(Exception):
             """Represent the legacy Hub exception with a snapshot path."""
 
@@ -143,22 +157,26 @@ class TestCachedModelSnapshot(unittest.TestCase):
         with TemporaryDirectory() as directory:
             snapshot = Path(directory)
             error = PartialSnapshotError(str(snapshot))
-            with patch.object(
-                huggingface, "_IncompleteSnapshotError", PartialSnapshotError
-            ), patch.object(
-                huggingface, "snapshot_download", side_effect=error
+            with (
+                patch.object(
+                    huggingface,
+                    "_IncompleteSnapshotError",
+                    PartialSnapshotError,
+                ),
+                patch.object(
+                    huggingface, "snapshot_download", side_effect=error
+                ),
             ):
                 with self.assertRaisesRegex(FileNotFoundError, "config.json"):
                     huggingface.cached_model_snapshot("group/model")
-                (snapshot / "config.json").write_text(
-                    "{}", encoding="utf-8"
-                )
+                (snapshot / "config.json").write_text("{}", encoding="utf-8")
                 self.assertEqual(
                     huggingface.cached_model_snapshot("group/model"), snapshot
                 )
 
     def test_rejects_invalid_identifier_before_lookup(self) -> None:
         """Avoid Hub calls for invalid model identifiers."""
+
         with patch.object(huggingface, "snapshot_download") as lookup:
             with self.assertRaises(ValueError):
                 huggingface.cached_model_snapshot(" ")
@@ -166,6 +184,7 @@ class TestCachedModelSnapshot(unittest.TestCase):
 
     def test_other_hub_errors_propagate(self) -> None:
         """Preserve unexpected errors from offline snapshot resolution."""
+
         with patch.object(
             huggingface, "snapshot_download", side_effect=OSError("offline")
         ):
@@ -178,20 +197,18 @@ class TestDownloadModel(unittest.TestCase):
 
     def test_download_delegates_to_hub(self) -> None:
         """Forward model and revision without custom progress handling."""
+
         expected = Path("/cache/snapshot")
         with patch.object(
             huggingface, "snapshot_download", return_value=str(expected)
         ) as download:
-            result = huggingface.download_model(
-                "group/model", revision="abc"
-            )
+            result = huggingface.download_model("group/model", revision="abc")
         self.assertEqual(result, expected)
-        download.assert_called_once_with(
-            repo_id="group/model", revision="abc"
-        )
+        download.assert_called_once_with(repo_id="group/model", revision="abc")
 
     def test_invalid_inputs_do_not_trigger_download(self) -> None:
         """Validate identifiers and callbacks before contacting the Hub."""
+
         with patch.object(huggingface, "snapshot_download") as download:
             with self.assertRaises(ValueError):
                 huggingface.download_model("")
@@ -203,6 +220,7 @@ class TestDownloadModel(unittest.TestCase):
 
     def test_non_string_hub_result_is_rejected(self) -> None:
         """Require the Hub to return a string snapshot path."""
+
         with patch.object(
             huggingface, "snapshot_download", return_value=Path("/cache")
         ):
@@ -211,6 +229,7 @@ class TestDownloadModel(unittest.TestCase):
 
     def test_progress_callback_reports_aggregate_bytes(self) -> None:
         """Forward aggregate byte updates and ignore unrelated Hub bars."""
+
         callback = Mock()
         with patch.object(
             huggingface, "snapshot_download", return_value="/cache/snapshot"
