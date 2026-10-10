@@ -37,6 +37,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 import sys
 
+__all__ = [
+    "main",
+]
+
 
 def main(arguments: Sequence[str] | None = None) -> int:
     """Start the desktop window, or explain how to install Qt.

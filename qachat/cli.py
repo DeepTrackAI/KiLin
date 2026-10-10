@@ -61,6 +61,10 @@ from qachat.runtime import (
     SelectedBackend,
 )
 
+__all__ = [
+    "main",
+]
+
 
 def _selected_backend(backend: Backend) -> SelectedBackend:
     """Resolve Automatic to the backend used by the local platform.

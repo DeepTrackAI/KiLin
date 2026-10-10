@@ -161,6 +161,11 @@ from qachat.trace_logging import (
     TraceTextStream,
 )
 
+__all__ = [
+    "ChatEngine",
+    "main",
+]
+
 ROOT = Path(__file__).resolve().parents[2]
 # The engine adds this phase to RAGSession's answer phases while it switches
 # the chat model before a question; the page shows it as its own step.
@@ -206,9 +211,7 @@ class _AnswerStream:
             self.flush()
 
     def flush(self) -> None:
-        """Emit buffered answer text and update the last-flush time.
-
-        """
+        """Emit buffered answer text and update the last-flush time."""
 
         if self._pieces:
             self._send("answer_delta", text="".join(self._pieces))
@@ -714,9 +717,7 @@ class ChatEngine:
                 expected = max(expected, byte_total)
 
         def send_progress() -> None:
-            """Send current download speed and progress to the frontend.
-
-            """
+            """Send current download speed and progress to the frontend."""
 
             with progress_lock:
                 current = completed
@@ -745,9 +746,7 @@ class ChatEngine:
             )
 
         def heartbeat() -> None:
-            """Periodically publish download progress until the event is set.
-
-            """
+            """Periodically publish download progress until the event is set."""
 
             while not stopped.wait(0.5):
                 send_progress()
@@ -975,9 +974,7 @@ class ChatEngine:
                     default_project_profile(kind),
                     # New projects start from defaults.json and the
                     # app-wide preferences.
-                    max_new_tokens=default_answer_settings()[
-                        "max_new_tokens"
-                    ],
+                    max_new_tokens=default_answer_settings()["max_new_tokens"],
                     temperature=default_answer_settings()["temperature"],
                     thinking=default_answer_settings()["thinking"],
                     chat_mlx=str(
@@ -986,9 +983,9 @@ class ChatEngine:
                         ]
                     ),
                     chat_torch=str(
-                        default_effort_levels(BACKEND_TORCH)[
-                            DEFAULT_LEVEL
-                        ]["model"]
+                        default_effort_levels(BACKEND_TORCH)[DEFAULT_LEVEL][
+                            "model"
+                        ]
                     ),
                     embedding_mlx=default_embedding_model(BACKEND_MLX),
                     embedding_torch=default_embedding_model(BACKEND_TORCH),
@@ -1965,9 +1962,7 @@ class ChatEngine:
                 replace = arguments.get("replace") is True
                 for value in _path_list(arguments.get("paths")):
                     origin = Path(value).expanduser().resolve(strict=True)
-                    if origin == directory or origin.is_relative_to(
-                        directory
-                    ):
+                    if origin == directory or origin.is_relative_to(directory):
                         raise ValueError(
                             f"{origin.name} is already in {folder}/."
                         )
@@ -2302,9 +2297,7 @@ class ChatEngine:
         stopped = Event()
 
         def tick() -> None:
-            """Periodically publish token usage while the answer is active.
-
-            """
+            """Periodically publish token usage while the answer is active."""
 
             while not stopped.wait(0.5):
                 self._send("usage_progress", **session.usage_since(mark))
@@ -2377,7 +2370,8 @@ class ChatEngine:
             """
 
             usage = (
-                parameters.get("usage") if isinstance(parameters, dict)
+                parameters.get("usage")
+                if isinstance(parameters, dict)
                 else None
             )
             if isinstance(usage, dict):
@@ -3262,9 +3256,7 @@ def _preference_payload() -> dict[str, object]:
     return {
         "effort_levels": {b: default_effort_levels(b) for b in backends},
         "router_models": {b: default_router_model(b) for b in backends},
-        "embedding_models": {
-            b: default_embedding_model(b) for b in backends
-        },
+        "embedding_models": {b: default_embedding_model(b) for b in backends},
         "search_depth": default_search_depth(),
         "query_format": default_query_format(),
         "appearance": default_appearance(),

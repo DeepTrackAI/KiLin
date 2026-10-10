@@ -31,3 +31,5 @@ Launch the interface explicitly with ``python -m qachat.gui`` in a suitable
 environment. This package does not re-export the Qt classes.
 
 """
+
+__all__ = []

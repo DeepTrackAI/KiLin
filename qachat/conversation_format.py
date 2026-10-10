@@ -52,6 +52,15 @@ from __future__ import annotations
 
 from typing import Final
 
+__all__ = [
+    "CONVERSATION_SESSION_KEY",
+    "CONVERSATION_SESSION_TITLE",
+    "CONVERSATION_SESSION_CATEGORY",
+    "CONVERSATION_RESUME_STATE_KEY",
+    "LEGACY_CONVERSATION_KEY",
+    "new_conversation_session",
+    "conversation_state",
+]
 
 CONVERSATION_SESSION_KEY: Final[str] = "05_conversations"
 CONVERSATION_SESSION_TITLE: Final[str] = "Conversation turns"

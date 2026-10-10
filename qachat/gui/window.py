@@ -84,6 +84,12 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
 from qachat.gui.preferences import default_appearance, write_defaults
 
+__all__ = [
+    "ChatBridge",
+    "SourceDropView",
+    "ChatWindow",
+]
+
 ROOT = Path(__file__).resolve().parents[2]
 ICONS = Path(__file__).resolve().parent / "icons"
 
@@ -513,9 +519,7 @@ class ChatBridge(QObject):
 
         """
 
-        self.commandRequested.emit(
-            {"action": "plan_choice", "choice": choice}
-        )
+        self.commandRequested.emit({"action": "plan_choice", "choice": choice})
 
     @Slot(int, int)
     def previewReference(self, turn_index: int, citation: int) -> None:
