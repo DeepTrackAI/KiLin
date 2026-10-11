@@ -178,6 +178,7 @@ from qachat.repository import (
     compare_repository_manifests,
     scan_repository,
 )
+from qachat.retrievals.model_identity import embedding_model_identity
 from qachat.retrievals import (
     CodeGraph,
     DocumentSelection,
@@ -273,7 +274,6 @@ ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
     ANSWER_PHASE_PROCESSING,
 )
 
-_INDEX_METADATA_VERSION = 1
 _EMBEDDING_PROGRESS_BATCH_SIZE = 64
 _PROGRESS_MIN_INTERVAL_SECONDS = 0.15
 _PROGRESS_TRACE_PERCENT_STEP = 5.0
@@ -2173,11 +2173,6 @@ class RAGSession:
             Tuple (chunks, indexes, index_status, source_changes), where status
             is reused or rebuilt.
 
-        Raises
-        ------
-        ValueError
-            If saved embedding vectors fail integrity validation.
-
         Notes
         -----
         A selected-source manifest and stored configuration metadata control
@@ -2223,11 +2218,22 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
-        # The resolved snapshot or folder changes when the same model ID
-        # resolves to other weights, whose vectors are not comparable.
+        # Bind the saved vectors to the actual loaded model, not merely to
+        # its configured ID or directory path. Cache identity on the loaded
+        # session so source refreshes do not rehash large local weight files.
         model_source = getattr(embedding_session, "model_source", None)
-        if isinstance(model_source, str):
-            expected_metadata["embedding_model_source"] = model_source
+        if not isinstance(model_source, str):
+            raise ValueError("The embedding model source is unavailable.")
+        model_identity = getattr(
+            embedding_session, "_retrieval_model_identity", None
+        )
+        if model_identity is None:
+            model_identity = embedding_model_identity(
+                embedding_session.model_id, model_source
+            )
+            embedding_session._retrieval_model_identity = model_identity
+        expected_metadata["embedding_model_source"] = model_source
+        expected_metadata["embedding_model_identity"] = model_identity
 
         saved_manifest: dict[str, object] | None = None
         saved_metadata: dict[str, object] | None = None
@@ -2302,6 +2308,10 @@ class RAGSession:
                     data={"index_path": str(index_path)},
                 ):
                     indexes = load_indexes(index_path)
+                    if indexes.embedding_model_identity != model_identity:
+                        raise ValueError(
+                            "Saved index embedding model identity differs."
+                        )
                 self.trace.emit(
                     "index.reused",
                     component="rag",
@@ -2343,6 +2353,10 @@ class RAGSession:
         if not configuration_changed and saved_manifest is not None:
             try:
                 saved = load_indexes(index_path)
+                if saved.embedding_model_identity != model_identity:
+                    raise ValueError(
+                        "Saved index embedding model identity differs."
+                    )
                 vectors = saved.semantic.embeddings
                 old_chunks = saved.semantic.chunks
                 # Saved vectors are mixed with new ones only when each chunk
@@ -2476,6 +2490,7 @@ class RAGSession:
             semantic,
             lexical,
             code_graph,
+            embedding_model_identity=model_identity,
         )
         self._emit_progress(
             "saving_index",
@@ -2564,14 +2579,7 @@ class RAGSession:
         """
 
         def report(message: str) -> None:
-            """Pass a progress message to the status callback, if any.
-
-            Parameters
-            ----------
-            message: str
-                Message passed to the current session.
-
-            """
+            """Pass a progress message to the status callback, if any."""
 
             if status_callback is not None:
                 status_callback(message)
@@ -2862,19 +2870,7 @@ class RAGSession:
         trace = getattr(self, "trace", NullTraceLogger())
 
         def ask(chat: object) -> Callable[[str, str, int], str]:
-            """Return ``ask(system, prompt, tokens)`` for one chat session.
-
-            Parameters
-            ----------
-            chat: object
-                Chat session to be wrapped in a generation callback.
-
-            Returns
-            -------
-            Callable[[str, str, int], str]
-                ``ask(system, prompt, tokens)`` for one chat session.
-
-            """
+            """Return ``ask(system, prompt, tokens)`` for one chat session."""
 
             return lambda system, prompt, tokens: side_reply(
                 chat, system, prompt, max_new_tokens=tokens
@@ -2997,11 +2993,6 @@ class RAGSession:
 
         A missing or unreadable manifest gives an empty mapping; tools use
         the result only for inventories and coverage reports.
-
-        Returns
-        -------
-        dict[Path, int]
-            selected source files and sizes from the source manifest.
 
         """
 
@@ -3178,11 +3169,6 @@ class RAGSession:
 
         Each answer adds its intent's instruction to this prompt.
 
-        Returns
-        -------
-        str
-            the project type's base system prompt.
-
         """
 
         return project_type(self.project.profile.kind).system_prompt
@@ -3195,27 +3181,7 @@ class RAGSession:
         turn_id: str,
         report_phase: Callable[..., None],
     ) -> RouteDecision:
-        """Classify a question's intent and trace the decision.
-
-        Parameters
-        ----------
-        question: str
-            Question or request to analyze.
-        kind: object
-            Normalized project kind used for routing.
-        use_router: bool
-            Whether to call the intent router.
-        turn_id: str
-            Identifier assigned to the current turn.
-        report_phase: Callable[..., None]
-            Callback reporting routing state to the frontend.
-
-        Returns
-        -------
-        RouteDecision
-            Validated router decision, with tracing recorded.
-
-        """
+        """Classify a question's intent and trace the decision."""
 
         trace = getattr(self, "trace", NullTraceLogger())
         started = perf_counter()
@@ -3280,14 +3246,7 @@ class RAGSession:
         return decision
 
     def _model_sessions(self: RAGSession) -> list[ChatSession]:
-        """The answer model's session and, when separate, the router's.
-
-        Returns
-        -------
-        list[ChatSession]
-            Distinct loaded chat sessions that expose usage counters.
-
-        """
+        """The answer model's session and, when separate, the router's."""
 
         sessions = [self.chat_session]
         router = getattr(self, "_router_session", None)
@@ -3298,14 +3257,7 @@ class RAGSession:
         ]
 
     def _router_chat(self: RAGSession) -> ChatSession:
-        """Return the router model's session, loading it once if needed.
-
-        Returns
-        -------
-        ChatSession
-            the router model's session, loading it once if needed.
-
-        """
+        """Return the router model's session, loading it once if needed."""
 
         if self.chat_session.model_id == self.router_model:
             return self.chat_session
@@ -3380,15 +3332,15 @@ class RAGSession:
 
         Notes
         -----
-        These fields identify the configured embedding/model/chunking choices,
-        not the resolved model commit or implementation/library versions. The
-        caller separately compares a selected-source manifest.
+        These fields identify configured embedding and chunking choices. The
+        retrieval preparation step additionally records the loaded model's
+        identity and source. Implementation/library versions are not tracked;
+        a selected-source manifest is compared separately.
 
         """
 
         profile = self.project.profile
         metadata: dict[str, object] = {
-            "format_version": _INDEX_METADATA_VERSION,
             "project_kind": profile.kind,
             "backend": self.backend,
             "embedding_model": profile.embedding_model(self.backend),
@@ -3797,19 +3749,7 @@ def _check_conversation_trace(
 
 
 def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
-    """The cached text of source files; empty when missing or unreadable.
-
-    Parameters
-    ----------
-    indexes: Path
-        Directory containing the persistent indexes.
-
-    Returns
-    -------
-    dict[str, dict[str, str]]
-        Cached source text, or an empty dictionary if unavailable.
-
-    """
+    """The cached text of source files; empty when missing or unreadable."""
 
     try:
         data = json.loads((indexes / _TEXT_CACHE).read_text(encoding="utf-8"))
@@ -3827,16 +3767,7 @@ def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
 def _write_text_cache(
     indexes: Path, entries: dict[str, dict[str, str]]
 ) -> None:
-    """Save the text of the current source files (removed files drop out).
-
-    Parameters
-    ----------
-    indexes: Path
-        Directory containing the persistent indexes.
-    entries: dict[str, dict[str, str]]
-        Cached source entries to write.
-
-    """
+    """Save the text of the current source files (removed files drop out)."""
 
     indexes.mkdir(parents=True, exist_ok=True)
     path = indexes / _TEXT_CACHE
@@ -3846,19 +3777,7 @@ def _write_text_cache(
 
 
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
-    """Number a document's selected chunks in source order.
-
-    Parameters
-    ----------
-    selection: DocumentSelection
-        Selected document, if any.
-
-    Returns
-    -------
-    tuple[Evidence, ...]
-        Numbered evidence records in source order.
-
-    """
+    """Number a document's selected chunks in source order."""
 
     return tuple(
         Evidence(
@@ -3902,19 +3821,7 @@ def _document_data(selection: DocumentSelection) -> dict[str, object]:
 
 
 def _document_message(selection: DocumentSelection | None) -> str:
-    """Describe a document selection for the progress display.
-
-    Parameters
-    ----------
-    selection: DocumentSelection | None
-        Selected document, if any.
-
-    Returns
-    -------
-    str
-        Status text describing the selected document.
-
-    """
+    """Describe a document selection for the progress display."""
 
     if selection is None:
         return "No document found to read"
@@ -3984,16 +3891,6 @@ def _merge_evidence(
     renumbered in conversation order; a repeated chunk keeps its first
     position. At most ``_MAX_REUSED_EVIDENCE`` items are kept, dropping the
     oldest.
-
-    Parameters
-    ----------
-    groups: list[tuple[Evidence, ...]]
-        Per-turn evidence groups in conversation order.
-
-    Returns
-    -------
-    tuple[Evidence, ...]
-        Combined evidence with new consecutive citation numbers.
 
     """
 

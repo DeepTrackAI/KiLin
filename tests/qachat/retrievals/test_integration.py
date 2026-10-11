@@ -25,7 +25,9 @@ import numpy as np
 from qachat import embeddings
 from qachat.chunking import chunk_source_units
 from qachat.embeddings import EmbeddingSession
+from qachat.retrievals.model_identity import embedding_model_identity
 from qachat.retrievals import (
+    CodeGraph,
     build_code_graph,
     build_lexical_index,
     build_semantic_index,
@@ -394,6 +396,34 @@ class TestLocalQwen3ModelRetrieval(unittest.TestCase):
                     )
                 self.assertGreaterEqual(loop[0].score, 0.0)
                 self.assertTrue(np.isfinite([r.score for r in numpy]).all())
+
+                # Persist genuinely computed backend vectors together with
+                # the model identity, then query the loaded index.
+                identity = embedding_model_identity(
+                    session.model_id, session.model_source,
+                    cache_directory=model_path.parent / "identity-cache",
+                )
+                persistent = prepare_persistent_indexes(
+                    index,
+                    build_lexical_index(chunks),
+                    CodeGraph((), ()),
+                    embedding_model_identity=identity,
+                )
+                target = model_path.parent / f"{backend}-index.json"
+                save_indexes(persistent, target)
+                restored = load_indexes(target)
+                self.assertEqual(restored, persistent)
+                self.assertEqual(restored.embedding_model_identity, identity)
+                restored_results = semantic_search(
+                    restored.semantic,
+                    "physics",
+                    session,
+                    backend="numpy",
+                )
+                self.assertEqual(
+                    [item.chunk.identifier for item in restored_results],
+                    [item.chunk.identifier for item in numpy],
+                )
             finally:
                 session.close()
 

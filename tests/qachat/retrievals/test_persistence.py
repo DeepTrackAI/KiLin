@@ -1,7 +1,7 @@
 """Test reproducible retrieval-index serialization and corruption checks.
 
-Temporary JSON files exercise the real persistence implementation. Explicit
-expected failures document integrity gaps without changing production code.
+Temporary JSON files exercise canonical payload integrity, schema changes,
+structural validation, and embedding-model identity.
 
 """
 
@@ -65,15 +65,31 @@ class _PersistentIndexFixtures(unittest.TestCase):
         rp.save_indexes(self.indexes, self.target)
         return json.loads(self.target.read_text(encoding="utf-8"))
 
-    def _write_payload(self, payload: dict[str, object]) -> None:
-        """Replace a saved index with a mutated JSON payload.
+    def _write_payload(
+        self,
+        payload: dict[str, object],
+        *,
+        reseal: bool = True,
+    ) -> None:
+        """Write a mutated payload, optionally updating its checksum.
 
         Parameters
         ----------
         payload: dict[str, object]
             Modified serialized index contents.
+        reseal: bool, optional
+            Recalculate the checksum when possible so structural tests reach
+            the record validator. Set to False to test integrity detection.
+            Defaults to True.
 
         """
+
+        if reseal and "payload_sha256" in payload:
+            try:
+                payload["payload_sha256"] = rp._payload_checksum(payload)
+            except ValueError:
+                # Deliberately invalid JSON numbers cannot be resealed.
+                pass
         self.target.write_text(json.dumps(payload), encoding="utf-8")
 
 class TestPersistentIndexes(_PersistentIndexFixtures):
@@ -94,12 +110,12 @@ class TestPersistentIndexes(_PersistentIndexFixtures):
         with self.assertRaises(FrozenInstanceError):
             loaded.fingerprint = "changed"
 
-    def test_json_has_declared_format_version(self) -> None:
-        """Serialize one stable supported format version.
+    def test_json_contains_expected_index_records(self) -> None:
+        """Persist both retrieval modalities without a format version.
 
         """
         payload = self._save_payload()
-        self.assertEqual(payload["format_version"], 1)
+        self.assertNotIn("format_version", payload)
         self.assertEqual(len(payload["semantic_embeddings"]), 2)
         self.assertEqual(len(payload["lexical_vectors"]), 2)
         self.assertEqual(payload["chunks"][0]["path"],
@@ -137,14 +153,14 @@ class TestPersistentIndexes(_PersistentIndexFixtures):
                 self.semantic, lexical, self.graph
             )
 
-    def test_unsupported_format_version(self) -> None:
-        """Do not interpret an unsupported future persistence schema.
+    def test_missing_model_identity_field_is_rejected(self) -> None:
+        """Require explicit model provenance even for standalone indexes.
 
         """
         payload = self._save_payload()
-        payload["format_version"] = 99
+        del payload["embedding_model_identity"]
         self._write_payload(payload)
-        with self.assertRaisesRegex(ValueError, "format version"):
+        with self.assertRaisesRegex(ValueError, "fields"):
             rp.load_indexes(self.target)
 
     def test_missing_keys_and_malformed_json(self) -> None:
@@ -291,15 +307,14 @@ class TestPersistentIndexes(_PersistentIndexFixtures):
         with self.assertRaises(ValueError):
             rp.load_indexes(self.target)
 
-    @unittest.expectedFailure
-    def test_pending_detect_modified_numeric_embeddings(self) -> None:
-        """Pending: changing vectors alone must invalidate their integrity.
+    def test_detect_modified_numeric_embeddings(self) -> None:
+        """Changing vectors without updating the checksum is detected.
 
         """
         payload = self._save_payload()
         payload["semantic_embeddings"][0] = [0.0, 1.0]
-        self._write_payload(payload)
-        with self.assertRaises(ValueError):
+        self._write_payload(payload, reseal=False)
+        with self.assertRaisesRegex(ValueError, "checksum"):
             rp.load_indexes(self.target)
 
 
@@ -793,20 +808,236 @@ class TestLoadedIndexValidation(_PersistentIndexFixtures):
                          [[1.0, 0.0], [0.0, 1.0]])
         self.assertEqual(rp.load_indexes(self.target), indexes)
 
-    def test_valid_saved_content_keeps_v1_schema(self) -> None:
-        """Preserve the existing serialized record layout and version.
+    def test_saved_content_has_integrity_fields(self) -> None:
+        """Write the checksum and provenance alongside retrieval records.
 
         """
         payload = self._save_payload()
-        self.assertEqual(payload["format_version"], 1)
         self.assertEqual(
             set(payload),
             {
-                "format_version", "fingerprint", "chunks",
+                "fingerprint", "chunks",
                 "semantic_embeddings", "lexical_vectors",
                 "inverse_document_frequency", "code_graph",
+                "embedding_model_identity", "payload_sha256",
             },
         )
+
+
+class TestPayloadIntegrity(_PersistentIndexFixtures):
+    """Check canonical checksums, model provenance, and integrity."""
+
+    def test_saved_checksum_matches_canonical_payload(self) -> None:
+        """Bind all numeric and provenance fields into the integrity digest.
+
+        """
+
+        payload = self._save_payload()
+        self.assertEqual(len(payload["payload_sha256"]), 64)
+        self.assertEqual(
+            payload["payload_sha256"], rp._payload_checksum(payload)
+        )
+
+    def test_canonical_checksum_ignores_json_key_and_whitespace_order(
+        self,
+    ) -> None:
+        """Pretty printing and JSON object order cannot break a saved index.
+
+        """
+
+        payload = self._save_payload()
+        reversed_order = dict(reversed(list(payload.items())))
+        self.target.write_text(
+            json.dumps(reversed_order, indent=7), encoding="utf-8"
+        )
+        self.assertEqual(rp.load_indexes(self.target), self.indexes)
+
+    def test_checksum_covers_each_independent_payload_component(self) -> None:
+        """Reject modifications even when source fingerprint is unchanged.
+
+        """
+
+        def change_vector(value: dict[str, object]) -> None:
+            """Alter one finite semantic component.
+
+            """
+
+            value["semantic_embeddings"][0][0] = 0.5
+
+        def change_lexical(value: dict[str, object]) -> None:
+            """Alter one valid lexical weight.
+
+            """
+
+            term = next(iter(value["lexical_vectors"][0]))
+            value["lexical_vectors"][0][term] = 0.4
+
+        def change_idf(value: dict[str, object]) -> None:
+            """Alter one valid inverse frequency.
+
+            """
+
+            term = next(iter(value["inverse_document_frequency"]))
+            value["inverse_document_frequency"][term] = 1.5
+
+        def change_graph(value: dict[str, object]) -> None:
+            """Alter one relationship.
+
+            """
+
+            value["code_graph"]["relations"][0]["target"] = "changed"
+
+        def change_model(value: dict[str, object]) -> None:
+            """Change the claimed model provenance.
+
+            """
+
+            value["embedding_model_identity"] = "different-model"
+
+        def change_source(value: dict[str, object]) -> None:
+            """Change the repository identity metadata.
+
+            """
+
+            value["fingerprint"] = "different-fingerprint"
+
+        for operation in (
+            change_vector, change_lexical, change_idf, change_graph,
+            change_model, change_source,
+        ):
+            with self.subTest(field=operation.__name__):
+                payload = self._save_payload()
+                operation(payload)
+                self._write_payload(payload, reseal=False)
+                with self.assertRaisesRegex(ValueError, "checksum"):
+                    rp.load_indexes(self.target)
+
+    def test_resealed_payload_is_not_authenticated(self) -> None:
+        """A checksum is not a defense against a writer who recomputes it.
+
+        """
+
+        payload = self._save_payload()
+        payload["semantic_embeddings"][0] = [3.0, 4.0]
+        self._write_payload(payload)
+        loaded = rp.load_indexes(self.target)
+        self.assertEqual(loaded.semantic.embeddings[0], (3.0, 4.0))
+
+    def test_missing_and_invalid_checksum_are_rejected(self) -> None:
+        """Require complete payload fields and a valid checksum.
+
+        """
+
+        for checksum in (None, "", False, "x" * 64):
+            with self.subTest(checksum=checksum):
+                payload = self._save_payload()
+                payload["payload_sha256"] = checksum
+                self._write_payload(payload, reseal=False)
+                with self.assertRaises(ValueError):
+                    rp.load_indexes(self.target)
+        payload = self._save_payload()
+        del payload["payload_sha256"]
+        self._write_payload(payload, reseal=False)
+        with self.assertRaisesRegex(ValueError, "fields"):
+            rp.load_indexes(self.target)
+
+    def test_unknown_payload_field_rejected(self) -> None:
+        """Keep the index format explicit and reject undeclared fields.
+
+        """
+
+        payload = self._save_payload()
+        payload["unrecognized"] = True
+        self._write_payload(payload)
+        with self.assertRaisesRegex(ValueError, "fields"):
+            rp.load_indexes(self.target)
+
+    def test_missing_integrity_fields_requires_rebuild(self) -> None:
+        """Reject old files without checksums or model provenance.
+
+        """
+
+        payload = self._save_payload()
+        payload.pop("payload_sha256")
+        payload.pop("embedding_model_identity")
+        self._write_payload(payload, reseal=False)
+        with self.assertRaisesRegex(ValueError, "fields"):
+            rp.load_indexes(self.target)
+
+    def test_saved_embedding_model_identity_roundtrips(self) -> None:
+        """Bind an explicit model identity to the saved semantic vectors.
+
+        """
+
+        indexes = rp.prepare_persistent_indexes(
+            self.semantic, self.lexical, self.graph,
+            embedding_model_identity="local-sha256:deadbeef",
+        )
+        rp.save_indexes(indexes, self.target)
+        loaded = rp.load_indexes(self.target)
+        self.assertEqual(loaded, indexes)
+        self.assertFalse(rp.indexes_are_current(
+            loaded, self.chunks, self.graph,
+            embedding_model_identity="other-model",
+        ))
+        self.assertTrue(rp.indexes_are_current(
+            loaded, self.chunks, self.graph,
+            embedding_model_identity="local-sha256:deadbeef",
+        ))
+
+    def test_invalid_model_identity_is_rejected(self) -> None:
+        """Forbid invalid provenance in memory or in persisted indexes.
+
+        """
+
+        for value in ("", "  ", 12, False, {}, []):
+            with self.subTest(identity=value):
+                with self.assertRaisesRegex(ValueError, "identity"):
+                    rp.prepare_persistent_indexes(
+                        self.semantic, self.lexical, self.graph,
+                        embedding_model_identity=value,
+                    )
+                payload = self._save_payload()
+                payload["embedding_model_identity"] = value
+                self._write_payload(payload)
+                with self.assertRaises(ValueError):
+                    rp.load_indexes(self.target)
+
+    def test_save_rejects_forged_source_fingerprint(self) -> None:
+        """Do not create bundles claiming another source-revision digest.
+
+        """
+
+        forged = replace(self.indexes, fingerprint="bad")
+        with self.assertRaisesRegex(ValueError, "fingerprint"):
+            rp.save_indexes(forged, self.target)
+        self.assertFalse(self.target.exists())
+
+    def test_save_rejects_identity_mutated_after_preparation(self) -> None:
+        """Reject manually constructed indexes with invalid identity fields.
+
+        """
+
+        forged = replace(self.indexes, embedding_model_identity="")
+        with self.assertRaisesRegex(ValueError, "identity"):
+            rp.save_indexes(forged, self.target)
+        self.assertFalse(self.target.exists())
+
+    def test_checksum_rejects_nonfinite_json_values(self) -> None:
+        """Canonical index payloads cannot contain nonstandard JSON numbers.
+
+        """
+
+        with self.assertRaises(ValueError):
+            rp._payload_checksum({"weight": float("nan")})
+
+    def test_stored_number_rejects_nonfinite_values(self) -> None:
+        """The low-level number converter rejects infinity independently.
+
+        """
+
+        with self.assertRaisesRegex(ValueError, "non-finite"):
+            rp._stored_number(float("inf"))
 
 
 if __name__ == "__main__":

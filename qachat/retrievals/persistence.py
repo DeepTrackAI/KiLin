@@ -1,16 +1,17 @@
-"""Serialize retrieval indexes with chunk-and-graph provenance fingerprints.
+"""Serialize retrieval indexes with source and payload integrity checks.
 
 ``PersistentIndexes`` groups semantic and lexical indexes with a code graph.
 JSON storage includes chunks, vectors, lexical statistics, and relationships.
-The stored fingerprint identifies ordered chunk content and the graph; it
-does not cover the numeric embedding vectors, lexical weights, embedding
-model identity, or model revision.
+The source fingerprint identifies ordered chunk content and the code graph.
+A separate checksum protects the full serialized payload, including numeric
+vectors, lexical statistics, and the resolved embedding-model identity.
 
 Loading reconstructs the records and validates vector cardinality, finite
 numeric values, lexical vocabulary consistency, unique chunk identifiers,
-and the chunk/graph fingerprint. These checks are not a complete schema
-validator or authenticity guarantee. Files are replaced through a temporary
-path, with no inter-process lock or transaction spanning metadata files.
+the chunk/graph fingerprint, and the payload checksum. Missing integrity
+fields cause loading to fail so the caller can rebuild the index. A checksum
+is not an authenticity guarantee. Files are replaced through a temporary
+path, without inter-process locking.
 
 Key Features
 ------------
@@ -27,8 +28,8 @@ Key Features
 
 - **Content identity**
 
-    Compare supplied chunks and graph against the stored fingerprint without
-    scanning a repository.
+    Compare supplied chunks and graph against a source fingerprint; verify
+    all saved fields with an independent payload checksum.
 
 Module Structure
 ----------------
@@ -64,7 +65,7 @@ Examples
 ...     indexes, list(indexes.semantic.chunks), indexes.code_graph,
 ... )
 
-The file must have been written in the supported index format.
+Only complete, checksum-verified index payloads can be loaded.
 
 """
 
@@ -96,7 +97,16 @@ __all__ = [
     "indexes_are_current",
 ]
 
-_FORMAT_VERSION = 1
+_PAYLOAD_FIELDS = frozenset({
+    "fingerprint",
+    "embedding_model_identity",
+    "chunks",
+    "semantic_embeddings",
+    "lexical_vectors",
+    "inverse_document_frequency",
+    "code_graph",
+    "payload_sha256",
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,6 +123,8 @@ class PersistentIndexes:
         Saved lexical index.
     code_graph: CodeGraph
         Saved deterministic code graph.
+    embedding_model_identity: str | None, optional
+        Model identity recorded when the bundle was built. Defaults to None.
 
     Attributes
     ----------
@@ -124,13 +136,15 @@ class PersistentIndexes:
         Saved lexical index.
     code_graph: CodeGraph
         Saved deterministic code graph.
+    embedding_model_identity: str | None
+        Identity of the embedding model, if recorded.
 
     Notes
     -----
     The fingerprint covers serialized ordered chunks and the code graph. It
-    excludes numeric vectors, lexical statistics, embedding model identity, and
-    backend/library versions. Frozen fields do not make nested lexical
-    dictionaries immutable.
+    excludes numeric vectors, lexical statistics, and model identity; the
+    saved payload checksum covers these fields. Backend/library versions are
+    not tracked. Frozen fields do not make lexical dictionaries immutable.
 
     """
 
@@ -138,12 +152,15 @@ class PersistentIndexes:
     semantic: SemanticIndex
     lexical: LexicalIndex
     code_graph: CodeGraph
+    embedding_model_identity: str | None = None
 
 
 def prepare_persistent_indexes(
     semantic: SemanticIndex,
     lexical: LexicalIndex,
     code_graph: CodeGraph,
+    *,
+    embedding_model_identity: str | None = None,
 ) -> PersistentIndexes:
     """Validate and combine retrieval data from one repository state.
 
@@ -155,6 +172,9 @@ def prepare_persistent_indexes(
         In-memory lexical index.
     code_graph: CodeGraph
         In-memory deterministic code graph.
+    embedding_model_identity: str | None, optional
+        Identity of the loaded model that produced the semantic vectors.
+        Defaults to None for standalone indexes without a model.
 
     Returns
     -------
@@ -170,11 +190,13 @@ def prepare_persistent_indexes(
     Notes
     -----
     Validation checks vector structure and finite numeric values but does
-    not establish embedding-model identity or require unit-normalized vectors.
+    not require unit-normalized vectors. Model identity is provided by the
+    caller and must match the loaded model before vectors can be reused.
 
     """
 
     _validate_index_records(semantic, lexical)
+    _validate_model_identity(embedding_model_identity)
 
     chunks = list(semantic.chunks)
     return PersistentIndexes(
@@ -182,6 +204,7 @@ def prepare_persistent_indexes(
         semantic=semantic,
         lexical=lexical,
         code_graph=code_graph,
+        embedding_model_identity=embedding_model_identity,
     )
 
 
@@ -214,20 +237,24 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
 
     Notes
     -----
-    Validates index structure and serializes embedding scalars as Python
-    floats before replacing a temporary sibling file. The supplied fingerprint
-    is stored as given, not recalculated here. Concurrent writes are not
-    coordinated.
+    Validates index records and the source fingerprint before serializing.
+    The checksum covers all payload fields and is computed before replacing
+    a temporary sibling file. Concurrent writes are not coordinated.
 
     """
 
     _validate_index_records(indexes.semantic, indexes.lexical)
+    _validate_model_identity(indexes.embedding_model_identity)
+    if indexes.fingerprint != _repository_fingerprint(
+        list(indexes.semantic.chunks), indexes.code_graph
+    ):
+        raise ValueError("The index source fingerprint is invalid.")
 
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     payload = {
-        "format_version": _FORMAT_VERSION,
         "fingerprint": indexes.fingerprint,
+        "embedding_model_identity": indexes.embedding_model_identity,
         "chunks": [_chunk_to_data(chunk) for chunk in indexes.semantic.chunks],
         "semantic_embeddings": [
             [float(value) for value in vector]
@@ -241,9 +268,10 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
         ),
         "code_graph": _code_graph_to_data(indexes.code_graph),
     }
+    payload["payload_sha256"] = _payload_checksum(payload)
     temporary = target.with_suffix(f"{target.suffix}.tmp")
     temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
         encoding="utf-8",
     )
     temporary.replace(target)
@@ -262,31 +290,38 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
     Returns
     -------
     PersistentIndexes
-        Reconstructed PersistentIndexes with a verified chunk/graph
-        fingerprint.
+        Reconstructed indexes with verified source and payload fingerprints.
 
     Raises
     ------
     ValueError
-        If the format version, structural fields, vector contents, chunk
-        identifiers, or source fingerprint are invalid.
+        If the checksum, record contents, model identity, or source
+        fingerprint are invalid.
     OSError
         If the file cannot be read.
 
     Notes
     -----
-    Vector counts, dimensions, types, and finiteness are checked before
-    accepting saved data. The source fingerprint still excludes numeric
-    embeddings, lexical weights, and model identity; payload checksums and
-    model provenance are reserved for a later format revision.
+    Missing integrity fields cause loading to fail so the caller can
+    rebuild from the active embedding model. The checksum detects accidental
+    changes; it cannot authenticate an adversarial modification.
 
     """
 
     target = Path(path).expanduser().resolve()
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
-        if payload["format_version"] != _FORMAT_VERSION:
-            raise ValueError("Unsupported index format version.")
+        if not isinstance(payload, dict):
+            raise ValueError("The saved index file is invalid.")
+        if set(payload) != _PAYLOAD_FIELDS:
+            raise ValueError("The saved index fields are invalid.")
+        if (
+            not isinstance(payload["payload_sha256"], str)
+            or payload["payload_sha256"] != _payload_checksum(payload)
+        ):
+            raise ValueError("The saved index payload checksum is invalid.")
+        identity = payload["embedding_model_identity"]
+        _validate_model_identity(identity)
 
         chunks = tuple(_chunk_from_data(item) for item in payload["chunks"])
         semantic = SemanticIndex(
@@ -312,6 +347,7 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
             semantic=semantic,
             lexical=lexical,
             code_graph=code_graph,
+            embedding_model_identity=identity,
         )
     except (KeyError, TypeError, json.JSONDecodeError) as error:
         raise ValueError("The saved index file is invalid.") from error
@@ -320,6 +356,7 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
         semantic,
         lexical,
         code_graph,
+        embedding_model_identity=identity,
     )
     if indexes.fingerprint != expected.fingerprint:
         raise ValueError("The saved index fingerprint is invalid.")
@@ -330,6 +367,8 @@ def indexes_are_current(
     indexes: PersistentIndexes,
     chunks: list[Chunk],
     code_graph: CodeGraph,
+    *,
+    embedding_model_identity: str | None = None,
 ) -> bool:
     """Return whether saved retrieval data matches the current repository.
 
@@ -344,6 +383,9 @@ def indexes_are_current(
     code_graph: CodeGraph
         Code entities and relations included in the fingerprint or serialized
         bundle.
+    embedding_model_identity: str | None, optional
+        If provided, also require the saved identity to match the active
+        embedding model. Defaults to None for source-only comparisons.
 
     Returns
     -------
@@ -352,14 +394,80 @@ def indexes_are_current(
 
     Notes
     -----
-    Only the supplied chunk/graph fingerprint is compared. No files are read
-    and model identity, model revisions, vector data, and current source
-    selection are not checked.
+    The source fingerprint does not cover numeric vectors. Passing an active
+    model identity adds a compatibility check without reading model files.
 
     """
 
     current = _repository_fingerprint(chunks, code_graph)
-    return indexes.fingerprint == current
+    return (
+        indexes.fingerprint == current
+        and (
+            embedding_model_identity is None
+            or indexes.embedding_model_identity == embedding_model_identity
+        )
+    )
+
+
+def _payload_checksum(payload: dict[str, object]) -> str:
+    """Calculate a canonical SHA-256 checksum for the index payload.
+
+    Parameters
+    ----------
+    payload: dict[str, object]
+        Serialized index data; an existing checksum field is excluded.
+
+    Returns
+    -------
+    str
+        Digest of the canonical JSON representation of the saved fields.
+
+    Raises
+    ------
+    ValueError
+        If non-finite JSON numeric values are present.
+
+    Notes
+    -----
+    Sorting dictionary keys makes the checksum insensitive to JSON layout.
+    List order remains significant. This is an integrity checksum, not a
+    signature or a proof of trusted origin.
+
+    """
+
+    without_checksum = {
+        key: value for key, value in payload.items()
+        if key != "payload_sha256"
+    }
+    encoded = json.dumps(
+        without_checksum,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _validate_model_identity(identity: str | None) -> None:
+    """Validate optional model provenance recorded in an index bundle.
+
+    Parameters
+    ----------
+    identity: str | None
+        Embedding-model identity, or None for stand-alone test indexes.
+
+    Raises
+    ------
+    ValueError
+        If identity is not a nonempty string or None.
+
+    """
+
+    if identity is not None and (
+        not isinstance(identity, str) or not identity.strip()
+    ):
+        raise ValueError("The embedding model identity is invalid.")
 
 
 def _repository_fingerprint(
