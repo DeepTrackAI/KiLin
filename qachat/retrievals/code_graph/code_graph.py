@@ -63,7 +63,6 @@ from pathlib import Path
 
 from qachat.sources.sources import SourceFile, SourceUnit
 
-
 __all__ = [
     "CodeEntity",
     "CodeRelation",
