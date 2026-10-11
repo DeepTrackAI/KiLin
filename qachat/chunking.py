@@ -1,9 +1,10 @@
 """Split source units into token-budgeted retrieval chunks.
 
-The chunker preserves source text and provenance while using a caller-supplied
+The chunker preserves substantive source text and provenance with a supplied
 token-count function. Units already within the maximum size stay whole. An
-oversized unit is split through its children when available, otherwise along
-line boundaries and, if necessary, within an individual long line.
+oversized unit is split through its children only when they cover all of its
+non-whitespace text. Otherwise, it is split along line boundaries and, if
+necessary, within an individual long line.
 
 Target size guides splitting; maximum size is the acceptance bound. Overlap
 is retained as source lines or character suffixes. Binary-search helpers
@@ -21,11 +22,11 @@ Key Features
 
 - **Hierarchical splitting**
 
-    Prefer complete source units and child units before splitting plain text.
+    Prefer complete units and use children only when no content is lost.
 
 - **Stable identifiers**
 
-    Hash chunk text and provenance into identifiers without including an
+    Hash an unambiguous encoding of text and provenance without including an
     absolute repository root.
 
 - **Progress reporting**
@@ -67,6 +68,7 @@ For model use, pass that model's token counter instead of ``len``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
@@ -183,6 +185,11 @@ def chunk_source_units(
     ------
     ValueError
         If a size is invalid or the token counter returns an invalid value.
+
+    Notes
+    -----
+    Identifiers now use an unambiguous JSON-array encoding instead of the
+    previous colon-separated encoding. Existing indexes must be rebuilt.
 
     """
 
@@ -324,7 +331,7 @@ def _chunk_source_unit(
             )
         ]
 
-    if unit.children:
+    if unit.children and _children_cover_text(unit):
         chunks: list[Chunk] = []
         for child in unit.children:
             chunks.extend(
@@ -345,6 +352,41 @@ def _chunk_source_unit(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
     )
+
+
+def _children_cover_text(unit: SourceUnit) -> bool:
+    """Check whether ordered children cover all substantive parent text.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Parent with candidate natural child units.
+
+    Returns
+    -------
+    bool
+        ``True`` if the children match nonoverlapping substrings in source
+        order, with only whitespace between or around those substrings.
+
+    Notes
+    -----
+    Unmatched non-whitespace content requires splitting the parent instead.
+    Exact substring matching also avoids using child text that was normalized
+    differently from the original source or belongs to another file.
+
+    """
+
+    offset = 0
+    for child in unit.children:
+        if child.path != unit.path or not child.text:
+            return False
+
+        start = unit.text.find(child.text, offset)
+        if start < 0 or unit.text[offset:start].strip():
+            return False
+        offset = start + len(child.text)
+
+    return not unit.text[offset:].strip()
 
 
 def _make_chunk(
@@ -376,20 +418,27 @@ def _make_chunk(
     Chunk
         New chunk with a content-based identifier.
 
+    Notes
+    -----
+    A JSON array preserves field boundaries and distinguishes missing metadata
+    from empty values before hashing. The first 16 hash digits are retained.
+
     """
 
-    identity = ":".join(
-        (
+    identity = json.dumps(
+        [
             unit.path.as_posix(),
-            str(start_line),
-            str(end_line),
+            start_line,
+            end_line,
             unit.kind,
-            unit.symbol or "",
-            unit.section or "",
-            str(unit.cell or ""),
-            str(part),
+            unit.symbol,
+            unit.section,
+            unit.cell,
+            part,
             text,
-        )
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     identifier = sha256(identity.encode("utf-8")).hexdigest()[:16]
     return Chunk(

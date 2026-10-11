@@ -4,10 +4,8 @@ The tests exercise the public chunking interface with deterministic token
 counters. They check exact text, token limits, line boundaries, overlap,
 provenance, identifiers, progress callbacks, and failure behavior.
 
-Two explicitly marked expected failures document known correctness risks:
-incomplete child coverage can discard parent text, and delimiters in provenance
-fields can produce identical identifiers for different sources. Remove each
-marker after fixing the corresponding production defect.
+Regressions verify that incomplete child coverage cannot lose substantive
+text and that distinct provenance fields produce distinct identifiers.
 
 """
 
@@ -157,14 +155,8 @@ class TestChunkContract(unittest.TestCase):
             [(unit.path, unit.text) for unit in units],
         )
 
-    @unittest.expectedFailure
     def test_colons_in_metadata_must_not_alias_chunk_identity(self) -> None:
-        """Track an ambiguous delimiter in the current identifier format.
-
-        Remove ``expectedFailure`` when identifier serialization becomes
-        unambiguous across metadata-field boundaries.
-
-        """
+        """Metadata separators must not cause identifier aliasing."""
 
         first = make_unit(
             "text", kind="markdown_section",
@@ -177,6 +169,22 @@ class TestChunkContract(unittest.TestCase):
         first_chunk, = chunk_source_units([first], count_tokens=len)
         second_chunk, = chunk_source_units([second], count_tokens=len)
         self.assertNotEqual(first_chunk.identifier, second_chunk.identifier)
+
+    def test_optional_provenance_values_remain_distinct(self) -> None:
+        """An absent symbol or section is distinct from an empty one."""
+
+        for field in ("symbol", "section"):
+            with self.subTest(field=field):
+                original = make_unit("abc", symbol="x", section="y")
+                absent, = chunk_source_units(
+                    [replace(original, **{field: None})],
+                    count_tokens=len,
+                )
+                empty, = chunk_source_units(
+                    [replace(original, **{field: ""})],
+                    count_tokens=len,
+                )
+                self.assertNotEqual(absent.identifier, empty.identifier)
 
     def test_unit_above_target_but_within_max_stays_whole(self) -> None:
         """The target guides splits but does not cap intact units."""
@@ -559,14 +567,8 @@ class TestHierarchicalSplitting(unittest.TestCase):
         )
         self.assertEqual([c.text for c in chunks], ["abcd"])
 
-    @unittest.expectedFailure
     def test_incomplete_children_must_not_discard_parent_text(self) -> None:
-        """Track the known, still-unfixed loss of uncovered parent text.
-
-        Remove ``expectedFailure`` when the chunker checks child coverage and
-        falls back to splitting the complete parent text.
-
-        """
+        """Keep uncovered parent text when splitting a hierarchy."""
 
         child = make_unit(
             "    work()\n", start_line=2, end_line=2,
@@ -587,6 +589,129 @@ class TestHierarchicalSplitting(unittest.TestCase):
             expected,
             "Uncovered parent content must survive hierarchical splitting.",
         )
+
+    def test_missing_child_text_at_any_position_uses_parent(self) -> None:
+        """Preserve missing text before, between, or after children."""
+
+        cases = (
+            ("header\nfirst\nsecond\n", 2, 3),
+            ("first\nmiddle\nsecond\n", 1, 3),
+            ("first\nsecond\nfooter\n", 1, 2),
+        )
+        for text, first_line, second_line in cases:
+            with self.subTest(text=text):
+                parent = make_unit(
+                    text, end_line=3,
+                    children=(
+                        make_unit("first\n", start_line=first_line,
+                                  end_line=first_line),
+                        make_unit("second\n", start_line=second_line,
+                                  end_line=second_line),
+                    ),
+                )
+                chunks = chunk_source_units(
+                    [parent], count_tokens=len,
+                    target_tokens=7, max_tokens=9, overlap_tokens=0,
+                )
+                self.assertEqual(
+                    "".join(chunk.text for chunk in chunks), text
+                )
+
+    def test_out_of_order_children_use_complete_parent(self) -> None:
+        """Children in a different source order cannot reorder the text."""
+
+        first = make_unit("first\n", start_line=1, end_line=1)
+        second = make_unit("second\n", start_line=2, end_line=2)
+        parent = make_unit(
+            "first\nsecond\n", end_line=2,
+            children=(second, first),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=7, max_tokens=7, overlap_tokens=0,
+        )
+        self.assertEqual("".join(c.text for c in chunks), parent.text)
+
+    def test_duplicate_children_use_complete_parent(self) -> None:
+        """Repeated child ranges must not duplicate or omit source text."""
+
+        first = make_unit("first\n", start_line=1, end_line=1)
+        parent = make_unit(
+            "first\nsecond\n", end_line=2,
+            children=(first, first),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=7, max_tokens=7, overlap_tokens=0,
+        )
+        self.assertEqual("".join(c.text for c in chunks), parent.text)
+
+    def test_mismatched_child_source_uses_complete_parent(self) -> None:
+        """Child provenance from another file must not replace source text."""
+
+        child = make_unit("body\n", path="other.py")
+        parent = make_unit(
+            "body\nheader\n", end_line=2,
+            children=(child,),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=7, max_tokens=7, overlap_tokens=0,
+        )
+        self.assertEqual("".join(c.text for c in chunks), parent.text)
+        self.assertTrue(all(c.path == parent.path for c in chunks))
+
+    def test_empty_child_uses_complete_parent(self) -> None:
+        """Empty children cannot establish valid structural coverage."""
+
+        parent = make_unit(
+            "body\nheader\n", end_line=2,
+            children=(make_unit(""), make_unit("body\n")),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=7, max_tokens=7, overlap_tokens=0,
+        )
+        self.assertEqual("".join(c.text for c in chunks), parent.text)
+
+    def test_blank_gaps_keep_structural_child_provenance(self) -> None:
+        """Whitespace-only gaps do not require abandoning hierarchy."""
+
+        first = make_unit("alpha\n", symbol="Class.first")
+        second = make_unit("beta\n", start_line=3,
+                           end_line=3, symbol="Class.second")
+        parent = make_unit(
+            "alpha\n\nbeta\n", end_line=3,
+            children=(first, second),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=6, max_tokens=6, overlap_tokens=0,
+        )
+        self.assertEqual([c.text for c in chunks],
+                         [first.text, second.text])
+        self.assertEqual([c.symbol for c in chunks],
+                         [first.symbol, second.symbol])
+
+    def test_nested_incomplete_children_use_complete_child(self) -> None:
+        """A nested gap is preserved even if ancestor coverage is complete."""
+
+        grandchild = make_unit("work()\n", symbol="Class.work")
+        child = make_unit(
+            "header\nwork()\n", end_line=2,
+            symbol="Class", children=(grandchild,),
+        )
+        parent = make_unit(
+            child.text, end_line=2, kind="python_module",
+            symbol=None, children=(child,),
+        )
+        chunks = chunk_source_units(
+            [parent], count_tokens=len,
+            target_tokens=7, max_tokens=7, overlap_tokens=0,
+        )
+        self.assertEqual("".join(c.text for c in chunks), parent.text)
+        self.assertTrue(all(c.symbol == "Class" for c in chunks))
+
 
 
 class TestChunkValidation(unittest.TestCase):
