@@ -6,6 +6,10 @@ No model loading, network access, or external resources are required.
 
 """
 
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
 from __future__ import annotations
 
 from typing import get_args

@@ -33,6 +33,12 @@ Module Structure
   ``default_answer_settings``
 - ``required_models``
 
+Examples
+--------
+>>> from qachat.gui.preferences import default_search_depth
+>>> len(default_search_depth())
+5
+
 """
 
 from __future__ import annotations

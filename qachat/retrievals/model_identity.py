@@ -10,7 +10,41 @@ rereading the file. This is a metadata-based optimization, not a guarantee
 against changes that preserve all observed metadata. Set ``force_verify``
 to rehash every file when stronger verification is required.
 
-The identity is intended for index compatibility, not authentication.
+The identity is intended for index compatibility, not
+authentication.
+
+Key Features
+------------
+
+- **Immutable model snapshots**
+
+    Identify standard Hugging Face snapshots by repository and commit.
+
+- **Local model fingerprints**
+
+    Hash the relative paths and contents of locally managed model files.
+
+- **Metadata-assisted verification**
+
+    Cache file digests outside the model folder and optionally verify all
+    contents regardless of cached metadata.
+
+Module Structure
+----------------
+
+- ``embedding_model_identity``
+
+    Return a stable model identity for retrieval-index compatibility.
+
+- Private file and manifest helpers
+
+    Resolve local model files, cache their digests, and check metadata.
+
+Examples
+--------
+>>> from qachat.retrievals.model_identity import embedding_model_identity
+>>> callable(embedding_model_identity)
+True
 
 """
 
@@ -55,6 +89,7 @@ def embedding_model_identity(
     force_verify: bool, optional
         Rehash all mutable model files even when cached metadata matches.
         Does not affect immutable Hugging Face snapshot identification.
+        Defaults to ``False``.
 
     Returns
     -------
@@ -355,9 +390,11 @@ def _directory_digest(
     root: pathlib.Path
         Resolved model directory.
     cache_directory: pathlib.Path | None, optional
-        Persistent manifest directory, or None to disable caching.
+        Persistent manifest directory. Defaults to ``None``, which
+        disables caching.
     force_verify: bool, optional
         Rehash every model file instead of trusting cached metadata.
+        Defaults to ``False``.
 
     Returns
     -------

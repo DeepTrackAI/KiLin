@@ -26,6 +26,12 @@ Module Structure
 - ``markdown_to_html``
 - ``write_report_pdf``
 
+Examples
+--------
+>>> from qachat.gui.report_pdf import markdown_to_html
+>>> "Example" in markdown_to_html("# Example")
+True
+
 """
 
 from __future__ import annotations

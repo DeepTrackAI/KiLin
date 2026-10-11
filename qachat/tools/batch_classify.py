@@ -47,6 +47,12 @@ Module Structure
 - ``classification_evidence``
 - ``classification_report``
 
+Examples
+--------
+>>> from qachat.tools.batch_classify import ClassifySettings
+>>> ClassifySettings().whole_words
+True
+
 """
 
 from __future__ import annotations

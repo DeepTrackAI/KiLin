@@ -46,6 +46,13 @@ Module Structure
 This module describes an internal storage contract. Its names are not exposed
 through the package-level ``qachat`` API.
 
+Examples
+--------
+>>> from qachat.conversation_format import new_conversation_session
+>>> record = new_conversation_session()
+>>> record["category"]
+'conversations'
+
 """
 
 from __future__ import annotations
@@ -77,8 +84,8 @@ def new_conversation_session(
     Parameters
     ----------
     resume_state: dict[str, object] | None, optional
-        Initial resumable conversation state. ``None`` creates an empty state.
-        The supplied mapping is stored by reference.
+        Initial resumable state. Defaults to ``None``, which creates an
+        empty state. A supplied mapping is stored by reference.
 
     Returns
     -------

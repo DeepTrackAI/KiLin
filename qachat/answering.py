@@ -212,7 +212,18 @@ _COMMON_WORDS: Final[frozenset[str]] = frozenset(
 
 
 class _Chat(Protocol):
-    """The part of ``ChatSession`` that side questions use."""
+    """The part of ``ChatSession`` that side questions use.
+
+    Attributes
+    ----------
+    messages: list[dict[str, str]]
+        The chat session's in-memory message history.
+    thinking: bool
+        Whether the session is configured for a thinking-capable response.
+    temperature: float
+        The generation temperature used by the session.
+
+    """
 
     messages: list[dict[str, str]]
     thinking: bool

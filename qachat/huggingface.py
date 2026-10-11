@@ -286,8 +286,7 @@ def download_model(
     revision: str | None, optional
         Branch, tag, or commit to download. Defaults to ``None``, which uses
         the repository's default revision.
-    progress_callback: collections.abc.Callable[[int, int], None] | None,
-        optional
+    progress_callback: Callable[[int, int], None] | None, optional
         Callback receiving completed and expected snapshot byte counts. The
         expected total can initially be zero while Hugging Face discovers
         repository files. Defaults to ``None``.
@@ -376,9 +375,9 @@ def _progress_tqdm(
 
             Parameters
             ----------
-            args: object
+            *args: object
                 Additional positional arguments forwarded to the sink.
-            kwargs: object
+            **kwargs: object
                 Additional keyword arguments forwarded to the sink.
 
             """

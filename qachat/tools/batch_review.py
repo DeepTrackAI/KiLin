@@ -46,6 +46,12 @@ Module Structure
 - ``answer_prompt``
 - ``check_citations``
 
+Examples
+--------
+>>> from qachat.tools.batch_review import ReviewSettings
+>>> ReviewSettings().part_tokens
+6000
+
 """
 
 from __future__ import annotations

@@ -6,6 +6,10 @@ The tests distinguish immutable Hub commits from mutable local directories.
 
 """
 
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
 from __future__ import annotations
 
 from hashlib import sha256

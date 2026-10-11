@@ -870,6 +870,11 @@ class SourceDropView(QWebEngineView):
     The sources folder (or the new-project drop zone) adds sources; the
     workspace's ``outputs`` and ``templates`` folders receive copies.
 
+    Parameters
+    ----------
+    parent: QWidget | None, optional
+        Owning Qt widget, if any. Defaults to ``None``.
+
     """
 
     pathsDropped = Signal(list)

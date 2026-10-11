@@ -174,7 +174,17 @@ EventSink = Callable[[dict[str, object]], None]
 
 
 class _AnswerStream:
-    """Batch generated text into a few frontend events per second."""
+    """Batch generated text into a few frontend events per second.
+
+    Parameters
+    ----------
+    send: Callable[..., None]
+        Callback publishing accumulated text to the frontend.
+    interval: float, optional
+        Minimum interval between progress notifications in seconds.
+        Defaults to ``0.08``.
+
+    """
 
     def __init__(
         self, send: Callable[..., None], interval: float = 0.08
@@ -746,7 +756,7 @@ class ChatEngine:
             )
 
         def heartbeat() -> None:
-            """Periodically publish download progress until the event is set."""
+            """Publish periodic download progress until the event is set."""
 
             while not stopped.wait(0.5):
                 send_progress()

@@ -5,6 +5,10 @@ metadata, and raw cells are intentionally excluded from source units.
 
 """
 
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
 from __future__ import annotations
 
 import json

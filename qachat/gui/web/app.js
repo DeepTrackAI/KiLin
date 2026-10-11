@@ -111,7 +111,7 @@ let activeProjectKind = "code";
 let lastEmptyPrompt = { code: -1, literature: -1 };
 let messageAttachments = [];
 let currentTurnCount = 0;
-// Project types from qachat/project_types.json, keyed by ID.
+// Project types sent by the engine from qachat/project_types/*.json.
 let projectTypes = {};
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
@@ -140,10 +140,21 @@ function renderProjectTypes(types) {
   activeProjectKind = ready ? activeProjectKind : select.value;
 }
 
+/**
+ * Format the number of conversation turns for display.
+ *
+ * @param count Number of conversation turns.
+ * @returns Singular or plural turn-count label.
+ */
 function turnCountLabel(count) {
   return `${count} ${count === 1 ? "turn" : "turns"}`;
 }
 
+/**
+ * Refresh the header and project summary from the saved turn count.
+ *
+ * @param count Latest saved count; defaults to the current count.
+ */
 function updateProjectSummary(count = currentTurnCount) {
   currentTurnCount = Number(count) || 0;
   const projectName = byId("project-name").textContent.trim();
@@ -152,6 +163,9 @@ function updateProjectSummary(count = currentTurnCount) {
   byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
 }
 
+/**
+ * Keep the compact project header visible after scrolling the conversation.
+ */
 function updateFloatingHeader() {
   const scrolled = ready && conversationScroll.scrollTop > 96;
   document.querySelector(".topbar").classList.toggle("floating", scrolled);
@@ -195,6 +209,11 @@ function showWorkspace(visible) {
   control.classList.toggle("panels-hidden", !visible);
 }
 
+/**
+ * Show or hide the conversations panel and synchronize its toggle.
+ *
+ * @param visible Whether the conversations panel should be visible.
+ */
 function showConversations(visible) {
   shell.classList.toggle("conversations-hidden", !visible);
   const control = byId("toggle-conversations");
@@ -204,6 +223,11 @@ function showConversations(visible) {
   control.title = control.getAttribute("aria-label");
 }
 
+/**
+ * Apply and persist the page appearance preference.
+ *
+ * @param value Requested theme: system, light, or dark.
+ */
 function applyAppearance(value) {
   const selected = ["system", "light", "dark"].includes(value) ? value : "system";
   document.documentElement.dataset.appearance = selected;
@@ -212,6 +236,11 @@ function applyAppearance(value) {
   bridge?.setAppearance(selected);
 }
 
+/**
+ * Render the resumable projects provided by the backend.
+ *
+ * @param projects Saved projects ordered by recent use.
+ */
 function renderSavedProjects(projects) {
   const host = byId("saved-projects");
   host.replaceChildren();
@@ -546,6 +575,9 @@ function roleModelIds(role, current) {
 
 /**
  * Build a model dropdown; models that are not downloaded are marked.
+ * @param ids Model IDs offered in the dropdown.
+ * @param value Currently chosen model ID.
+ * @param label Accessible label of the model selector.
  */
 function modelSelect(ids, value, label) {
   const select = document.createElement("select");
@@ -564,6 +596,8 @@ function modelSelect(ids, value, label) {
 
 /**
  * Show a Download button under a row whose model is not cached.
+ * @param id Model identifier shown by this row.
+ * @param installed Whether the chosen backend is installed.
  */
 function downloadNotice(id, installed) {
   if (!id || cachedModels.has(id) || id.startsWith("/") || id.startsWith(".")) return null;
@@ -584,6 +618,8 @@ function downloadNotice(id, installed) {
 
 /**
  * Build a model group heading with its Restore defaults button.
+ * @param role Model role whose defaults can be restored.
+ * @param title Visible model-group heading.
  */
 function modelGroupHeader(role, title) {
   const header = document.createElement("div");
@@ -818,6 +854,11 @@ function openModels() {
   byId("close-models").focus();
 }
 
+/**
+ * Collect the unsaved model, router, and retrieval choices.
+ *
+ * @returns Current settings object to send to the engine.
+ */
 function currentModelSettings() {
   return {
     chat_model: draftLevels[DEFAULT_LEVEL]?.model || byId("chat-model").value.trim(),
@@ -841,6 +882,9 @@ function modelEditsPending() {
     || settings.embedding_model !== before.embedding_model || settings.query_format !== before.query_format
     || settings.router_model !== before.router_model;
 }
+/**
+ * Close the model settings panel and refresh source-drop bounds.
+ */
 function hideModels() {
   setupCompletionVisible = false;
   byId("models-panel").classList.add("hidden");
@@ -849,6 +893,8 @@ function hideModels() {
 
 /**
  * Explain the first invalid effort level, or return an empty string.
+ * @param levels Current draft effort-level settings.
+ * @param depth Current draft retrieval-depth steps.
  */
 function levelProblem(levels, depth) {
   for (const [index, level] of levels.entries()) {
@@ -862,6 +908,12 @@ function levelProblem(levels, depth) {
   return "";
 }
 
+/**
+ * Validate pending model changes and request that the engine apply them.
+ *
+ * @param closeAfter Whether to close Settings after applying the changes.
+ * @param explicitDownload Model ID to download, or null for ordinary edits.
+ */
 function applyModelEdits(closeAfter = false, explicitDownload = null) {
   if (busy || !bridge) return;
   const settings = currentModelSettings();
@@ -896,6 +948,9 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   setBusy(true, byId("model-download-status").textContent);
   bridge.applyModelSettings(JSON.stringify({ ...settings, download: missing.length > 0 }));
 }
+/**
+ * Close Settings if possible, applying confirmed edits when idle.
+ */
 function closeModels() {
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
   if (busy) {
@@ -1192,6 +1247,7 @@ document.body.append(sourceDropSpotlight);
 let lastSourceDropBounds = "";
 /**
  * The visible part of an element, clipped by scrolling parents, or null.
+ * @param target DOM element whose visible rectangle is needed.
  */
 function visibleRect(target) {
   const rect = target?.getBoundingClientRect();
@@ -1225,6 +1281,11 @@ function syncSourceDropTarget() {
   }) : [];
   sendSourceDropBounds(JSON.stringify({ ...(sources || {}), folders }));
 }
+/**
+ * Update the native source-drop overlay and send its bounds to Qt.
+ *
+ * @param bounds JSON string containing the visible target rectangle.
+ */
 function sendSourceDropBounds(bounds) {
   const region = JSON.parse(bounds);
   const visible = sourceDragActive && region.width > 0 && region.height > 0;
@@ -1239,6 +1300,11 @@ function sendSourceDropBounds(bounds) {
   lastSourceDropBounds = bounds;
   bridge.setSourceDropTarget(bounds);
 }
+/**
+ * Reflect native dragging over the editable source locations.
+ *
+ * @param active Whether a native file drag is currently in progress.
+ */
 function showNativeSourceDrag(active) {
   sourceDragActive = Boolean(active && !busy);
   const target = ready ? byId("workspace-source-drop") : byId("drop-zone");
@@ -1341,6 +1407,9 @@ function showFolderMenu(x, y, folder, path, isFile) {
 
 /**
  * Confirm, then delete a file or folder in outputs or templates.
+ * @param folder Editable workspace folder name.
+ * @param path Workspace-relative target path.
+ * @param isFile Whether the target is a file.
  */
 function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
@@ -1361,6 +1430,8 @@ function copyToSources(path) {
 
 /**
  * Send a folder edit; the engine only refreshes the workspace tree.
+ * @param request Folder-edit request sent to the backend.
+ * @param message Progress message displayed during the edit.
  */
 function editFolder(request, message) {
   if (busy || !bridge) return;
@@ -1392,6 +1463,9 @@ function folderFilesChosen(folder, purpose, paths) {
   editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
 
+/**
+ * Hide the context menu for workspace source files.
+ */
 function hideSourceMenu() {
   sourceMenu.classList.add("hidden");
 }
@@ -1421,11 +1495,22 @@ document.addEventListener("keydown", (event) => {
 window.addEventListener("blur", hideSourceMenu);
 document.addEventListener("scroll", hideSourceMenu, true);
 
+/**
+ * Confirm opening a project file with its default application.
+ *
+ * @param path Workspace-relative path to the selected file.
+ */
 function openWorkspaceFile(path) {
   if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
   bridge.openWorkspaceFile(path);
 }
 
+/**
+ * Restore the interface after an engine failure and display the error.
+ *
+ * @param message Error message for the user.
+ * @param tracePath Path to the saved trace, if available.
+ */
 function showError(message, tracePath = "") {
   clearAskingConversation();
   applyingModels = false;
@@ -1528,7 +1613,12 @@ function seconds(value) {
   return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
 }
 
-/** Format a byte count using compact binary units. */
+/**
+ * Format a byte count using compact binary units.
+ *
+ * @param value Raw byte count.
+ * @returns Human-readable binary-unit size.
+ */
 function bytes(value) {
   const amount = Math.max(0, Number(value) || 0);
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -1542,7 +1632,12 @@ function bytes(value) {
   return `${size.toFixed(digits)} ${units[unit]}`;
 }
 
-/** Return presentation details for a backend model-download heartbeat. */
+/**
+ * Describe a model-download progress update.
+ *
+ * @param data Model-download heartbeat data.
+ * @returns Elapsed time, progress, and estimated time details.
+ */
 function downloadProgress(data) {
   const downloaded = Math.max(0, Number(data.completed_bytes) || 0);
   const total = Math.max(0, Number(data.total_bytes) || 0);
@@ -1560,7 +1655,11 @@ function downloadProgress(data) {
   return { percent, text: parts.join(" · ") };
 }
 
-/** Update the setup card's determinate or animated download meter. */
+/**
+ * Update the setup card's download progress meter.
+ *
+ * @param percent Current completion percentage, or null.
+ */
 function updateDownloadMeter(percent) {
   const meter = byId("readiness-meter");
   meter.classList.remove("hidden");
@@ -1753,6 +1852,7 @@ function renderSourcePreview(data) {
  * @param answer Destination DOM element.
  * @param turn Answer text and its evidence records.
  * @param item Conversation article used when selecting a linked citation.
+ * @param thinkingMs Time spent on thinking, or null if absent.
  */
 function renderAnswer(answer, turn, item, thinkingMs = null) {
   const citations = new Set((turn.evidence || []).map((source) => Number(source.citation)));
@@ -1803,6 +1903,12 @@ const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
 
+/**
+ * Detect Markdown lines that begin a block-level structure.
+ *
+ * @param line Candidate Markdown source line.
+ * @returns Whether the line starts a supported Markdown block.
+ */
 function isMarkdownBlockStart(line) {
   return [MARKDOWN_FENCE, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET, MARKDOWN_NUMBER]
     .some((pattern) => pattern.test(line));
@@ -1895,6 +2001,13 @@ function renderMarkdown(host, text, linkCitation = null) {
 // citation markers such as [1] or [2, 3].
 const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])/g;
 
+/**
+ * Render escaped inline Markdown and optionally link evidence citations.
+ *
+ * @param element DOM element receiving the parsed content.
+ * @param text Inline Markdown text to render.
+ * @param linkCitation Callback constructing a citation link when valid.
+ */
 function appendInlineMarkdown(element, text, linkCitation) {
   let last = 0;
   for (const match of text.matchAll(MARKDOWN_INLINE)) {
@@ -2122,6 +2235,9 @@ function clearAskingConversation() {
   if (lastConversationData) renderConversations(lastConversationData);
 }
 
+/**
+ * Render the project-type welcome screen for an empty conversation.
+ */
 function renderConversationEmpty() {
   conversation.replaceChildren();
   const type = projectTypes[activeProjectKind] || {};
@@ -2163,6 +2279,9 @@ function renderConversationEmpty() {
   updateFloatingHeader();
 }
 
+/**
+ * Render removable chips for source files attached to the next prompt.
+ */
 function renderAttachments() {
   const host = byId("attachment-list");
   host.replaceChildren();
@@ -2240,6 +2359,9 @@ const ANSWER_STAGE_DURATION_MS = 450;
 const RENAME_CLICK_DELAY_MS = 250;
 const ANSWER_STAGE_QUEUE_LIMIT = 8;
 
+/**
+ * Clear any queued answer-stage labels and the running stage timer.
+ */
 function resetAnswerStages() {
   clearTimeout(answerStageTimer);
   answerStageTimer = null;
@@ -2247,6 +2369,9 @@ function resetAnswerStages() {
   answerStageQueue = [];
 }
 
+/**
+ * Show the next queued stage and schedule the following stage.
+ */
 function advanceAnswerStage() {
   if (answerStageTimer) return;
   const stage = answerStageQueue.shift();
@@ -2263,6 +2388,12 @@ function advanceAnswerStage() {
   }, ANSWER_STAGE_DURATION_MS);
 }
 
+/**
+ * Queue a distinct stage label while a question is being answered.
+ *
+ * @param key Stable identifier used to deduplicate stage labels.
+ * @param detail Human-readable status shown by the activity display.
+ */
 function queueAnswerStage(key, detail) {
   if (!pendingTurn) return;
   markTimelineStep(detail);
@@ -2357,6 +2488,11 @@ function renderTimeline(record, turn) {
   return details;
 }
 
+/**
+ * Complete an answer immediately and discard pending stage animations.
+ *
+ * @param turn Completed answer and saved conversation metadata.
+ */
 function completeAfterAnswerStages(turn) {
   // Freeze the timer when the answer arrives, not after the stage animation.
   if (pendingTurn && pendingTurn.elapsedMs === null) {
@@ -2398,6 +2534,7 @@ function formatTokens(count) {
 
 /**
  * Total tokens of a usage record (read plus written).
+ * @param usage Input and output token-count record.
  */
 function usageSum(usage) {
   return (Number(usage?.input_tokens) || 0) + (Number(usage?.output_tokens) || 0);
@@ -2717,6 +2854,7 @@ function thoughtsBlock(text, label, open = false) {
 
 /**
  * Name an intent for display, using the project type's list.
+ * @param intentId Configured project-type intent ID.
  */
 function intentName(intentId) {
   const names = projectTypes[activeProjectKind]?.intents || {};
@@ -2725,6 +2863,7 @@ function intentName(intentId) {
 
 /**
  * Describe which earlier turns the answer sees, such as "Recent 2 + turn 3".
+ * @param data Turn parameters containing history metadata.
  */
 function describeHistory(data) {
   const ids = data.history_turn_ids || [];
@@ -3353,10 +3492,16 @@ byId("branch-chat").addEventListener("click", () => {
   setBusy(true, "Branching this conversation…");
   bridge.branchConversation();
 });
+/**
+ * Send a valid edited conversation title to the backend.
+ */
 function commitConversationName() {
   const name = byId("conversation-name").textContent.trim();
   if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
 }
+/**
+ * Rename the current project when the edited title differs.
+ */
 function commitProjectName() {
   const name = byId("project-name").textContent.trim();
   const current = byId("workspace-path").value.split(/[\\/]/).pop();

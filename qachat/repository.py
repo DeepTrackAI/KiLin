@@ -943,6 +943,7 @@ def repository_has_changed(
     )
     return not bool(changes["matches"])
 
+
 def _manifest_files(
     manifest: dict[str, object],
 ) -> dict[str, dict[str, object]]:

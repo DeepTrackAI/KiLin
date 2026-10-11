@@ -28,7 +28,45 @@ set up even when ``qachat/gui/defaults.json`` changes later:
 opened, from the defaults, or from the ``effort_levels.json`` and
 ``model_choices.json`` files earlier versions kept, which it then removes.
 
-The defaults and the shared validation live in ``qachat.gui.preferences``.
+The defaults and the shared validation live in
+``qachat.gui.preferences``.
+
+Key Features
+------------
+
+- **Project-local settings**
+
+    Read and update effort levels, search-depth steps, and router models in
+    the project's ``profile.ini``.
+
+- **Legacy migration**
+
+    Import compatible settings from earlier project files when they exist.
+
+Module Structure
+----------------
+
+- ``read_effort_levels``, ``write_effort_levels``
+
+    Read and write the five backend-specific effort levels.
+
+- ``read_search_depth``, ``write_search_depth``
+
+    Read and write the five retrieval-depth steps.
+
+- ``read_router_model``, ``write_router_model``
+
+    Read and write the project router model.
+
+- ``save_project_settings``
+
+    Write missing settings or migrate compatible legacy values.
+
+Examples
+--------
+>>> from qachat.gui.model_settings import read_search_depth
+>>> len(read_search_depth(None))
+5
 
 """
 

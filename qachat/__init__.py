@@ -30,6 +30,12 @@ The public names are listed explicitly in ``__all__``. They are grouped
 by implementation module in the import section below. This initializer does
 not export every public object from every submodule.
 
+Examples
+--------
+>>> import qachat
+>>> qachat.PROJECT_KIND_CODE
+'code'
+
 """
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession

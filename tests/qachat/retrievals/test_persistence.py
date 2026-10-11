@@ -5,6 +5,10 @@ structural validation, and embedding-model identity.
 
 """
 
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
@@ -91,6 +95,7 @@ class _PersistentIndexFixtures(unittest.TestCase):
                 # Deliberately invalid JSON numbers cannot be resealed.
                 pass
         self.target.write_text(json.dumps(payload), encoding="utf-8")
+
 
 class TestPersistentIndexes(_PersistentIndexFixtures):
     """Validate index alignment, hashing, and durable file roundtrips."""
