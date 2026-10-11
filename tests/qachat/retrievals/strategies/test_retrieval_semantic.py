@@ -412,9 +412,8 @@ class TestSemanticSearch(unittest.TestCase):
                     rs._cosine_similarity(first, second)
 
 
-    @unittest.expectedFailure
-    def test_pending_reject_nonfinite_query_vectors(self) -> None:
-        """Pending: NaN query components must not produce ranked evidence.
+    def test_reject_nonfinite_query_vectors(self) -> None:
+        """Reject NaN query components before semantic ranking.
 
         """
         self.session.mapping["query"] = [float("nan"), 0.0]
@@ -431,6 +430,108 @@ class TestSemanticSearch(unittest.TestCase):
         matrix = rs.semantic_matrix(self.index)
         self.assertTrue(np.isfinite(matrix).all())
         self.assertTrue(math.isclose(float(matrix[0, 0]), 1.0))
+
+
+class TestAdditionalSemanticVectorValidation(unittest.TestCase):
+    """Check rejection of malformed embeddings from external adapters."""
+
+    def setUp(self) -> None:
+        """Construct a small corpus and a controlled embedding adapter.
+
+        """
+        self.chunks = [chunk("a", "east"), chunk("b", "north")]
+        self.session = FakeEmbeddings({
+            "east": [1.0, 0.0],
+            "north": [0.0, 1.0],
+            "query": [1.0, 0.0],
+        })
+
+    def test_bad_document_numeric_components(self) -> None:
+        """Reject nonfinite, nonnumeric, or Boolean document values.
+
+        """
+        for value in (float("nan"), float("inf"),
+                      -float("inf"), True, "1", None):
+            with self.subTest(value=value):
+                with patch.object(
+                    self.session, "embed_documents",
+                    return_value=[[1.0, value], [0.0, 1.0]],
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "finite numeric"
+                    ):
+                        rs.build_semantic_index(
+                            self.chunks, self.session
+                        )
+
+    def test_zero_document_vector(self) -> None:
+        """A zero backend vector is rejected during index construction.
+
+        """
+        with patch.object(
+            self.session, "embed_documents",
+            return_value=[[0.0, 0.0], [0.0, 1.0]],
+        ):
+            with self.assertRaisesRegex(ValueError, "zero vector"):
+                rs.build_semantic_index(self.chunks, self.session)
+
+    def test_nonsequence_document_vector(self) -> None:
+        """An embedding adapter cannot return scalar vector records.
+
+        """
+        with patch.object(
+            self.session, "embed_documents",
+            return_value=[123, [0.0, 1.0]],
+        ):
+            with self.assertRaisesRegex(ValueError, "dimension"):
+                rs.build_semantic_index(self.chunks, self.session)
+
+    def test_reject_invalid_queries_in_both_scoring_backends(self) -> None:
+        """Reject invalid queries for NumPy and loop scoring alike.
+
+        """
+        index = rs.build_semantic_index(self.chunks, self.session)
+        for value in (float("nan"), float("inf"),
+                      -float("inf"), True, "bad", None):
+            self.session.mapping["query"] = [1.0, value]
+            for backend in ("loop", "numpy"):
+                with self.subTest(value=value, backend=backend):
+                    with self.assertRaisesRegex(
+                        ValueError, "finite numeric"
+                    ):
+                        rs.semantic_search(
+                            index, "query", self.session,
+                            backend=backend,
+                        )
+
+    def test_nonsequence_query_is_rejected(self) -> None:
+        """Avoid numerical calls with scalar or absent query vectors.
+
+        """
+        index = rs.build_semantic_index(self.chunks, self.session)
+        for vector in (None, 12, []):
+            with self.subTest(vector=vector):
+                with patch.object(
+                    self.session, "embed_query", return_value=vector
+                ):
+                    with self.assertRaises(ValueError):
+                        rs.semantic_search(index, "query", self.session)
+
+    def test_valid_nonunit_vectors_preserve_cosine_results(self) -> None:
+        """Vector validation must not require an L2 norm equal to one.
+
+        """
+        self.session.mapping["east"] = [3.0, 4.0]
+        self.session.mapping["north"] = [0.0, 2.0]
+        self.session.mapping["query"] = [3.0, 4.0]
+        index = rs.build_semantic_index(self.chunks, self.session)
+        for backend in ("loop", "numpy"):
+            with self.subTest(backend=backend):
+                results = rs.semantic_search(
+                    index, "query", self.session, backend=backend
+                )
+                self.assertEqual(results[0].chunk.identifier, "a")
+                self.assertAlmostEqual(results[0].score, 1.0)
 
 
 if __name__ == "__main__":

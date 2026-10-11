@@ -6,10 +6,11 @@ The stored fingerprint identifies ordered chunk content and the graph; it
 does not cover the numeric embedding vectors, lexical weights, embedding
 model identity, or model revision.
 
-Loading reconstructs the records and checks the chunk/graph fingerprint.
-This check is not a comprehensive schema validator or authenticity guarantee.
-Files are replaced through a temporary path, with no inter-process lock or
-transaction spanning other project metadata files.
+Loading reconstructs the records and validates vector cardinality, finite
+numeric values, lexical vocabulary consistency, unique chunk identifiers,
+and the chunk/graph fingerprint. These checks are not a complete schema
+validator or authenticity guarantee. Files are replaced through a temporary
+path, with no inter-process lock or transaction spanning metadata files.
 
 Key Features
 ------------
@@ -72,6 +73,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
+import math
 from pathlib import Path
 
 from qachat.chunking import Chunk
@@ -81,7 +83,10 @@ from qachat.retrievals.code_graph.code_graph import (
     CodeRelation,
 )
 from qachat.retrievals.strategies.retrieval_lexical import LexicalIndex
-from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
+from qachat.retrievals.strategies.retrieval_semantic import (
+    SemanticIndex,
+    _validate_semantic_embeddings,
+)
 
 __all__ = [
     "PersistentIndexes",
@@ -159,18 +164,17 @@ def prepare_persistent_indexes(
     Raises
     ------
     ValueError
-        If semantic and lexical indexes contain different chunks.
+        If chunks are not aligned, chunk identifiers are duplicated, or
+        semantic/lexical vectors are malformed.
 
     Notes
     -----
-    Checks equality of semantic and lexical chunk tuples before computing the
-    fingerprint. It does not validate vector dimensions, numeric finiteness, or
-    agreement with a specific embedding model.
+    Validation checks vector structure and finite numeric values but does
+    not establish embedding-model identity or require unit-normalized vectors.
 
     """
 
-    if semantic.chunks != lexical.chunks:
-        raise ValueError("Semantic and lexical indexes must share chunks.")
+    _validate_index_records(semantic, lexical)
 
     chunks = list(semantic.chunks)
     return PersistentIndexes(
@@ -205,14 +209,19 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
         written.
     TypeError
         If a stored field cannot be serialized to JSON.
+    ValueError
+        If the stored chunks or retrieval vectors fail validation.
 
     Notes
     -----
-    Creates parent directories and replaces a temporary sibling file. The
-    supplied fingerprint is stored as given, not recalculated here. Concurrent
-    writes are not coordinated.
+    Validates index structure and serializes embedding scalars as Python
+    floats before replacing a temporary sibling file. The supplied fingerprint
+    is stored as given, not recalculated here. Concurrent writes are not
+    coordinated.
 
     """
+
+    _validate_index_records(indexes.semantic, indexes.lexical)
 
     target = Path(path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -221,7 +230,8 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
         "fingerprint": indexes.fingerprint,
         "chunks": [_chunk_to_data(chunk) for chunk in indexes.semantic.chunks],
         "semantic_embeddings": [
-            list(vector) for vector in indexes.semantic.embeddings
+            [float(value) for value in vector]
+            for vector in indexes.semantic.embeddings
         ],
         "lexical_vectors": [
             dict(vector) for vector in indexes.lexical.vectors
@@ -258,17 +268,17 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
     Raises
     ------
     ValueError
-        If the format version, recognized structural fields, conversions, or
-        content fingerprint are invalid.
+        If the format version, structural fields, vector contents, chunk
+        identifiers, or source fingerprint are invalid.
     OSError
         If the file cannot be read.
 
     Notes
     -----
-    Numeric vectors and lexical statistics are converted but not
-    comprehensively validated or covered by the fingerprint. A successfully
-    loaded file is not proof that all vectors have consistent dimensions,
-    counts, or finite values.
+    Vector counts, dimensions, types, and finiteness are checked before
+    accepting saved data. The source fingerprint still excludes numeric
+    embeddings, lexical weights, and model identity; payload checksums and
+    model provenance are reserved for a later format revision.
 
     """
 
@@ -282,22 +292,19 @@ def load_indexes(path: str | Path) -> PersistentIndexes:
         semantic = SemanticIndex(
             chunks=chunks,
             embeddings=tuple(
-                tuple(float(value) for value in vector)
+                tuple(_stored_number(value) for value in vector)
                 for vector in payload["semantic_embeddings"]
             ),
         )
         lexical = LexicalIndex(
             chunks=chunks,
             vectors=tuple(
-                {str(term): float(value) for term, value in vector.items()}
+                _stored_weight_mapping(vector)
                 for vector in payload["lexical_vectors"]
             ),
-            inverse_document_frequency={
-                str(term): float(value)
-                for term, value in payload[
-                    "inverse_document_frequency"
-                ].items()
-            },
+            inverse_document_frequency=_stored_weight_mapping(
+                payload["inverse_document_frequency"]
+            ),
         )
         code_graph = _code_graph_from_data(payload["code_graph"])
         indexes = PersistentIndexes(
@@ -533,3 +540,150 @@ def _code_graph_from_data(data: dict[str, object]) -> CodeGraph:
         entities=entities,
         relations=relations,
     )
+
+
+def _stored_number(value: object) -> float:
+    """Convert a JSON number without accepting Boolean or text coercion.
+
+    Parameters
+    ----------
+    value: object
+        Raw JSON value expected to represent a finite real number.
+
+    Returns
+    -------
+    float
+        Finite Python floating-point value.
+
+    Raises
+    ------
+    ValueError
+        If the saved value is not a finite JSON number.
+
+    """
+    if type(value) not in (int, float):
+        raise ValueError("The saved index contains an invalid numeric value.")
+    try:
+        converted = float(value)
+    except OverflowError as error:
+        raise ValueError(
+            "The saved index numeric value is too large."
+        ) from error
+    if not math.isfinite(converted):
+        raise ValueError("The saved index contains a non-finite value.")
+    return converted
+
+
+def _stored_weight_mapping(data: object) -> dict[str, float]:
+    """Decode a JSON sparse vector or inverse-frequency dictionary.
+
+    Parameters
+    ----------
+    data: object
+        Saved lexical term-to-weight mapping.
+
+    Returns
+    -------
+    dict[str, float]
+        Term weights validated as finite real values.
+
+    Raises
+    ------
+    ValueError
+        If the mapping or any numeric component is malformed.
+
+    """
+    if not isinstance(data, dict):
+        raise ValueError("The saved lexical weights must be a dictionary.")
+    return {
+        str(term): _stored_number(weight)
+        for term, weight in data.items()
+    }
+
+
+def _validate_index_records(
+    semantic: SemanticIndex,
+    lexical: LexicalIndex,
+) -> None:
+    """Validate aligned retrieval records before saving or accepting data.
+
+    Parameters
+    ----------
+    semantic: SemanticIndex
+        Ordered semantic retrieval data and chunk provenance.
+    lexical: LexicalIndex
+        Ordered lexical retrieval data and term statistics.
+
+    Raises
+    ------
+    ValueError
+        If chunk identities, embedding vectors, or lexical data are invalid.
+
+    Notes
+    -----
+    Semantic vector norms need not equal one. Empty lexical vectors are
+    permitted, but their keys must be present in the IDF vocabulary.
+
+    """
+    if semantic.chunks != lexical.chunks:
+        raise ValueError("Semantic and lexical indexes must share chunks.")
+
+    chunks = semantic.chunks
+    if not chunks:
+        raise ValueError("Persistent indexes require at least one chunk.")
+    identifiers = [chunk.identifier for chunk in chunks]
+    if any(not isinstance(value, str) or not value for value in identifiers):
+        raise ValueError("Chunk identifiers must be non-empty strings.")
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("Chunk identifiers must be unique.")
+
+    _validate_semantic_embeddings(semantic.embeddings, len(chunks))
+
+    if not isinstance(lexical.vectors, (tuple, list)) or (
+        len(lexical.vectors) != len(chunks)
+    ):
+        raise ValueError("Lexical vector count does not match chunks.")
+    vocabulary = lexical.inverse_document_frequency
+    if not isinstance(vocabulary, dict):
+        raise ValueError("Lexical IDF must be a term-weight dictionary.")
+
+    for term, weight in vocabulary.items():
+        if not isinstance(term, str) or not term:
+            raise ValueError("Lexical IDF terms must be non-empty strings.")
+        _validate_lexical_weight(weight, label="Lexical IDF")
+
+    for vector in lexical.vectors:
+        if not isinstance(vector, dict):
+            raise ValueError("Lexical vectors must be dictionaries.")
+        for term, weight in vector.items():
+            if not isinstance(term, str) or not term:
+                raise ValueError("Lexical terms must be non-empty strings.")
+            if term not in vocabulary:
+                raise ValueError("Lexical term is absent from the IDF index.")
+            _validate_lexical_weight(weight, label="Lexical vector")
+
+
+def _validate_lexical_weight(value: float, *, label: str) -> None:
+    """Reject non-finite, negative, or nonnumeric lexical weights.
+
+    Parameters
+    ----------
+    value: float
+        A sparse TF-IDF component or inverse document frequency.
+    label: str
+        Location of the weight for validation diagnostics.
+
+    Raises
+    ------
+    ValueError
+        If a value cannot represent a TF-IDF weight.
+
+    """
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError(f"{label} must contain finite nonnegative weights.")
+    try:
+        finite = math.isfinite(value)
+    except (OverflowError, TypeError, ValueError):
+        finite = False
+    if not finite or value < 0.0:
+        raise ValueError(f"{label} must contain finite nonnegative weights.")
