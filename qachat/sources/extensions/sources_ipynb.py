@@ -48,7 +48,6 @@ from qachat.sources.sources import (
     _source_unit,
 )
 
-
 __all__ = [
     "extract_source_units",
 ]

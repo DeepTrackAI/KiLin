@@ -74,7 +74,6 @@ from qachat.sources.sources import (
     _source_unit,
 )
 
-
 __all__ = [
     "read_source_file",
     "extract_source_units",
