@@ -74,7 +74,6 @@ from pathlib import Path
 
 from qachat.sources.sources import SourceUnit
 
-
 __all__ = [
     "Chunk",
     "chunk_source_units",
@@ -191,7 +190,7 @@ def chunk_source_units(
     counts: dict[str, int] = {}
 
     def count(text: str) -> int:
-        """Memoize validated token counts during one chunking call.
+        """Memorize validated token counts during one chunking call.
 
         Parameters
         ----------
