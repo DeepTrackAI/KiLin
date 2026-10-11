@@ -7,10 +7,23 @@ non-whitespace text. Otherwise, it is split along line boundaries and, if
 necessary, within an individual long line.
 
 Target size guides splitting; maximum size is the acceptance bound. Overlap
-is retained as source lines or character suffixes. Binary-search helpers
-assume token counts are sufficiently monotonic across candidate prefixes or
-suffixes. The callback is responsible for matching the intended tokenizer.
-No embedding model is loaded by this module.
+is retained as source lines or character suffixes. No embedding model is
+loaded by this module.
+
+Token-count assumptions
+-----------------------
+
+Chunk boundaries are selected using binary search over candidate fragments.
+This assumes that token counts are approximately monotonic as text grows or
+shrinks. Subword tokenizers do not strictly guarantee this: adding characters
+can sometimes reduce the count because previously separate tokens merge.
+
+Consequently, the chunker may produce smaller fragments than necessary or,
+in unusual cases, fail to identify a fitting fragment. This is an intentional
+performance trade-off: splitting efficiently takes precedence over finding
+globally optimal boundaries. Every emitted chunk is checked using the supplied
+token counter and must fit within ``max_tokens``. The caller should use the
+token counter corresponding to the intended embedding model.
 
 Key Features
 ------------
@@ -164,7 +177,8 @@ def chunk_source_units(
     units: list[SourceUnit]
         Natural source units.
     count_tokens: Callable[[str], int]
-        Token counter from the selected embedding model.
+        Token counter from the selected embedding model. Boundary selection
+        assumes approximately monotonic token counts; see module notes.
     target_tokens: int, optional
         Preferred size when a unit must be split. Defaults to ``500``.
     max_tokens: int, optional
