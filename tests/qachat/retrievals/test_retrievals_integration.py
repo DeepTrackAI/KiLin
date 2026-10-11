@@ -3,8 +3,9 @@
 The first integration path uses real source extraction, chunking, graph
 building, lexical ranking, fusion, routing, and persistence with a controlled
 embedding adapter. The backend tests use locally generated tiny model weights
-and the real QAChat EmbeddingSession when optional libraries are installed.
-No test downloads model weights or requires an external service.
+and the real QAChat EmbeddingSession. Optional tests also use the standard
+pretrained embedding models when already cached locally. No test downloads
+model weights or requires an external service.
 
 """
 
@@ -17,14 +18,21 @@ import math
 from pathlib import Path
 import platform
 from tempfile import TemporaryDirectory
+from types import ModuleType
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
 from qachat import embeddings
 from qachat.chunking import chunk_source_units
 from qachat.embeddings import EmbeddingSession
+from qachat.huggingface import model_is_available
+from qachat.model_defaults import (
+    DEFAULT_EMBEDDING_MODEL_MLX,
+    DEFAULT_EMBEDDING_MODEL_TORCH,
+)
+from qachat.query_formats import format_qwen3_query
 from qachat.retrievals.model_identity import embedding_model_identity
 from qachat.retrievals import (
     CodeGraph,
@@ -457,6 +465,336 @@ class TestLocalQwen3ModelRetrieval(unittest.TestCase):
             path = Path(directory) / "mlx-model"
             _save_tiny_mlx_model(path)
             self._exercise_backend("mlx", path)
+
+
+def _load_cached_default_model(
+    model_id: str,
+    backend: str,
+) -> EmbeddingSession:
+    """Load an installed default embedding model without downloading.
+
+    Parameters
+    ----------
+    model_id: str
+        Model identifier supplied by ``qachat.model_defaults``.
+    backend: str
+        Explicit ``'torch'`` or ``'mlx'`` embedding backend.
+
+    Returns
+    -------
+    EmbeddingSession
+        Loaded pretrained embedding model, owned by the caller.
+
+    Raises
+    ------
+    unittest.SkipTest
+        If the model is not cached, required packages are missing, or MLX
+        hardware is unavailable.
+
+    Notes
+    -----
+    An existing but incomplete or incompatible cached model is not silently
+    skipped: loader errors are test failures. The session is always created
+    with downloads disabled, independent of the caller's environment.
+
+    """
+
+    if not model_is_available(model_id):
+        raise unittest.SkipTest(
+            f"Default embedding model is not cached: {model_id}"
+        )
+
+    if backend == "mlx":
+        if (
+            platform.system() != "Darwin"
+            or platform.machine().lower() != "arm64"
+        ):
+            raise unittest.SkipTest("MLX requires Apple Silicon macOS.")
+        modules = ("mlx", "mlx_embeddings", "transformers")
+    elif backend == "torch":
+        modules = ("torch", "transformers")
+    else:
+        raise ValueError("Unsupported embedding backend.")
+
+    missing = [name for name in modules if find_spec(name) is None]
+    if missing:
+        raise unittest.SkipTest(
+            "Missing optional embedding dependencies: "
+            + ", ".join(missing)
+        )
+
+    if backend == "mlx":
+        from mlx import core as mx
+
+        if not mx.metal.is_available():
+            raise unittest.SkipTest("MLX Metal is unavailable.")
+
+    return EmbeddingSession(
+        model_id,
+        backend=backend,
+        allow_download=False,
+    )
+
+
+def _check_default_model_pipeline(
+    test: unittest.TestCase,
+    session: EmbeddingSession,
+) -> None:
+    """Verify real embeddings through search and index persistence.
+
+    Parameters
+    ----------
+    test: unittest.TestCase
+        Active test instance supplying assertions.
+    session: EmbeddingSession
+        Loaded default embedding model; the caller owns its lifecycle.
+
+    Notes
+    -----
+    Assertions concern structure and numerical consistency, not which of
+    these short texts the pretrained model considers most relevant. Floating
+    point differences between search backends are allowed.
+
+    """
+
+    texts = [
+        "Brownian motion describes the diffusion of small particles.",
+        "Proteins fold into structures determined by their sequence.",
+        "Optical tweezers use light to manipulate microscopic objects.",
+    ]
+    query = format_qwen3_query(
+        "How do particles diffuse?",
+        "Retrieve scientific passages that answer the question.",
+    )
+    test.assertGreater(session.count_tokens(texts[0]), 0)
+    test.assertGreater(session.count_tokens(query), 0)
+
+    documents = session.embed_documents(texts[:2])
+    question = session.embed_query(query)
+    test.assertEqual(len(documents), 2)
+    dimensions = len(question)
+    test.assertGreater(dimensions, 0)
+    for vector in [*documents, question]:
+        test.assertEqual(len(vector), dimensions)
+        test.assertTrue(all(math.isfinite(value) for value in vector))
+        norm = math.sqrt(math.fsum(value * value for value in vector))
+        test.assertAlmostEqual(norm, 1.0, delta=0.01)
+
+    chunks = [
+        chunk(str(number), text, path=f"notes/{number}.txt")
+        for number, text in enumerate(texts)
+    ]
+    semantic = build_semantic_index(chunks, session, batch_size=2)
+    lexical = build_lexical_index(chunks)
+    graph = CodeGraph((), ())
+    identity = embedding_model_identity(
+        session.model_id, session.model_source
+    )
+    test.assertTrue(identity)
+    indexes = prepare_persistent_indexes(
+        semantic,
+        lexical,
+        graph,
+        embedding_model_identity=identity,
+    )
+
+    with TemporaryDirectory() as directory:
+        saved_path = Path(directory) / "retrieval.json"
+        save_indexes(indexes, saved_path)
+        loaded = load_indexes(saved_path)
+        test.assertEqual(loaded, indexes)
+        test.assertEqual(loaded.embedding_model_identity, identity)
+        test.assertTrue(indexes_are_current(loaded, chunks, graph))
+
+        loop = semantic_search(
+            loaded.semantic, query, session, count=len(chunks),
+            backend="loop",
+        )
+        numpy = semantic_search(
+            loaded.semantic, query, session, count=len(chunks),
+            backend="numpy", matrix=semantic_matrix(loaded.semantic),
+        )
+        test.assertEqual(len(loop), len(chunks))
+        test.assertEqual(len(numpy), len(chunks))
+        loop_scores = {item.chunk.identifier: item.score for item in loop}
+        numpy_scores = {item.chunk.identifier: item.score for item in numpy}
+        test.assertEqual(set(loop_scores), set(numpy_scores))
+        for identifier, score in loop_scores.items():
+            test.assertTrue(math.isfinite(score))
+            test.assertLessEqual(abs(score), 1.0001)
+            test.assertAlmostEqual(
+                score, numpy_scores[identifier], delta=0.001
+            )
+
+
+class TestDefaultModelSelection(unittest.TestCase):
+    """Verify offline selection and skip behavior without real weights."""
+
+    def test_torch_uses_packaged_default_without_download(self) -> None:
+        """Load the declared PyTorch model with network access disabled.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.find_spec", return_value=object()), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            result = _load_cached_default_model(
+                DEFAULT_EMBEDDING_MODEL_TORCH, "torch"
+            )
+        self.assertIs(result, loader.return_value)
+        loader.assert_called_once_with(
+            DEFAULT_EMBEDDING_MODEL_TORCH,
+            backend="torch",
+            allow_download=False,
+        )
+
+    def test_uncached_default_skips_without_loading(self) -> None:
+        """Do not instantiate a model absent from the local cache.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=False), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            with self.assertRaisesRegex(unittest.SkipTest, "not cached"):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_TORCH, "torch"
+                )
+        loader.assert_not_called()
+
+    def test_missing_backend_dependency_skips(self) -> None:
+        """Skip unavailable optional libraries rather than downloading.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.find_spec", return_value=None), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            with self.assertRaisesRegex(
+                unittest.SkipTest, "Missing optional"
+            ):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_TORCH, "torch"
+                )
+        loader.assert_not_called()
+
+    def test_existing_model_load_failure_is_reported(self) -> None:
+        """Propagate loader failures for models reported as cached.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.find_spec", return_value=object()), \
+            patch(
+                f"{__name__}.EmbeddingSession",
+                side_effect=RuntimeError("invalid weights"),
+            ):
+            with self.assertRaisesRegex(RuntimeError, "invalid weights"):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_TORCH, "torch"
+                )
+
+    def test_mlx_skips_on_unsupported_hardware(self) -> None:
+        """Avoid importing MLX on systems without Apple Silicon.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.platform.system", return_value="Linux"), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            with self.assertRaisesRegex(unittest.SkipTest, "Apple Silicon"):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_MLX, "mlx"
+                )
+        loader.assert_not_called()
+
+    def test_mlx_uses_packaged_default_without_download(self) -> None:
+        """Load the declared MLX model only when Metal is available.
+
+        """
+
+        mlx = ModuleType("mlx")
+        core = ModuleType("mlx.core")
+        core.metal = Mock(is_available=Mock(return_value=True))
+        with patch.dict("sys.modules", {"mlx": mlx, "mlx.core": core}), \
+            patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.platform.system", return_value="Darwin"), \
+            patch(f"{__name__}.platform.machine", return_value="arm64"), \
+            patch(f"{__name__}.find_spec", return_value=object()), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            result = _load_cached_default_model(
+                DEFAULT_EMBEDDING_MODEL_MLX, "mlx"
+            )
+        self.assertIs(result, loader.return_value)
+        loader.assert_called_once_with(
+            DEFAULT_EMBEDDING_MODEL_MLX,
+            backend="mlx",
+            allow_download=False,
+        )
+
+    def test_mlx_without_metal_skips(self) -> None:
+        """Skip MLX when the optional Metal runtime is unavailable.
+
+        """
+
+        mlx = ModuleType("mlx")
+        core = ModuleType("mlx.core")
+        core.metal = Mock(is_available=Mock(return_value=False))
+        with patch.dict("sys.modules", {"mlx": mlx, "mlx.core": core}), \
+            patch(f"{__name__}.model_is_available", return_value=True), \
+            patch(f"{__name__}.platform.system", return_value="Darwin"), \
+            patch(f"{__name__}.platform.machine", return_value="arm64"), \
+            patch(f"{__name__}.find_spec", return_value=object()), \
+            patch(f"{__name__}.EmbeddingSession") as loader:
+            with self.assertRaisesRegex(unittest.SkipTest, "Metal"):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_MLX, "mlx"
+                )
+        loader.assert_not_called()
+
+    def test_invalid_backend_is_rejected(self) -> None:
+        """Reject unsupported backend identifiers in the test helper.
+
+        """
+
+        with patch(f"{__name__}.model_is_available", return_value=True):
+            with self.assertRaisesRegex(ValueError, "Unsupported"):
+                _load_cached_default_model(
+                    DEFAULT_EMBEDDING_MODEL_TORCH, "other"
+                )
+
+
+class TestDefaultTorchEmbeddingModel(unittest.TestCase):
+    """Exercise the actual default Qwen3 PyTorch embedding snapshot."""
+
+    def test_cached_pretrained_model_retrieval(self) -> None:
+        """Embed, search, and persist with the cached PyTorch default.
+
+        """
+
+        session = _load_cached_default_model(
+            DEFAULT_EMBEDDING_MODEL_TORCH, "torch"
+        )
+        try:
+            _check_default_model_pipeline(self, session)
+        finally:
+            session.close()
+
+
+class TestDefaultMLXEmbeddingModel(unittest.TestCase):
+    """Exercise the actual default quantized Qwen3 MLX snapshot."""
+
+    def test_cached_pretrained_model_retrieval(self) -> None:
+        """Embed, search, and persist with the cached MLX default.
+
+        """
+
+        session = _load_cached_default_model(
+            DEFAULT_EMBEDDING_MODEL_MLX, "mlx"
+        )
+        try:
+            _check_default_model_pipeline(self, session)
+        finally:
+            session.close()
 
 
 if __name__ == "__main__":
