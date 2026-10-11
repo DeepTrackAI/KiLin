@@ -52,12 +52,10 @@ from .huggingface import (
     model_is_available,
 )
 from .query_formats import (
-    LITERATURE_REPOSITORY_INSTRUCTION,
     QUERY_FORMAT_CHOICES,
     QUERY_FORMAT_PLAIN,
     QUERY_FORMAT_QWEN3,
     QueryFormat,
-    SOFTWARE_REPOSITORY_INSTRUCTION,
     format_qwen3_query,
 )
 from .project import (
@@ -247,7 +245,6 @@ __all__ = [
     "FAILURE_POLICY_WARN",
     "FailurePolicy",
     "HybridResult",
-    "LITERATURE_REPOSITORY_INSTRUCTION",
     "MODEL_ROLE_CHAT",
     "MODEL_ROLE_CHOICES",
     "MODEL_ROLE_EMBEDDING",
@@ -268,7 +265,6 @@ __all__ = [
     "QAProject",
     "RAGSession",
     "RetrievalPlan",
-    "SOFTWARE_REPOSITORY_INSTRUCTION",
     "SYSTEM_ROLE",
     "SelectedBackend",
     "SemanticIndex",
