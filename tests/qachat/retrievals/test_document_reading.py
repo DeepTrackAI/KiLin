@@ -268,9 +268,8 @@ class TestReadDocument(unittest.TestCase):
         )
         self.assertEqual(selection.path, Path("a.py"))
 
-    @unittest.expectedFailure
     def test_target_selection_uses_identifier_deduplication(self) -> None:
-        """Pending: duplicated chunk IDs should not double-count evidence.
+        """Identical duplicate records count as one source chunk.
 
         """
         target = [self.a, self.a]
@@ -280,12 +279,12 @@ class TestReadDocument(unittest.TestCase):
         )
         self.assertEqual(selection.estimated_tokens,
                          dr.estimate_tokens(self.a.text))
-        self.assertEqual(selection.total_chunks, 2)
+        self.assertEqual(selection.total_chunks, 1)
+        self.assertEqual(selection.chunks, (self.a,))
+        self.assertTrue(selection.complete)
 
-
-    @unittest.expectedFailure
-    def test_pending_named_functions_remain_in_one_file(self) -> None:
-        """Pending: one DocumentSelection must reference a single source path.
+    def test_named_functions_remain_in_one_file(self) -> None:
+        """A selection cannot combine functions from different files.
 
         """
         chunks = [
@@ -302,9 +301,12 @@ class TestReadDocument(unittest.TestCase):
         selected = dr.read_document(
             "Explain foo and bar", chunks, graph, [], max_tokens=100
         )
+        self.assertEqual(selected.path, Path("a.py"))
+        self.assertEqual(selected.functions, ("a.foo",))
+        self.assertEqual([value.identifier for value in selected.chunks],
+                         ["one"])
         self.assertTrue(all(value.path == selected.path
                             for value in selected.chunks))
-
 
     def test_document_reason_choices_are_canonical(self) -> None:
         """Keep the public selection reasons stable across the package.
@@ -314,6 +316,212 @@ class TestReadDocument(unittest.TestCase):
             dr.DOCUMENT_REASON_CHOICES,
             ("named_function", "named_file", "search"),
         )
+
+
+class TestDocumentProvenance(unittest.TestCase):
+    """Enforce source identity and reproducibility of document evidence."""
+
+    def setUp(self) -> None:
+        """Build two function-bearing files and one unrelated source.
+
+        """
+        self.foo = chunk(
+            "foo", "a" * 8, path="a.py", start=2, symbol="foo"
+        )
+        self.half = chunk(
+            "half", "b" * 8, path="a.py", start=12, symbol="half"
+        )
+        self.bar = chunk(
+            "bar", "c" * 8, path="b.py", start=4, symbol="bar"
+        )
+        self.baz = chunk(
+            "baz", "d" * 8, path="b.py", start=8, symbol="baz"
+        )
+        self.extra = chunk("extra", "e" * 8, path="c.py")
+        self.chunks = [
+            self.half, self.bar, self.foo, self.extra, self.baz
+        ]
+        self.graph = CodeGraph(
+            (
+                CodeEntity("a.foo", "python_function", Path("a.py")),
+                CodeEntity("a.half", "python_function", Path("a.py")),
+                CodeEntity("b.bar", "python_function", Path("b.py")),
+                CodeEntity("b.baz", "python_function", Path("b.py")),
+                CodeEntity("b.missing", "python_function", Path("b.py")),
+            ),
+            (),
+        )
+
+    def test_ranked_function_path_wins_over_lexical_fallback(self) -> None:
+        """Choose one named-function file using restricted rank scores.
+
+        """
+        selection = dr.read_document(
+            "Explain foo and bar", self.chunks, self.graph,
+            [ranked(self.bar, 2.0), ranked(self.foo, 0.2)],
+            max_tokens=100,
+        )
+        self.assertEqual(selection.path, Path("b.py"))
+        self.assertEqual(selection.functions, ("b.bar",))
+        self.assertEqual(selection.chunks, (self.bar,))
+        self.assertEqual(selection.total_chunks, 1)
+        self.assertEqual(selection.reason,
+                         dr.DOCUMENT_REASON_NAMED_FUNCTION)
+
+    def test_unrelated_ranked_files_do_not_choose_function_path(self) -> None:
+        """An unrelated search hit cannot override function candidates.
+
+        """
+        selection = dr.read_document(
+            "Explain foo and bar", self.chunks, self.graph,
+            [ranked(self.extra, 100.0)], max_tokens=100,
+        )
+        self.assertEqual(selection.path, Path("a.py"))
+        self.assertEqual(selection.functions, ("a.foo",))
+        self.assertEqual(selection.chunks, (self.foo,))
+
+    def test_named_functions_same_file_keep_source_order(self) -> None:
+        """Sort selected function chunks by source line, not name.
+
+        """
+        selection = dr.read_document(
+            "Explain half and foo", self.chunks, self.graph, [],
+            max_tokens=100,
+        )
+        self.assertEqual(selection.path, Path("a.py"))
+        self.assertEqual(selection.functions, ("a.foo", "a.half"))
+        self.assertEqual(selection.chunks, (self.foo, self.half))
+        self.assertEqual(selection.total_chunks, 2)
+        self.assertTrue(selection.complete)
+
+    def test_missing_function_chunks_are_not_reported_as_read(self) -> None:
+        """Only functions with actual chunks appear in the selection.
+
+        """
+        selection = dr.read_document(
+            "Explain bar and missing", self.chunks, self.graph, [],
+            max_tokens=100,
+        )
+        self.assertEqual(selection.path, Path("b.py"))
+        self.assertEqual(selection.functions, ("b.bar",))
+        self.assertEqual(selection.chunks, (self.bar,))
+
+    def test_rank_top_limits_function_path_choice(self) -> None:
+        """Respect the configured ranking slice for function selection.
+
+        """
+        selection = dr.read_document(
+            "Explain foo and bar", self.chunks, self.graph,
+            [ranked(self.foo, 0.1), ranked(self.bar, 10.0)],
+            max_tokens=100, top=1,
+        )
+        self.assertEqual(selection.path, Path("a.py"))
+        self.assertEqual(selection.functions, ("a.foo",))
+
+    def test_explicit_path_overrides_named_function_and_ranked(self) -> None:
+        """A caller-selected file wins over text and ranking signals.
+
+        """
+        selection = dr.read_document(
+            "Explain foo in a.py", self.chunks, self.graph,
+            [ranked(self.foo, 50.0)], max_tokens=100,
+            path=Path("b.py"),
+        )
+        self.assertEqual(selection.path, Path("b.py"))
+        self.assertEqual(selection.functions, ())
+        self.assertEqual(selection.chunks, (self.bar, self.baz))
+        self.assertEqual(selection.reason,
+                         dr.DOCUMENT_REASON_NAMED_FILE)
+
+    def test_explicit_missing_file_returns_none(self) -> None:
+        """Unknown caller-supplied paths must not fabricate evidence.
+
+        """
+        selection = dr.read_document(
+            "Explain foo", self.chunks, self.graph,
+            [ranked(self.foo, 50.0)], max_tokens=100,
+            path=Path("missing.py"),
+        )
+        self.assertIsNone(selection)
+
+    def test_explicit_path_returns_source_order_despite_index_order(
+        self,
+    ) -> None:
+        """Restore source order for unsorted caller-provided chunks.
+
+        """
+        selection = dr.read_document(
+            "question", self.chunks, self.graph, [],
+            max_tokens=100, path=Path("a.py"),
+        )
+        self.assertEqual(selection.chunks, (self.foo, self.half))
+        self.assertEqual(selection.total_chunks, 2)
+
+    def test_function_selection_preserves_budget_and_single_source(
+        self,
+    ) -> None:
+        """A truncated function selection is restricted to one file.
+
+        """
+        selection = dr.read_document(
+            "Explain foo and half and bar", self.chunks, self.graph,
+            [ranked(self.foo, 5.0), ranked(self.half, 4.0),
+             ranked(self.bar, 1.0)], max_tokens=2,
+        )
+        self.assertEqual(selection.path, Path("a.py"))
+        self.assertEqual(selection.total_chunks, 2)
+        self.assertEqual(selection.estimated_tokens, 2)
+        self.assertEqual(selection.chunks, (self.foo,))
+        self.assertFalse(selection.complete)
+
+    def test_repeated_identical_chunks_are_counted_once(self) -> None:
+        """Duplicate raw records must not inflate the evidence budget.
+
+        """
+        selection = dr.read_document(
+            "question", [self.foo, self.foo], self.graph, [],
+            max_tokens=2, path=Path("a.py"),
+        )
+        self.assertEqual(selection.chunks, (self.foo,))
+        self.assertEqual(selection.total_chunks, 1)
+        self.assertEqual(selection.estimated_tokens, 2)
+        self.assertTrue(selection.complete)
+
+    def test_conflicting_duplicate_identifiers_are_rejected(self) -> None:
+        """Do not silently lose conflicting evidence sharing one ID.
+
+        """
+        conflict = chunk(
+            self.foo.identifier, "different", path="a.py", start=9
+        )
+        with self.assertRaisesRegex(ValueError, "Conflicting chunks"):
+            dr.read_document(
+                "question", [self.foo, conflict], self.graph, [],
+                max_tokens=100, path=Path("a.py"),
+            )
+
+    def test_internal_fit_rejects_mixed_source_paths(self) -> None:
+        """Enforce single-source provenance at the fitting boundary.
+
+        """
+        with self.assertRaisesRegex(ValueError, "one file"):
+            dr._fit(
+                [self.foo, self.bar], [], 100,
+                path=Path("a.py"), functions=(),
+                reason=dr.DOCUMENT_REASON_NAMED_FILE,
+            )
+
+    def test_source_order_preserves_input_for_same_line_spans(self) -> None:
+        """Keep tie order for chunks split from a single long line.
+
+        """
+        split_one = chunk("z", "part one", path="a.py", start=2)
+        split_two = chunk("a", "part two", path="a.py", start=2)
+        selection = dr.read_document(
+            "question", [split_one, split_two], self.graph, [],
+            max_tokens=100, path=Path("a.py"),
+        )
+        self.assertEqual(selection.chunks, (split_one, split_two))
 
 
 if __name__ == "__main__":

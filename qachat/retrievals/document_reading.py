@@ -6,13 +6,12 @@ fit function". Document reading chooses one target and supplies all of its
 chunks in source order, so the answer can draw on parts that ranked
 retrieval would miss.
 
-The target is chosen deterministically. A function named in the question
-(known to the code graph) is read alone. Otherwise a file named in the
-question, by path, file name, or file stem, is read. Otherwise the file
-that dominates the question's fused search results is read. When the
-target is longer than the token budget, its chunks most relevant to the
-question are kept, still in source order, and the selection is marked
-incomplete.
+The target is chosen deterministically. An explicitly supplied path takes
+precedence; otherwise named functions are selected from one source file.
+When functions in several files are named, ranking selects one file, with a
+stable path-order fallback. Otherwise a named file or the file dominating
+the fused search results is read. Over-budget selections keep the most
+relevant chunks in source order and are marked incomplete.
 
 Only text already in the index is read; nothing is loaded from disk.
 Token counts are estimates, so a selection can be slightly larger or
@@ -96,6 +95,7 @@ from qachat.chunking import Chunk
 from qachat.retrievals.code_graph import CodeGraph
 from qachat.retrievals.routing import (
     RetrievalPlan,
+    _chunk_matches_function,
     expand_retrieval_context,
     plan_retrieval,
 )
@@ -215,22 +215,23 @@ def read_document(
         ``20``.
     path: pathlib.Path | None, optional
         The file to read, when the caller already chose it (for example
-        the user did). Defaults to ``None``.
+        the user did). Takes precedence over named functions and search
+        ranking. Defaults to ``None``.
 
     Returns
     -------
     DocumentSelection | None
-        The selection, or None when no chunks or results identify a
-        target.
+        The selection, or None when no indexed chunks belong to the
+        identified target. Selected chunks always come from one file.
 
     """
 
     if not chunks:
         return None
 
-    # A named function is read alone.
+    # A caller-specified path takes precedence over named functions.
     plan = plan_retrieval(question, graph)
-    if plan.functions:
+    if path is None and plan.functions:
         target = expand_retrieval_context(
             (),
             chunks,
@@ -244,12 +245,32 @@ def read_document(
             ),
         )
         if target:
+            # A DocumentSelection describes exactly one source file.
+            candidates = sorted({chunk.path for chunk in target})
+            target_path = (
+                dominant_path(ranked[:top], candidates) or candidates[0]
+            )
+            target = [
+                chunk for chunk in target if chunk.path == target_path
+            ]
+            matched_functions = {
+                entity.name
+                for entity in graph.entities
+                if entity.name in plan.functions
+                and any(
+                    _chunk_matches_function(chunk, entity)
+                    for chunk in target
+                )
+            }
+            functions = tuple(
+                name for name in plan.functions if name in matched_functions
+            )
             return _fit(
                 target,
                 ranked,
                 max_tokens,
-                path=target[0].path,
-                functions=plan.functions,
+                path=target_path,
+                functions=functions,
                 reason=DOCUMENT_REASON_NAMED_FUNCTION,
             )
 
@@ -265,6 +286,8 @@ def read_document(
         return None
 
     target = [chunk for chunk in chunks if chunk.path == target_path]
+    if not target:
+        return None
     return _fit(
         target,
         ranked,
@@ -451,8 +474,32 @@ def _fit(
         ranking order (unranked chunks last), and a chunk that does not fit
         is skipped while smaller later ones may still fit.
 
+    Raises
+    ------
+    ValueError
+        If chunks refer to a different file or an identifier refers to
+        conflicting chunk records.
+
+    Notes
+    -----
+    Repeated identical chunk identifiers are counted only once. Valid
+    persistent indexes already require unique identifiers.
+
     """
 
+    unique: dict[str, Chunk] = {}
+    for chunk in target:
+        if chunk.path != path:
+            raise ValueError("Document chunks must belong to one file.")
+        previous = unique.get(chunk.identifier)
+        if previous is not None and previous != chunk:
+            raise ValueError("Conflicting chunks share an identifier.")
+        unique.setdefault(chunk.identifier, chunk)
+
+    target = sorted(
+        unique.values(),
+        key=lambda chunk: (chunk.start_line, chunk.end_line),
+    )
     sizes = {chunk.identifier: estimate_tokens(chunk.text) for chunk in target}
     chosen: set[str] = set(sizes)
     if sum(sizes.values()) > max_tokens:
