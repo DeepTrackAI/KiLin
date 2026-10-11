@@ -1,14 +1,13 @@
-"""Integration tests for a small committed PDF source fixture.
+"""Integration tests for committed PDF source fixtures.
 
-The two-page synthetic PDF tests real text extraction and page provenance.
-A separate, optional scientific-paper regression is retained for manual use.
+The two-page synthetic PDF tests text extraction and page provenance.
+A scientific-paper fixture tests a historical text-spacing regression.
 
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
@@ -75,19 +74,13 @@ class TestPdfIntegration(unittest.TestCase):
         self.assertEqual([unit.section for unit in units],
                          ["Page 1", "Page 2"])
 
-    @unittest.skipUnless(
-        os.environ.get("QACHAT_TEST_LARGE_PDF") == "1",
-        "Set QACHAT_TEST_LARGE_PDF=1 for optional scientific PDF regression",
-    )
-    def test_optional_scientific_pdf_spacing_regression(self) -> None:
-        """Check the historical DIVA spacing issue when opted in."""
+    def test_scientific_pdf_spacing_regression(self) -> None:
+        """Check the historical DIVA spacing issue using a committed PDF."""
 
-        root = Path(__file__).resolve().parents[4]
-        relative = Path("example_repos/literature_repo/papers/patil25deep.pdf")
-        path = root / relative
-        if not path.is_file():
-            self.skipTest("Optional scientific PDF fixture is unavailable")
-        file = sources_pdf.read_source_file(path, relative)
+        relative = Path("papers/patil25deep.pdf")
+        file = sources_pdf.read_source_file(
+            fixture_path("patil25deep.pdf"), relative
+        )
         self.assertIn("we introduce DIVA", " ".join(file.text.split()))
         self.assertNotIn("DIV A ", file.text)
         self.assertNotIn("(cid:", file.text)
