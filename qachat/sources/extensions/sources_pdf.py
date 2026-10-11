@@ -58,7 +58,6 @@ The PDF hook requires its optional reader dependency when imported.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 import re
 from typing import Final
@@ -162,7 +161,6 @@ def _layout_pages(target: Path, page_count: int) -> list[str] | None:
     """
 
     try:
-        logging.getLogger("pdfminer").setLevel(logging.ERROR)
         text = _pdfminer_text(str(target), laparams=LAParams())
     except Exception:  # Any parser failure falls back to pypdf.
         return None

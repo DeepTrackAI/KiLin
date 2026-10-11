@@ -1,7 +1,7 @@
 """Unit tests for lightweight Markdown heading extraction.
 
-The current extractor recognizes ATX headings without parsing fenced code or
-nested document structure. Tests preserve this documented limited contract.
+The extractor recognizes ATX headings outside fenced code without parsing
+nested document structure. Tests preserve this lightweight contract.
 
 """
 
@@ -89,6 +89,59 @@ class TestMarkdownExtraction(unittest.TestCase):
         )
         self.assertEqual(units[0].section, "Heading")
         self.assertEqual(units[0].text, text)
+
+    def test_headings_inside_backtick_fences_are_not_sections(self) -> None:
+        """Keep fenced Python comments inside the surrounding section."""
+
+        text = (
+            "Preamble\n# Intro\n```python\n# Comment\n"
+            "```\n## Usage\nExample\n"
+        )
+        units = sources_md.extract_source_units(
+            SourceFile(Path("readme.md"), text)
+        )
+        self.assertEqual([unit.section for unit in units],
+                         [None, "Intro", "Usage"])
+        self.assertEqual([(u.start_line, u.end_line) for u in units],
+                         [(1, 1), (2, 5), (6, 7)])
+        self.assertEqual("".join(unit.text for unit in units), text)
+
+    def test_tilde_fence_closes_only_with_matching_marker(self) -> None:
+        """Require a matching closer of at least the opener's length."""
+
+        text = (
+            "# Start\n~~~~ text\n# Fake one\n~~~\n"
+            "# Fake two\n````\n# Fake three\n"
+            "~~~~ extra\n# Fake four\n~~~~  \n## End\n"
+        )
+        units = sources_md.extract_source_units(
+            SourceFile(Path("notes.md"), text)
+        )
+        self.assertEqual([unit.section for unit in units],
+                         ["Start", "End"])
+        self.assertEqual("".join(unit.text for unit in units), text)
+
+    def test_unclosed_fence_hides_all_later_headings(self) -> None:
+        """Do not end an open backtick fence at a shorter delimiter."""
+
+        text = "# Section\n````js\n# Fake\n```\n## Also fake\n"
+        units = sources_md.extract_source_units(
+            SourceFile(Path("notes.md"), text)
+        )
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].section, "Section")
+        self.assertEqual(units[0].text, text)
+
+    def test_fence_in_preamble_does_not_create_a_section(self) -> None:
+        """Keep heading-shaped lines in initial fenced text as preamble."""
+
+        text = "   ```md\n# Fake\n   ```\n# Actual\nText\n"
+        units = sources_md.extract_source_units(
+            SourceFile(Path("notes.md"), text)
+        )
+        self.assertEqual([unit.section for unit in units],
+                         [None, "Actual"])
+        self.assertEqual("".join(unit.text for unit in units), text)
 
     def test_blank_markdown_produces_no_units(self) -> None:
         """Avoid creating units from whitespace-only documents."""

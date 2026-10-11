@@ -156,6 +156,31 @@ class TestNotebookExtraction(unittest.TestCase):
                         {"cell_type": "code", "source": source},
                     ])
 
+    def test_malformed_cell_types_are_rejected(self) -> None:
+        """Reject non-string cell types with a consistent ValueError."""
+
+        for cell_type in (None, 7, 1.5, False, [], {}, ["code"]):
+            with self.subTest(cell_type=cell_type):
+                with self.assertRaisesRegex(ValueError, "Invalid Jupyter"):
+                    self._extract([
+                        {"cell_type": cell_type, "source": "text"},
+                    ])
+
+    def test_markdown_cell_ignores_headings_inside_code_fences(self) -> None:
+        """Find the first real heading, not a comment inside a fence."""
+
+        units = self._extract([
+            {"cell_type": "markdown", "source":
+             "```python\n# Fake\n```\n## Actual\nBody\n"},
+            {"cell_type": "markdown", "source":
+             "~~~text\n# Still fake\n~~~\n"},
+            {"cell_type": "markdown", "source":
+             "````\n# Fake\n```\n# Still fake\n"},
+        ])
+        self.assertEqual([unit.section for unit in units],
+                         ["Actual", None, None])
+        self.assertEqual([unit.cell for unit in units], [1, 2, 3])
+
     def test_unknown_cell_type_is_ignored(self) -> None:
         """Ignore unrecognized but hashable cell types."""
 

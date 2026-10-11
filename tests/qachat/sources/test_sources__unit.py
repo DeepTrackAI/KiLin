@@ -271,6 +271,32 @@ class TestReadRepositoryFiles(unittest.TestCase):
                     ):
                         read_repository_files(report)
 
+    def test_extension_reader_must_preserve_file_provenance(self) -> None:
+        """Reject a reader that returns a different repository path."""
+
+        report = {**self.report, "selected_files": ["two.rst"]}
+        invalid = (
+            SourceFile(Path("wrong.rst"), "data"),
+            SourceFile(Path("two.rst"), 17),
+            SourceFile("two.rst", "data"),
+        )
+        callback = Mock()
+        for record in invalid:
+            with self.subTest(record=record):
+                extension = SimpleNamespace(
+                    read_source_file=Mock(return_value=record)
+                )
+                with patch.object(
+                    sources, "_extension_module", return_value=extension
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "Invalid source reader"
+                    ):
+                        read_repository_files(
+                            report, progress_callback=callback
+                        )
+        callback.assert_not_called()
+
     def test_extension_reader_failure_propagates(self) -> None:
         """Do not convert extension exceptions into empty files."""
 
@@ -394,6 +420,48 @@ class TestExtractSourceUnits(unittest.TestCase):
             units = extract_source_units(files)
         self.assertEqual(units, [first, second])
         self.assertEqual(extractor.call_count, 2)
+
+    def test_extractor_must_preserve_unit_provenance(self) -> None:
+        """Reject units claiming to originate from a different file."""
+
+        file = SourceFile(Path("a.xyz"), "data")
+        wrong = SourceUnit(Path("wrong.xyz"), "data", 1, 1, "custom")
+        extension = SimpleNamespace(
+            extract_source_units=Mock(return_value=[wrong])
+        )
+        callback = Mock()
+        with patch.object(
+            sources, "_extension_module", return_value=extension
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Invalid source extractor"
+            ):
+                extract_source_units(
+                    [file], progress_callback=callback
+                )
+        callback.assert_not_called()
+
+    def test_extractor_nested_units_must_preserve_provenance(self) -> None:
+        """Apply the same path contract to nested child units."""
+
+        file = SourceFile(Path("a.xyz"), "data")
+        wrong_child = SourceUnit(
+            Path("wrong.xyz"), "data", 1, 1, "custom"
+        )
+        parent = SourceUnit(
+            file.path, "data", 1, 1, "custom",
+            children=(wrong_child,),
+        )
+        extension = SimpleNamespace(
+            extract_source_units=Mock(return_value=[parent])
+        )
+        with patch.object(
+            sources, "_extension_module", return_value=extension
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Invalid source extractor"
+            ):
+                extract_source_units([file])
 
     def test_extension_can_return_no_units(self) -> None:
         """Treat an empty list as a valid extractor result."""

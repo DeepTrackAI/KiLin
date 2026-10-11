@@ -160,7 +160,8 @@ class SourceUnit:
     coordinates are file-local for ordinary text, cell-local for notebooks, and
     page-local for PDFs. Use cell and section to interpret those coordinates.
     Children can cover structural portions of a parent unit and are used when
-    chunking oversized units.
+    chunking oversized units. Extensions must preserve the source path for
+    each unit and its children.
 
     """
 
@@ -204,7 +205,8 @@ def read_repository_files(
         If report structure, file containment, regular-file status, UTF-8
         decoding, or the optional callback is invalid.
     RuntimeError
-        If an extension reader returns something other than SourceFile.
+        If an extension reader returns an invalid SourceFile record or
+        inconsistent source provenance.
     OSError
         If a selected file cannot be resolved or read.
     ImportError
@@ -267,7 +269,12 @@ def read_repository_files(
         else:
             source_file = _read_text_file(target, relative_path)
 
-        if not isinstance(source_file, SourceFile):
+        if (
+            not isinstance(source_file, SourceFile)
+            or not isinstance(source_file.path, Path)
+            or source_file.path != relative_path
+            or not isinstance(source_file.text, str)
+        ):
             raise RuntimeError(
                 f"Invalid source reader for {relative_path.suffix or 'file'}."
             )
@@ -304,8 +311,8 @@ def extract_source_units(
         If a progress callback is not callable or an extension rejects its
         source content.
     RuntimeError
-        If an extractor does not return a list containing only SourceUnit
-        records.
+        If an extractor returns invalid SourceUnit records or inconsistent
+        source provenance.
     ImportError
         If an existing extension cannot import a required dependency.
 
@@ -328,8 +335,9 @@ def extract_source_units(
         extractor = getattr(extension, "extract_source_units", None)
         if extractor is not None:
             extracted = extractor(source_file)
-            if not isinstance(extracted, list) or any(
-                not isinstance(unit, SourceUnit) for unit in extracted
+            if (
+                not isinstance(extracted, list)
+                or not _units_match_source(extracted, source_file.path)
             ):
                 raise RuntimeError(
                     f"Invalid source extractor for "
@@ -354,6 +362,40 @@ def extract_source_units(
             progress_callback(current, total)
 
     return units
+
+
+def _units_match_source(units: list[SourceUnit], path: Path) -> bool:
+    """Check the provenance of every unit, including nested children.
+
+    Parameters
+    ----------
+    units: list[SourceUnit]
+        Units returned by a source extension.
+    path: pathlib.Path
+        Expected repository-relative source path.
+
+    Returns
+    -------
+    bool
+        True if every unit has the expected path and valid child structure.
+
+    """
+
+    pending = list(units)
+    seen: set[int] = set()
+    while pending:
+        unit = pending.pop()
+        if (
+            not isinstance(unit, SourceUnit)
+            or unit.path != path
+            or not isinstance(unit.children, tuple)
+        ):
+            return False
+        if id(unit) in seen:
+            continue
+        seen.add(id(unit))
+        pending.extend(unit.children)
+    return True
 
 
 def _extension_module(path: Path) -> ModuleType | None:

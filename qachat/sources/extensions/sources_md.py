@@ -2,9 +2,8 @@
 
 Heading lines beginning with one to six hash characters define successive
 flat sections. The text before the first heading is preserved separately.
-This implementation does not parse nested Markdown structure, setext
-headings, or fenced-code state; a heading-shaped line in a code fence can be
-recognized as a section boundary.
+Headings inside backtick or tilde code fences are ignored. This lightweight
+implementation does not parse nested Markdown structure or setext headings.
 
 Key Features
 ------------
@@ -51,6 +50,59 @@ __all__ = [
 ]
 
 MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
+_FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+
+
+def _markdown_headings(lines: list[str]) -> list[tuple[int, str]]:
+    """Find ATX headings outside backtick and tilde code fences.
+
+    Parameters
+    ----------
+    lines: list[str]
+        Markdown source lines, retaining line endings where available.
+
+    Returns
+    -------
+    list[tuple[int, str]]
+        One-based line numbers and normalized heading titles.
+
+    Notes
+    -----
+    Fences may be indented by up to three spaces. A closing fence must use
+    the opening character at least as many times, with only trailing spaces.
+    Backtick fence info strings cannot contain backticks. Heading detection
+    otherwise keeps the existing lightweight ATX syntax.
+
+    """
+
+    headings: list[tuple[int, str]] = []
+    fence: str | None = None
+    for line_number, source_line in enumerate(lines, start=1):
+        line = source_line.rstrip("\r\n")
+        if fence is not None:
+            closing = _FENCE_CLOSE.match(line)
+            if (
+                closing is not None
+                and closing.group(1)[0] == fence[0]
+                and len(closing.group(1)) >= len(fence)
+            ):
+                fence = None
+            continue
+
+        opening = _FENCE_OPEN.match(line)
+        if opening is not None:
+            marker = opening.group(1)
+            if marker[0] != "`" or "`" not in opening.group(2):
+                fence = marker
+                continue
+
+        match = MARKDOWN_HEADING.match(line)
+        if match is not None:
+            title = match.group(2).strip().rstrip("#").rstrip()
+            headings.append((line_number, title))
+
+    return headings
 
 
 def _markdown_units(path: Path, lines: list[str]) -> list[SourceUnit]:
@@ -70,12 +122,7 @@ def _markdown_units(path: Path, lines: list[str]) -> list[SourceUnit]:
 
     """
 
-    headings: list[tuple[int, str]] = []
-    for line_number, line in enumerate(lines, 1):
-        match = MARKDOWN_HEADING.match(line.rstrip("\r\n"))
-        if match is not None:
-            title = match.group(2).strip().rstrip("#").rstrip()
-            headings.append((line_number, title))
+    headings = _markdown_headings(lines)
 
     units: list[SourceUnit] = []
     first_heading = headings[0][0] if headings else len(lines) + 1

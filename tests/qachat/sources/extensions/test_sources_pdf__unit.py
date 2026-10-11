@@ -107,6 +107,22 @@ class TestPdfReading(unittest.TestCase):
             )
         self.assertEqual(file.text, "Plain text.")
 
+    def test_layout_extraction_does_not_change_global_logging(self) -> None:
+        """Leave pdfminer logging configuration under caller control."""
+
+        logger = logging.getLogger("pdfminer")
+        logger.setLevel(logging.DEBUG)
+        for result in ("Page\f", ValueError("invalid PDF")):
+            with self.subTest(result=result):
+                kwargs = (
+                    {"side_effect": result}
+                    if isinstance(result, Exception)
+                    else {"return_value": result}
+                )
+                with patch.object(sources_pdf, "_pdfminer_text", **kwargs):
+                    sources_pdf._layout_pages(Path("paper.pdf"), 1)
+                self.assertEqual(logger.level, logging.DEBUG)
+
     def test_layout_page_count_mismatch_uses_plain_fallback(self) -> None:
         """Avoid assigning incorrect page provenance to layout output."""
 
