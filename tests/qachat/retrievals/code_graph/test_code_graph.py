@@ -279,9 +279,8 @@ class TestRemainingGraphBranches(unittest.TestCase):
 class TestGraphDeterminismRegression(unittest.TestCase):
     """Track cross-process ordering when graph entities share a name."""
 
-    @unittest.expectedFailure
-    def test_pending_equal_name_order_independent_of_hash_seed(self) -> None:
-        """Pending: equal-name graph entities must sort identically.
+    def test_equal_name_order_independent_of_hash_seed(self) -> None:
+        """Equal-name entities are reproducibly ordered across processes.
 
         Notes
         -----
@@ -294,12 +293,15 @@ class TestGraphDeterminismRegression(unittest.TestCase):
             "from pathlib import Path; "
             "from qachat.sources.sources import SourceFile, SourceUnit; "
             "from qachat.retrievals.code_graph import build_code_graph; "
+            "from qachat.retrievals.persistence import "
+            "_repository_fingerprint; "
             "p=Path('x.py'); "
             "k=['python_module_context','python_class_context',"
             "'matlab_file_context','extra_context']; "
             "u=[SourceUnit(p,'hello',1,1,t) for t in k]; "
             "g=build_code_graph([SourceFile(p,'hello')],u); "
-            "print(','.join(e.kind for e in g.entities))"
+            "print(','.join(e.kind for e in g.entities)); "
+            "print(_repository_fingerprint([],g))"
         )
         outputs = []
         for seed in (1, 2, 3, 4):
@@ -310,4 +312,50 @@ class TestGraphDeterminismRegression(unittest.TestCase):
             )
             outputs.append(process.stdout.strip())
         self.assertEqual(len(set(outputs)), 1)
+        kinds, digest = outputs[0].splitlines()
+        self.assertEqual(
+            kinds,
+            "extra_context,matlab_file_context,python_class_context,"
+            "python_module_context,source_file",
+        )
+        self.assertEqual(len(digest), 64)
+
+    def test_equal_name_and_kind_order_by_path(self) -> None:
+        """Path breaks remaining ties even when names and kinds match.
+
+        Notes
+        -----
+        Both paths become the qualified name ``a.b``. Their distinct source
+        file and module-context records must survive deduplication and keep
+        their order even when source inputs arrive in a different order.
+
+        """
+        files = [
+            source_file("a.b.py", "value = 1\n"),
+            source_file("a/b.py", "value = 2\n"),
+        ]
+        units = [
+            source_unit(
+                "a.b.py", "value = 1\n", kind="python_module_context"
+            ),
+            source_unit(
+                "a/b.py", "value = 2\n", kind="python_module_context"
+            ),
+        ]
+        expected = [
+            ("a.b", "python_module_context", "a.b.py"),
+            ("a.b", "python_module_context", "a/b.py"),
+            ("a.b", "source_file", "a.b.py"),
+            ("a.b", "source_file", "a/b.py"),
+        ]
+        graph = cg.build_code_graph(files, units)
+        actual = [
+            (item.name, item.kind, item.path.as_posix())
+            for item in graph.entities
+        ]
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            graph,
+            cg.build_code_graph(files[::-1], units[::-1]),
+        )
 
