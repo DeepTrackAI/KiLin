@@ -523,16 +523,16 @@ class TestProjectTypeFields(ProjectTypeFixture):
                     self._load(f"graphbad{index}", data)
 
     def test_history_recent_turns_range(self) -> None:
-        """Accept zero through twenty previous turns, rejecting booleans."""
+        """Accept zero through one hundred turns, rejecting invalid values."""
 
-        for index, value in enumerate((0, 1, 20)):
+        for index, value in enumerate((0, 1, 20, 21, 99, 100)):
             data = _type_data()
             data["history"] = {"recent_turns": value}
             self.assertEqual(
                 self._load(f"recentok{index}", data).recent_turns,
                 value,
             )
-        for index, value in enumerate((-1, 21, "2", None, False, 2.5)):
+        for index, value in enumerate((-1, 101, "2", None, False, 2.5)):
             with self.subTest(value=value):
                 data = _type_data()
                 data["history"] = {"recent_turns": value}
