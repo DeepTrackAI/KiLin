@@ -1350,9 +1350,7 @@ class RAGSession:
                         evidence,
                         [self.turns[number - 1] for number in related_turns],
                     )
-                    effective["related_evidence_count"] = (
-                        len(evidence) - found
-                    )
+                    effective["related_evidence_count"] = len(evidence) - found
                     effective["evidence_from_turns"] = related_turns
                 report_phase(
                     ANSWER_PHASE_EVIDENCE_READY,
@@ -1700,8 +1698,8 @@ class RAGSession:
             component="rag",
             data={"project_directory": str(project.root), "refresh": True},
         ):
-            chunks, indexes, status, source_changes = (
-                self._prepare_retrieval(self.embedding_session)
+            chunks, indexes, status, source_changes = self._prepare_retrieval(
+                self.embedding_session
             )
         self.chunks = chunks
         self.indexes = indexes
@@ -1949,9 +1947,7 @@ class RAGSession:
         # content has another hash and is read again.
         texts = _read_text_cache(self.project.indexes)
         hashes = {
-            name: sha256(
-                (self.project.source / name).read_bytes()
-            ).hexdigest()
+            name: sha256((self.project.source / name).read_bytes()).hexdigest()
             for name in selected
         }
         reused = {
@@ -1983,19 +1979,23 @@ class RAGSession:
             component="rag",
             data={"selected_file_count": selected_count},
         ):
-            source_files = [] if not selected_count else read_repository_files(
-                report,
-                progress_callback=(
-                    lambda current, total: self._emit_count_progress(
-                        "reading_source",
-                        35.0,
-                        42.0,
-                        "Reading source files",
-                        current,
-                        total,
-                        reading_started,
-                    )
-                ),
+            source_files = (
+                []
+                if not selected_count
+                else read_repository_files(
+                    report,
+                    progress_callback=(
+                        lambda current, total: self._emit_count_progress(
+                            "reading_source",
+                            35.0,
+                            42.0,
+                            "Reading source files",
+                            current,
+                            total,
+                            reading_started,
+                        )
+                    ),
+                )
             )
         # Rewriting the cache from the selected files drops removed files.
         read = {source.path.as_posix(): source for source in source_files}
@@ -2050,19 +2050,23 @@ class RAGSession:
             component="rag",
             data={"file_count": source_file_count},
         ):
-            units = [] if not source_files else extract_source_units(
-                source_files,
-                progress_callback=(
-                    lambda current, total: self._emit_count_progress(
-                        "extracting_source",
-                        43.0,
-                        49.0,
-                        "Extracting source structure",
-                        current,
-                        total,
-                        extracting_started,
-                    )
-                ),
+            units = (
+                []
+                if not source_files
+                else extract_source_units(
+                    source_files,
+                    progress_callback=(
+                        lambda current, total: self._emit_count_progress(
+                            "extracting_source",
+                            43.0,
+                            49.0,
+                            "Extracting source structure",
+                            current,
+                            total,
+                            extracting_started,
+                        )
+                    ),
+                )
             )
 
         # Files with chunks from the saved index are not chunked again.
@@ -2986,9 +2990,7 @@ class RAGSession:
             if number in found or not 1 <= number <= len(self.turns):
                 continue
             found.add(number)
-            related = self.turns[number - 1].parameters.get(
-                "related_turn_ids"
-            )
+            related = self.turns[number - 1].parameters.get("related_turn_ids")
             if isinstance(related, list):
                 pending.extend(
                     related_number
@@ -3821,9 +3823,7 @@ def _check_conversation_trace(
         )
     resolved = Path(output_path).expanduser().resolve()
     if resolved != conversation_path:
-        raise ValueError(
-            "Enabled RAG tracing must use the conversation path."
-        )
+        raise ValueError("Enabled RAG tracing must use the conversation path.")
 
 
 def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:
@@ -4180,11 +4180,7 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
                 str(item["symbol"]) if item["symbol"] is not None else None
             ),
             text=str(item["text"]),
-            cell=(
-                int(item["cell"])
-                if item.get("cell") is not None
-                else None
-            ),
+            cell=(int(item["cell"]) if item.get("cell") is not None else None),
         )
         for item in evidence_data
     )
