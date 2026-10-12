@@ -61,10 +61,11 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
+from tempfile import NamedTemporaryFile
 from time import perf_counter
-from typing import Final, Mapping, Sequence
+from typing import Final, Mapping, NotRequired, Sequence, TypedDict, cast
 
 from qachat.project import (
     PROJECT_KIND_CHOICES,
@@ -84,6 +85,16 @@ __all__ = ["prepare_sources_workspace"]
 _COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
 
 
+class _SourceRecord(TypedDict):
+    """Persisted ownership and imported-file inventory of one source.
+
+    """
+
+    original: str
+    name: str
+    files: NotRequired[list[str]]
+
+
 def prepare_sources_workspace(
     source_paths: Sequence[str | Path],
     kind: ProjectKind,
@@ -97,8 +108,9 @@ def prepare_sources_workspace(
 
     Adding sources is cumulative. Re-adding a source updates its selected files
     without deleting older snapshots. Pass an empty list to reopen an existing
-    workspace unchanged. ``selected_files`` limits each folder to checked
-    relative file paths. ``settings`` is validated before copying.
+    workspace unchanged. When provided, ``selected_files`` must identify every
+    supplied source, so unmatched or missing keys cannot broaden the import.
+    ``settings`` is validated before copying.
 
     Parameters
     ----------
@@ -113,9 +125,10 @@ def prepare_sources_workspace(
         compatible profile.ini. Relative paths use the current working
         directory.
     selected_files: Mapping[str, Sequence[str]] | None, optional
-        Optional mapping from resolved original source-path strings to relative
-        selected files. A directory selection must be a nonempty subset of the
-        scan report; None uses the scan selection. Defaults to ``None``.
+        Optional mapping from source paths to selected relative filenames.
+        Keys are normalized and must match all supplied source paths exactly.
+        Each directory selection must be a nonempty subset of the scan report;
+        None uses the scan selection. Defaults to ``None``.
     settings: dict[str, object] | None, optional
         Optional supported profile updates applied through configure_project
         before copying. Defaults to ``None``.
@@ -206,6 +219,31 @@ def prepare_sources_workspace(
         if source not in chosen:
             chosen.append(source)
 
+    selections: dict[str, Sequence[str]] | None = None
+    if selected_files is not None:
+        if not isinstance(selected_files, Mapping):
+            raise ValueError("Source selections must be a path mapping.")
+        selections = {}
+        for key, files in selected_files.items():
+            if not isinstance(key, (str, Path)) or not str(key).strip():
+                raise ValueError("Invalid source selection path.")
+            original = str(Path(key).expanduser().resolve())
+            if original in selections:
+                raise ValueError(f"Duplicate source selection: {original}")
+            if not isinstance(files, (list, tuple)) or not all(
+                isinstance(file, str) for file in files
+            ):
+                raise ValueError(f"Invalid file selection: {original}")
+            selections[original] = files
+        expected = {str(source) for source in chosen}
+        if selections.keys() != expected:
+            missing = sorted(expected - selections.keys())
+            unexpected = sorted(selections.keys() - expected)
+            raise ValueError(
+                "Source selection paths must match requested sources; "
+                f"missing: {missing}; unexpected: {unexpected}."
+            )
+
     if not chosen and not (workspace / "profile.ini").is_file():
         raise ValueError("Add a source before creating a workspace.")
     workspace.mkdir(parents=True, exist_ok=True)
@@ -240,13 +278,9 @@ def prepare_sources_workspace(
         )
         if record is None:
             name = _unique_name(source, used, source_root)
-            record = {"original": original, "name": name}
+            record = _SourceRecord(original=original, name=name)
         destination = source_root / record["name"]
-        selection = (
-            selected_files.get(original)
-            if selected_files is not None
-            else None
-        )
+        selection = selections[original] if selections is not None else None
         copied = _copy_source(
             source, destination, project, workspace, selection
         )
@@ -260,7 +294,19 @@ def prepare_sources_workspace(
                 "copied_files": copied,
             },
         )
-        record["files"] = copied
+        # Existing, deselected snapshots remain project-owned. Preserve their
+        # provenance when they still exist, without claiming new local files
+        # were imported from the original repository. A direct-file record
+        # names the original file, even if its snapshot name was disambiguated.
+        if source.is_file():
+            record["files"] = copied
+        else:
+            inventory = set(record.get("files", [])) | set(copied)
+            record["files"] = sorted(
+                relative
+                for relative in inventory
+                if _is_regular_snapshot(destination, relative)
+            )
         if record not in records:
             records.append(record)
             used.add(record["name"])
@@ -465,9 +511,10 @@ def _copy_file(source: Path, destination: Path) -> None:
 
     Notes
     -----
-    The file is copied through a predictable temporary sibling and then
-    replaced. These checks are not a race-free security boundary and do not
-    validate every possible temporary-path interference.
+    Bytes are copied into a newly created, randomly named temporary file in
+    the destination directory before replacement. The temporary file is
+    removed if copying or replacement fails. This is not a general defense
+    against concurrent filesystem mutation by another process.
 
     """
 
@@ -477,12 +524,53 @@ def _copy_file(source: Path, destination: Path) -> None:
         if parent.is_symlink():
             raise ValueError(f"Do not copy through a symbolic link: {parent}")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
-    shutil.copy2(source, temporary)
-    temporary.replace(destination)
+    stream = NamedTemporaryFile(
+        mode="wb",
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            with source.open("rb") as original:
+                shutil.copyfileobj(original, stream)
+        shutil.copystat(source, temporary)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def _read_records(path: Path) -> list[dict[str, str]]:
+def _is_regular_snapshot(destination: Path, relative: str) -> bool:
+    """Check whether a tracked imported file still exists without links.
+
+    Parameters
+    ----------
+    destination: pathlib.Path
+        Original source's destination file or directory in the workspace.
+    relative: str
+        Name of a previously imported snapshot relative to the destination.
+
+    Returns
+    -------
+    bool
+        True if the tracked path is a regular file reached without symlinks.
+
+    """
+
+    path = destination / relative
+    if path.is_symlink() or not path.is_file():
+        return False
+    parent = path.parent
+    while parent != destination:
+        if parent.is_symlink():
+            return False
+        parent = parent.parent
+    return True
+
+
+def _read_records(path: Path) -> list[_SourceRecord]:
     """Validate persisted source ownership before using destination names.
 
     Parameters
@@ -492,23 +580,20 @@ def _read_records(path: Path) -> list[dict[str, str]]:
 
     Returns
     -------
-    list[dict[str, str]]
-        List of source-origin record dictionaries, or an empty list when the
-        manifest is missing.
+    list[_SourceRecord]
+        Validated ownership and inventory records, or an empty list if missing.
 
     Raises
     ------
     ValueError
-        If the manifest format, record structure, original path, or stored
-        source name is invalid.
+        If the manifest format, fields, inventory, or ownership is invalid.
     OSError
         If the file cannot be read.
 
     Notes
     -----
-    Stored records may also contain a files list; the existing return
-    annotation is narrower than that actual JSON structure. This helper does
-    not validate every copied-file entry.
+    A missing ``files`` list is accepted for older manifest records. Present
+    inventories must contain unique, normalized relative paths.
 
     """
 
@@ -520,39 +605,83 @@ def _read_records(path: Path) -> list[dict[str, str]]:
     records = payload.get("sources")
     if not isinstance(records, list):
         raise ValueError("Invalid workspace source list.")
+    seen_names: set[str] = set()
+    seen_originals: set[str] = set()
     for item in records:
         if not isinstance(item, dict):
             raise ValueError("Invalid workspace source entry.")
         original, name = item.get("original"), item.get("name")
         if not isinstance(original, str) or not isinstance(name, str):
             raise ValueError("Invalid workspace source entry.")
-        if name in {"", ".", ".."} or Path(name).name != name:
+        if (
+            name in {"", ".", ".."}
+            or Path(name).name != name
+            or "\\" in name
+            or PureWindowsPath(name).drive
+        ):
             raise ValueError("Invalid workspace source name.")
-    return records
+        if not original.strip():
+            raise ValueError("Invalid workspace source entry.")
+        if original in seen_originals or name in seen_names:
+            raise ValueError("Duplicate or conflicting workspace sources.")
+        seen_originals.add(original)
+        seen_names.add(name)
+        files = item.get("files", [])
+        if not isinstance(files, list):
+            raise ValueError("Invalid workspace source files inventory.")
+        seen_files: set[str] = set()
+        for relative in files:
+            if not isinstance(relative, str) or not relative:
+                raise ValueError("Invalid workspace source files inventory.")
+            normalized = PurePosixPath(relative)
+            if (
+                normalized.is_absolute()
+                or not normalized.parts
+                or ".." in normalized.parts
+                or PureWindowsPath(relative).drive
+                or "\\" in relative
+                or normalized.as_posix() != relative
+                or relative in seen_files
+            ):
+                raise ValueError("Invalid workspace source files inventory.")
+            seen_files.add(relative)
+    return cast("list[_SourceRecord]", records)
 
 
-def _write_records(path: Path, records: list[dict[str, str]]) -> None:
+def _write_records(path: Path, records: list[_SourceRecord]) -> None:
     """Save ownership after each successful source copy.
 
     Parameters
     ----------
     path: pathlib.Path
         Source-origin JSON manifest path.
-    records: list[dict[str, str]]
+    records: list[_SourceRecord]
         Source-origin records with original and name strings and, when written
         by preparation, a list of copied files.
 
     Notes
     -----
-    Writes the source-origin format version and supplied records. No
-    multi-writer coordination is provided; records are not checked against
-    destination contents here.
+    Uses a newly created temporary file in the same directory and replaces
+    the manifest after writing it completely. Temporary files are cleaned up
+    on errors. There is no multi-writer coordination.
 
     """
 
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps({"version": 1, "sources": records}, indent=2) + "\n",
+    stream = NamedTemporaryFile(
+        mode="w",
         encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
     )
-    temporary.replace(path)
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            stream.write(
+                json.dumps({"version": 1, "sources": records}, indent=2)
+                + "\n"
+            )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
