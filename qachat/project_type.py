@@ -176,7 +176,7 @@ HISTORY_POLICY_CHOICES: Final[tuple[HistoryPolicy, ...]] = (
 # Earlier turns kept as history when a type does not set recent_turns, and
 # the most a type may set.
 _DEFAULT_RECENT_TURNS: Final[int] = 2
-_MAX_RECENT_TURNS: Final[int] = 20
+_MAX_RECENT_TURNS: Final[int] = 100
 
 # How an intent obtains evidence for its answer.
 # ``document`` reads one whole file or function in source order.
@@ -468,9 +468,7 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
     """
 
     where = f"{kind}.intents.{intent_id}"
-    if not isinstance(intent_id, str) or not _ID_PATTERN.fullmatch(
-        intent_id
-    ):
+    if not isinstance(intent_id, str) or not _ID_PATTERN.fullmatch(intent_id):
         raise ValueError(
             f"Intent ID {intent_id!r} in {kind!r} must be lowercase letters, "
             "digits, hyphens, or underscores, starting with a letter."

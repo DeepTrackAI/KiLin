@@ -315,9 +315,7 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
         raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
     extensions = _PROJECT_EXTENSIONS[kind]
     parser = ConfigParser()
-    parser.read_string(
-        _default_profile_text(kind, "sources", extensions)
-    )
+    parser.read_string(_default_profile_text(kind, "sources", extensions))
     return _read_profile(parser)
 
 
