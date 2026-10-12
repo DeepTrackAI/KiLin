@@ -29,7 +29,9 @@ Key Features
 
 - **Validated on load**
 
-    A malformed file raises ``ValueError`` naming the type and field.
+    A malformed file or an unknown field at any configuration level raises
+    ``ValueError`` naming the type and field. Tool-specific settings are
+    checked by their registered tool.
 
 Module Structure
 ----------------
@@ -130,6 +132,7 @@ import re
 from typing import Final, Literal, TypeAlias
 
 from qachat.repository import normalize_extensions
+from qachat.tools.contract import reject_unknown
 from qachat.tools.registry import ToolUse, parse_tool
 
 __all__ = [
@@ -464,7 +467,8 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
     ------
     ValueError
         If the ID, a field, a shortcut pattern, or the tool settings are
-        invalid, or a tool is combined with a retrieval mode.
+        invalid, an unknown field is present, or a tool is combined with
+        a retrieval mode.
 
     """
 
@@ -477,8 +481,27 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
     if not isinstance(data, dict):
         raise ValueError(f"Intent {where!r} must be an object.")
 
+    reject_unknown(
+        where,
+        data,
+        (
+            "description",
+            "system_prompt",
+            "answer_guidance",
+            "history",
+            "retrieval",
+            "shortcuts",
+            "tool",
+        ),
+    )
     history = _object(where, data, "history")
+    reject_unknown(f"{where}.history", history, ("policy",))
     retrieval = _object(where, data, "retrieval")
+    reject_unknown(
+        f"{where}.retrieval",
+        retrieval,
+        ("mode", "strategy", "include_related_evidence", "max_tokens"),
+    )
 
     policy = history.get("policy", HISTORY_POLICY_RELEVANT)
     if policy not in HISTORY_POLICY_CHOICES:
@@ -579,7 +602,8 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
     Raises
     ------
     ValueError
-        If the ID, a field, or an intent is invalid.
+        If the ID, a field, or an intent is invalid, including unknown
+        configuration fields.
 
     """
 
@@ -591,6 +615,25 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
     if not isinstance(data, dict):
         raise ValueError(f"Project type {kind!r} must be an object.")
 
+    reject_unknown(
+        kind,
+        data,
+        (
+            "display_name",
+            "description",
+            "extensions",
+            "max_file_bytes",
+            "retrieval_instruction",
+            "system_prompt",
+            "capabilities",
+            "history",
+            "default_intent",
+            "intents",
+            "answer_guidance",
+            "welcome_prompts",
+            "suggestions",
+        ),
+    )
     extensions = _texts(kind, data, "extensions")
     if not extensions or any(
         not extension.startswith(".") for extension in extensions
@@ -613,9 +656,9 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
         )
 
     # The type check rejects 1 and 0, which equal True and False.
-    code_graph = _object(kind, data, "capabilities").get(
-        "code_graph", CODE_GRAPH_AUTO
-    )
+    capabilities = _object(kind, data, "capabilities")
+    reject_unknown(f"{kind}.capabilities", capabilities, ("code_graph",))
+    code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
         bool,
         str,
@@ -625,9 +668,9 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
             'false, or "auto".'
         )
 
-    recent_turns = _object(kind, data, "history").get(
-        "recent_turns", _DEFAULT_RECENT_TURNS
-    )
+    history = _object(kind, data, "history")
+    reject_unknown(f"{kind}.history", history, ("recent_turns",))
+    recent_turns = history.get("recent_turns", _DEFAULT_RECENT_TURNS)
     if (
         type(recent_turns) is not int
         or not 0 <= recent_turns <= _MAX_RECENT_TURNS
@@ -722,8 +765,9 @@ def load_project_types(
     ------
     ValueError
         If the folder has no project types, a file is not valid JSON, or a
-        type is malformed. The built-in project kinds are checked by
-        ``qachat.project``, which owns them.
+        type contains invalid or unknown fields. Every JSON file is checked;
+        loading stops at the first invalid definition. The built-in project
+        kinds are checked by ``qachat.project``, which owns them.
 
     """
 

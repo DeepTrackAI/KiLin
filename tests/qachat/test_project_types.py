@@ -221,6 +221,86 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     profile.target_tokens, profile.max_tokens
                 )
 
+    def test_every_packaged_file_rejects_unknown_fields(self) -> None:
+        """Reject typos at every configuration level in every JSON file."""
+
+        definitions = {
+            path.stem: json.loads(path.read_text(encoding="utf-8"))
+            for path in sorted(PROJECT_TYPES_DIR.glob("*.json"))
+        }
+        self.assertGreaterEqual(len(definitions), 2)
+        count = 0
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for kind, data in definitions.items():
+                intent_id = next(iter(data["intents"]))
+                locations = (
+                    ("", ()),
+                    (".capabilities", ("capabilities",)),
+                    (".history", ("history",)),
+                    (f".intents.{intent_id}", ("intents", intent_id)),
+                    (
+                        f".intents.{intent_id}.history",
+                        ("intents", intent_id, "history"),
+                    ),
+                    (
+                        f".intents.{intent_id}.retrieval",
+                        ("intents", intent_id, "retrieval"),
+                    ),
+                )
+                for location, keys in locations:
+                    with self.subTest(kind=kind, location=location):
+                        changed = deepcopy(definitions)
+                        target = changed[kind]
+                        for key in keys:
+                            target = target.setdefault(key, {})
+                        target["unrecognized_setting"] = True
+                        directory = root / f"case{count}"
+                        directory.mkdir()
+                        for name, content in changed.items():
+                            (directory / f"{name}.json").write_text(
+                                json.dumps(content), encoding="utf-8"
+                            )
+                        with self.assertRaisesRegex(
+                            ValueError, "unknown settings"
+                        ) as caught:
+                            load_project_types(directory)
+                        self.assertIn(
+                            f"{kind}{location}", str(caught.exception)
+                        )
+                        self.assertIn(
+                            "unrecognized_setting", str(caught.exception)
+                        )
+                        count += 1
+                tool_id = next(
+                    (
+                        name for name, intent in data["intents"].items()
+                        if "tool" in intent
+                    ),
+                    None,
+                )
+                if tool_id is not None:
+                    with self.subTest(kind=kind, location="tool"):
+                        changed = deepcopy(definitions)
+                        changed[kind]["intents"][tool_id]["tool"][
+                            "unrecognized_setting"
+                        ] = True
+                        directory = root / f"case{count}"
+                        directory.mkdir()
+                        for name, content in changed.items():
+                            (directory / f"{name}.json").write_text(
+                                json.dumps(content), encoding="utf-8"
+                            )
+                        with self.assertRaisesRegex(
+                            ValueError, "unknown settings"
+                        ) as caught:
+                            load_project_types(directory)
+                        self.assertIn(
+                            f"{kind}.intents.{tool_id}.tool",
+                            str(caught.exception),
+                        )
+                        count += 1
+
     def test_packaged_files_accept_textual_and_intent_edits(self) -> None:
         """Modified descriptions and intent IDs preserve schema validity."""
 
@@ -349,6 +429,22 @@ class TestProjectTypeLoading(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "Project type ID"):
                     load_project_types(folder)
 
+    def test_later_file_with_unknown_field_fails_entire_directory(
+        self,
+    ) -> None:
+        """A valid first JSON file must not mask a broken later file."""
+
+        valid = _type_data()
+        broken = _type_data()
+        broken["misspelled_description"] = "not a valid field"
+        folder = self._folder(
+            "laterunknown", {"alpha": valid, "zeta": broken}
+        )
+        with self.assertRaisesRegex(
+            ValueError, "zeta.*unknown settings.*misspelled_description"
+        ):
+            load_project_types(folder)
+
     def test_valid_kind_id_boundaries(self) -> None:
         """Allow valid separators and the largest permitted identifier."""
 
@@ -394,6 +490,39 @@ class TestProjectTypeFields(ProjectTypeFixture):
             loaded.display_name = "other"
         with self.assertRaises(FrozenInstanceError):
             intent.description = "other"
+
+    def test_unknown_project_and_nested_keys_are_rejected(self) -> None:
+        """Reject misspelled fields without disallowing custom type IDs."""
+
+        scenarios = (
+            (("display_nam",), "samples"),
+            (("capabilities", "code_grap"), "samples.capabilities"),
+            (("history", "recent_turn"), "samples.history"),
+        )
+        for index, (keys, location) in enumerate(scenarios):
+            with self.subTest(keys=keys):
+                data = _type_data()
+                target = data
+                for key in keys[:-1]:
+                    target = target.setdefault(key, {})
+                target[keys[-1]] = 1
+                with self.assertRaisesRegex(
+                    ValueError, "unknown settings"
+                ) as caught:
+                    self._load(f"unknownproject{index}", data)
+                self.assertIn(location, str(caught.exception))
+                self.assertIn(keys[-1], str(caught.exception))
+
+    def test_unknown_keys_are_reported_in_sorted_order(self) -> None:
+        """Multiple typos produce a deterministic, actionable error."""
+
+        data = _type_data()
+        data["zeta_typo"] = 1
+        data["alpha_typo"] = 2
+        with self.assertRaisesRegex(
+            ValueError, r"unknown settings: alpha_typo, zeta_typo"
+        ):
+            self._load("severalunknown", data)
 
     def test_optional_text_fields_are_stripped(self) -> None:
         """Normalize optional labels, guidance, and example strings."""
@@ -733,6 +862,31 @@ class TestIntentFields(ProjectTypeFixture):
                 self._load(f"shortcutsbad{index}", data)
         with self.assertRaisesRegex(ValueError, "regular expression"):
             self._load("regexbad", self._with_intent(shortcuts=["("]))
+
+    def test_unknown_intent_and_nested_keys_are_rejected(self) -> None:
+        """Reject unexpected intent, history, and retrieval properties."""
+
+        scenarios = (
+            (("system_promt",), "samples.intents.explain"),
+            (("history", "polcy"), "samples.intents.explain.history"),
+            (
+                ("retrieval", "include_releated_evidence"),
+                "samples.intents.explain.retrieval",
+            ),
+        )
+        for index, (keys, location) in enumerate(scenarios):
+            with self.subTest(keys=keys):
+                data = _type_data()
+                target = data["intents"]["explain"]
+                for key in keys[:-1]:
+                    target = target.setdefault(key, {})
+                target[keys[-1]] = "ignored before validation"
+                with self.assertRaisesRegex(
+                    ValueError, "unknown settings"
+                ) as caught:
+                    self._load(f"unknownintent{index}", data)
+                self.assertIn(location, str(caught.exception))
+                self.assertIn(keys[-1], str(caught.exception))
 
     def test_tool_defaults_and_retrieval_incompatibility(self) -> None:
         """Tools default to no retrieval and permit absent instructions."""
