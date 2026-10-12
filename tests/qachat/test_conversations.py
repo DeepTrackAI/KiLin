@@ -421,7 +421,6 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
             r"^\d{4}-\d{2}-\d{2}T\d\d:\d\d:\d\d\.\d{3}Z$",
         )
 
-    @unittest.expectedFailure
     def test_temporary_file_symlink_cannot_overwrite_external_file(self):
         """A malicious predictable .json.tmp link must not be followed."""
         self.store.root.mkdir(parents=True)
@@ -436,6 +435,11 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
         with patch.object(self.store, "_new_path", return_value=path):
             self.store.create()
         self.assertEqual(target.read_text(), "Do not change")
+        self.assertTrue(temporary.is_symlink())
+        self.assertTrue(path.is_file())
+        self.assertEqual(
+            list(self.store.root.glob(f".{path.name}.*.tmp")), []
+        )
 
 
 class TestStoreBranching(ConversationStoreFixture):
@@ -849,6 +853,31 @@ class TestConversationJsonHelpers(ConversationStoreFixture):
         with self.assertRaises(TypeError):
             module._write_json(path, {"bad": object()})
         self.assertFalse(path.exists())
+
+    def test_write_json_serialization_failure_preserves_existing_file(self):
+        """A serialization error must not leave a partial replacement."""
+        path = self.base / "saved.json"
+        module._write_json(path, {"version": 1})
+        before = path.read_bytes()
+        with self.assertRaises(TypeError):
+            module._write_json(path, {"value": object()})
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(
+            list(self.base.glob(f".{path.name}.*.tmp")), []
+        )
+
+    def test_write_json_replace_failure_cleans_temporary_file(self):
+        """A failed replacement preserves the old JSON and removes debris."""
+        path = self.base / "saved.json"
+        module._write_json(path, {"version": 1})
+        before = path.read_bytes()
+        with patch.object(module.Path, "replace", side_effect=OSError("deny")):
+            with self.assertRaisesRegex(OSError, "deny"):
+                module._write_json(path, {"version": 2})
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(
+            list(self.base.glob(f".{path.name}.*.tmp")), []
+        )
 
     def test_invalid_utf8_is_rejected_during_decoding(self):
         """Binary content must not be treated as a valid JSON record."""

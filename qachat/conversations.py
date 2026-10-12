@@ -8,8 +8,9 @@ not duplicate the parent's complete trace-event history.
 
 Files support both legacy top-level conversation records and grouped trace
 sessions through the shared internal conversation-format contract. Writes
-replace a temporary JSON file, but this module provides no multi-process lock
-or transaction across registry and filesystem updates.
+use securely created temporary files and atomic single-file replacement,
+but the module provides no multi-process lock or transaction across
+registry and filesystem updates.
 Conversation files can contain full questions, answers, and source excerpts.
 
 Key Features
@@ -61,6 +62,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
 from qachat.conversation_format import (
@@ -771,18 +773,32 @@ def _write_json(path: Path, payload: object) -> None:
 
     Notes
     -----
-    Parent directories are created. Replacement is a single-file operation, not
-    a transaction with the in-memory registry or other writers.
+    Parent directories are created. An exclusive, unpredictably named temporary
+    file in the destination directory prevents following a pre-existing
+    temporary-file symlink. Temporary files are removed on any write or replace
+    failure. Replacement is atomic for one file, not a transaction with the
+    in-memory registry or other writers.
 
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+    stream = NamedTemporaryFile(
+        mode="w",
         encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
     )
-    temporary.replace(path)
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            stream.write(
+                json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+            )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _utc_timestamp() -> str:
