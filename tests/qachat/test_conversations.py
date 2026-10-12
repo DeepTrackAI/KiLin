@@ -1114,3 +1114,72 @@ class TestConversationJsonHelpers(ConversationStoreFixture):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStoreFileOwnership(ConversationStoreFixture):
+    """Require ownership for store metadata writes, branching and archival."""
+
+    def test_mutations_refuse_a_competing_logger(self) -> None:
+        """Keep file bytes and store registry unchanged on contention."""
+
+        from qachat.conversation_ownership import ConversationLockedError
+        from qachat.trace_logging import TraceConfig, TraceLogger
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        logger = TraceLogger(
+            TraceConfig(enabled=True, output_path=path),
+            default_directory=self.store.root,
+        )
+        self.addCleanup(logger.close)
+        before = path.read_bytes()
+        actions = (
+            lambda: self.store.rename(item.conversation_id, "new"),
+            lambda: self.store.touch(item.conversation_id),
+            lambda: self.store.archive(item.conversation_id),
+            lambda: self.store.create(branch_from=item.conversation_id),
+        )
+        for action in actions:
+            with self.subTest(action=action):
+                with self.assertRaises(ConversationLockedError):
+                    action()
+                self.assertEqual(path.read_bytes(), before)
+                self.assertEqual(self.store.active(), item)
+
+    def test_borrowed_logger_owner_supports_gui_style_mutations(
+        self,
+    ) -> None:
+        """Allow metadata updates and archival under an existing file lock."""
+
+        from qachat.trace_logging import TraceConfig, TraceLogger
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        logger = TraceLogger(
+            TraceConfig(enabled=True, output_path=path),
+            default_directory=self.store.root,
+        )
+        self.addCleanup(logger.close)
+        ownership = logger._file_lock
+        renamed = self.store.rename(
+            item.conversation_id, "Revised", ownership=ownership
+        )
+        touched = self.store.touch(
+            item.conversation_id, ownership=ownership
+        )
+        self.assertEqual(renamed.name, "Revised")
+        self.assertEqual(touched.name, "Revised")
+        logger.update_conversation(asdict(touched))
+        branch = self.store.create(
+            branch_from=item.conversation_id, ownership=ownership
+        )
+        self.assertEqual(
+            branch.parent_conversation_id, item.conversation_id
+        )
+        active, archive = self.store.archive(
+            item.conversation_id, ownership=ownership
+        )
+        self.assertTrue(archive.is_file())
+        self.assertEqual(active, branch)
+        logger.close(emit_event=False)
+        self.assertTrue(archive.exists())

@@ -2233,6 +2233,49 @@ class TestRAGSessionConstruction(unittest.TestCase):
              "max_new_tokens": 64}
         )
 
+    def test_untraced_constructor_holds_lease_until_close(self) -> None:
+        """Protect conversation history even with tracing disabled."""
+
+        from qachat.conversation_ownership import (
+            ConversationFileLock,
+            ConversationLockedError,
+        )
+
+        with self._construction_patches():
+            session = rag.RAGSession(self.root)
+        path = session.conversation_path
+        self.assertTrue(session._conversation_ownership.holds(path))
+        with self.assertRaises(ConversationLockedError):
+            ConversationFileLock(path).acquire()
+        session.close()
+        self.assertIsNone(session._conversation_ownership)
+        with ConversationFileLock(path):
+            pass
+
+    def test_early_callback_failure_releases_untraced_lease(
+        self,
+    ) -> None:
+        """Release an acquired lock if preparation fails before model load."""
+
+        from qachat.conversation_ownership import ConversationFileLock
+
+        path = self.root / "logs" / "traces" / "conversation_fixed.json"
+
+        def fail_on_progress(event: rag.ProgressEvent) -> None:
+            """Stop during the initial preparation notification."""
+
+            raise RuntimeError("progress failed")
+
+        with self._construction_patches():
+            with self.assertRaisesRegex(RuntimeError, "progress failed"):
+                rag.RAGSession(
+                    self.root,
+                    conversation_path=path,
+                    progress_callback=fail_on_progress,
+                )
+        with ConversationFileLock(path):
+            pass
+
     def test_constructor_closes_models_and_trace_on_index_failure(
         self,
     ) -> None:
@@ -3312,3 +3355,86 @@ class TestRAGTraceIntegration(unittest.TestCase):
             self._conversation()["resume_state"]["turns"][0]["answer"],
             "tool answer",
         )
+
+
+class TestRAGFileOwnership(unittest.TestCase):
+    """Protect direct persistence and destination switches without tracing."""
+
+    def setUp(self) -> None:
+        """Reserve canonical test paths without loading external models."""
+
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.session = _session(self.root)
+        self.session.conversation_path.parent.mkdir(parents=True)
+
+    def test_direct_save_refuses_a_competing_lease(self) -> None:
+        """Do not replace JSON when a separate writer owns the same file."""
+
+        from qachat.conversation_ownership import (
+            ConversationFileLock,
+            ConversationLockedError,
+        )
+
+        path = self.session.conversation_path
+        self.session._save_conversation()
+        before = path.read_bytes()
+        old_checkpoint = self.session._checkpoint_id
+        with ConversationFileLock(path):
+            with self.assertRaises(ConversationLockedError):
+                self.session._save_conversation(pending_turn=_turn())
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.session.turns, [])
+        self.assertEqual(self.session._checkpoint_id, old_checkpoint)
+
+    def test_switch_lock_conflict_preserves_previous_conversation(
+        self,
+    ) -> None:
+        """Retain the old path and its lock if the new file is occupied."""
+
+        from qachat.conversation_ownership import (
+            ConversationFileLock,
+            ConversationLockedError,
+        )
+
+        previous = self.session.conversation_path
+        target = previous.with_name("conversation_next.json")
+        owner = ConversationFileLock(previous)
+        owner.acquire()
+        self.addCleanup(owner.release)
+        self.session._conversation_ownership = owner
+        self.session.turns = [_turn("original")]
+        with ConversationFileLock(target):
+            with self.assertRaises(ConversationLockedError):
+                self.session.switch_conversation(
+                    target, trace=NullTraceLogger()
+                )
+        self.assertEqual(self.session.conversation_path, previous)
+        self.assertEqual(self.session.turns[0].question, "original")
+        self.assertTrue(owner.holds(previous))
+        self.session.switch_conversation(
+            target, trace=NullTraceLogger()
+        )
+        self.assertFalse(owner.holds(previous))
+        self.assertTrue(
+            self.session._conversation_ownership.holds(target)
+        )
+        self.session.close()
+        self.assertFalse(
+            self.session._conversation_ownership is not None
+        )
+
+    def test_closed_borrowed_logger_is_rejected_on_switch(self) -> None:
+        """Require an enabled borrowed logger to retain its writer lease."""
+
+        target = self.session.conversation_path.with_name(
+            "conversation_target.json"
+        )
+        logger = TraceLogger(
+            TraceConfig(enabled=True, output_path=target),
+            default_directory=self.root,
+        )
+        logger.close()
+        with self.assertRaisesRegex(RuntimeError, "no file lock"):
+            self.session.switch_conversation(target, trace=logger)

@@ -434,16 +434,47 @@ class ChatEngine:
         self.project_trace = NullTraceLogger()
 
     def _detach_project_trace(self) -> None:
-        """Release the current trace without rewriting its persisted JSON.
+        """Close an archived trace and release its file lock without writing.
 
         GUI conversation deletion archives a trace whose accepted events and
-        resume state have already been written. Detaching avoids the otherwise
-        redundant full-document rewrite performed by ``close()`` immediately
-        before the file is moved into the recoverable ``deleted`` folder.
+        resume state have already been written. Closing without a final event
+        avoids rewriting the moved JSON and releases the exclusive file lock.
 
         """
 
+        if isinstance(self.project_trace, TraceLogger):
+            self.project_trace.close(emit_event=False)
         self.project_trace = NullTraceLogger()
+
+    def _store_ownership(self, conversation_id: str):
+        """Borrow the active RAG file lease for store mutations.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Conversation being modified by the store.
+
+        Returns
+        -------
+        ConversationFileLock | None
+            Held ownership of the currently active file, or None when the
+            operation targets another conversation.
+
+        Notes
+        -----
+        The store validates borrowed ownership and never releases it. This
+        permits GUI metadata changes and archival while RAG or a trace logger
+        holds the active conversation's exclusive lock.
+
+        """
+
+        if (
+            self.session is not None
+            and self.active_conversation is not None
+            and conversation_id == self.active_conversation.conversation_id
+        ):
+            return self.session._active_conversation_lock()
+        return None
 
     def _send(self, event: str, **data: object) -> None:
         """Pass one named event dictionary to the configured frontend sink.
@@ -2135,7 +2166,11 @@ class ChatEngine:
         if not title:
             return
         renamed = self.conversation_store.rename(
-            self.active_conversation.conversation_id, title
+            self.active_conversation.conversation_id,
+            title,
+            ownership=self._store_ownership(
+                self.active_conversation.conversation_id
+            ),
         )
         self.active_conversation = renamed
         self.active_trace.update_conversation(asdict(renamed))
@@ -2247,7 +2282,10 @@ class ChatEngine:
                 and self.active_conversation is not None
             ):
                 self.active_conversation = self.conversation_store.touch(
-                    self.active_conversation.conversation_id
+                    self.active_conversation.conversation_id,
+                    ownership=self._store_ownership(
+                        self.active_conversation.conversation_id
+                    ),
                 )
                 self.active_trace.update_conversation(
                     asdict(self.active_conversation)
@@ -2641,9 +2679,14 @@ class ChatEngine:
                 self.active_conversation.conversation_id if branch else None
             )
             conversation = self.conversation_store.create(
-                branch_from=parent_id
+                branch_from=parent_id,
+                ownership=(
+                    self._store_ownership(parent_id)
+                    if parent_id is not None
+                    else None
+                ),
             )
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_create.failed",
@@ -2662,9 +2705,9 @@ class ChatEngine:
 
         Notes
         -----
-        Operation errors are caught and reported through an error event. The
-        method is synchronous; event-sink or error-reporting failures may still
-        propagate.
+        Operation errors are caught and reported through an error event.
+        A rejected target-file lock restores the previous store selection and
+        keeps the existing live session active.
 
         """
 
@@ -2678,7 +2721,7 @@ class ChatEngine:
                 == self.active_conversation.conversation_id
             ):
                 return
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_select.failed",
@@ -2709,7 +2752,11 @@ class ChatEngine:
         try:
             if self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
-            renamed = self.conversation_store.rename(conversation_id, name)
+            renamed = self.conversation_store.rename(
+                conversation_id,
+                name,
+                ownership=self._store_ownership(conversation_id),
+            )
             if (
                 self.active_conversation is not None
                 and renamed.conversation_id
@@ -2760,7 +2807,8 @@ class ChatEngine:
                 conversation_id=conversation_id,
             )
             replacement, archived_path = self.conversation_store.archive(
-                conversation_id
+                conversation_id,
+                ownership=self._store_ownership(conversation_id),
             )
             if deleting_active:
                 self._detach_project_trace()
@@ -2848,6 +2896,38 @@ class ChatEngine:
                 f"Could not rename the project: {error}",
             )
 
+    def _switch_with_store_rollback(
+        self,
+        conversation: ConversationInfo,
+    ) -> None:
+        """Switch the active conversation or restore store selection.
+
+        Parameters
+        ----------
+        conversation: ConversationInfo
+            Target already selected or created by ConversationStore.
+
+        Notes
+        -----
+        The store may change its active ID before the engine can acquire the
+        target file. A rejected acquisition leaves the live session unchanged;
+        restore the previous store selection in that case. If the session
+        already switched, retain its new selection instead.
+
+        """
+
+        previous = self.active_conversation
+        try:
+            self._switch_conversation(conversation)
+        except BaseException:
+            if (
+                previous is not None
+                and self.active_conversation is previous
+                and self.conversation_store is not None
+            ):
+                self.conversation_store.select(previous.conversation_id)
+            raise
+
     def _switch_conversation(
         self,
         conversation: ConversationInfo,
@@ -2862,10 +2942,9 @@ class ChatEngine:
             Registered conversation metadata for the state to activate or
             trace.
         close_current_trace: bool, optional
-            Whether to append a closing event to the current trace before
-            switching. Deletion passes ``False`` after archiving the already
-            durable trace to avoid a redundant full JSON rewrite. Defaults to
-            ``True``.
+            Whether to append a closing event to the old trace after a
+            successful switch. Deletion passes False after it already closed
+            and detached its archived trace. Defaults to True.
 
         Raises
         ------
@@ -2874,21 +2953,33 @@ class ChatEngine:
 
         Notes
         -----
-        Closes the previous trace, opens the target trace, and switches RAG
-        history/settings while reusing models and indexes. This sequence is not
-        rolled back as one transaction on failure.
+        Acquires the target trace before releasing the previous one. If the
+        target is already owned or invalid, the old logger is retained. The
+        loaded model/history reconfiguration is not a multi-step transaction.
 
         """
 
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
-        if close_current_trace:
-            self._close_project_trace()
-        self._start_project_trace(self.session.project.root, conversation)
-        turns = self.session.switch_conversation(
-            self.conversation_store.state_path(conversation),
-            trace=self.project_trace,
-        )
+        previous_trace = self.project_trace
+        try:
+            # Acquiring the target first leaves the active writer untouched
+            # if the conversation is locked by another QAChat process.
+            self._start_project_trace(
+                self.session.project.root, conversation
+            )
+            turns = self.session.switch_conversation(
+                self.conversation_store.state_path(conversation),
+                trace=self.project_trace,
+            )
+        except BaseException:
+            if self.project_trace is not previous_trace:
+                if isinstance(self.project_trace, TraceLogger):
+                    self.project_trace.close(emit_event=False)
+                self.project_trace = previous_trace
+            raise
+        if close_current_trace and previous_trace is not self.project_trace:
+            previous_trace.close()
         self.active_conversation = conversation
         self._use_project_answer_settings()
         self.active_trace.emit(
@@ -2962,7 +3053,7 @@ class ChatEngine:
             if self.session is None or self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
             conversation = self.conversation_store.create()
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
             self._send("reset", archived=None)
         except Exception as error:
             self._report_error(

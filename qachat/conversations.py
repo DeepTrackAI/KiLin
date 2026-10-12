@@ -8,9 +8,10 @@ not duplicate the parent's complete trace-event history.
 
 Files use only the canonical grouped conversation-session record through
 the shared internal conversation-format contract. Writes use securely
-created temporary files and atomic single-file replacement,
-but the module provides no multi-process lock or transaction across
-registry and filesystem updates.
+created temporary files and atomic single-file
+replacement. A stable companion-file lock excludes concurrent QAChat writers,
+including writers in other processes; the in-memory registry and filesystem
+are not updated as one transaction.
 Conversation files can contain full questions, answers, and source excerpts.
 
 Key Features
@@ -65,6 +66,10 @@ import re
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
+from qachat.conversation_ownership import (
+    ConversationFileLock,
+    conversation_write_ownership,
+)
 from qachat.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
@@ -187,9 +192,10 @@ class ConversationStore:
 
     Notes
     -----
-    Metadata and saved state are local JSON, not an encrypted store. Registry
-    operations and file writes do not provide inter-process locking. The store
-    does not load language models.
+    Metadata and saved state are local JSON, not an encrypted store.
+    File mutations borrow a caller-held ownership token or acquire a
+    short-lived cross-process lock. Registry updates are not transactional.
+    The store does not load language models.
 
     """
 
@@ -311,7 +317,12 @@ class ConversationStore:
         self._active_id = item.conversation_id
         return item
 
-    def create(self, *, branch_from: str | None = None) -> ConversationInfo:
+    def create(
+        self,
+        *,
+        branch_from: str | None = None,
+        ownership: ConversationFileLock | None = None,
+    ) -> ConversationInfo:
         """Create an empty conversation or a resumable copy of a parent.
 
         Parameters
@@ -320,6 +331,9 @@ class ConversationStore:
             Identifier of a registered parent to copy resumable state from, or
             None to create an empty independent conversation. Defaults to
             ``None``.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock for the parent conversation when branching. The
+            new destination always acquires its own short-lived lock.
 
         Returns
         -------
@@ -339,7 +353,8 @@ class ConversationStore:
         A branch copies non-metadata fields from the parent resume state and
         records parent/checkpoint identity. Old trace operations are not
         copied. The new filename avoids existing paths at the moment it is
-        chosen; no concurrent-writer lock is used.
+        chosen; each candidate path is locked and checked before creation.
+        A collision detected after selection raises rather than overwriting.
 
         """
 
@@ -351,11 +366,7 @@ class ConversationStore:
             if parent is not None
             else f"Conversation {len(self._items) + 1}"
         )
-        checkpoint = (
-            self._checkpoint_id(self.state_path(parent))
-            if parent is not None
-            else None
-        )
+        checkpoint = None
         now = _utc_timestamp()
         item = ConversationInfo(
             conversation_id=f"conversation_{uuid4().hex[:12]}",
@@ -370,29 +381,51 @@ class ConversationStore:
         path = self._new_path()
         copied_state: dict[str, object] = {}
         if parent is not None:
-            saved = conversation_state(_read_json(self.state_path(parent)))
-            metadata = ConversationInfo.__dataclass_fields__
-            copied_state = {
-                key: value
-                for key, value in saved.items()
-                if key not in metadata
-            }
-        _write_json(
-            path,
-            {
-                "sessions": {
-                    CONVERSATION_SESSION_KEY: new_conversation_session(
-                        {**asdict(item), **copied_state}
-                    )
+            parent_path = self.state_path(parent)
+            with conversation_write_ownership(
+                parent_path, ownership=ownership
+            ):
+                saved = conversation_state(_read_json(parent_path))
+                checkpoint = saved.get("checkpoint_id")
+                checkpoint = (
+                    checkpoint
+                    if isinstance(checkpoint, str) and checkpoint
+                    else None
+                )
+                metadata = ConversationInfo.__dataclass_fields__
+                copied_state = {
+                    key: value
+                    for key, value in saved.items()
+                    if key not in metadata
                 }
-            },
-        )
+            item = replace(item, origin_checkpoint_id=checkpoint)
+        with conversation_write_ownership(path):
+            if path.exists():
+                raise FileExistsError(
+                    f"Conversation path already exists: {path}"
+                )
+            _write_json(
+                path,
+                {
+                    "sessions": {
+                        CONVERSATION_SESSION_KEY: new_conversation_session(
+                            {**asdict(item), **copied_state}
+                        )
+                    }
+                },
+            )
         self._items[item.conversation_id] = item
         self._paths[item.conversation_id] = path
         self._active_id = item.conversation_id
         return item
 
-    def rename(self, conversation_id: str, name: str) -> ConversationInfo:
+    def rename(
+        self,
+        conversation_id: str,
+        name: str,
+        *,
+        ownership: ConversationFileLock | None = None,
+    ) -> ConversationInfo:
         """Normalize and persist a conversation display name.
 
         Parameters
@@ -403,6 +436,9 @@ class ConversationStore:
         name: str
             Display name. Renaming collapses whitespace after string conversion
             and requires 1 to 80 characters.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock held by an active session for this file. Without
+            one, the store acquires and releases its own exclusive lock.
 
         Returns
         -------
@@ -428,10 +464,15 @@ class ConversationStore:
                 "Conversation name must be 80 characters or less."
             )
         renamed = replace(item, name=clean, updated_at_utc=_utc_timestamp())
-        self._update_metadata(renamed)
+        self._update_metadata(renamed, ownership=ownership)
         return renamed
 
-    def touch(self, conversation_id: str) -> ConversationInfo:
+    def touch(
+        self,
+        conversation_id: str,
+        *,
+        ownership: ConversationFileLock | None = None,
+    ) -> ConversationInfo:
         """Update and persist the last-modified timestamp of a conversation.
 
         Parameters
@@ -439,6 +480,9 @@ class ConversationStore:
         conversation_id: str
             Identifier of a conversation already discovered or created by this
             store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock held by an active session for this file. Without
+            one, the store acquires and releases its own exclusive lock.
 
         Returns
         -------
@@ -456,7 +500,7 @@ class ConversationStore:
 
         item = self._require(conversation_id)
         updated = replace(item, updated_at_utc=_utc_timestamp())
-        self._update_metadata(updated)
+        self._update_metadata(updated, ownership=ownership)
         return updated
 
     def is_empty(self, conversation_id: str) -> bool:
@@ -489,7 +533,10 @@ class ConversationStore:
         return not turns
 
     def archive(
-        self, conversation_id: str
+        self,
+        conversation_id: str,
+        *,
+        ownership: ConversationFileLock | None = None,
     ) -> tuple[ConversationInfo, Path]:
         """Remove a conversation from the catalog and retain its JSON.
 
@@ -505,6 +552,9 @@ class ConversationStore:
         conversation_id: str
             Identifier of a conversation already discovered or created by this
             store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock for archiving the currently owned conversation.
+            Other files are locked independently before moving.
 
         Returns
         -------
@@ -521,8 +571,8 @@ class ConversationStore:
 
         Notes
         -----
-        The move and the registry update are not one transaction, and no
-        inter-process lock is taken.
+        The source path remains exclusively owned through the rename; the
+        registry update is not part of a filesystem transaction.
 
         """
 
@@ -535,12 +585,17 @@ class ConversationStore:
                 "The deleted-conversations folder must not be a link."
             )
 
-        destination = deleted / source.name
-        number = 2
-        while destination.exists():
-            destination = deleted / f"{source.stem}_{number}{source.suffix}"
-            number += 1
-        source.rename(destination)
+        with conversation_write_ownership(
+            source, ownership=ownership
+        ):
+            destination = deleted / source.name
+            number = 2
+            while destination.exists():
+                destination = (
+                    deleted / f"{source.stem}_{number}{source.suffix}"
+                )
+                number += 1
+            source.rename(destination)
         self._items.pop(conversation_id)
         self._paths.pop(conversation_id)
 
@@ -613,7 +668,12 @@ class ConversationStore:
                 self._items[item.conversation_id] = item
                 self._paths[item.conversation_id] = path
 
-    def _update_metadata(self, item: ConversationInfo) -> None:
+    def _update_metadata(
+        self,
+        item: ConversationInfo,
+        *,
+        ownership: ConversationFileLock | None = None,
+    ) -> None:
         """Replace saved metadata, then update the in-memory record.
 
         Parameters
@@ -621,6 +681,8 @@ class ConversationStore:
         item: ConversationInfo
             Updated metadata record for a conversation already registered in
             the store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed exclusive write lock for this record, when already held.
 
         Raises
         ------
@@ -632,11 +694,12 @@ class ConversationStore:
         """
 
         path = self._paths[item.conversation_id]
-        payload = _read_json(path)
-        conversation = conversation_state(payload, create=True)
-        conversation.update(asdict(item))
-        _write_json(path, payload)
-        self._items[item.conversation_id] = item
+        with conversation_write_ownership(path, ownership=ownership):
+            payload = _read_json(path)
+            conversation = conversation_state(payload, create=True)
+            conversation.update(asdict(item))
+            _write_json(path, payload)
+            self._items[item.conversation_id] = item
 
     def _new_path(self) -> Path:
         """Choose a timestamped conversation filename not currently present.

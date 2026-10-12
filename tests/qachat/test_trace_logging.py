@@ -1064,3 +1064,86 @@ class TestTraceTextStream(unittest.TestCase):
             trace_text_preview("one two three four five six seven eight"),
             "one two three … six seven eight",
         )
+
+
+class TestTraceExclusiveOwnership(unittest.TestCase):
+    """Protect real trace JSON files against independent active writers."""
+
+    def setUp(self) -> None:
+        """Reserve one shared output path for each trace test."""
+
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.path = self.root / "conversation_shared.json"
+
+    def _open(self, *, policy: str = FAILURE_POLICY_WARN) -> TraceLogger:
+        """Create a new concrete logger using the same file path."""
+
+        return TraceLogger(
+            TraceConfig(
+                enabled=True,
+                output_path=self.path,
+                failure_policy=policy,
+            ),
+            default_directory=self.root,
+        )
+
+    def test_competing_logger_does_not_overwrite_existing_events(
+        self,
+    ) -> None:
+        """Refuse simultaneous independent loggers without losing events."""
+
+        from qachat.conversation_ownership import ConversationLockedError
+
+        first = self._open()
+        self.addCleanup(first.close)
+        first.emit("owner.event", component="test")
+        before = self.path.read_bytes()
+        with self.assertRaises(ConversationLockedError):
+            self._open()
+        self.assertEqual(self.path.read_bytes(), before)
+        first.close()
+        second = self._open()
+        self.addCleanup(second.close)
+        second.emit("later.event", component="test")
+        self.assertIn(b"owner_event", self.path.read_bytes())
+        self.assertIn(b"later_event", self.path.read_bytes())
+
+    def test_invalid_trace_releases_lease_before_raising(self) -> None:
+        """Reject corrupted JSON twice without misreporting contention."""
+
+        self.path.write_text("not json", encoding="utf-8")
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "trace is invalid"):
+                self._open()
+        self.path.unlink()
+        logger = self._open()
+        logger.close()
+
+    def test_strict_close_failure_still_releases_lease(self) -> None:
+        """Release OS ownership when the trace.closed write raises."""
+
+        logger = self._open(policy=FAILURE_POLICY_RAISE)
+        with patch.object(
+            logger, "_write_readable_trace", side_effect=OSError("full")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Could not write"):
+                logger.close()
+        self.assertTrue(logger._closed)
+        self.assertFalse(logger._file_lock.holds(self.path))
+        another = self._open()
+        another.close()
+
+    def test_detach_releases_without_rewriting_existing_json(self) -> None:
+        """Allow archival detachment without losing the last saved trace."""
+
+        logger = self._open()
+        logger.emit("last.saved", component="test")
+        before = self.path.read_bytes()
+        logger.close(emit_event=False)
+        self.assertEqual(self.path.read_bytes(), before)
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            logger.update_conversation({"turns": []})
+        new_logger = self._open()
+        new_logger.close()

@@ -301,6 +301,17 @@ its workspace folder, reloads the conversation registry, and restores the
 selected chat. If reopening fails, QAChat attempts to restore the old folder. Changing conversation retains already loaded
 models and indexes where the engine implements that reuse.
 
+Conversation files use exclusive single-writer ownership. The GUI opens a
+new conversation trace before closing the previous one, so a conflict on
+the target does not discard the active trace. Metadata updates and branching
+borrow the active writer's file lock; inactive conversations are locked for
+the duration of their update or archival. Deleting an active conversation
+moves the saved JSON into `logs/traces/deleted/` and releases the old writer
+without appending a redundant closing event. The sidecar `.json.lock` file
+may remain after closing; it does not indicate a stale active lock. See
+[conversation-file ownership](../../docs/conversation_ownership.md) for the
+error and recovery contract.
+
 Select an answer to inspect its evidence. A citation requests a preview of
 that evidence's source location through the bridge. Reference responses are
 matched to the currently selected turn and citation before being displayed,

@@ -206,6 +206,8 @@ class TestConversationLifecycle(unittest.TestCase):
         for model in models:
             model.close.assert_not_called()
 
+        # Ownership is exclusive: release the reset logger before reopening.
+        trace.close()
         reopened = _logger(self.path)
         session.switch_conversation(self.path, trace=reopened)
         self.assertEqual(session.turns, [])
@@ -484,7 +486,12 @@ class TestConversationStoreIntegration(unittest.TestCase):
         path = self.store.state_path(item)
         trace = _logger(path)
         self.addCleanup(trace.close)
-        renamed = self.store.rename(item.conversation_id, "Renamed")
+        # GUI-style metadata updates borrow the active trace's file lock.
+        renamed = self.store.rename(
+            item.conversation_id,
+            "Renamed",
+            ownership=trace._file_lock,
+        )
         trace.update_conversation(asdict(renamed))
         trace.emit("conversation.renamed", component="gui_engine")
         trace.close()

@@ -48,7 +48,8 @@ Key Features
 - **Conversation state**
 
     Restore or switch saved conversations around one authoritative JSON path
-    using the shared internal conversation-format contract.
+    using the shared internal conversation-format contract and a single-writer
+    file lease.
 
 - **Trace alignment**
 
@@ -123,7 +124,9 @@ Examples
 ...     session.close()
 
 Disabling tracing does not disable conversation checkpoint persistence.
-The workspace and model dependencies must already be suitable for its profile.
+An exclusive companion-file lock protects each active conversation path while
+it is open, including when tracing is disabled. The workspace and model
+dependencies must already be suitable for its profile.
 
 """
 
@@ -160,6 +163,10 @@ from qachat.chat import (
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.embeddings import EmbeddingSession
 from qachat.conversation_format import conversation_state
+from qachat.conversation_ownership import (
+    ConversationFileLock,
+    conversation_write_ownership,
+)
 from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.project_type import (
     HISTORY_POLICY_RECENT,
@@ -219,6 +226,7 @@ from qachat.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
     NullTraceLogger,
     TraceConfig,
+    TraceLogger,
     TraceSink,
     create_trace_logger,
     trace_text_preview,
@@ -575,8 +583,9 @@ class RAGSession:
 
     Notes
     -----
-    Construction performs I/O and loads models. A rebuilt index reads selected
-    source contents and writes index/manifest metadata. Forensic traces and
+    Construction acquires exclusive ownership of the conversation file and
+    releases it on failure or close. A rebuilt index reads selected source
+    contents and writes index/manifest metadata. Forensic traces and
     resumable state can contain complete source excerpts and conversations. No
     automatic evidence-token budget, answer validation, or history
     summarization is supplied. Close explicitly to release owned resources.
@@ -639,6 +648,56 @@ class RAGSession:
 
         """
 
+        self._conversation_ownership: ConversationFileLock | None = None
+        self._owns_trace = False
+        try:
+            self._initialize(
+                project_directory,
+                progress_callback=progress_callback,
+                trace=trace,
+                conversation_path=conversation_path,
+                router_model=router_model,
+            )
+        except BaseException:
+            ownership = self._conversation_ownership
+            if ownership is not None:
+                ownership.release()
+            if getattr(self, "_owns_trace", False):
+                self.trace.close()
+            raise
+
+    def _initialize(
+        self,
+        project_directory: str | Path,
+        *,
+        progress_callback: ProgressCallback | None,
+        trace: TraceConfig | TraceSink | None,
+        conversation_path: str | Path | None,
+        router_model: str | None,
+    ) -> None:
+        """Prepare the owned trace, conversation history, indexes and models.
+
+        Parameters
+        ----------
+        project_directory: str | pathlib.Path
+            Existing project workspace to open.
+        progress_callback: ProgressCallback | None
+            Optional preparation-progress observer.
+        trace: TraceConfig | TraceSink | None
+            Trace configuration or a caller-owned logger.
+        conversation_path: str | pathlib.Path | None
+            Path of the conversation record, or None for a new one.
+        router_model: str | None
+            Optional separate model identifier used to route questions.
+
+        Notes
+        -----
+        ``__init__`` is responsible for releasing the acquired conversation
+        ownership and an owned logger if any preparation step raises, even
+        before model construction begins.
+
+        """
+
         session_started_at = perf_counter()
         if progress_callback is not None and not callable(progress_callback):
             raise ValueError("progress_callback must be callable or None.")
@@ -654,6 +713,10 @@ class RAGSession:
             trace,
             self.conversation_path,
         )
+        if not self.trace.enabled:
+            ownership = ConversationFileLock(self.conversation_path)
+            ownership.acquire()
+            self._conversation_ownership = ownership
         self.trace.emit(
             "session.started",
             component="rag",
@@ -769,8 +832,8 @@ class RAGSession:
                 chat_session.close()
             if embedding_session is not None:
                 embedding_session.close()
-            if self._owns_trace:
-                self.trace.close()
+            # __init__ releases the owned trace and conversation lock on
+            # every construction failure, including this one.
             raise
 
         self.embedding_session = embedding_session
@@ -1577,11 +1640,11 @@ class RAGSession:
 
         Notes
         -----
-        Loaded models and indexes are reused. The target path and trace
-        sink are validated before the active session is changed. Failures
-        during later state loading are not transactional. Generation settings
-        come from the last
-        saved turn when available, otherwise the profile defaults.
+        Loaded models and indexes are reused. The target file's exclusive
+        ownership is validated or acquired before releasing the old path.
+        A failed acquisition or JSON read leaves the active session unchanged.
+        Later model/history reconfiguration is not fully transactional.
+        Generation settings come from the last saved turn or profile defaults.
 
         """
 
@@ -1589,14 +1652,51 @@ class RAGSession:
             raise RuntimeError("This RAG session is closed.")
         target_path = self._resolve_conversation_path(conversation_path)
         _check_conversation_trace(trace, target_path)
-        if self._owns_trace:
-            self.trace.close()
+        old_ownership = getattr(self, "_conversation_ownership", None)
+        target_ownership: ConversationFileLock | None = None
+        if not trace.enabled:
+            if (
+                target_path == self.conversation_path
+                and old_ownership is not None
+                and old_ownership.holds(target_path)
+            ):
+                target_ownership = old_ownership
+            else:
+                target_ownership = ConversationFileLock(target_path)
+                target_ownership.acquire()
+
+        try:
+            # Acquire and validate the destination before changing any active
+            # session references or releasing the previous conversation.
+            messages, turns, checkpoint_id = self._load_conversation(
+                path=target_path
+            )
+        except BaseException:
+            if (
+                target_ownership is not None
+                and target_ownership is not old_ownership
+            ):
+                target_ownership.release()
+            raise
+
+        previous_trace = self.trace
+        previous_owns_trace = self._owns_trace
+        if previous_owns_trace and trace is not previous_trace:
+            previous_trace.close()
+        if (
+            old_ownership is not None
+            and old_ownership is not target_ownership
+        ):
+            old_ownership.release()
+
         self.trace = trace
-        self._owns_trace = False
+        self._owns_trace = (
+            previous_owns_trace and trace is previous_trace
+        )
+        self._conversation_ownership = target_ownership
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
         self.conversation_path = target_path
-        messages, turns, checkpoint_id = self._load_conversation()
         self.chat_session.reset()
         if messages:
             self.chat_session.restore_history(messages)
@@ -1681,10 +1781,10 @@ class RAGSession:
 
         Notes
         -----
-        The closed flag is set in a finally block and an owned trace is closed
-        there. Caller-owned sinks are not closed. Backend cleanup errors
-        propagate; this is not a guarantee that every allocation is released if
-        earlier cleanup fails.
+        The closed flag is set even if backend cleanup raises. An owned trace
+        releases its file lock; when tracing is disabled, the session releases
+        its own conversation lease. Caller-owned traces remain open and must
+        be closed by the caller. Backend cleanup errors still propagate.
 
         """
 
@@ -1700,8 +1800,14 @@ class RAGSession:
             trace.emit("session.closed", component="rag")
         finally:
             self._closed = True
-            if getattr(self, "_owns_trace", False):
-                trace.close()
+            try:
+                if getattr(self, "_owns_trace", False):
+                    trace.close()
+            finally:
+                ownership = getattr(self, "_conversation_ownership", None)
+                if ownership is not None:
+                    ownership.release()
+                    self._conversation_ownership = None
 
     def refresh_sources(self: RAGSession, project: QAProject) -> None:
         """Update the indexes after sources were added, changed, or removed.
@@ -3513,8 +3619,16 @@ class RAGSession:
 
     def _load_conversation(
         self: RAGSession,
+        *,
+        path: Path | None = None,
     ) -> tuple[list[dict[str, str]], list[ConversationTurn], str | None]:
         """Load saved chat messages and human-readable turns.
+
+        Parameters
+        ----------
+        path: pathlib.Path | None, optional
+            Read a staged target conversation without first switching the
+            active path. None reads the current conversation.
 
         Returns
         -------
@@ -3531,13 +3645,14 @@ class RAGSession:
 
         Notes
         -----
-        Reads only the canonical grouped conversation record. It does not
-        validate that saved turns, evidence, profile, and indexes are
+        Reads only the canonical grouped conversation record. The caller
+        holds file ownership while restoring or staging a switch. This does
+        not validate that saved turns, evidence, profile, and indexes are
         mutually consistent.
 
         """
 
-        path = self.conversation_path
+        path = self.conversation_path if path is None else path
         if not path.is_file():
             return [], [], None
         try:
@@ -3584,9 +3699,9 @@ class RAGSession:
         Builds a hash-identified resumable snapshot. With an enabled trace
         sink, state is written through ``update_conversation`` to the same file
         as ``conversation_path``; otherwise it is written directly to that
-        path. A failed write leaves the committed turn list and checkpoint ID
-        unchanged. The hash labels content but does not store a separate
-        immutable historical snapshot for every checkpoint.
+        path under an exclusive file lease. A failed write leaves the committed
+        turn list and checkpoint ID unchanged. The hash labels content but does
+        not store a separate immutable snapshot for each checkpoint.
 
         """
 
@@ -3648,15 +3763,18 @@ class RAGSession:
         if self.trace.enabled:
             self.trace.update_conversation(saved_state)
         else:
-            payload: dict[str, object] = {"sessions": {}}
-            if path.is_file():
-                loaded = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(loaded, dict):
-                    raise ValueError("The saved conversation is invalid.")
-                payload = loaded
-            stored = conversation_state(payload, create=True)
-            stored.update(saved_state)
-            _write_json(path, payload)
+            with conversation_write_ownership(
+                path, ownership=self._active_conversation_lock()
+            ):
+                payload: dict[str, object] = {"sessions": {}}
+                if path.is_file():
+                    loaded = json.loads(path.read_text(encoding="utf-8"))
+                    if not isinstance(loaded, dict):
+                        raise ValueError("The saved conversation is invalid.")
+                    payload = loaded
+                stored = conversation_state(payload, create=True)
+                stored.update(saved_state)
+                _write_json(path, payload)
         # The checkpoint write is the commit boundary. Diagnostic events
         # may fail afterward without undoing successfully persisted data.
         if pending_turn is not None:
@@ -3676,6 +3794,27 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
 
+    def _active_conversation_lock(self) -> ConversationFileLock | None:
+        """Return the owner of the current conversation, when available.
+
+        Returns
+        -------
+        ConversationFileLock | None
+            Trace logger's held file lock or the RAG session's direct-write
+            lock. ``None`` is possible in minimal test fixtures.
+
+        Notes
+        -----
+        This is an internal borrowing interface. Callers must not release
+        the returned owner and must not retain it after switching sessions.
+
+        """
+
+        trace = getattr(self, "trace", None)
+        if isinstance(trace, TraceLogger):
+            return trace._file_lock
+        return getattr(self, "_conversation_ownership", None)
+
     def _archive_conversation(self: RAGSession) -> Path | None:
         """Rename the active conversation log with a readable UTC time.
 
@@ -3694,14 +3833,19 @@ class RAGSession:
         """
 
         path = self.conversation_path
-        if not path.is_file():
-            return None
-        timestamp = datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H-%M-%S-%fZ"
-        )
-        archived_path = path.with_name(f"conversation_{timestamp}.json")
-        path.replace(archived_path)
-        return archived_path
+        with conversation_write_ownership(
+            path, ownership=self._active_conversation_lock()
+        ):
+            if not path.is_file():
+                return None
+            timestamp = datetime.now(timezone.utc).strftime(
+                "%Y-%m-%dT%H-%M-%S-%fZ"
+            )
+            archived_path = path.with_name(
+                f"conversation_{timestamp}.json"
+            )
+            path.replace(archived_path)
+            return archived_path
 
     def _resolve_conversation_path(
         self,
@@ -3731,8 +3875,9 @@ class RAGSession:
 
         Notes
         -----
-        None allocates a timestamped name beneath logs/traces. Path resolution
-        is not a multi-process filename reservation.
+        None allocates a timestamped name beneath logs/traces. Filename
+        selection is not a reservation; exclusive ownership must be acquired
+        before the resulting record is read or modified.
 
         """
 
@@ -3858,6 +4003,10 @@ def _check_conversation_trace(
     resolved = Path(output_path).expanduser().resolve()
     if resolved != conversation_path:
         raise ValueError("Enabled RAG tracing must use the conversation path.")
+    if isinstance(trace, TraceLogger) and not trace._file_lock.holds(
+        conversation_path
+    ):
+        raise RuntimeError("The conversation trace logger has no file lock.")
 
 
 def _read_text_cache(indexes: Path) -> dict[str, dict[str, str]]:

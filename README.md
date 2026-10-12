@@ -55,6 +55,18 @@ uv run --no-sync ruff check qachat setup tests
 To check formatting without changing files, add `--check` to the Black
 command. Format only the files you changed when preserving existing style.
 
+## Conversation persistence and exclusive ownership
+
+Each active conversation has a single writable `conversation_*.json` record.
+QAChat holds an OS-level advisory lock on a stable `.json.lock` companion
+while an active trace or tracing-disabled RAG session owns that file. A second
+writer targeting the same conversation raises `ConversationLockedError` and
+leaves the saved JSON unchanged. Locks are released on close and by the
+operating system after process termination; the companion files can remain.
+This is not a substitute for database transactions or a disk-durability
+protocol. For behavior during switching, archival, and GUI metadata updates,
+see [conversation-file ownership](docs/conversation_ownership.md).
+
 ## Tutorials
 
 Follow these notebooks in order, or open the one you need.

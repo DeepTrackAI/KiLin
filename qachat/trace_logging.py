@@ -13,8 +13,9 @@ questions, answers, source excerpts, paths, and other sensitive information.
 Artifacts returned by this implementation are inline JSON records rather than
 separately stored artifact files.
 
-Event writes are serialized within one logger, but the module does not provide
-multi-process locking or a transaction across separate logger instances.
+Event writes are serialized within one logger. A stable companion-file lock
+excludes simultaneous writers in the current or another process; this is not
+a multi-file transaction or protection against nonparticipating programs.
 I/O failure handling applies to event writes according to the configuration.
 Direct conversation-state updates propagate write failures and restore their
 previous in-memory state, preventing later events from committing an aborted
@@ -56,7 +57,8 @@ Key Features
 
 - **Ownership control**
 
-    Distinguish caller-supplied sinks from loggers created by the factory.
+    Distinguish caller-supplied sinks from loggers created by the factory and
+    release the file lease only when the owning logger is closed.
 
 Module Structure
 ----------------
@@ -143,6 +145,7 @@ from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
+from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
     CONVERSATION_SESSION_CATEGORY,
@@ -340,7 +343,7 @@ class TraceLogger:
     Construction resolves the output path, creates its parent directory,
     optionally loads prior grouped state, and emits the initial event. Event
     mutation is guarded by this instance's lock; different instances or
-    processes are not coordinated.
+    processes are excluded by an exclusive conversation-file lock.
 
     Parameters
     ----------
@@ -392,8 +395,8 @@ class TraceLogger:
         Merge resumable conversation state into this same JSON document.
     reset_conversation_state()
         Clear retained conversation state and readable conversation records.
-    close()
-        Emit the closing event and mark subsequent event writes closed.
+    close(*, emit_event=True)
+        Finish the logger and release exclusive file ownership.
 
     Raises
     ------
@@ -408,9 +411,9 @@ class TraceLogger:
     -----
     Standard mode is not a privacy guarantee: resume state, tracebacks, or
     backend text may contain sensitive data. Artifacts are inline dictionaries.
-    There is no append-only log, multi-file transaction, or cross-process
-    locking. Close the current writer before opening another logger for the
-    same file. Saved readable turns and conversation operations are retained;
+    There is no append-only log or multi-file transaction. Opening a second
+    writer for the same canonical path raises ConversationLockedError.
+    Saved readable turns and conversation operations are retained;
     new records use numbers above the highest saved keys. Turn identifiers and
     span identifiers group events only within one logger run. Event sequence
     numbers and top-level event counts also describe the current run, not the
@@ -453,9 +456,9 @@ class TraceLogger:
         The first event is written during construction. Exact JSON paths can be
         reused; output is not guaranteed to be a new file. Saved sessions
         provide a fixed numbering baseline before that first event is emitted.
-        Later writes do not mutate this baseline or reload changes from another
-        writer. Resumable state is copied separately so its updates cannot
-        modify the saved-session snapshot.
+        Exclusive ownership is acquired before reading saved state or writing
+        the first event and released on construction failure. Resumable state
+        is copied separately so updates cannot modify the saved snapshot.
 
         """
 
@@ -488,55 +491,62 @@ class TraceLogger:
             mode=0o700,
         )
         self.readable_path = self.output_path
-        if self.output_path.is_file():
-            try:
-                existing = json.loads(
-                    self.output_path.read_text(encoding="utf-8")
-                )
-                # Validate before the constructor writes its first event.
-                # A malformed record must never be replaced with empty state.
-                self._conversation = conversation_state(existing)
-                self._previous_sessions = existing["sessions"]
-            except (
-                OSError, json.JSONDecodeError, TypeError, KeyError
-            ) as error:
-                raise ValueError(
-                    "The conversation trace is invalid."
-                ) from error
-        # Keep the loaded trace immutable while current events are rewritten.
-        self._conversation = deepcopy(self._conversation)
-        previous_conversation = self._previous_sessions.get(
-            CONVERSATION_SESSION_KEY
-        )
-        if not isinstance(previous_conversation, Mapping):
-            previous_conversation = {}
-        self._turn_offset = _numbered_record_offset(
-            previous_conversation.get("turns"),
-            r"turn_([0-9]+)",
-        )
-        self._conversation_operation_offset = _numbered_record_offset(
-            previous_conversation.get("operations"),
-            r"([0-9]+)_.+",
-        )
-        _restrict_permissions(self.output_path, 0o600)
-        self.emit(
-            "trace.started",
-            component="trace",
-            data={
-                "mode": config.mode,
-                "output_path": str(self.output_path),
-                "include_embedding_vectors": (
-                    config.include_embedding_vectors
-                ),
-                "environment": {
-                    "python": sys.version,
-                    "python_executable": sys.executable,
-                    "platform": platform.platform(),
-                    "process_id": os.getpid(),
-                    "packages": _package_versions(),
+        self._file_lock = ConversationFileLock(self.output_path)
+        self._file_lock.acquire()
+        try:
+            if self.output_path.is_file():
+                try:
+                    existing = json.loads(
+                        self.output_path.read_text(encoding="utf-8")
+                    )
+                    # Validate before the constructor writes its first event.
+                    # Never replace invalid records with empty state.
+                    self._conversation = conversation_state(existing)
+                    self._previous_sessions = existing["sessions"]
+                except (
+                    OSError, json.JSONDecodeError, TypeError, KeyError
+                ) as error:
+                    raise ValueError(
+                        "The conversation trace is invalid."
+                    ) from error
+            # Keep prior trace state immutable during current writes.
+            self._conversation = deepcopy(self._conversation)
+            previous_conversation = self._previous_sessions.get(
+                CONVERSATION_SESSION_KEY
+            )
+            if not isinstance(previous_conversation, Mapping):
+                previous_conversation = {}
+            self._turn_offset = _numbered_record_offset(
+                previous_conversation.get("turns"),
+                r"turn_([0-9]+)",
+            )
+            self._conversation_operation_offset = _numbered_record_offset(
+                previous_conversation.get("operations"),
+                r"([0-9]+)_.+",
+            )
+            _restrict_permissions(self.output_path, 0o600)
+            self.emit(
+                "trace.started",
+                component="trace",
+                data={
+                    "mode": config.mode,
+                    "output_path": str(self.output_path),
+                    "include_embedding_vectors": (
+                        config.include_embedding_vectors
+                    ),
+                    "environment": {
+                        "python": sys.version,
+                        "python_executable": sys.executable,
+                        "platform": platform.platform(),
+                        "process_id": os.getpid(),
+                        "packages": _package_versions(),
+                    },
                 },
-            },
-        )
+            )
+
+        except BaseException:
+            self._file_lock.release()
+            raise
 
     @property
     def include_content(self) -> bool:
@@ -671,6 +681,9 @@ class TraceLogger:
             return
 
         with self._lock:
+            # A queued writer must not write after close releases the lease.
+            if self._closed or self._failed:
+                return
             if span_id is None:
                 span_id = self._active_span_id.get()
             self._sequence += 1
@@ -1011,6 +1024,8 @@ class TraceLogger:
             str(key): _json_value(value) for key, value in data.items()
         }
         with self._lock:
+            if self._closed:
+                raise RuntimeError("This trace logger is closed.")
             previous = self._conversation
             self._conversation = {**previous, **changes}
             try:
@@ -1037,6 +1052,8 @@ class TraceLogger:
         """
 
         with self._lock:
+            if self._closed:
+                raise RuntimeError("This trace logger is closed.")
             self._conversation = {}
             self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
             self._events = [
@@ -1047,21 +1064,33 @@ class TraceLogger:
             self._turn_offset = 0
             self._conversation_operation_offset = 0
 
-    def close(self) -> None:
-        """Emit the closing event and mark subsequent event writes closed.
+    def close(self, *, emit_event: bool = True) -> None:
+        """Finish the logger and release exclusive conversation ownership.
+
+        Parameters
+        ----------
+        emit_event: bool, optional
+            Whether to write the final ``trace.closed`` event. Set False
+            when detaching an already persisted conversation for archival.
+            Defaults to True.
 
         Notes
         -----
-        Repeated calls return without another closing event. The implementation
-        opens files only for individual writes, so there is no persistent file
-        handle to close. Retained events and resume state remain in memory.
+        Releases the OS and process-local locks even when strict event-write
+        handling raises. Repeated calls do not write or release again.
+        Caller-owned sinks must be closed by their owner, not by RAGSession.
 
         """
 
         if self._closed:
             return
-        self.emit("trace.closed", component="trace")
-        self._closed = True
+        try:
+            if emit_event:
+                self.emit("trace.closed", component="trace")
+        finally:
+            with self._lock:
+                self._closed = True
+            self._file_lock.release()
 
     def _write_event(self, event: dict[str, object]) -> None:
         """Append an event in memory and conditionally refresh the output file.
@@ -1104,9 +1133,10 @@ class TraceLogger:
         from being changed by a write. Repeated writes replace this run's
         projection without duplicating it or overwriting earlier runs.
 
-        A temporary JSON file replaces the target. This is neither an immutable
-        snapshot history nor a multi-writer transaction. Another writer's
-        changes are not reloaded before replacement.
+        A temporary JSON file replaces the target while the exclusive
+        companion-file lock is held. This is not an immutable snapshot history
+        or multi-file transaction. Other QAChat writers cannot open this path
+        until this logger releases ownership.
 
         """
 
