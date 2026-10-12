@@ -17,6 +17,7 @@ from configparser import ConfigParser
 from dataclasses import FrozenInstanceError, asdict
 import json
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
@@ -511,25 +512,39 @@ class TestProjectProfileValidation(ProjectFixture):
             with self.assertRaisesRegex(ValueError, error):
                 project.open_project(root)
 
-    @unittest.expectedFailure
-    def test_pending_nonfinite_temperature_is_rejected(self) -> None:
-        """Reject NaN generation temperatures before model initialization."""
+    def test_nonfinite_temperature_is_rejected(self) -> None:
+        """Reject NaN and infinity before initializing a chat backend."""
 
-        root = self._profile("nonfinite-temperature")
-        self._edit(root, "generation", "temperature", "nan")
-        with self.assertRaisesRegex(ValueError, "temperature"):
-            project.open_project(root)
+        for index, value in enumerate((
+            "nan", "NaN", "inf", "+Infinity", "-inf",
+        )):
+            with self.subTest(value=value):
+                root = self._profile(f"nonfinite-temperature{index}")
+                self._edit(root, "generation", "temperature", value)
+                with self.assertRaisesRegex(ValueError, "must be finite"):
+                    project.open_project(root)
 
-    @unittest.expectedFailure
-    def test_pending_invalid_extension_is_rejected_on_profile_read(
-        self,
-    ) -> None:
-        """Validate suffix patterns before later repository scanning."""
+    def test_invalid_extension_is_rejected_on_profile_read(self) -> None:
+        """Validate literal suffixes before repository scanning."""
 
-        root = self._profile("bad-extension")
-        self._edit(root, "project", "extensions", ".py*")
-        with self.assertRaisesRegex(ValueError, "extensions"):
-            project.open_project(root)
+        for index, extension in enumerate((
+            ".py*", ".pdf?", ".py/file", ".py file", ".py!",
+        )):
+            with self.subTest(extension=extension):
+                root = self._profile(f"bad-extension{index}")
+                self._edit(root, "project", "extensions", extension)
+                with self.assertRaisesRegex(ValueError, "extensions"):
+                    project.open_project(root)
+
+    def test_profile_extensions_normalize_and_deduplicate(self) -> None:
+        """Profiles use the same normalized suffixes as project types."""
+
+        root = self._profile("duplicate-extensions")
+        self._edit(root, "project", "extensions", ".PY, .py, .tar.GZ")
+        self.assertEqual(
+            project.open_project(root).profile.extensions,
+            (".py", ".tar.gz"),
+        )
 
     def test_max_new_tokens_accepts_none_or_positive_integer(self) -> None:
         """Parse optional generation limits without negative values."""
@@ -637,7 +652,10 @@ class TestConfigureProject(ProjectFixture):
             {"backend": "invalid"},
             {"target_tokens": 500, "max_tokens": 10},
             {"extensions": ["missing-dot"]},
+            {"extensions": [".py*"]},
             {"temperature": -1},
+            {"temperature": float("nan")},
+            {"temperature": float("inf")},
             {"max_new_tokens": "unexpected"},
             {"thinking": "maybe"},
         ):
@@ -928,8 +946,7 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertTrue((result.source / self.file).is_file())
         self.assertFalse((result.source / "workspaces").exists())
 
-    @unittest.expectedFailure
-    def test_pending_unchanged_manifest_verifies_snapshot_content(
+    def test_unchanged_manifest_verifies_snapshot_content(
         self,
     ) -> None:
         """Detect modifications to a workspace copy of unchanged sources."""
@@ -943,6 +960,165 @@ class TestProjectWorkspace(ProjectFixture):
             (refreshed.source / self.file).read_text(),
             "first version\n",
         )
+
+    def test_workspace_rejects_symlinked_managed_source(self) -> None:
+        """Never scan or synchronize a substituted external source copy."""
+
+        first = self._prepare()
+        outside = self._folder("symlink-target")
+        shutil.rmtree(first.source)
+        try:
+            first.source.symlink_to(outside, target_is_directory=True)
+        except (NotImplementedError, OSError):
+            self.skipTest("Creating directory symlinks is unavailable")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            self._prepare()
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_workspace_rejects_symlinked_managed_root(self) -> None:
+        """Keep workspace ownership rooted within the chosen sandbox."""
+
+        first = self._prepare()
+        target = self.root / "displaced-managed-project"
+        first.root.rename(target)
+        try:
+            first.root.symlink_to(target, target_is_directory=True)
+        except (NotImplementedError, OSError):
+            self.skipTest("Creating directory symlinks is unavailable")
+        with self.assertRaisesRegex(ValueError, "symbolic link"):
+            self._prepare()
+        self.assertTrue((target / "source_snapshot.json").is_file())
+
+    def test_snapshot_heals_missing_selected_file(self) -> None:
+        """Recover a deleted copy even when its original is unchanged."""
+
+        first = self._prepare()
+        (first.source / self.file).unlink()
+        refreshed = self._prepare()
+        self.assertEqual(
+            (refreshed.source / self.file).read_text(),
+            "first version\n",
+        )
+
+    def test_snapshot_heals_same_size_content_change(self) -> None:
+        """Verify SHA-256, not only file existence or file size."""
+
+        first = self._prepare()
+        (first.source / self.file).write_text(
+            "other version\n", encoding="utf-8"
+        )
+        refreshed = self._prepare()
+        self.assertEqual(
+            (refreshed.source / self.file).read_text(),
+            "first version\n",
+        )
+
+    def test_snapshot_heals_extra_selected_file(self) -> None:
+        """Remove selected content not present in the original manifest."""
+
+        first = self._prepare()
+        unexpected = self._write(
+            first.source, f"pkg/unexpected{self.suffix}", "new file\n"
+        )
+        self._prepare()
+        self.assertFalse(unexpected.exists())
+
+    def test_snapshot_integrity_checks_previous_state_before_sync(
+        self,
+    ) -> None:
+        """Repair tampered content even when the original also changed."""
+
+        first = self._prepare()
+        (first.source / self.file).write_text(
+            "tampered version\n", encoding="utf-8"
+        )
+        new = f"pkg/new{self.suffix}"
+        self._write(self.source, new, "new original\n")
+        refreshed = self._prepare()
+        self.assertEqual(
+            (refreshed.source / self.file).read_text(),
+            "first version\n",
+        )
+        self.assertEqual(
+            (refreshed.source / new).read_text(),
+            "new original\n",
+        )
+
+    def test_snapshot_rebuild_does_not_follow_symlink(self) -> None:
+        """Treat a selected symlink in the copy as changed content."""
+
+        first = self._prepare()
+        untouched = self._write(self.root, "outside.txt", "outside\n")
+        target = first.source / self.file
+        target.unlink()
+        try:
+            target.symlink_to(untouched)
+        except (NotImplementedError, OSError):
+            self.skipTest("Creating file symlinks is unavailable")
+        refreshed = self._prepare()
+        self.assertFalse((refreshed.source / self.file).is_symlink())
+        self.assertEqual(
+            (refreshed.source / self.file).read_text(),
+            "first version\n",
+        )
+        self.assertEqual(untouched.read_text(), "outside\n")
+
+    def test_snapshot_incomplete_integrity_scan_is_not_accepted(
+        self,
+    ) -> None:
+        """Never accept an incomplete snapshot verification as valid."""
+
+        first = self._prepare()
+        actual_scan = project.scan_repository
+
+        def scan_with_failed_snapshot(directory, **options):
+            report = actual_scan(directory, **options)
+            if Path(directory) == first.source:
+                report["complete"] = False
+            return report
+
+        with patch.object(
+            project, "scan_repository", side_effect=scan_with_failed_snapshot
+        ):
+            with self.assertRaisesRegex(ValueError, "incomplete scan"):
+                self._prepare()
+
+    def test_snapshot_copy_is_stable_when_selected_files_unchanged(
+        self,
+    ) -> None:
+        """Avoid unnecessary copies after successful content verification."""
+
+        first = self._prepare()
+        with patch.object(
+            project.shutil, "copy2", wraps=project.shutil.copy2
+        ) as copied:
+            second = self._prepare()
+        self.assertEqual(first.root, second.root)
+        copied.assert_not_called()
+
+    def test_removed_copy_can_disappear_after_integrity_check(
+        self,
+    ) -> None:
+        """Tolerate a concurrently removed copied file during cleanup."""
+
+        first = self._prepare()
+        target = first.source / self.file
+        (self.source / self.file).unlink()
+        actual_verify = project._snapshot_matches_manifest
+
+        def delete_after_verification(*args):
+            verified = actual_verify(*args)
+            target.unlink()
+            return verified
+
+        with patch.object(
+            project,
+            "_snapshot_matches_manifest",
+            side_effect=delete_after_verification,
+        ):
+            refreshed = self._prepare()
+        self.assertEqual(refreshed.root, first.root)
+        self.assertFalse(target.exists())
 
     def test_workspace_uses_safe_fallback_for_punctuation_only_name(
         self,

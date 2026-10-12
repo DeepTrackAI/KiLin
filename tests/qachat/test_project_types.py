@@ -467,8 +467,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
             (".py", ".md"),
         )
 
-    @unittest.expectedFailure
-    def test_pending_extensions_use_repository_scanner_grammar(
+    def test_extensions_use_repository_scanner_grammar(
         self,
     ) -> None:
         """Reject wildcard patterns that the repository scanner rejects."""
@@ -477,6 +476,29 @@ class TestProjectTypeFields(ProjectTypeFixture):
         data["extensions"] = [".py*"]
         with self.assertRaisesRegex(ValueError, "suffix|extensions"):
             self._load("wildcard", data)
+
+    def test_normalized_extension_duplicates_are_removed(self) -> None:
+        """Deduplicate equivalent suffixes using the scanner's grammar."""
+
+        data = _type_data()
+        data["extensions"] = [".PY", ".py", ".tar.GZ", ".TAR.gz"]
+        self.assertEqual(
+            self._load("deduplicated", data).extensions,
+            (".py", ".tar.gz"),
+        )
+
+    def test_invalid_literal_extension_patterns(self) -> None:
+        """Reject unsafe suffixes before scanning a project."""
+
+        for index, extension in enumerate((
+            ".py*", ".pdf?", ".py/file", ".py file", ".py\\ext",
+            ".", ".py!", ".py;",
+        )):
+            with self.subTest(extension=extension):
+                data = _type_data()
+                data["extensions"] = [extension]
+                with self.assertRaisesRegex(ValueError, "suffix"):
+                    self._load(f"unsafe-suffix{index}", data)
 
     def test_positive_file_size_requires_integer_not_boolean(self) -> None:
         """Do not interpret booleans or numeric strings as byte counts."""

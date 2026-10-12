@@ -129,6 +129,7 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
+from qachat.repository import normalize_extensions
 from qachat.tools.registry import ToolUse, parse_tool
 
 __all__ = [
@@ -591,13 +592,18 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
         raise ValueError(f"Project type {kind!r} must be an object.")
 
     extensions = _texts(kind, data, "extensions")
-    if not extensions or not all(
-        extension.startswith(".") and len(extension) > 1
-        for extension in extensions
+    if not extensions or any(
+        not extension.startswith(".") for extension in extensions
     ):
         raise ValueError(
             f"Project type {kind!r} needs file suffixes such as '.pdf'."
         )
+    try:
+        extensions = normalize_extensions(extensions)
+    except ValueError as error:
+        raise ValueError(
+            f"Project type {kind!r} needs literal file suffixes: {error}"
+        ) from error
 
     max_file_bytes = data.get("max_file_bytes")
     if type(max_file_bytes) is not int or max_file_bytes < 1:
@@ -649,7 +655,7 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
         kind=kind,
         display_name=_text(kind, data, "display_name"),
         description=_text(kind, data, "description"),
-        extensions=tuple(extension.lower() for extension in extensions),
+        extensions=extensions,
         max_file_bytes=max_file_bytes,
         retrieval_instruction=_text(kind, data, "retrieval_instruction"),
         system_prompt=_text(kind, data, "system_prompt"),

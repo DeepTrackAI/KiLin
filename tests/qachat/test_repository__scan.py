@@ -105,6 +105,25 @@ class TestRepositoryScanSelection(_RepositoryFixture):
                     getattr(repository, name), set(defaults[name])
                 )
 
+    def test_public_extension_normalizer_reuses_scanner_grammar(
+        self,
+    ) -> None:
+        """Normalize and validate literal suffixes before file scanning."""
+
+        self.assertEqual(
+            repository.normalize_extensions(
+                ["py", ".PY", ".tar.GZ", ".tar.gz"]
+            ),
+            (".py", ".tar.gz"),
+        )
+        for value in (".py*", ".py?", ".py file", ".py/file"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "wildcards"):
+                    repository.normalize_extensions([value])
+        with self.assertRaisesRegex(ValueError, "extensions"):
+            repository.normalize_extensions(".py")
+        self.assertEqual(repository.normalize_extensions([]), ())
+
     def test_default_selection_and_report_metadata(self) -> None:
         """Return sorted relative paths and coherent selection totals."""
 

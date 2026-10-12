@@ -27,7 +27,7 @@ Key Features
 
 - **Managed source copy**
 
-    Track original selected content using size and SHA-256 manifests.
+    Track and verify selected source and snapshot content using SHA-256.
 
 - **Explicit configuration**
 
@@ -98,6 +98,7 @@ from configparser import ConfigParser
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 import json
+from math import isfinite
 from pathlib import Path
 import re
 import shutil
@@ -118,6 +119,7 @@ from qachat.query_formats import (
 from qachat.repository import (
     build_repository_manifest,
     compare_repository_manifests,
+    normalize_extensions,
     scan_repository,
 )
 from qachat.runtime import (
@@ -683,8 +685,9 @@ def prepare_project_workspace(
     ``indexes/``, ``logs/``, ``profile.ini``, and ``source_snapshot.json``.
     Only files selected by the project's repository rules are mirrored.
 
-    Reopening the same source compares a saved SHA-256 manifest and copies only
-    files that were added or modified while deleting files that were removed.
+    Reopening the same source verifies the managed copy against its saved
+    SHA-256 manifest. If the copy differs, it is rebuilt from the original;
+    otherwise only added, modified, and removed source files are synchronized.
     If another source folder with the same basename already owns the preferred
     workspace name, a short path hash is appended to avoid a collision.
 
@@ -717,9 +720,10 @@ def prepare_project_workspace(
     -----
     This mirrors one original repository using its selected-source manifest. It
     is not the cumulative multi-source API in qachat.workspace. The current
-    implementation does not reject incomplete scans, revalidate unchanged
-    copied files, or provide an atomic transaction across the snapshot and
-    manifest. Source copying is organization, not execution sandboxing.
+    implementation requires complete source and snapshot scans and verifies
+    copied content on each reopen. This adds disk I/O proportional to selected
+    source size. Synchronization is not atomic across snapshot and manifest,
+    and source copying is organization, not execution sandboxing.
 
     """
 
@@ -742,12 +746,16 @@ def prepare_project_workspace(
 
     preferred_root = sandbox / f"project_{safe_name}"
     root = _select_workspace_root(preferred_root, source)
+    if root.is_symlink():
+        raise ValueError("Managed workspace root must not be a symbolic link.")
     root.mkdir(parents=True, exist_ok=True)
 
     # Keep the source snapshot as a sibling of indexes/ and logs/.  Preserve
     # the original folder name so the sandbox structure is easy to inspect.
     source_name = source.name
     snapshot = root / source_name
+    if snapshot.is_symlink():
+        raise ValueError("Managed source copy must not be a symbolic link.")
     snapshot.mkdir(parents=True, exist_ok=True)
 
     profile_path = root / "profile.ini"
@@ -792,6 +800,16 @@ def prepare_project_workspace(
         saved_manifest = None
         changes = compare_repository_manifests(None, current_manifest)
 
+    # The saved source manifest alone cannot detect edits to the managed
+    # copy. Verify selected copied bytes before using the incremental diff.
+    # A divergent snapshot is rebuilt, not synchronized on top of untrusted
+    # content (including unexpected selected files and symbolic links).
+    if saved_manifest is not None and not _snapshot_matches_manifest(
+        snapshot, project.profile, saved_manifest
+    ):
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
+
     if not bool(changes["matches"]):
         if saved_manifest is None:
             shutil.rmtree(snapshot)
@@ -819,6 +837,53 @@ def prepare_project_workspace(
     _write_json(snapshot_manifest_path, manifest_payload)
 
     return open_project(root)
+
+
+def _snapshot_matches_manifest(
+    snapshot: Path,
+    profile: ProjectProfile,
+    manifest: dict[str, object],
+) -> bool:
+    """Verify that selected copied files still match their saved hashes.
+
+    Parameters
+    ----------
+    snapshot: pathlib.Path
+        Managed copy of the original source directory.
+    profile: ProjectProfile
+        Profile defining the literal extensions and file-size limit.
+    manifest: dict[str, object]
+        Previously validated source manifest used to construct the copy.
+
+    Returns
+    -------
+    bool
+        True when the selected copied content exactly matches the manifest.
+
+    Raises
+    ------
+    ValueError
+        If the snapshot cannot be scanned completely.
+    OSError
+        If files cannot be read or change while their hashes are computed.
+
+    Notes
+    -----
+    Selected files are rehashed on each workspace preparation, including
+    when the source manifest is unchanged. Unselected files are not part of
+    this integrity contract. A mismatched copy is rebuilt by the caller.
+
+    """
+
+    report = scan_repository(
+        snapshot,
+        extensions=profile.extensions,
+        max_file_bytes=profile.max_file_bytes,
+    )
+    copied_manifest = build_repository_manifest(report)
+    return bool(compare_repository_manifests(manifest, copied_manifest)[
+        "matches"
+    ])
 
 
 def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
@@ -1047,9 +1112,8 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
     Notes
     -----
-    The temperature check rejects negative values but not NaN or positive
-    infinity. Extension validation here is less restrictive than the repository
-    scanner; scan-time validation can still reject a profile extension.
+    Temperatures must be finite and nonnegative. Literal extension grammar
+    is shared with the repository scanner to reject invalid settings early.
 
     """
 
@@ -1059,7 +1123,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
     kind = cast("ProjectKind", kind_value)
 
     extensions = tuple(
-        part.strip().lower()
+        part.strip()
         for part in _required(
             parser,
             "project",
@@ -1071,6 +1135,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         not extension.startswith(".") for extension in extensions
     ):
         raise ValueError("project.extensions must contain values like .py.")
+    try:
+        extensions = normalize_extensions(extensions)
+    except ValueError as error:
+        raise ValueError(
+            f"project.extensions must contain literal suffixes: {error}"
+        ) from error
 
     backend_value = _required(parser, "models", "backend")
     if backend_value not in BACKEND_CHOICES:
@@ -1101,6 +1171,8 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         )
 
     temperature = _float(parser, "generation", "temperature")
+    if not isfinite(temperature):
+        raise ValueError("generation.temperature must be finite.")
     if temperature < 0:
         raise ValueError("generation.temperature cannot be negative.")
 
@@ -1376,7 +1448,8 @@ def _float(parser: ConfigParser, section: str, option: str) -> float:
 
     Notes
     -----
-    This conversion does not reject non-finite floating-point values.
+    Conversion alone permits non-finite values; ``_read_profile`` rejects
+    them after parsing.
 
     """
 

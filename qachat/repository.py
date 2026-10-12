@@ -59,6 +59,11 @@ Module Structure
 
     Return whether selected repository content has changed.
 
+- ``normalize_extensions``
+
+    Validate and normalize literal file suffixes across the configuration
+    loader, profile reader, and repository scanner.
+
 - ``scan_repository``
 
     Preview files selected from a local repository without reading them.
@@ -105,6 +110,7 @@ __all__ = [
     "build_repository_manifest",
     "compare_repository_manifests",
     "detect_repository_changes",
+    "normalize_extensions",
     "repository_has_changed",
     "scan_repository",
 ]
@@ -288,7 +294,7 @@ def _skip_reason(
     return None
 
 
-def _normalize_extensions(
+def normalize_extensions(
     extensions: list[str] | tuple[str, ...],
 ) -> tuple[str, ...]:
     """Check and normalize selected file extensions.
@@ -462,7 +468,7 @@ def scan_repository(
         if type(value) is not int or value < 1:
             raise ValueError(f"{label} must be a positive whole number.")
 
-    selected_extensions = _normalize_extensions(extensions)
+    selected_extensions = normalize_extensions(extensions)
     includes = _selection_paths(include_paths, "include_paths")
     excludes = _selection_paths(exclude_paths, "exclude_paths")
     chosen = Path(repository).expanduser()
