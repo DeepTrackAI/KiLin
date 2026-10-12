@@ -152,6 +152,35 @@ class TestSetupScript(unittest.TestCase):
         self.assertNotIn("python:", self.log.read_text(encoding="utf-8"))
         self.assertNotIn("Setup complete", result.stdout)
 
+    def test_installed_uv_is_reused_without_download(self) -> None:
+        (self.fake_bin / "uv").unlink()
+        installed = Path(self.environment["UV_INSTALL_DIR"]) / "uv"
+        installed.parent.mkdir(parents=True)
+        shutil.copyfile(self.uv_stub, installed)
+        installed.chmod(0o755)
+        result = self._run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.log.read_text(encoding="utf-8").splitlines()[0],
+            f"uv:{self.project}:sync --extra mlx",
+        )
+
+    def test_download_failure_stops_before_install(self) -> None:
+        (self.fake_bin / "uv").unlink()
+        self.environment["QACHAT_TEST_CURL_EXIT"] = "22"
+        result = self._run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self.log.read_text(encoding="utf-8").splitlines(), ["curl"]
+        )
+        self.assertNotIn("Setup complete", result.stdout)
+
+    def test_backend_check_failure_does_not_claim_success(self) -> None:
+        self.environment["QACHAT_TEST_CHECK_EXIT"] = "3"
+        result = self._run()
+        self.assertEqual(result.returncode, 3)
+        self.assertNotIn("Setup complete", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
