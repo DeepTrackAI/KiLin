@@ -141,6 +141,7 @@ from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
@@ -240,7 +241,7 @@ class TraceConfig:
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
     include_embedding_vectors: bool
-        Whether callers are allowed to attach complete embedding vectors. This
+        Whether callers are allowed to attach complete embedding vectors.
         This is the only optional diagnostic payload category.
     failure_policy: FailurePolicy
         Event-write I/O handling: warn disables later event writes and emits a
@@ -1082,10 +1083,10 @@ class TraceLogger:
         from being changed by a write. Repeated writes replace this run's
         projection without duplicating it or overwriting earlier runs.
 
-        A temporary JSON file replaces the target while the exclusive
-        companion-file lock is held. This is not an immutable snapshot history
-        or multi-file transaction. Other QAChat writers cannot open this path
-        until this logger releases ownership.
+        A uniquely created temporary JSON file replaces the target while
+        the exclusive companion-file lock is held. This is not an
+        immutable snapshot history or multi-file transaction. Other QAChat
+        writers cannot open this path until this logger releases ownership.
 
         """
 
@@ -1160,10 +1161,7 @@ class TraceLogger:
             "sessions": sessions,
         }
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        temporary = self.readable_path.with_suffix(".json.tmp")
-        temporary.write_text(content, encoding="utf-8")
-        _restrict_permissions(temporary, 0o600)
-        temporary.replace(self.readable_path)
+        atomic_write_text(self.readable_path, content)
 
     def _readable_event(
         self,

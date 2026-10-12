@@ -63,8 +63,8 @@ Key Features
 
 - **Progress and tracing**
 
-    Emit stage callbacks and structured events, with content retention
-    controlled by trace settings.
+    Emit stage callbacks and complete diagnostic events when tracing is
+    enabled, with embedding vectors independently opt-in.
 
 - **Intent routing and tools**
 
@@ -144,6 +144,8 @@ import re
 import sys
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
+
+from qachat.atomic_writes import atomic_write_text
 from qachat.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
@@ -658,12 +660,25 @@ class RAGSession:
                 conversation_path=conversation_path,
                 router_model=router_model,
             )
-        except BaseException:
+        except BaseException as error:
             ownership = self._conversation_ownership
-            if ownership is not None:
-                ownership.release()
-            if getattr(self, "_owns_trace", False):
-                self.trace.close()
+            try:
+                if getattr(self, "_owns_trace", False):
+                    try:
+                        self.trace.close()
+                    except BaseException as cleanup_error:
+                        error.add_note(
+                            f"Trace cleanup failed: {cleanup_error!r}"
+                        )
+            finally:
+                if ownership is not None:
+                    try:
+                        ownership.release()
+                    except BaseException as cleanup_error:
+                        error.add_note(
+                            f"Conversation lock cleanup failed: "
+                            f"{cleanup_error!r}"
+                        )
             raise
 
     def _initialize(
@@ -821,17 +836,29 @@ class RAGSession:
                         if key in previous
                     }
                 )
-        except Exception as error:
-            self.trace.exception(
-                "session.open.failed",
-                error,
-                component="rag",
-                duration_ms=(perf_counter() - session_started_at) * 1000,
-            )
-            if chat_session is not None:
-                chat_session.close()
-            if embedding_session is not None:
-                embedding_session.close()
+        except BaseException as error:
+            try:
+                self.trace.exception(
+                    "session.open.failed",
+                    error,
+                    component="rag",
+                    duration_ms=(perf_counter() - session_started_at) * 1000,
+                )
+            except BaseException as cleanup_error:
+                error.add_note(
+                    f"Failure tracing initialization: {cleanup_error!r}"
+                )
+            # Close both partially created models even if one close fails.
+            # Preserve the initialization failure as the primary exception.
+            for model in (chat_session, embedding_session):
+                if model is None:
+                    continue
+                try:
+                    model.close()
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"Model cleanup failed: {cleanup_error!r}"
+                    )
             # __init__ releases the owned trace and conversation lock on
             # every construction failure, including this one.
             raise
@@ -1776,38 +1803,94 @@ class RAGSession:
         )
         return archived_path
 
-    def close(self: RAGSession) -> None:
-        """Release both models while keeping indexes and logs on disk.
+    def _close_model_sessions(self: RAGSession) -> list[BaseException]:
+        """Attempt to close every model owned by this RAG session.
+
+        Returns
+        -------
+        list[BaseException]
+            Exceptions from individual model cleanup operations, in model
+            close order. All available models are attempted independently.
 
         Notes
         -----
-        The closed flag is set even if backend cleanup raises. An owned trace
-        releases its file lock; when tracing is disabled, the session releases
-        its own conversation lease. Caller-owned traces remain open and must
-        be closed by the caller. Backend cleanup errors still propagate.
+        The separate router is detached even when its cleanup raises.
+        Models are not closed during an active model replacement here; this
+        helper is used only during final session shutdown.
+
+        """
+
+        errors: list[BaseException] = []
+        for attribute in (
+            "chat_session",
+            "_router_session",
+            "embedding_session",
+        ):
+            model = getattr(self, attribute, None)
+            if model is None:
+                continue
+            if attribute == "_router_session":
+                self._router_session = None
+            try:
+                model.close()
+            except BaseException as error:
+                errors.append(error)
+        return errors
+
+    def close(self: RAGSession) -> None:
+        """Attempt all owned cleanup and release conversation ownership.
+
+        Raises
+        ------
+        BaseException
+            The first cleanup error, after attempting remaining model,
+            trace, and ownership cleanup. Further errors are attached as
+            exception notes when supported by Python.
+
+        Notes
+        -----
+        The closed flag is set even when backend cleanup raises. An owned
+        trace releases its file lease; caller-owned traces remain open and
+        must be closed by their owner. A tracing-disabled session releases
+        its own conversation lease. Failure of one cleanup step never skips
+        another owned resource.
 
         """
 
         if self._closed:
             return
+        self._closed = True
         trace = getattr(self, "trace", NullTraceLogger())
+        errors = self._close_model_sessions()
         try:
-            self.chat_session.close()
-            if getattr(self, "_router_session", None) is not None:
-                self._router_session.close()
-                self._router_session = None
-            self.embedding_session.close()
-            trace.emit("session.closed", component="rag")
+            if errors:
+                trace.emit(
+                    "session.closed",
+                    component="rag",
+                    status="failed",
+                    data={"model_cleanup_errors": len(errors)},
+                )
+            else:
+                trace.emit("session.closed", component="rag")
+        except BaseException as error:
+            errors.append(error)
+        try:
+            if getattr(self, "_owns_trace", False):
+                trace.close()
+        except BaseException as error:
+            errors.append(error)
         finally:
-            self._closed = True
-            try:
-                if getattr(self, "_owns_trace", False):
-                    trace.close()
-            finally:
-                ownership = getattr(self, "_conversation_ownership", None)
-                if ownership is not None:
+            ownership = getattr(self, "_conversation_ownership", None)
+            if ownership is not None:
+                self._conversation_ownership = None
+                try:
                     ownership.release()
-                    self._conversation_ownership = None
+                except BaseException as error:
+                    errors.append(error)
+        if errors:
+            for error in errors[1:]:
+                errors[0].add_note(f"Additional cleanup failure: {error!r}")
+            raise errors[0]
 
     def refresh_sources(self: RAGSession, project: QAProject) -> None:
         """Update the indexes after sources were added, changed, or removed.
@@ -4055,9 +4138,7 @@ def _write_text_cache(
 
     indexes.mkdir(parents=True, exist_ok=True)
     path = indexes / _TEXT_CACHE
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(entries), encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_text(path, json.dumps(entries))
 
 
 def _document_evidence(selection: DocumentSelection) -> tuple[Evidence, ...]:
@@ -4427,12 +4508,9 @@ def _write_json(path: Path, data: dict[str, object]) -> None:
 
     """
 
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        path, json.dumps(data, indent=2, sort_keys=True) + "\n"
     )
-    temporary.replace(path)
 
 
 def _chunk_trace_data(

@@ -7,11 +7,10 @@ A branch records its parent's identifier and checkpoint reference; it does
 not duplicate the parent's complete trace-event history.
 
 Files use only the canonical grouped conversation-session record through
-the shared internal conversation-format contract. Writes use securely
-created temporary files and atomic single-file
-replacement. A stable companion-file lock excludes concurrent QAChat writers,
-including writers in other processes; the in-memory registry and filesystem
-are not updated as one transaction.
+the shared internal conversation-format contract. Writes use unique
+atomically replaced temporary files. A stable companion-file lock excludes
+concurrent QAChat writers across processes. The in-memory registry and
+filesystem are not updated as one transaction.
 Conversation files can contain full questions, answers, and source excerpts.
 
 Key Features
@@ -58,14 +57,15 @@ Examples
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
-from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
@@ -425,6 +425,7 @@ class ConversationStore:
         name: str,
         *,
         ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
     ) -> ConversationInfo:
         """Normalize and persist a conversation display name.
 
@@ -439,6 +440,10 @@ class ConversationStore:
         ownership: ConversationFileLock | None, optional
             Borrowed lock held by an active session for this file. Without
             one, the store acquires and releases its own exclusive lock.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Writer for the same JSON file, such as an active trace logger's
+            ``update_conversation``. Requires borrowed ownership and replaces
+            the store's own file write. Defaults to ``None``.
 
         Returns
         -------
@@ -464,7 +469,9 @@ class ConversationStore:
                 "Conversation name must be 80 characters or less."
             )
         renamed = replace(item, name=clean, updated_at_utc=_utc_timestamp())
-        self._update_metadata(renamed, ownership=ownership)
+        self._update_metadata(
+            renamed, ownership=ownership, state_writer=state_writer
+        )
         return renamed
 
     def touch(
@@ -472,6 +479,7 @@ class ConversationStore:
         conversation_id: str,
         *,
         ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
     ) -> ConversationInfo:
         """Update and persist the last-modified timestamp of a conversation.
 
@@ -483,6 +491,10 @@ class ConversationStore:
         ownership: ConversationFileLock | None, optional
             Borrowed lock held by an active session for this file. Without
             one, the store acquires and releases its own exclusive lock.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Writer for the same JSON file, such as an active trace logger's
+            ``update_conversation``. Requires borrowed ownership and replaces
+            the store's own file write. Defaults to ``None``.
 
         Returns
         -------
@@ -500,7 +512,9 @@ class ConversationStore:
 
         item = self._require(conversation_id)
         updated = replace(item, updated_at_utc=_utc_timestamp())
-        self._update_metadata(updated, ownership=ownership)
+        self._update_metadata(
+            updated, ownership=ownership, state_writer=state_writer
+        )
         return updated
 
     def is_empty(self, conversation_id: str) -> bool:
@@ -673,6 +687,7 @@ class ConversationStore:
         item: ConversationInfo,
         *,
         ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
     ) -> None:
         """Replace saved metadata, then update the in-memory record.
 
@@ -683,6 +698,10 @@ class ConversationStore:
             the store.
         ownership: ConversationFileLock | None, optional
             Borrowed exclusive write lock for this record, when already held.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Coordinated writer for the same conversation file. Requires an
+            active borrowed owner; the store updates its registry only after
+            the writer succeeds. Defaults to ``None``.
 
         Raises
         ------
@@ -691,14 +710,30 @@ class ConversationStore:
         OSError
             If the updated record cannot be written.
 
+        Notes
+        -----
+        A successful coordinated write updates the trace and store metadata
+        together, without a second JSON replacement from the store. Callers
+        must supply a writer targeting the borrowed conversation path.
+
         """
 
         path = self._paths[item.conversation_id]
+        if state_writer is not None and ownership is None:
+            raise ValueError(
+                "A coordinated state writer requires held ownership."
+            )
         with conversation_write_ownership(path, ownership=ownership):
             payload = _read_json(path)
             conversation = conversation_state(payload, create=True)
-            conversation.update(asdict(item))
-            _write_json(path, payload)
+            changes = asdict(item)
+            if state_writer is None:
+                conversation.update(changes)
+                _write_json(path, payload)
+            else:
+                # The active trace is the sole JSON writer. A second
+                # store replacement would leave its snapshot stale.
+                state_writer(changes)
             self._items[item.conversation_id] = item
 
     def _new_path(self) -> Path:
@@ -960,23 +995,9 @@ def _write_json(path: Path, payload: object) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    stream = NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        delete=False,
+    atomic_write_text(
+        path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     )
-    temporary = Path(stream.name)
-    try:
-        with stream:
-            stream.write(
-                json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-            )
-        temporary.replace(path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _utc_timestamp() -> str:

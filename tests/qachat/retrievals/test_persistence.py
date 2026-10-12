@@ -277,7 +277,7 @@ class TestPersistentIndexes(_PersistentIndexFixtures):
 
         """
         with patch.object(
-            Path, "write_text", side_effect=OSError("disk full")
+            rp, "atomic_write_text", side_effect=OSError("disk full")
         ):
             with self.assertRaisesRegex(OSError, "disk full"):
                 rp.save_indexes(self.indexes, self.target)

@@ -140,6 +140,83 @@ class TestGUIConversationOwnership(unittest.TestCase):
         with ConversationFileLock(old_path):
             pass
 
+    def test_rename_commits_through_trace_only(self) -> None:
+        """A later diagnostic event must not revert a renamed title."""
+
+        import json
+
+        from qachat.conversation_format import conversation_state
+        from qachat import conversations
+
+        self.store.select(self.previous.conversation_id)
+        self.session._active_conversation_lock.return_value = (
+            self.previous_trace._file_lock
+        )
+        path = self.store.state_path(self.previous)
+        with patch.object(
+            conversations,
+            "_write_json",
+            side_effect=AssertionError("unexpected second writer"),
+        ), patch.object(self.engine, "_send_conversations"):
+            self.engine.rename_conversation(
+                self.previous.conversation_id, "Updated title"
+            )
+        self.previous_trace.emit("later.event", component="test")
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(conversation_state(saved)["name"], "Updated title")
+        self.assertEqual(self.store.active().name, "Updated title")
+        self.assertEqual(self.engine.active_conversation.name, "Updated title")
+
+    def test_active_trace_supports_metadata_before_rag_session(
+        self,
+    ) -> None:
+        """Borrow the GUI trace lease when the RAG model is not loaded."""
+
+        import json
+
+        from qachat.conversation_format import conversation_state
+
+        self.store.select(self.previous.conversation_id)
+        self.engine.session = None
+        with patch.object(self.engine, "_send_conversations"):
+            self.engine.rename_conversation(
+                self.previous.conversation_id, "Ready title"
+            )
+        path = self.store.state_path(self.previous)
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(conversation_state(saved)["name"], "Ready title")
+        self.assertEqual(self.engine.active_conversation.name, "Ready title")
+
+    def test_failed_rename_does_not_change_registry_or_saved_title(
+        self,
+    ) -> None:
+        """A failed trace update must not create a stale store snapshot."""
+
+        import json
+
+        from qachat.conversation_format import conversation_state
+
+        self.store.select(self.previous.conversation_id)
+        self.session._active_conversation_lock.return_value = (
+            self.previous_trace._file_lock
+        )
+        path = self.store.state_path(self.previous)
+        previous_name = self.previous.name
+        with patch.object(
+            self.previous_trace,
+            "_write_readable_trace",
+            side_effect=OSError("out of space"),
+        ), patch.object(self.engine, "_report_error") as report:
+            self.engine.rename_conversation(
+                self.previous.conversation_id, "Unsaved title"
+            )
+        report.assert_called_once()
+        self.previous_trace.emit("later.event", component="test")
+        saved = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(conversation_state(saved)["name"], previous_name)
+        self.assertEqual(self.store.active(), self.previous)
+        self.assertEqual(self.engine.active_conversation, self.previous)
+
 
 if __name__ == "__main__":
     unittest.main()

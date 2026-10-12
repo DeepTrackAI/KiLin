@@ -1167,7 +1167,7 @@ class TestRAGLifecycle(unittest.TestCase):
             session.close()
         self.assertTrue(session._closed)
         session.trace.close.assert_called_once()
-        session.embedding_session.close.assert_not_called()
+        session.embedding_session.close.assert_called_once()
 
     def test_refresh_sources_replaces_only_retrieval_state(self) -> None:
         """Refresh indexed sources without reloading chat resources."""
@@ -1194,6 +1194,55 @@ class TestRAGLifecycle(unittest.TestCase):
             session.refresh_sources(project)
         self.assertIs(session.project, project)
         self.assertIs(session.indexes, original_index)
+
+    def test_close_attempts_every_resource_after_multiple_failures(
+        self,
+    ) -> None:
+        """Report the first failure after releasing all owned resources."""
+
+        session = _session()
+        session._router_session = MagicMock()
+        session.chat_session.close.side_effect = OSError("chat failure")
+        session._router_session.close.side_effect = ValueError(
+            "router failure"
+        )
+        session.embedding_session.close.side_effect = RuntimeError(
+            "embedding failure"
+        )
+        session.trace = MagicMock()
+        session._owns_trace = True
+        session.trace.emit.side_effect = OSError("trace event failure")
+        session.trace.close.side_effect = OSError("trace close failure")
+        owner = MagicMock()
+        session._conversation_ownership = owner
+        with self.assertRaisesRegex(OSError, "chat failure") as caught:
+            session.close()
+        self.assertTrue(session._closed)
+        self.assertIsNone(session._router_session)
+        self.assertEqual(session.chat_session.close.call_count, 1)
+        self.assertEqual(session.embedding_session.close.call_count, 1)
+        self.assertEqual(session.trace.close.call_count, 1)
+        self.assertIsNone(session._conversation_ownership)
+        owner.release.assert_called_once_with()
+        self.assertIn("router failure", str(caught.exception.__notes__))
+        self.assertIn("embedding failure", str(caught.exception.__notes__))
+        session.close()
+        self.assertEqual(session.chat_session.close.call_count, 1)
+
+    def test_close_releases_direct_ownership_after_trace_failure(
+        self,
+    ) -> None:
+        """Release direct-write ownership even if emitting close fails."""
+
+        session = _session()
+        owner = MagicMock()
+        session._conversation_ownership = owner
+        session.trace = MagicMock()
+        session.trace.emit.side_effect = OSError("event write failed")
+        with self.assertRaisesRegex(OSError, "event write failed"):
+            session.close()
+        owner.release.assert_called_once_with()
+        session.embedding_session.close.assert_called_once_with()
 
     def test_switch_chat_model_rejects_closed_or_wrong_backend(self) -> None:
         """Reject unsupported model switches and closed sessions."""
@@ -2297,6 +2346,36 @@ class TestRAGSessionConstruction(unittest.TestCase):
         mocks.embeddings.return_value.close.assert_called_once()
         mocks.chat.return_value.close.assert_called_once()
         mocks.trace.close.assert_called_once()
+
+    def test_constructor_keeps_primary_error_when_cleanup_fails(
+        self,
+    ) -> None:
+        """Attempt each cleanup step without masking restoration errors."""
+
+        with self._construction_patches() as mocks:
+            mocks.loaded.side_effect = ValueError("invalid history")
+            mocks.chat.return_value.close.side_effect = OSError(
+                "chat cleanup failed"
+            )
+            mocks.embeddings.return_value.close.side_effect = OSError(
+                "embedding cleanup failed"
+            )
+            mocks.trace.exception.side_effect = RuntimeError(
+                "cannot trace failure"
+            )
+            mocks.trace.close.side_effect = OSError("trace close failed")
+            with self.assertRaisesRegex(
+                ValueError, "invalid history"
+            ) as caught:
+                rag.RAGSession(self.root)
+        mocks.chat.return_value.close.assert_called_once()
+        mocks.embeddings.return_value.close.assert_called_once()
+        mocks.trace.close.assert_called_once()
+        notes = " ".join(caught.exception.__notes__)
+        self.assertIn("chat cleanup failed", notes)
+        self.assertIn("embedding cleanup failed", notes)
+        self.assertIn("trace close failed", notes)
+        self.assertIn("cannot trace failure", notes)
 
     def test_constructor_closes_trace_on_embedding_load_failure(
         self,

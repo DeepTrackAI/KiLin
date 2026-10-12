@@ -97,6 +97,7 @@ from collections.abc import Mapping
 from configparser import ConfigParser
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from io import StringIO
 import json
 from math import isfinite
 from pathlib import Path
@@ -104,6 +105,7 @@ import re
 import shutil
 from typing import Final, TypeAlias, cast
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
@@ -385,10 +387,9 @@ def configure_project(
         parser.set(section, option, str(value))
     _read_profile(parser)
     path = project.root / "profile.ini"
-    temporary = path.with_suffix(".ini.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        parser.write(stream)
-    temporary.replace(path)
+    stream = StringIO()
+    parser.write(stream)
+    atomic_write_text(path, stream.getvalue())
     configured = open_project(project.root)
     effective = asdict(configured.profile)
     active_trace.emit(
@@ -1055,12 +1056,9 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        path, json.dumps(value, indent=2, sort_keys=True) + "\n"
     )
-    temporary.replace(path)
 
 
 def _remove_empty_directories(root: Path) -> None:

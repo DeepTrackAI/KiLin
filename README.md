@@ -75,9 +75,13 @@ while an active trace or tracing-disabled RAG session owns that file. A second
 writer targeting the same conversation raises `ConversationLockedError` and
 leaves the saved JSON unchanged. Locks are released on close and by the
 operating system after process termination; the companion files can remain.
-This is not a substitute for database transactions or a disk-durability
-protocol. For behavior during switching, archival, and GUI metadata updates,
-see [conversation-file ownership](docs/conversation_ownership.md).
+Conversation JSON and related local metadata use unique temporary files and
+atomic replacements, avoiding predictable temporary-file collisions. Active
+GUI metadata changes are written once through the owning trace, rather than
+through two independent snapshots. These guarantees do not replace database
+transactions or a disk-durability protocol. For switching, archival, error
+recovery, and GUI metadata updates, see
+[conversation-file ownership](docs/conversation_ownership.md).
 
 ## Tutorials
 

@@ -43,8 +43,8 @@ activation also remain configurable.
 ## Recorded data
 
 An enabled logger always makes its `include_content` and `include_token_ids`
-properties true. A disabled `NullTraceLogger` makes them false, so callers
-to avoid constructing expensive diagnostic artifacts. These are sink capability
+properties true. A disabled `NullTraceLogger` makes them false, allowing
+callers to avoid constructing expensive diagnostic artifacts. These are sink capability
 properties, not configurable tracing modes. Both built-in and custom events
 are recorded without mode-based filtering.
 
@@ -62,6 +62,22 @@ external backends and custom tools may not offer every diagnostic detail.
 Token IDs are included when available; embeddings are included only when
 explicitly enabled. The JSON format and existing event identifiers are
 otherwise unchanged by this simplification.
+
+## Persistence and write failures
+
+Each trace update writes through a uniquely created temporary file in the
+same directory as its destination. Successful updates atomically replace the
+existing JSON. Failed writes leave the earlier JSON in place and remove the
+temporary file; this avoids collisions with predictable `.tmp` names and
+pre-existing temporary-file symlinks.
+
+Optional diagnostic event writes use the configured `failure_policy`. Required
+conversation checkpoint writes propagate failures and restore the logger's
+previous in-memory resume state. When the GUI updates active conversation
+metadata, it delegates the write to the active trace so later diagnostic
+events cannot undo a rename or timestamp change from an obsolete snapshot.
+These are single-file guarantees, not transactions across metadata, model
+state, or multiple files; no power-loss durability is claimed.
 
 ## Migration from earlier trace configurations
 

@@ -77,6 +77,7 @@ import json
 import math
 from pathlib import Path
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.chunking import Chunk
 from qachat.retrievals.code_graph.code_graph import (
     CodeEntity,
@@ -269,12 +270,11 @@ def save_indexes(indexes: PersistentIndexes, path: str | Path) -> Path:
         "code_graph": _code_graph_to_data(indexes.code_graph),
     }
     payload["payload_sha256"] = _payload_checksum(payload)
-    temporary = target.with_suffix(f"{target.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        target,
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)
+        + "\n",
     )
-    temporary.replace(target)
     return target
 
 

@@ -71,9 +71,11 @@ Examples
 """
 
 from configparser import ConfigParser
+from io import StringIO
 import json
 from pathlib import Path
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.gui.preferences import (
     LEVEL_COUNT,
     MAX_LEVEL_NAME,
@@ -390,10 +392,9 @@ def _write(root: Path, profile: ConfigParser) -> None:
     """
 
     path = Path(root) / PROFILE_FILE
-    temporary = path.with_suffix(".ini.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        profile.write(stream)
-    temporary.replace(path)
+    stream = StringIO()
+    profile.write(stream)
+    atomic_write_text(path, stream.getvalue())
 
 
 def _read_json(path: Path) -> object:

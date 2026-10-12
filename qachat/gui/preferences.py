@@ -51,6 +51,7 @@ from typing import Final
 
 from huggingface_hub.utils import validate_repo_id
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
@@ -445,9 +446,7 @@ def write_defaults(
                 raise ValueError(f"{key}: {error}") from error
         else:
             raise ValueError(f"Unknown default setting {key!r}.")
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(_format(saved) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    atomic_write_text(path, _format(saved) + "\n")
     _CACHE.pop(path, None)
     return built_in_defaults(path)
 

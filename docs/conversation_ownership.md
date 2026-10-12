@@ -2,9 +2,9 @@
 
 QAChat stores resumable conversation state and, when tracing is enabled,
 structured diagnostic events in the same `conversation_*.json` document.
-The checkpoint changes in PR 1 and the callback-lifecycle changes in PR 2
-make an individual session's outcomes consistent. This document describes
-the additional single-writer guarantee introduced in PR 3.
+The session's checkpoint and callback lifecycles distinguish committed turns
+from unsuccessful operations. This document describes how QAChat keeps
+individual conversation files consistent across components and processes.
 
 ## The ownership contract
 
@@ -60,6 +60,15 @@ updates (`rename`, `touch`) and branch creation borrow the active owner;
 otherwise the store acquires a temporary lease for the target. The store
 cannot update or archive a conversation owned by another process.
 
+For an active traced conversation, the GUI supplies the trace's
+`update_conversation` callback as the store's `state_writer` argument. The
+store validates the saved record, invokes that writer while borrowing the
+existing lock, and changes its in-memory metadata **only after a successful
+write**. There is no separate store write to overwrite with a stale trace
+snapshot later. When tracing is disabled or the record is inactive, the store
+uses its own atomic JSON writer. Callers using `state_writer` must ensure that
+it targets the same file as the borrowed ownership token.
+
 A tracing-disabled RAG session *still saves checkpoints* and retains
 exclusive ownership. This is important because disabling diagnostic tracing
 must not disable persistence protection.
@@ -84,6 +93,29 @@ then moves the JSON to `logs/traces/deleted/`. In the deletion flow, the GUI
 closes the old logger with `emit_event=False` to release ownership without
 rewriting the already archived JSON. An inactive conversation is locked
 independently during archival.
+
+## Atomic writes and cleanup
+
+Conversation JSON, trace output, and supporting project metadata are written
+through the internal `atomic_write_text` helper. It creates a fresh,
+uniquely named temporary file in the destination directory and atomically
+replaces the destination after completing the write. A pre-existing `.tmp`
+symlink cannot redirect the write; an unsuccessful write or replacement
+removes the temporary file and preserves the prior destination. The same
+helper is used for cached source text and GUI answer timelines. File-format
+choices (such as indentation and sorting) remain with the callers.
+
+This atomicity concerns **one file at a time**. It does not synchronize
+multiple files, protect against programs bypassing the advisory lock, or
+force data to stable storage after power loss. File access and permissions
+remain the responsibility of the local environment; this helper introduces
+no configurable permissions policy.
+
+On `RAGSession.close()`, QAChat attempts to close every owned model, its
+owned trace, and its direct-write lock even if one cleanup step raises. The
+first failure still propagates, with later failures attached as exception
+notes. Errors during partial initialization likewise do not prevent other
+models or the owned trace from being cleaned up.
 
 ## Errors and recovery
 

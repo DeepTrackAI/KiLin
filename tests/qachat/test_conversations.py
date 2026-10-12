@@ -1146,6 +1146,84 @@ class TestStoreFileOwnership(ConversationStoreFixture):
                 self.assertEqual(path.read_bytes(), before)
                 self.assertEqual(self.store.active(), item)
 
+    def test_coordinated_metadata_write_is_the_only_file_write(
+        self,
+    ) -> None:
+        """Keep the trace snapshot current without a store replacement."""
+
+        from qachat.trace_logging import TraceConfig, TraceLogger
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        logger = TraceLogger(
+            TraceConfig(enabled=True, output_path=path),
+            default_directory=self.store.root,
+        )
+        self.addCleanup(logger.close)
+        with patch.object(
+            module, "_write_json", side_effect=AssertionError("store wrote")
+        ):
+            renamed = self.store.rename(
+                item.conversation_id,
+                "Updated title",
+                ownership=logger._file_lock,
+                state_writer=logger.update_conversation,
+            )
+        self.assertEqual(self.store.active().name, "Updated title")
+        self.assertEqual(renamed.name, "Updated title")
+        logger.emit("later.event", component="test")
+        self.assertEqual(
+            conversation_state(self._saved(path))["name"], "Updated title"
+        )
+
+    def test_failed_coordinated_write_leaves_registry_and_trace_intact(
+        self,
+    ) -> None:
+        """Do not commit metadata when its active trace write fails."""
+
+        from qachat.trace_logging import TraceConfig, TraceLogger
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        logger = TraceLogger(
+            TraceConfig(enabled=True, output_path=path),
+            default_directory=self.store.root,
+        )
+        self.addCleanup(logger.close)
+        before = path.read_bytes()
+        with patch.object(
+            logger,
+            "_write_readable_trace",
+            side_effect=OSError("disk full"),
+        ):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                self.store.rename(
+                    item.conversation_id,
+                    "Unsaved title",
+                    ownership=logger._file_lock,
+                    state_writer=logger.update_conversation,
+                )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.store.active(), item)
+        logger.emit("later.event", component="test")
+        self.assertEqual(
+            conversation_state(self._saved(path))["name"], item.name
+        )
+
+    def test_coordinated_writer_requires_borrowed_ownership(self) -> None:
+        """Reject a writer callback when no file owner is supplied."""
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "requires held ownership"):
+            self.store.touch(
+                item.conversation_id,
+                state_writer=lambda metadata: None,
+            )
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.store.active(), item)
+
     def test_borrowed_logger_owner_supports_gui_style_mutations(
         self,
     ) -> None:
@@ -1162,14 +1240,22 @@ class TestStoreFileOwnership(ConversationStoreFixture):
         self.addCleanup(logger.close)
         ownership = logger._file_lock
         renamed = self.store.rename(
-            item.conversation_id, "Revised", ownership=ownership
+            item.conversation_id,
+            "Revised",
+            ownership=ownership,
+            state_writer=logger.update_conversation,
         )
         touched = self.store.touch(
-            item.conversation_id, ownership=ownership
+            item.conversation_id,
+            ownership=ownership,
+            state_writer=logger.update_conversation,
         )
         self.assertEqual(renamed.name, "Revised")
         self.assertEqual(touched.name, "Revised")
-        logger.update_conversation(asdict(touched))
+        logger.emit("metadata.updated", component="test")
+        self.assertEqual(
+            conversation_state(self._saved(path))["name"], "Revised"
+        )
         branch = self.store.create(
             branch_from=item.conversation_id, ownership=ownership
         )

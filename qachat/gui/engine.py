@@ -10,7 +10,8 @@ A workspace is a managed directory containing copied sources, configuration,
 indexes, and conversations. It is not an operating-system execution sandbox.
 The engine can download a catalog model when explicitly requested and can
 load models according to project settings. The process entry point enables
-forensic tracing, which can retain conversation and source content.
+complete diagnostic tracing, which can retain conversation and source
+content.
 
 Commands are processed sequentially. Cancellation in the desktop window
 terminates the engine process rather than interrupting a model call in place.
@@ -69,7 +70,7 @@ interface or the documented engine methods to open a project.
 from __future__ import annotations
 
 from configparser import ConfigParser, Error as ConfigError
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, replace
 from hashlib import sha256
@@ -83,6 +84,7 @@ from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
 
+from qachat.atomic_writes import atomic_write_text
 from qachat.gui.preferences import (
     default_answer_settings,
     default_appearance,
@@ -120,6 +122,7 @@ from qachat.gui.model_catalog import (
 )
 from qachat import RAGSession, prepare_sources_workspace
 from qachat.conversation_format import conversation_state
+from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
 from qachat.project_type import load_project_types, project_type
@@ -381,8 +384,8 @@ class ChatEngine:
         Notes
         -----
         With tracing disabled, this selects a null sink. Otherwise it opens a
-        logger using the packaged mode at the conversation state path and
-        emits trace_ready.
+        logger using full diagnostic recording at the conversation state path
+        and emits trace_ready.
         The path comes from the store, keeping GUI trace and resume state
         aligned.
 
@@ -446,8 +449,10 @@ class ChatEngine:
             self.project_trace.close(emit_event=False)
         self.project_trace = NullTraceLogger()
 
-    def _store_ownership(self, conversation_id: str):
-        """Borrow the active RAG file lease for store mutations.
+    def _store_ownership(
+        self, conversation_id: str
+    ) -> ConversationFileLock | None:
+        """Borrow the active trace or RAG file lease for store mutations.
 
         Parameters
         ----------
@@ -464,16 +469,51 @@ class ChatEngine:
         -----
         The store validates borrowed ownership and never releases it. This
         permits GUI metadata changes and archival while RAG or a trace logger
-        holds the active conversation's exclusive lock.
+        holds the active conversation's exclusive lock. The trace itself can
+        own the lease before RAG model initialization finishes.
 
         """
 
         if (
-            self.session is not None
-            and self.active_conversation is not None
-            and conversation_id == self.active_conversation.conversation_id
+            self.active_conversation is None
+            or conversation_id != self.active_conversation.conversation_id
         ):
+            return None
+        if isinstance(self.project_trace, TraceLogger):
+            return self.project_trace._file_lock
+        if self.session is not None:
             return self.session._active_conversation_lock()
+        return None
+
+    def _store_state_writer(
+        self, conversation_id: str
+    ) -> Callable[[Mapping[str, object]], None] | None:
+        """Return the current trace writer for active GUI metadata.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Registered conversation whose metadata will be changed.
+
+        Returns
+        -------
+        Callable[[Mapping[str, object]], None] | None
+            The active trace state writer, or None for a nonactive
+            conversation or when tracing is disabled.
+
+        Notes
+        -----
+        The store invokes this writer once, under the borrowed trace
+        ownership token, instead of separately replacing the JSON.
+
+        """
+
+        if (
+            self.active_conversation is not None
+            and conversation_id == self.active_conversation.conversation_id
+            and isinstance(self.active_trace, TraceLogger)
+        ):
+            return self.active_trace.update_conversation
         return None
 
     def _send(self, event: str, **data: object) -> None:
@@ -2171,9 +2211,11 @@ class ChatEngine:
             ownership=self._store_ownership(
                 self.active_conversation.conversation_id
             ),
+            state_writer=self._store_state_writer(
+                self.active_conversation.conversation_id
+            ),
         )
         self.active_conversation = renamed
-        self.active_trace.update_conversation(asdict(renamed))
         self._send_conversations("conversations")
 
     def ask(
@@ -2286,9 +2328,9 @@ class ChatEngine:
                     ownership=self._store_ownership(
                         self.active_conversation.conversation_id
                     ),
-                )
-                self.active_trace.update_conversation(
-                    asdict(self.active_conversation)
+                    state_writer=self._store_state_writer(
+                        self.active_conversation.conversation_id
+                    ),
                 )
             turn = self.session.turns[-1]
             event: dict[str, object] = {
@@ -2387,9 +2429,7 @@ class ChatEngine:
         timelines[timestamp] = timeline
         path = root / "logs" / _ANSWER_TIMELINES
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(timelines), encoding="utf-8")
-        temporary.replace(path)
+        atomic_write_text(path, json.dumps(timelines))
 
     def _usage_totals(self) -> dict[str, dict[str, int]]:
         """Tokens used by the open chat and by the whole project.
@@ -2756,6 +2796,7 @@ class ChatEngine:
                 conversation_id,
                 name,
                 ownership=self._store_ownership(conversation_id),
+                state_writer=self._store_state_writer(conversation_id),
             )
             if (
                 self.active_conversation is not None
@@ -2763,7 +2804,6 @@ class ChatEngine:
                 == self.active_conversation.conversation_id
             ):
                 self.active_conversation = renamed
-                self.active_trace.update_conversation(asdict(renamed))
             self.active_trace.emit(
                 "conversation.renamed",
                 component="gui_engine",
