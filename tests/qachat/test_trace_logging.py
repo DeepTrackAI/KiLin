@@ -26,6 +26,7 @@ import warnings
 from qachat.conversation_format import CONVERSATION_SESSION_KEY
 from qachat import trace_logging
 from qachat.trace_logging import (
+    DEFAULT_TRACE_MODE,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
@@ -71,15 +72,34 @@ class TestTraceConfig(unittest.TestCase):
     """Keep immutable tracing configuration and validation explicit."""
 
     def test_default_flags_and_mode(self) -> None:
-        """Start with disabled, standard tracing and warn-on-write-error."""
+        """Use the packaged trace mode without implicitly enabling tracing."""
         config = TraceConfig()
         self.assertFalse(config.enabled)
         self.assertIsNone(config.output_path)
-        self.assertEqual(config.mode, TRACE_MODE_STANDARD)
+        self.assertEqual(config.mode, DEFAULT_TRACE_MODE)
+        self.assertIn(config.mode, trace_logging.TRACE_MODE_CHOICES)
         self.assertFalse(config.include_embedding_vectors)
         self.assertEqual(config.failure_policy, FAILURE_POLICY_WARN)
         with self.assertRaises(FrozenInstanceError):
             config.enabled = True
+
+    def test_default_mode_matches_packaged_configuration(self) -> None:
+        """Keep the public trace default tied to the packaged JSON value."""
+        config_path = Path(trace_logging.__file__).with_name(
+            "qachat_defaults.json"
+        )
+        settings = json.loads(config_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            settings["TRACE"]["DEFAULT_MODE"], DEFAULT_TRACE_MODE
+        )
+        self.assertIn(DEFAULT_TRACE_MODE, trace_logging.TRACE_MODE_CHOICES)
+        self.assertEqual(
+            TraceConfig(enabled=True).mode, DEFAULT_TRACE_MODE
+        )
+        self.assertEqual(
+            TraceConfig(enabled=True, mode=TRACE_MODE_STANDARD).mode,
+            TRACE_MODE_STANDARD,
+        )
 
     def test_accepts_supported_modes_policies_and_paths(self) -> None:
         """Allow either mode and policy with string or Path locations."""
@@ -139,6 +159,7 @@ class TestTraceLoggerEvents(unittest.TestCase):
 
     def _logger(self, **settings: object) -> TraceLogger:
         """Create a trace at the test's exact conversation path."""
+        settings.setdefault("mode", TRACE_MODE_STANDARD)
         config = TraceConfig(
             enabled=True, output_path=self.path, **settings
         )
@@ -856,6 +877,57 @@ class TestTraceWriteFailures(unittest.TestCase):
                 logger.emit("failing.event", component="test")
             logger.emit("ignored.event", component="test")
         write.assert_called_once()
+
+    def test_failed_state_write_cannot_be_committed_by_later_event(
+        self,
+    ) -> None:
+        """Roll back attempted state even when logging subsequently works."""
+        logger = self._logger(FAILURE_POLICY_WARN)
+        logger.update_conversation({
+            "checkpoint_id": "committed",
+            "turns": [{"question": "Earlier"}],
+        })
+        before = _payload(self.path)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]["resume_state"]
+        with patch.object(
+            logger, "_write_readable_trace", side_effect=OSError("full")
+        ):
+            with self.assertRaisesRegex(OSError, "full"):
+                logger.update_conversation({
+                    "checkpoint_id": "uncommitted",
+                    "turns": [{"question": "Unsaved"}],
+                })
+        self.assertEqual(logger._conversation, before)
+        logger.emit("after.failed.checkpoint", component="test")
+        actual = _payload(self.path)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]["resume_state"]
+        self.assertEqual(actual, before)
+        self.assertFalse(logger._failed)
+        logger.update_conversation({"checkpoint_id": "next"})
+        actual = _payload(self.path)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]["resume_state"]
+        self.assertEqual(actual["checkpoint_id"], "next")
+        self.assertEqual(actual["turns"], before["turns"])
+
+    def test_failed_rename_preserves_saved_resume_state(self) -> None:
+        """Leave an earlier checkpoint intact when atomic rename fails."""
+        logger = self._logger(FAILURE_POLICY_WARN)
+        logger.update_conversation({"checkpoint_id": "committed"})
+        with patch.object(
+            Path, "replace", side_effect=OSError("rename refused")
+        ):
+            with self.assertRaisesRegex(OSError, "rename refused"):
+                logger.update_conversation({"checkpoint_id": "unsaved"})
+        logger.emit("after.rename.failure", component="test")
+        self.assertEqual(
+            _payload(self.path)["sessions"][CONVERSATION_SESSION_KEY][
+                "resume_state"
+            ]["checkpoint_id"],
+            "committed",
+        )
 
     def test_conversation_update_propagates_io_error(self) -> None:
         """Keep direct resumable-state writes outside event failure policy."""

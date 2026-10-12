@@ -15,8 +15,10 @@ separately stored artifact files.
 
 Event writes are serialized within one logger, but the module does not provide
 multi-process locking or a transaction across separate logger instances.
-I/O failure handling applies to event writes according to the configuration;
-direct conversation-state updates have their own write path.
+I/O failure handling applies to event writes according to the configuration.
+Direct conversation-state updates propagate write failures and restore their
+previous in-memory state, preventing later events from committing an aborted
+checkpoint.
 
 Reopening an exact output path preserves previously saved readable turns and
 conversation-level operations. New records start above the highest saved
@@ -59,9 +61,9 @@ Key Features
 Module Structure
 ----------------
 
-- ``TRACE_MODE_*`` constants and ``TraceMode``
+- ``TRACE_MODE_*`` constants, ``DEFAULT_TRACE_MODE``, and ``TraceMode``
 
-    Canonical identifiers for standard and forensic trace detail.
+    Canonical modes and the default read from packaged configuration.
 
 - ``FAILURE_POLICY_*`` constants and ``FailurePolicy``
 
@@ -151,6 +153,7 @@ from qachat.conversation_format import (
 )
 
 __all__ = [
+    "DEFAULT_TRACE_MODE",
     "FAILURE_POLICY_CHOICES",
     "FAILURE_POLICY_RAISE",
     "FAILURE_POLICY_WARN",
@@ -182,6 +185,16 @@ TRACE_MODE_CHOICES: Final[tuple[TraceMode, ...]] = (
     TRACE_MODE_STANDARD,
     TRACE_MODE_FORENSIC,
 )
+
+# Keep the trace mode configurable without coupling RAG or the GUI to JSON.
+_TRACE_DEFAULTS = json.loads(
+    Path(__file__).with_name("qachat_defaults.json").read_text(
+        encoding="utf-8"
+    )
+)["TRACE"]
+DEFAULT_TRACE_MODE: Final[TraceMode] = _TRACE_DEFAULTS["DEFAULT_MODE"]
+if DEFAULT_TRACE_MODE not in TRACE_MODE_CHOICES:
+    raise ValueError("The configured default trace mode is invalid.")
 FAILURE_POLICY_WARN: Final[FailurePolicy] = "warn"
 FAILURE_POLICY_RAISE: Final[FailurePolicy] = "raise"
 FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
@@ -244,7 +257,7 @@ class TraceConfig:
         Trace detail mode. Standard suppresses designated forensic events;
         forensic enables content/token flags used by callers. Resume state and
         arbitrary diagnostics can still contain full text in either mode.
-        Defaults to ``'standard'``.
+        Defaults to the mode in packaged ``qachat_defaults.json``.
     include_embedding_vectors: bool, optional
         Whether callers are allowed to attach complete embedding vectors. This
         flag is independent of mode. Defaults to ``False``.
@@ -262,9 +275,10 @@ class TraceConfig:
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
     mode: TraceMode
-        Trace detail mode. Standard suppresses designated forensic events;
-        forensic enables content/token flags used by callers. Resume state and
-        arbitrary diagnostics can still contain full text in either mode.
+        Trace detail mode using the packaged default unless overridden.
+        Standard suppresses designated forensic events; forensic enables
+        content/token flags used by callers. Resume state and arbitrary
+        diagnostics can still contain full text in either mode.
     include_embedding_vectors: bool
         Whether callers are allowed to attach complete embedding vectors. This
         flag is independent of mode.
@@ -289,7 +303,7 @@ class TraceConfig:
 
     enabled: bool = False
     output_path: str | Path | None = None
-    mode: TraceMode = TRACE_MODE_STANDARD
+    mode: TraceMode = DEFAULT_TRACE_MODE
     include_embedding_vectors: bool = False
     failure_policy: FailurePolicy = FAILURE_POLICY_WARN
 
@@ -985,15 +999,25 @@ class TraceLogger:
 
         Notes
         -----
-        Merges converted fields into the retained state and immediately
-        rewrites the grouped output. It does not clear omitted fields, acquire
-        the event lock, check closed/failed flags, or route OSError through
-        failure_policy.
+        Merges converted fields into a candidate state under the event lock
+        and writes it atomically. If serialization or writing fails, the
+        previous in-memory state is restored so subsequent events cannot
+        accidentally commit the failed checkpoint. Omitted fields are kept.
+        Checkpoint writes bypass the optional event-write failure policy.
 
         """
 
-        self._conversation.update(_json_value(dict(data)))
-        self._write_readable_trace()
+        changes = {
+            str(key): _json_value(value) for key, value in data.items()
+        }
+        with self._lock:
+            previous = self._conversation
+            self._conversation = {**previous, **changes}
+            try:
+                self._write_readable_trace()
+            except BaseException:
+                self._conversation = previous
+                raise
 
     def reset_conversation_state(self) -> None:
         """Clear retained state for an archived conversation.
@@ -1159,8 +1183,8 @@ class TraceLogger:
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
         temporary = self.readable_path.with_suffix(".json.tmp")
         temporary.write_text(content, encoding="utf-8")
+        _restrict_permissions(temporary, 0o600)
         temporary.replace(self.readable_path)
-        _restrict_permissions(self.readable_path, 0o600)
 
     def _readable_event(
         self,
@@ -1617,8 +1641,8 @@ def create_trace_logger(
     Notes
     -----
     None selects a null sink at this factory layer. RAGSession changes its own
-    None default to an enabled forensic configuration before calling this
-    factory. Logger-construction I/O and validation errors propagate.
+    None default to an enabled configuration using the packaged trace mode
+    before calling this factory. Logger-construction errors propagate.
 
     """
 

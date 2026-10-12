@@ -198,6 +198,7 @@ from .sources import (
     read_repository_files,
 )
 from .trace_logging import (
+    DEFAULT_TRACE_MODE,
     FAILURE_POLICY_CHOICES,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
@@ -246,6 +247,7 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL_TORCH",
     "EmbeddingSession",
     "Evidence",
+    "DEFAULT_TRACE_MODE",
     "FAILURE_POLICY_CHOICES",
     "FAILURE_POLICY_RAISE",
     "FAILURE_POLICY_WARN",

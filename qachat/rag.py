@@ -20,7 +20,7 @@ When tracing is enabled for a RAG session, its trace output is required to use
 that same path; tracing therefore cannot silently redirect conversation
 persistence. The session has side effects: initialization may create files,
 rebuild indexes, load models, and download missing model files according to the
-profile. ``trace=None`` creates enabled forensic tracing in this class, unlike
+profile. ``trace=None`` enables the packaged default trace mode here, unlike
 the low-level chat and embedding classes.
 
 History and expanded evidence have no automatic summarization or shared
@@ -217,7 +217,6 @@ from qachat.tools import (
 from qachat.tools.choose_document import document_scope
 from qachat.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
-    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceSink,
@@ -501,8 +500,9 @@ class RAGSession:
         Callback exceptions propagate. Defaults to ``None``.
     trace: TraceConfig | TraceSink | None, optional
         Trace configuration or caller-owned sink. None requests a new enabled
-        forensic logger. TraceConfig(enabled=False) disables tracing but not
-        conversation persistence. Defaults to ``None``.
+        logger with the packaged default mode. TraceConfig(enabled=False)
+        disables tracing but not conversation persistence. Defaults to
+        ``None``.
     conversation_path: str | pathlib.Path | None, optional
         Optional conversation_*.json path under project logs. Relative paths
         start at the project root; None chooses a new path under logs/traces.
@@ -608,7 +608,7 @@ class RAGSession:
             preparation. Callback exceptions propagate. Defaults to ``None``.
         trace: TraceConfig | TraceSink | None, optional
             Trace configuration or caller-owned sink. ``None`` requests a new
-            enabled forensic logger bound to the conversation path. An enabled
+            enabled logger using the packaged default trace mode. An enabled
             TraceConfig without an output path is bound there automatically.
             An enabled configuration or sink with a different output path is
             rejected. ``TraceConfig(enabled=False)`` disables tracing but not
@@ -1051,12 +1051,13 @@ class RAGSession:
 
         Notes
         -----
-        The method appends chat history and a ConversationTurn before
-        checkpoint writing finishes. A persistence or late phase-callback
-        failure does not roll back that state. Evidence is supplied in the
-        prompt but generated claims/citations are not checked. Full chat
-        history and all expanded evidence are used without an aggregate
-        token-budget guard.
+        A generated turn is committed to memory only after its resumable
+        checkpoint has been written. If persistence fails, the previous
+        chat-model history is restored. Exceptions after the checkpoint
+        commit (including late phase callbacks) do not undo the saved turn.
+        Evidence is supplied in the prompt but generated claims/citations
+        are not checked. Full chat history and expanded evidence are used
+        without an aggregate token-budget guard.
 
         """
 
@@ -1108,6 +1109,11 @@ class RAGSession:
                 phase_callback(phase, details)
 
         question = question.strip()
+        # Keep the committed model history available if saving fails after
+        # generation temporarily changes its message list.
+        committed_messages = [
+            dict(message) for message in self.chat_session.messages
+        ]
         trace = getattr(self, "trace", NullTraceLogger())
         turn_id = trace.new_id(f"turn-{len(self.turns) + 1:04d}")
         history_roles = [
@@ -1497,12 +1503,22 @@ class RAGSession:
                 data=representation,
                 turn_id=turn_id,
             )
-            self.turns.append(turn)
             report_phase(
                 ANSWER_PHASE_SAVING,
                 message="Saving conversation",
             )
-            self._save_conversation(trace_turn_id=turn_id)
+            try:
+                self._save_conversation(
+                    pending_turn=turn,
+                    trace_turn_id=turn_id,
+                )
+            except Exception:
+                # A checkpoint event can fail *after* persistence succeeds.
+                # In that case _save_conversation already committed the turn;
+                # only a genuine pre-commit failure restores model history.
+                if not self.turns or self.turns[-1] is not turn:
+                    self.chat_session.restore_history(committed_messages)
+                raise
             report_phase(
                 ANSWER_PHASE_COMPLETED,
                 message="Answer ready",
@@ -3532,12 +3548,17 @@ class RAGSession:
     def _save_conversation(
         self,
         *,
+        pending_turn: ConversationTurn | None = None,
         trace_turn_id: str | None = None,
     ) -> None:
         """Save exact chat state and inspectable interaction records.
 
         Parameters
         ----------
+        pending_turn: ConversationTurn | None, optional
+            New turn to save with the already committed conversation. It is
+            appended to the in-memory list only after the checkpoint write
+            succeeds. ``None`` saves the existing state unchanged.
         trace_turn_id: str | None, optional
             Optional identifier associating trace events with one conversation
             turn. Defaults to ``None``.
@@ -3547,14 +3568,18 @@ class RAGSession:
         Builds a hash-identified resumable snapshot. With an enabled trace
         sink, state is written through ``update_conversation`` to the same file
         as ``conversation_path``; otherwise it is written directly to that
-        path. The hash labels content but this implementation does not store a
-        separate immutable historical snapshot for every checkpoint.
+        path. A failed write leaves the committed turn list and checkpoint ID
+        unchanged. The hash labels content but does not store a separate
+        immutable historical snapshot for every checkpoint.
 
         """
 
+        turns = self.turns
+        if pending_turn is not None:
+            turns = [*turns, pending_turn]
         conversation = {
             "system_prompt": self._system_prompt(),
-            "turns": [_turn_to_data(turn) for turn in self.turns],
+            "turns": [_turn_to_data(turn) for turn in turns],
         }
         parent_checkpoint_id = getattr(self, "_checkpoint_id", None)
         checkpoint_snapshot = {
@@ -3587,7 +3612,7 @@ class RAGSession:
                     ensure_ascii=False,
                 ).encode("utf-8")
             ).hexdigest(),
-            "turn_count": len(self.turns),
+            "turn_count": len(turns),
         }
         checkpoint_id = _resume_checkpoint_id(checkpoint_snapshot)
         checkpoint_state = {
@@ -3595,7 +3620,7 @@ class RAGSession:
             "parent_checkpoint_id": parent_checkpoint_id,
             "conversation_sha256": checkpoint_snapshot["conversation_sha256"],
             "index_fingerprint": self.indexes.fingerprint,
-            "turn_count": len(self.turns),
+            "turn_count": len(turns),
         }
 
         path = self.conversation_path
@@ -3616,6 +3641,11 @@ class RAGSession:
             stored = conversation_state(payload, create=True)
             stored.update(saved_state)
             _write_json(path, payload)
+        # The checkpoint write is the commit boundary. Diagnostic events
+        # may fail afterward without undoing successfully persisted data.
+        if pending_turn is not None:
+            self.turns.append(pending_turn)
+        self._checkpoint_id = checkpoint_id
         self.trace.emit(
             "state.checkpoint.committed",
             component="rag",
@@ -3624,12 +3654,11 @@ class RAGSession:
                 "parent_checkpoint_id": parent_checkpoint_id,
                 "immutable_state_saved": True,
                 "conversation_path": str(path),
-                "turn_count": len(self.turns),
+                "turn_count": len(turns),
                 "index_fingerprint": self.indexes.fingerprint,
             },
             turn_id=trace_turn_id,
         )
-        self._checkpoint_id = checkpoint_id
 
     def _archive_conversation(self: RAGSession) -> Path | None:
         """Rename the active conversation log with a readable UTC time.
@@ -3735,9 +3764,9 @@ def _conversation_trace(
     Parameters
     ----------
     trace: TraceConfig | TraceSink | None
-        Trace request for the RAG session. ``None`` selects an enabled forensic
-        trace. An enabled configuration without an output path is bound to the
-        conversation record automatically.
+        Trace request for the RAG session. ``None`` selects an enabled trace
+        with the packaged default mode. An enabled configuration without an
+        output path is bound to the conversation record automatically.
     conversation_path: pathlib.Path
         Authoritative conversation JSON path used for resumable state.
 
@@ -3764,7 +3793,6 @@ def _conversation_trace(
         trace = TraceConfig(
             enabled=True,
             output_path=conversation_path,
-            mode=TRACE_MODE_FORENSIC,
         )
     elif isinstance(trace, TraceConfig) and trace.enabled:
         if trace.output_path is None:

@@ -153,7 +153,6 @@ from qachat.tools import (
 )
 from qachat.trace_logging import (
     FAILURE_POLICY_WARN,
-    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -382,7 +381,8 @@ class ChatEngine:
         Notes
         -----
         With tracing disabled, this selects a null sink. Otherwise it opens a
-        forensic logger at the conversation state path and emits trace_ready.
+        logger using the packaged mode at the conversation state path and
+        emits trace_ready.
         The path comes from the store, keeping GUI trace and resume state
         aligned.
 
@@ -399,7 +399,6 @@ class ChatEngine:
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
-                mode=TRACE_MODE_FORENSIC,
                 failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,

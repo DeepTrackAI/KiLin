@@ -40,6 +40,7 @@ from qachat.retrievals.code_graph import CodeGraph
 from qachat.runtime import BACKEND_MLX
 from qachat.tools import ToolResult, ToolUse
 from qachat.trace_logging import (
+    DEFAULT_TRACE_MODE,
     TRACE_MODE_FORENSIC,
     TRACE_MODE_STANDARD,
     NullTraceLogger,
@@ -775,6 +776,11 @@ def _answer_patches(
         run.return_value = ToolResult(
             "tool answer", (asdict(_evidence()),), {"name": "tool"}
         )
+        # A mocked successful persistence call still commits the pending
+        # turn, without touching the filesystem.
+        save.side_effect = lambda pending_turn, **options: (
+            session.turns.append(pending_turn)
+        )
         yield SimpleNamespace(
             route=route, retrieve=retrieve, read=read,
             run=run, save=save,
@@ -1102,14 +1108,16 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(session.turns, [])
         mocks.save.assert_not_called()
 
-    def test_save_failure_keeps_appended_turn(self) -> None:
-        """Document in-memory turn state after a checkpoint write failure."""
+    def test_save_failure_retains_only_committed_turns(self) -> None:
+        """Exclude a generated answer when its checkpoint cannot be saved."""
         session = _session()
         with _answer_patches(session, _intent()) as mocks:
             mocks.save.side_effect = OSError("disk full")
             with self.assertRaisesRegex(OSError, "disk full"):
                 session.ask("Question", use_router=False)
-        self.assertEqual(len(session.turns), 1)
+        self.assertEqual(session.turns, [])
+        self.assertIsNone(session._checkpoint_id)
+        session.chat_session.restore_history.assert_called()
 
     def test_phase_callback_exception_propagates(self) -> None:
         """Propagate exceptions raised by the interface phase callback."""
@@ -1607,6 +1615,32 @@ class TestRAGConversationPersistence(unittest.TestCase):
                          "src/a.py")
         self.assertFalse(session.conversation_path.exists())
 
+    def test_failed_untraced_checkpoint_preserves_previous_turns(
+        self,
+    ) -> None:
+        """Keep existing disk and memory state when direct JSON write fails."""
+        session = self.session
+        session.turns = [_turn("Saved question", "Saved answer")]
+        session._save_conversation()
+        first = session._checkpoint_id
+        before = session.conversation_path.read_bytes()
+        pending = _turn("Pending question", "Pending answer")
+        with patch.object(
+            rag, "_write_json", side_effect=OSError("out of space")
+        ):
+            with self.assertRaisesRegex(OSError, "out of space"):
+                session._save_conversation(pending_turn=pending)
+        self.assertEqual(len(session.turns), 1)
+        self.assertEqual(session._checkpoint_id, first)
+        self.assertEqual(session.conversation_path.read_bytes(), before)
+        session._save_conversation(pending_turn=pending)
+        state = rag.conversation_state(
+            json.loads(session.conversation_path.read_text())
+        )
+        self.assertEqual(len(session.turns), 2)
+        self.assertEqual(state["checkpoint"]["parent_checkpoint_id"], first)
+        self.assertEqual(state["turns"][1]["question"], "Pending question")
+
     def test_load_canonical_turns_reconstructs_model_history(self) -> None:
         """Restore chat messages and turns from canonical saved records."""
         session = self.session
@@ -1863,7 +1897,15 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertTrue(enabled.enabled)
         self.assertTrue(owned)
         self.assertEqual(enabled.output_path.resolve(), path)
+        self.assertEqual(enabled.config.mode, DEFAULT_TRACE_MODE)
         enabled.close()
+        standard, owned = rag._conversation_trace(
+            TraceConfig(enabled=True, mode=TRACE_MODE_STANDARD),
+            path.with_name("conversation_standard.json"),
+        )
+        self.assertTrue(owned)
+        self.assertEqual(standard.config.mode, TRACE_MODE_STANDARD)
+        standard.close()
         with self.assertRaisesRegex(ValueError, "conversation path"):
             rag._conversation_trace(
                 TraceConfig(enabled=True, output_path=self.root / "other"),
@@ -2802,8 +2844,9 @@ class TestRAGTraceIntegration(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OSError, "no space"):
                 self._ask_with_real_save("Save failure", _intent())
-        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(self.session.turns, [])
         self.assertIsNone(self.session._checkpoint_id)
+        self.session.chat_session.restore_history.assert_called()
         turn = self._conversation()["turns"]["turn_0001"]
         self.assertEqual(
             turn["stages"]["01_question"]["operations"][
@@ -2813,6 +2856,100 @@ class TestRAGTraceIntegration(unittest.TestCase):
         )
         self.assertNotIn("05_generation", turn["stages"])
         self.assertEqual(self._conversation()["resume_state"], {})
+
+    def test_failed_checkpoint_restores_committed_history_and_retries(
+        self,
+    ) -> None:
+        """Exclude a failed turn from history, then link the next save."""
+        trace = self._bind_trace(mode=TRACE_MODE_FORENSIC)
+        chat = self.session.chat_session
+
+        def restore(messages: list[dict[str, str]]) -> None:
+            """Make the model fake retain restored message history."""
+            chat.messages = [dict(message) for message in messages]
+
+        def reply(prompt: str, **options: object) -> str:
+            """Simulate the real chat model adding generated messages."""
+            chat.messages.extend([
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "model answer"},
+            ])
+            return "model answer"
+
+        chat.restore_history.side_effect = restore
+        chat.reply.side_effect = reply
+        self._ask_with_real_save("First saved", _intent())
+        first = self.session._checkpoint_id
+        messages = [dict(message) for message in chat.messages]
+        original_writer = trace._write_readable_trace
+
+        def fail_pending_state() -> None:
+            """Refuse only the attempted checkpoint write."""
+            if trace._conversation.get("checkpoint_id") != first:
+                raise OSError("checkpoint unavailable")
+            original_writer()
+
+        with patch.object(
+            trace, "_write_readable_trace", side_effect=fail_pending_state
+        ):
+            with self.assertRaisesRegex(OSError, "checkpoint unavailable"):
+                self._ask_with_real_save("Failed to save", _intent())
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(self.session._checkpoint_id, first)
+        self.assertEqual(chat.messages, messages)
+        self.assertEqual(trace._conversation["checkpoint_id"], first)
+        saved = self._conversation()["resume_state"]
+        self.assertEqual(saved["checkpoint_id"], first)
+        self.assertEqual(len(saved["turns"]), 1)
+        self.assertEqual(
+            self._conversation()["turns"]["turn_0002"]["stages"][
+                "01_question"
+            ]["operations"]["01_turn"]["event"]["status"],
+            "failed",
+        )
+        self._ask_with_real_save("Saved after retry", _intent())
+        saved = self._conversation()["resume_state"]
+        self.assertEqual(len(self.session.turns), 2)
+        self.assertEqual(len(saved["turns"]), 2)
+        self.assertEqual(
+            saved["checkpoint"]["parent_checkpoint_id"], first
+        )
+        self.assertEqual(
+            [turn["question"] for turn in saved["turns"]],
+            ["First saved", "Saved after retry"],
+        )
+
+    def test_postcommit_trace_error_does_not_roll_back_checkpoint(
+        self,
+    ) -> None:
+        """Keep a saved turn if its subsequent diagnostic event fails."""
+        trace = self._bind_trace()
+        original_emit = trace.emit
+
+        def fail_event(event_type: str, **options: object) -> None:
+            """Fail only the event emitted after checkpoint persistence."""
+            if event_type == "state.checkpoint.committed":
+                raise RuntimeError("diagnostic unavailable")
+            original_emit(event_type, **options)
+
+        with patch.object(trace, "emit", side_effect=fail_event):
+            with self.assertRaisesRegex(
+                RuntimeError, "diagnostic unavailable"
+            ):
+                self._ask_with_real_save("Saved despite trace", _intent())
+        saved = self._conversation()["resume_state"]
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(self.session._checkpoint_id,
+                         saved["checkpoint_id"])
+        self.assertEqual(
+            saved["turns"][0]["question"], "Saved despite trace"
+        )
+        self.assertEqual(
+            self._conversation()["turns"]["turn_0001"]["stages"][
+                "01_question"
+            ]["operations"]["01_turn"]["event"]["status"],
+            "failed",
+        )
 
     def test_late_callback_failure_keeps_saved_checkpoint_and_failure(
         self,

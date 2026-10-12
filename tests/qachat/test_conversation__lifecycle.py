@@ -28,6 +28,7 @@ from qachat.conversation_format import (
 from qachat.rag import RAGSession, _conversation_trace
 from qachat.conversations import ConversationStore
 from qachat.trace_logging import (
+    DEFAULT_TRACE_MODE,
     NullTraceLogger,
     TRACE_MODE_FORENSIC,
     TraceConfig,
@@ -553,11 +554,13 @@ class TestConversationTraceSelection(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.path = self.root / "logs" / "conversation_trace.json"
 
-    def test_missing_trace_configuration_uses_forensic_conversation(self):
+    def test_missing_trace_configuration_uses_configured_mode(self):
+        """Use the packaged trace mode for a new conversation."""
         trace, owned = _conversation_trace(None, self.path)
         self.addCleanup(trace.close)
         self.assertTrue(owned)
         self.assertTrue(trace.enabled)
+        self.assertEqual(trace.config.mode, DEFAULT_TRACE_MODE)
         self.assertEqual(trace.output_path, self.path)
         self.assertTrue(self.path.is_file())
 
