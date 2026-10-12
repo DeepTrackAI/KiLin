@@ -2,7 +2,9 @@
 
 ``prepare_sources_workspace`` accepts local files or directories, prepares a
 project profile, copies selected content into ``sources``, and records source
-origins in ``sources.json``. Source names are disambiguated when needed.
+origins in ``sources.json``. Imported snapshots are project-owned: later
+imports preserve existing files unless replacement is explicitly requested.
+Source names are disambiguated when needed.
 Directory inputs use repository scanning; individual-file inputs have a
 separate extension-and-size check.
 
@@ -24,7 +26,8 @@ Key Features
 - **Selected copying**
 
     Use profile selection rules and optional per-source selections for
-    directory inputs.
+    directory inputs. Preserve existing snapshot files by default; require
+    ``replace_existing=True`` to overwrite them.
 
 - **Profile integration**
 
@@ -101,16 +104,19 @@ def prepare_sources_workspace(
     workspace_directory: str | Path,
     *,
     selected_files: Mapping[str, Sequence[str]] | None = None,
+    replace_existing: bool = False,
     settings: dict[str, object] | None = None,
     trace: TraceSink | None = None,
 ) -> QAProject:
     """Add sources to one project without changing their original files.
 
-    Adding sources is cumulative. Re-adding a source updates its selected files
-    without deleting older snapshots. Pass an empty list to reopen an existing
-    workspace unchanged. When provided, ``selected_files`` must identify every
-    supplied source, so unmatched or missing keys cannot broaden the import.
-    ``settings`` is validated before copying.
+    Adding sources is cumulative. Re-adding a source imports newly selected
+    files without deleting or overwriting existing snapshots. To replace
+    selected snapshot files explicitly, pass ``replace_existing=True``.
+    Pass an empty list to reopen an existing workspace unchanged. When
+    provided, ``selected_files`` must identify every supplied source, so
+    unmatched or missing keys cannot broaden the import. ``settings`` is
+    validated before copying.
 
     Parameters
     ----------
@@ -129,6 +135,11 @@ def prepare_sources_workspace(
         Keys are normalized and must match all supplied source paths exactly.
         Each directory selection must be a nonempty subset of the scan report;
         None uses the scan selection. Defaults to ``None``.
+    replace_existing: bool, optional
+        Whether to overwrite already imported files selected again. Defaults
+        to ``False``, preserving project-owned snapshots even when their
+        originals or the local copies have changed. Missing files and newly
+        selected files are still copied.
     settings: dict[str, object] | None, optional
         Optional supported profile updates applied through configure_project
         before copying. Defaults to ``None``.
@@ -145,8 +156,8 @@ def prepare_sources_workspace(
     Raises
     ------
     ValueError
-        If kinds, paths, workspace ownership/profile, source selections, or
-        source-origin records fail their implemented checks.
+        If kinds, paths, workspace ownership/profile, source selections,
+        replacement policy, or source-origin records fail their checks.
     NotADirectoryError
         If an existing workspace is not a directory.
     OSError
@@ -156,10 +167,11 @@ def prepare_sources_workspace(
     Notes
     -----
     Copying is cumulative: removed or deselected original files are not deleted
-    from old workspace copies. Directory sources must have complete scans;
-    direct file sources use a narrower extension/size check. Files, profile,
-    and source-origin records are not committed as one transaction. A workspace
-    is not an execution sandbox.
+    from old workspace copies. Existing snapshots are preserved by default;
+    a replacement must be explicitly requested. Directory sources must have
+    complete scans; direct files use a narrower extension/size check.
+    Files, profile, and source-origin records are not committed as one
+    transaction. A workspace is not an execution sandbox.
 
     """
 
@@ -173,6 +185,7 @@ def prepare_sources_workspace(
             "kind": kind,
             "workspace_directory": str(workspace_directory),
             "selected_files": selected_files,
+            "replace_existing": replace_existing,
             "settings": settings,
         },
         status="started",
@@ -183,6 +196,8 @@ def prepare_sources_workspace(
         )
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
+    if type(replace_existing) is not bool:
+        raise ValueError("replace_existing must be true or false.")
     if not str(workspace_directory).strip():
         raise ValueError("Choose a workspace folder.")
 
@@ -281,8 +296,13 @@ def prepare_sources_workspace(
             record = _SourceRecord(original=original, name=name)
         destination = source_root / record["name"]
         selection = selections[original] if selections is not None else None
-        copied = _copy_source(
-            source, destination, project, workspace, selection
+        copied, preserved = _copy_source(
+            source,
+            destination,
+            project,
+            workspace,
+            selection,
+            replace_existing=replace_existing,
         )
         active_trace.emit(
             "workspace.source.copied",
@@ -292,6 +312,7 @@ def prepare_sources_workspace(
                 "destination": str(destination),
                 "requested_files": selection,
                 "copied_files": copied,
+                "preserved_files": preserved,
             },
         )
         # Existing, deselected snapshots remain project-owned. Preserve their
@@ -299,7 +320,7 @@ def prepare_sources_workspace(
         # were imported from the original repository. A direct-file record
         # names the original file, even if its snapshot name was disambiguated.
         if source.is_file():
-            record["files"] = copied
+            record["files"] = copied + preserved
         else:
             inventory = set(record.get("files", [])) | set(copied)
             record["files"] = sorted(
@@ -403,8 +424,10 @@ def _copy_source(
     project: QAProject,
     workspace: Path,
     selected_files: Sequence[str] | None,
-) -> list[str]:
-    """Copy only files selected by the workspace profile.
+    *,
+    replace_existing: bool = False,
+) -> tuple[list[str], list[str]]:
+    """Copy eligible files while protecting existing snapshots.
 
     Parameters
     ----------
@@ -419,15 +442,15 @@ def _copy_source(
         Resolved managed-workspace path excluded from source copies when
         applicable.
     selected_files: Sequence[str] | None
-        Optional mapping from resolved original source-path strings to relative
-        selected files. A directory selection must be a nonempty subset of the
-        scan report; None uses the scan selection.
+        Optional selected filenames relative to a directory or the original
+        filename for a direct source file. None uses the scan selection.
+    replace_existing: bool, optional
+        Replace existing regular snapshot files when True. Defaults to False.
 
     Returns
     -------
-    list[str]
-        Relative filenames copied from a directory, or the copied source
-        filename for a single-file input.
+    tuple[list[str], list[str]]
+        Original-relative filenames copied and preserved, respectively.
 
     Raises
     ------
@@ -442,8 +465,8 @@ def _copy_source(
     -----
     The directory path applies scan_repository rules and excludes a nested
     workspace. Direct files are not passed through all protected-name rules.
-    Existing destination files omitted from this copy operation are left in
-    place.
+    Files omitted from this copy operation are left in place, as are files
+    selected again without an explicit replacement request.
 
     """
 
@@ -463,8 +486,11 @@ def _copy_source(
             raise ValueError(
                 f"File is empty or exceeds the size limit: {source}"
             )
-        _copy_file(source, destination)
-        return [source.name]
+        if _copy_file(
+            source, destination, replace_existing=replace_existing
+        ):
+            return [source.name], []
+        return [], [source.name]
 
     excludes: tuple[str, ...] = ()
     if workspace.is_relative_to(source):
@@ -486,13 +512,28 @@ def _copy_source(
     if not selected:
         raise ValueError(f"No selected files in source folder: {source}")
     destination.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    preserved: list[str] = []
     for relative in selected:
-        _copy_file(source / str(relative), destination / str(relative))
-    return [str(path) for path in selected]
+        path = str(relative)
+        if _copy_file(
+            source / path,
+            destination / path,
+            replace_existing=replace_existing,
+        ):
+            copied.append(path)
+        else:
+            preserved.append(path)
+    return copied, preserved
 
 
-def _copy_file(source: Path, destination: Path) -> None:
-    """Replace one snapshot only after its new bytes are complete.
+def _copy_file(
+    source: Path,
+    destination: Path,
+    *,
+    replace_existing: bool = False,
+) -> bool:
+    """Create one snapshot, preserving an existing file by default.
 
     Parameters
     ----------
@@ -500,19 +541,29 @@ def _copy_file(source: Path, destination: Path) -> None:
         Original local source file or directory.
     destination: pathlib.Path
         Managed destination path for the selected source or file.
+    replace_existing: bool, optional
+        Explicitly allow replacement of an existing regular file. Defaults
+        to False.
+
+    Returns
+    -------
+    bool
+        True if copied, False if an existing snapshot was preserved.
 
     Raises
     ------
     ValueError
-        If the destination or one of its parent directories is a symbolic link.
+        If the destination or one of its parents is a symbolic link, or an
+        existing destination is not a regular file.
     OSError
         If creating directories, copying metadata/content, or replacing the
         target fails.
 
     Notes
     -----
-    Bytes are copied into a newly created, randomly named temporary file in
-    the destination directory before replacement. The temporary file is
+    Existing regular files are not overwritten without explicit permission.
+    New bytes are copied into a randomly named temporary file in the
+    destination directory before atomic replacement. The temporary file is
     removed if copying or replacement fails. This is not a general defense
     against concurrent filesystem mutation by another process.
 
@@ -523,6 +574,13 @@ def _copy_file(source: Path, destination: Path) -> None:
     for parent in destination.parents:
         if parent.is_symlink():
             raise ValueError(f"Do not copy through a symbolic link: {parent}")
+    if destination.exists():
+        if not destination.is_file():
+            raise ValueError(
+                f"Snapshot destination is not a regular file: {destination}"
+            )
+        if not replace_existing:
+            return False
     destination.parent.mkdir(parents=True, exist_ok=True)
     stream = NamedTemporaryFile(
         mode="wb",
@@ -538,6 +596,7 @@ def _copy_file(source: Path, destination: Path) -> None:
                 shutil.copyfileobj(original, stream)
         shutil.copystat(source, temporary)
         temporary.replace(destination)
+        return True
     finally:
         temporary.unlink(missing_ok=True)
 

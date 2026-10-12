@@ -5,9 +5,9 @@ project profiles. Verify cumulative imports, selected copies, provenance,
 configuration, and filesystem safeguards without loading models or accessing
 a user's files.
 
-Expected failures document independently reproducible workspace defects; they
-are not changes to the production module. The tests distinguish present
-implementation behavior from the desired snapshot-preservation contract.
+Snapshot re-imports preserve existing project copies unless a caller
+explicitly requests replacement. Tests exercise both policies, cumulative
+provenance, and filesystem safety.
 
 """
 
@@ -685,17 +685,17 @@ class TestSnapshotBehavior(WorkspaceFixture):
             (project.source / "code.py").read_text(), "local = True\n"
         )
 
-    def test_reimport_currently_replaces_existing_snapshot(self) -> None:
-        """Document the current explicit re-import copy semantics."""
+    def test_reimport_preserves_existing_snapshot_by_default(self) -> None:
+        """An updated original does not implicitly replace its snapshot."""
 
         original = self._file("code.py", "old = 1\n")
         project = self._prepare([original])
         original.write_text("new = 2\n", encoding="utf-8")
         self._prepare([original])
         self.assertEqual(
-            (project.source / "code.py").read_text(), "new = 2\n"
+            (project.source / "code.py").read_text(), "old = 1\n"
         )
-        self.assertEqual(len(self._records()), 1)
+        self.assertEqual(self._records()[0]["files"], ["code.py"])
 
     def test_reimport_does_not_remove_deselected_directory_files(
         self,
@@ -785,7 +785,7 @@ class TestSnapshotBehavior(WorkspaceFixture):
         self._prepare([first, second])
         existing = self._records()[1]["name"]
         second.write_text("updated = 3\n", encoding="utf-8")
-        self._prepare([second])
+        self._prepare([second], replace_existing=True)
         self.assertEqual(self._records()[1]["name"], existing)
         self.assertEqual(
             (self.destination / "sources" / str(existing)).read_text(),
@@ -820,9 +820,8 @@ class TestSnapshotBehavior(WorkspaceFixture):
         self.assertEqual(records[0], original)
         self.assertEqual(records[1]["original"], str(second))
 
-    @unittest.expectedFailure
     def test_reimport_cannot_silently_overwrite_local_changes(self) -> None:
-        """Future snapshot policy should protect locally edited copies."""
+        """A local edit is authoritative until explicitly replaced."""
 
         original = self._file("code.py", "original = 1\n")
         project = self._prepare([original])
@@ -831,6 +830,196 @@ class TestSnapshotBehavior(WorkspaceFixture):
         original.write_text("original = 2\n", encoding="utf-8")
         self._prepare([original])
         self.assertEqual(snapshot.read_text(), "local = 10\n")
+
+    def test_explicit_replacement_overwrites_locally_edited_file(
+        self,
+    ) -> None:
+        """A caller can deliberately replace a snapshot from the original."""
+
+        original = self._file("code.py", "external = 1\n")
+        project = self._prepare([original])
+        snapshot = project.source / "code.py"
+        snapshot.write_text("local = 10\n", encoding="utf-8")
+        original.write_text("external = 2\n", encoding="utf-8")
+        self._prepare([original], replace_existing=True)
+        self.assertEqual(snapshot.read_text(), "external = 2\n")
+        self.assertEqual(self._records()[0]["files"], ["code.py"])
+        self.assertEqual(original.read_text(), "external = 2\n")
+
+    def test_reimport_preserves_existing_file_modification_time(
+        self,
+    ) -> None:
+        """Skipping an existing copy does not update its metadata."""
+
+        original = self._file("code.py", "original = 1\n")
+        project = self._prepare([original])
+        snapshot = project.source / "code.py"
+        snapshot.write_text("local = 2\n", encoding="utf-8")
+        os.utime(snapshot, ns=(1_000_000_000, 2_000_000_000))
+        original.write_text("original = 3\n", encoding="utf-8")
+        self._prepare([original])
+        self.assertEqual(snapshot.read_text(), "local = 2\n")
+        self.assertEqual(snapshot.stat().st_mtime_ns, 2_000_000_000)
+
+    def test_reimport_repairs_missing_snapshot_without_replacing_other(
+        self,
+    ) -> None:
+        """Previously deleted copies are restored without touching others."""
+
+        folder = self._folder("research")
+        first = self._file("research/first.py", "first = 1\n")
+        second = self._file("research/second.py", "second = 1\n")
+        project = self._prepare([folder])
+        snapshot = project.source / "research"
+        (snapshot / "first.py").unlink()
+        (snapshot / "second.py").write_text(
+            "second_local = 2\n", encoding="utf-8"
+        )
+        first.write_text("first = 3\n", encoding="utf-8")
+        second.write_text("second = 3\n", encoding="utf-8")
+        self._prepare([folder])
+        self.assertEqual((snapshot / "first.py").read_text(), "first = 3\n")
+        self.assertEqual(
+            (snapshot / "second.py").read_text(), "second_local = 2\n"
+        )
+        self.assertEqual(
+            sorted(self._records()[0]["files"]),
+            ["first.py", "second.py"],
+        )
+
+    def test_new_files_from_existing_directory_are_added_by_default(
+        self,
+    ) -> None:
+        """Re-import is additive when a folder gains a new source file."""
+
+        folder = self._folder("research")
+        existing = self._file("research/existing.py", "value = 1\n")
+        project = self._prepare([folder])
+        snapshot = project.source / "research"
+        existing.write_text("value = 2\n", encoding="utf-8")
+        self._file("research/new.py", "new = 3\n")
+        self._prepare([folder])
+        self.assertEqual((snapshot / "existing.py").read_text(), "value = 1\n")
+        self.assertEqual((snapshot / "new.py").read_text(), "new = 3\n")
+        self.assertEqual(
+            self._records()[0]["files"], ["existing.py", "new.py"]
+        )
+
+    def test_explicit_replacement_only_changes_selected_directory_files(
+        self,
+    ) -> None:
+        """Replacement respects an explicit subset of eligible files."""
+
+        folder = self._folder("research")
+        first = self._file("research/first.py", "first = 1\n")
+        second = self._file("research/second.py", "second = 1\n")
+        project = self._prepare([folder])
+        first.write_text("first = 2\n", encoding="utf-8")
+        second.write_text("second = 2\n", encoding="utf-8")
+        self._prepare(
+            [folder],
+            selected_files={str(folder): ["first.py"]},
+            replace_existing=True,
+        )
+        snapshot = project.source / "research"
+        self.assertEqual((snapshot / "first.py").read_text(), "first = 2\n")
+        self.assertEqual((snapshot / "second.py").read_text(), "second = 1\n")
+        self.assertEqual(
+            self._records()[0]["files"], ["first.py", "second.py"]
+        )
+
+    def test_reimport_preserves_nested_local_changes(self) -> None:
+        """Nested directory snapshots follow the same default policy."""
+
+        folder = self._folder("research")
+        original = self._file("research/module/code.py", "value = 1\n")
+        project = self._prepare([folder])
+        snapshot = project.source / "research/module/code.py"
+        snapshot.write_text("local = True\n", encoding="utf-8")
+        original.write_text("value = 2\n", encoding="utf-8")
+        self._prepare([folder])
+        self.assertEqual(snapshot.read_text(), "local = True\n")
+
+    def test_invalid_replacement_flag_rejected_without_changes(self) -> None:
+        """Only explicit Boolean replacement decisions are accepted."""
+
+        original = self._file("code.py")
+        for value in (1, 0, "true", None, [], 2.5):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "replace_existing"):
+                    self._prepare([original], replace_existing=value)
+        self.assertFalse(self.destination.exists())
+
+    def test_untracked_file_inside_imported_directory_is_preserved(
+        self,
+    ) -> None:
+        """Do not overwrite or falsely claim a preexisting local file."""
+
+        folder = self._folder("research")
+        self._file("research/first.py")
+        project = self._prepare([folder])
+        local = project.source / "research/new.py"
+        local.write_text("local = True\n", encoding="utf-8")
+        self._file("research/new.py", "external = True\n")
+        self._prepare([folder])
+        self.assertEqual(local.read_text(), "local = True\n")
+        self.assertEqual(self._records()[0]["files"], ["first.py"])
+        self._prepare([folder], replace_existing=True)
+        self.assertEqual(local.read_text(), "external = True\n")
+        self.assertEqual(self._records()[0]["files"], ["first.py", "new.py"])
+
+    def test_preserved_file_does_not_invoke_copy(self) -> None:
+        """Avoid temporary writes for unchanged snapshot ownership."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        with patch.object(
+            workspace.shutil, "copyfileobj", side_effect=OSError("copied")
+        ):
+            self._prepare([original])
+        self.assertEqual(self._records()[0]["files"], ["code.py"])
+
+    def test_existing_snapshot_directory_cannot_be_treated_as_file(
+        self,
+    ) -> None:
+        """Reject inconsistent file-vs-directory substitutions."""
+
+        original = self._file("code.py")
+        project = self._prepare([original])
+        snapshot = project.source / "code.py"
+        snapshot.unlink()
+        snapshot.mkdir()
+        for replacement in (False, True):
+            with self.subTest(replacement=replacement):
+                with self.assertRaisesRegex(ValueError, "not a regular file"):
+                    self._prepare(
+                        [original], replace_existing=replacement
+                    )
+        self.assertTrue(snapshot.is_dir())
+
+    def test_trace_distinguishes_preserved_from_copied_files(self) -> None:
+        """Trace records copied and retained filenames separately."""
+
+        folder = self._folder("research")
+        self._file("research/old.py")
+        self._prepare([folder])
+        self._file("research/new.py")
+        trace = MagicMock()
+        self._prepare([folder], trace=trace)
+        start_data = trace.emit.call_args_list[0].kwargs["data"]
+        copy_data = trace.emit.call_args_list[1].kwargs["data"]
+        self.assertFalse(start_data["replace_existing"])
+        self.assertEqual(copy_data["copied_files"], ["new.py"])
+        self.assertEqual(copy_data["preserved_files"], ["old.py"])
+        trace.reset_mock()
+        self._prepare([folder], trace=trace, replace_existing=True)
+        start_data = trace.emit.call_args_list[0].kwargs["data"]
+        copy_data = trace.emit.call_args_list[1].kwargs["data"]
+        self.assertTrue(start_data["replace_existing"])
+        self.assertEqual(
+            copy_data["copied_files"], ["new.py", "old.py"]
+        )
+        self.assertEqual(copy_data["preserved_files"], [])
 
     def test_reselection_manifest_lists_all_retained_snapshots(self) -> None:
         """Provenance must not forget earlier snapshots still on disk."""
@@ -1208,7 +1397,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
             side_effect=OSError("write failed"),
         ):
             with self.assertRaisesRegex(OSError, "write failed"):
-                self._prepare([original])
+                self._prepare([original], replace_existing=True)
         self.assertEqual(snapshot.read_text(), "initial = 1\n")
         self.assertFalse(list(snapshot.parent.glob(".code.py.*.tmp")))
 
@@ -1226,7 +1415,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
             side_effect=OSError("no temporary file"),
         ):
             with self.assertRaisesRegex(OSError, "no temporary file"):
-                self._prepare([original])
+                self._prepare([original], replace_existing=True)
         self.assertEqual(
             (project.source / "code.py").read_text(), "initial = 1\n"
         )
@@ -1241,7 +1430,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
         outside = self._file("outside/marker.txt", "PROTECTED\n")
         temporary = self.destination / "sources/code.py.tmp"
         temporary.symlink_to(outside)
-        self._prepare([original])
+        self._prepare([original], replace_existing=True)
         self.assertEqual(outside.read_text(), "PROTECTED\n")
         self.assertFalse(
             (self.destination / "sources/code.py").is_symlink()
