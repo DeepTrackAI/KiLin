@@ -166,7 +166,6 @@ from qachat.project_type import (
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
-    ProjectType,
     project_type,
 )
 from qachat.query_formats import (
