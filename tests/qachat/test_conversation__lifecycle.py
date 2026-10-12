@@ -23,6 +23,7 @@ from unittest.mock import MagicMock
 from qachat.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
+    new_conversation_session,
 )
 from qachat.rag import RAGSession, _conversation_trace
 from qachat.conversations import ConversationStore
@@ -217,7 +218,10 @@ class TestConversationLifecycle(unittest.TestCase):
 
     def test_reset_without_trace_does_not_create_replacement(self):
         session = _session(self.root, NullTraceLogger())
-        session.conversation_path.write_text('{"conversation": {}}')
+        session.conversation_path.write_text(json.dumps({
+            "sessions": {CONVERSATION_SESSION_KEY:
+                         new_conversation_session()},
+        }))
         session.turns = [object()]
         archived = session.reset()
         self.assertTrue(archived.is_file())
@@ -324,6 +328,96 @@ class TestTraceReopening(unittest.TestCase):
 
 
 
+class TestCanonicalTracePersistence(unittest.TestCase):
+    """Keep the trace writer strict and compatible with canonical state."""
+
+    def setUp(self) -> None:
+        directory = TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name).resolve()
+        self.path = self.root / "conversation.json"
+
+    def test_first_event_creates_complete_canonical_session(self):
+        trace = _logger(self.path)
+        payload = _read(self.path)
+        session = payload["sessions"][CONVERSATION_SESSION_KEY]
+        self.assertEqual(session["title"], "Conversation turns")
+        self.assertEqual(session["category"], "conversations")
+        self.assertEqual(session["turns"], {})
+        self.assertEqual(session["operations"], {})
+        self.assertIs(conversation_state(payload), session["resume_state"])
+        trace.close()
+
+    def test_turn_only_trace_has_both_readable_groups(self):
+        trace = _logger(self.path)
+        trace.emit("turn.started", component="rag", turn_id="first")
+        trace.close()
+        session = _group(self.path)
+        self.assertEqual(list(session["turns"]), ["turn_0001"])
+        self.assertEqual(session["operations"], {})
+        self.assertEqual(conversation_state(_read(self.path)), {})
+
+    def test_conversation_operation_only_trace_has_both_groups(self):
+        trace = _logger(self.path)
+        trace.emit("conversation.renamed", component="rag")
+        trace.close()
+        session = _group(self.path)
+        self.assertEqual(session["turns"], {})
+        self.assertEqual(list(session["operations"]),
+                         ["01_conversation_renamed"])
+        self.assertEqual(conversation_state(_read(self.path)), {})
+
+    def test_reject_obsolete_and_malformed_existing_files(self):
+        canonical = {
+            "sessions": {
+                CONVERSATION_SESSION_KEY: new_conversation_session(),
+            }
+        }
+        bad_records = (
+            {"conversation": {"turns": []}},
+            {"trace": {"sessions": canonical["sessions"]}},
+            {"sessions": [], "trace": {"sessions": {}}},
+            {"sessions": {}},
+            {"sessions": {CONVERSATION_SESSION_KEY: {
+                "category": "conversations", "conversation": {},
+            }}},
+            {"sessions": {CONVERSATION_SESSION_KEY: {
+                "category": "runtime", "important": "untouched",
+            }}},
+            {"sessions": {"custom": new_conversation_session()}},
+            {"sessions": {CONVERSATION_SESSION_KEY:
+                          new_conversation_session({
+                "chat_messages": [{"role": "user"}],
+            })}},
+        )
+        for number, record in enumerate(bad_records):
+            with self.subTest(number=number):
+                path = self.root / f"invalid_{number}.json"
+                path.write_text(json.dumps(record), encoding="utf-8")
+                before = path.read_bytes()
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    _logger(path)
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_reopen_keeps_canonical_resume_state_and_trace_operations(self):
+        trace = _logger(self.path)
+        trace.update_conversation({"checkpoint_id": "before"})
+        trace.emit("conversation.restored", component="rag")
+        trace.close()
+        previous = _group(self.path)
+        trace = _logger(self.path)
+        trace.update_conversation({"checkpoint_id": "after"})
+        trace.emit("turn.started", component="rag", turn_id="new")
+        trace.close()
+        current = _group(self.path)
+        self.assertEqual(current["resume_state"]["checkpoint_id"], "after")
+        self.assertEqual(list(current["turns"]), ["turn_0001"])
+        self.assertEqual(len(current["operations"]),
+                         len(previous["operations"]))
+        self.assertEqual(conversation_state(_read(self.path)),
+                         current["resume_state"])
+
+
 class TestConversationStoreIntegration(unittest.TestCase):
     """Exercise storage, trace persistence, and RAG lifecycle together."""
 
@@ -414,14 +508,12 @@ class TestConversationStoreIntegration(unittest.TestCase):
                             item.conversation_id)
         self.assertFalse(archived.is_symlink())
 
-    def test_untraced_rag_checkpoint_migrates_old_grouped_state(self):
+    def test_untraced_rag_checkpoint_keeps_canonical_metadata(self):
         item = self.store.ensure()
         path = self.store.state_path(item)
         payload = _read(path)
         group = payload["sessions"][CONVERSATION_SESSION_KEY]
-        legacy = group.pop("resume_state")
-        legacy["custom_note"] = {"origin": "earlier-session"}
-        group["conversation"] = legacy
+        group["resume_state"]["custom_note"] = {"origin": "session"}
         group["operations"] = {"01_action": {"title": "Retained"}}
         path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -431,9 +523,8 @@ class TestConversationStoreIntegration(unittest.TestCase):
         session._save_conversation()
 
         saved = _read(path)["sessions"][CONVERSATION_SESSION_KEY]
-        self.assertNotIn("conversation", saved)
         self.assertEqual(saved["resume_state"]["custom_note"],
-                         {"origin": "earlier-session"})
+                         {"origin": "session"})
         self.assertEqual(saved["resume_state"]["conversation_id"],
                          item.conversation_id)
         self.assertTrue(saved["resume_state"]["checkpoint_id"])

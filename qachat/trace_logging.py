@@ -146,7 +146,6 @@ from qachat.conversation_format import (
     CONVERSATION_SESSION_CATEGORY,
     CONVERSATION_SESSION_KEY,
     CONVERSATION_SESSION_TITLE,
-    LEGACY_CONVERSATION_KEY,
     conversation_state,
     new_conversation_session,
 )
@@ -480,28 +479,16 @@ class TraceLogger:
                 existing = json.loads(
                     self.output_path.read_text(encoding="utf-8")
                 )
-                sessions = existing.get("sessions")
-                if not isinstance(sessions, dict):
-                    previous_trace = existing.get("trace")
-                    sessions = (
-                        previous_trace.get("sessions", {})
-                        if isinstance(previous_trace, dict)
-                        else {}
-                    )
-                if isinstance(sessions, dict):
-                    self._previous_sessions = sessions
-                try:
-                    self._conversation = conversation_state(existing)
-                except ValueError:
-                    if isinstance(sessions, dict):
-                        try:
-                            self._conversation = conversation_state(
-                                {"sessions": sessions}
-                            )
-                        except ValueError:
-                            pass
-            except (OSError, json.JSONDecodeError, AttributeError):
-                raise ValueError("The conversation trace is invalid.")
+                # Validate before the constructor writes its first event.
+                # A malformed record must never be replaced with empty state.
+                self._conversation = conversation_state(existing)
+                self._previous_sessions = existing["sessions"]
+            except (
+                OSError, json.JSONDecodeError, TypeError, KeyError
+            ) as error:
+                raise ValueError(
+                    "The conversation trace is invalid."
+                ) from error
         # Keep the loaded trace immutable while current events are rewritten.
         self._conversation = deepcopy(self._conversation)
         previous_conversation = self._previous_sessions.get(
@@ -1138,12 +1125,13 @@ class TraceLogger:
             CONVERSATION_SESSION_KEY,
             new_conversation_session(),
         )
-        if isinstance(conversation_session, dict):
-            conversation_session.pop(LEGACY_CONVERSATION_KEY, None)
-            conversation_session.pop(CONVERSATION_RESUME_STATE_KEY, None)
-            conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
-                self._conversation
-            )
+        # A trace may contain only turn events or only conversation-level
+        # operations. Persist both groups so every saved record is canonical.
+        conversation_session.setdefault("turns", {})
+        conversation_session.setdefault("operations", {})
+        conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
+            self._conversation
+        )
         sessions = dict(
             sorted(
                 sessions.items(),

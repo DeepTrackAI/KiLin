@@ -22,6 +22,10 @@ import unittest
 from unittest.mock import DEFAULT, MagicMock, Mock, patch, sentinel
 
 from qachat import rag
+from qachat.conversation_format import (
+    CONVERSATION_SESSION_KEY,
+    new_conversation_session,
+)
 from qachat.answering import RouteDecision
 from qachat.project_type import (
     HISTORY_POLICY_RECENT,
@@ -1520,21 +1524,19 @@ class TestRAGConversationPersistence(unittest.TestCase):
                          "src/a.py")
         self.assertFalse(session.conversation_path.exists())
 
-    def test_load_legacy_messages_and_checkpoint(self) -> None:
+    def test_load_canonical_turns_reconstructs_model_history(self) -> None:
         session = self.session
-        data = {
-            "conversation": {
-                "turns": [rag._turn_to_data(_turn())],
-                "chat_messages": [
-                    {"role": "user", "content": "saved"},
-                    {"role": "assistant", "content": "reply"},
-                ],
-                "checkpoint_id": "checkpoint_previous",
-            },
-        }
+        data = {"sessions": {CONVERSATION_SESSION_KEY:
+                             new_conversation_session({
+            "system_prompt": "Saved system prompt",
+            "turns": [rag._turn_to_data(_turn())],
+            "checkpoint_id": "checkpoint_previous",
+        })}}
         session.conversation_path.write_text(json.dumps(data))
         messages, turns, checkpoint = session._load_conversation()
-        self.assertEqual(messages[0]["content"], "saved")
+        self.assertEqual(messages[0]["content"], "Saved system prompt")
+        self.assertEqual([message["role"] for message in messages],
+                         ["system", "user", "assistant"])
         self.assertEqual(len(turns), 1)
         self.assertEqual(checkpoint, "checkpoint_previous")
 
@@ -1543,25 +1545,33 @@ class TestRAGConversationPersistence(unittest.TestCase):
         session.conversation_path.write_text("not JSON")
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._load_conversation()
-        session.conversation_path.write_text(json.dumps({
-            "conversation": {"turns": [
-                {"timestamp": "x", "evidence": "bad"}
-            ]},
-        }))
+        corrupt = {"sessions": {CONVERSATION_SESSION_KEY:
+                                 new_conversation_session({
+            "turns": [{"timestamp": "x", "evidence": "bad"}],
+        })}}
+        session.conversation_path.write_text(json.dumps(corrupt))
         with self.assertRaises(ValueError):
             session._load_conversation()
-        session.conversation_path.write_text(json.dumps({
-            "conversation": {
-                "turns": [], "chat_messages": [{"role": "user"}],
-            },
-        }))
+        obsolete = {"sessions": {CONVERSATION_SESSION_KEY:
+                                  new_conversation_session({
+            "turns": [], "chat_messages": [{"role": "user"}],
+        })}}
+        session.conversation_path.write_text(json.dumps(obsolete))
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._load_conversation()
+        for record in ({"conversation": {"turns": []}}, [], None):
+            session.conversation_path.write_text(json.dumps(record))
+            with self.subTest(record=record):
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    session._load_conversation()
 
     def test_load_conversation_ignores_invalid_checkpoint(self) -> None:
         session = self.session
         session.conversation_path.write_text(json.dumps({
-            "conversation": {"turns": [], "checkpoint_id": 100},
+            "sessions": {CONVERSATION_SESSION_KEY:
+                         new_conversation_session({
+                "turns": [], "checkpoint_id": 100,
+            })},
         }))
         self.assertIsNone(session._load_conversation()[2])
 
@@ -1574,6 +1584,30 @@ class TestRAGConversationPersistence(unittest.TestCase):
         payload = json.loads(session.conversation_path.read_text())
         self.assertEqual(payload["sessions"]["custom"],
                          {"title": "Keep"})
+
+    def test_untraced_save_does_not_convert_obsolete_state(self) -> None:
+        session = self.session
+        session.conversation_path.write_text(json.dumps({
+            "conversation": {"turns": [{"question": "Do not replace"}]},
+        }))
+        before = session.conversation_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            session._save_conversation()
+        self.assertEqual(session.conversation_path.read_bytes(), before)
+
+    def test_untraced_save_preserves_invalid_grouped_state(self) -> None:
+        session = self.session
+        bad_group = new_conversation_session({
+            "turns": [], "checkpoint_id": "old",
+        })
+        bad_group["conversation"] = {"turns": [{"question": "Old"}]}
+        session.conversation_path.write_text(json.dumps({
+            "sessions": {CONVERSATION_SESSION_KEY: bad_group},
+        }))
+        before = session.conversation_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            session._save_conversation()
+        self.assertEqual(session.conversation_path.read_bytes(), before)
 
     def test_write_json_is_atomic_and_replaces_existing_data(self) -> None:
         path = self.root / "payload.json"
@@ -1663,10 +1697,11 @@ class TestRAGConversationPersistence(unittest.TestCase):
             "max_new_tokens": 64,
         })
         target.write_text(json.dumps({
-            "conversation": {
+            "sessions": {CONVERSATION_SESSION_KEY:
+                         new_conversation_session({
                 "turns": [rag._turn_to_data(earlier)],
                 "checkpoint_id": "restored",
-            },
+            })},
         }))
         old_chat = session.chat_session
         turns = session.switch_conversation(target, trace=NullTraceLogger())
@@ -2198,15 +2233,15 @@ class TestRAGAdditionalBranches(unittest.TestCase):
         self.assertEqual(session.router_model, "another-router")
         session.chat_session.close.assert_not_called()
 
-    def test_save_conversation_replaces_nonmapping_json(self) -> None:
+    def test_save_conversation_rejects_nonmapping_json(self) -> None:
         with TemporaryDirectory() as directory:
             session = _session(Path(directory))
             session.conversation_path.parent.mkdir(parents=True)
             session.conversation_path.write_text("[]")
-            session._save_conversation()
-            payload = json.loads(session.conversation_path.read_text())
-            self.assertIsInstance(payload, dict)
-            self.assertIn("turns", rag.conversation_state(payload))
+            before = session.conversation_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "invalid"):
+                session._save_conversation()
+            self.assertEqual(session.conversation_path.read_bytes(), before)
 
     def test_explicit_enabled_trace_config_is_bound(self) -> None:
         with TemporaryDirectory() as directory:

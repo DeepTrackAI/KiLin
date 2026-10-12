@@ -1,7 +1,7 @@
 """Test persistent conversation discovery, metadata, and branching.
 
 Use real JSON files in isolated temporary directories without loading models.
-Exercise the public ConversationStore operations, legacy/grouped compatibility,
+Exercise the public ConversationStore operations and canonical storage,
 file naming, recoverable archiving, and filesystem and corruption boundaries.
 Regression tests cover malformed records and preservation on updates.
 
@@ -103,8 +103,6 @@ class ConversationStoreFixture(unittest.TestCase):
     def _candidate(
         self,
         filename: str,
-        *,
-        grouped: bool = True,
         **metadata: object,
     ) -> Path:
         """Write one independently discoverable fixture conversation.
@@ -113,8 +111,6 @@ class ConversationStoreFixture(unittest.TestCase):
         ----------
         filename: str
             JSON file basename under logs/traces.
-        grouped: bool, optional
-            Use grouped format instead of the legacy format.
         **metadata: object
             Metadata overrides, including invalid values for negative tests.
 
@@ -137,14 +133,11 @@ class ConversationStoreFixture(unittest.TestCase):
         state.update(metadata)
         path = self.store.root / filename
         path.parent.mkdir(parents=True, exist_ok=True)
-        if grouped:
-            payload = {
-                "sessions": {
-                    CONVERSATION_SESSION_KEY: new_conversation_session(state)
-                }
+        payload = {
+            "sessions": {
+                CONVERSATION_SESSION_KEY: new_conversation_session(state)
             }
-        else:
-            payload = {"conversation": state}
+        }
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
@@ -178,7 +171,7 @@ class TestStoreConstruction(ConversationStoreFixture):
 
 
 class TestStoreDiscovery(ConversationStoreFixture):
-    """Discover legacy/grouped records and skip invalid files."""
+    """Discover canonical records and skip obsolete or invalid files."""
 
     def test_ensure_creates_an_empty_grouped_record(self):
         item = self.store.ensure()
@@ -205,16 +198,23 @@ class TestStoreDiscovery(ConversationStoreFixture):
         self.assertEqual(self.store.state_path(second), name)
         self.assertEqual(len(self.store.conversations()), 1)
 
-    def test_ensure_discovers_both_formats(self):
-        old = self._candidate("conversation_old.json", grouped=False)
+    def test_ensure_skips_obsolete_record_without_deleting_it(self):
+        old = self._candidate("conversation_old.json")
+        old.write_text(json.dumps({"conversation": {
+            "conversation_id": "conversation_old", "name": "Old",
+        }}), encoding="utf-8")
+        before = old.read_bytes()
         new = self._candidate(
-            "conversation_new.json", name="Grouped", grouped=True,
+            "conversation_new.json", name="Grouped",
             updated_at_utc="2026-10-12T10:00:00.000Z",
         )
         selected = self.store.ensure()
         self.assertEqual(selected.name, "Grouped")
-        self.assertEqual(self.store.state_path("conversation_old"), old)
         self.assertEqual(self.store.state_path("conversation_new"), new)
+        self.assertEqual(old.read_bytes(), before)
+        self.assertNotIn("conversation_old", [
+            item.conversation_id for item in self.store.conversations()
+        ])
 
     def test_latest_updated_record_becomes_active(self):
         self._candidate(
@@ -507,9 +507,9 @@ class TestStoreDiscovery(ConversationStoreFixture):
         self.assertEqual(remaining.conversation_id, "conversation_newer")
         self.assertTrue(archived.is_file())
 
-    def test_valid_legacy_metadata_and_unicode_names_are_preserved(self):
+    def test_valid_utc_metadata_and_unicode_names_are_preserved(self):
         original = self._candidate(
-            "conversation_legacy.json", grouped=False,
+            "conversation_imported.json",
             name="Vetenskap 日本語", parent_conversation_id="parent_01",
             origin_checkpoint_id="step:12/xyz",
             created_at_utc="2026-10-10T09:00:00+00:00",
@@ -631,7 +631,6 @@ class TestStoreBranching(ConversationStoreFixture):
         parent = self.store.create()
         self._persist(parent, {
             "turns": [{"question": "Original", "answer": "Yes"}],
-            "chat_messages": [{"role": "user", "content": "Original"}],
             "checkpoint_id": "checkpoint-123",
             "checkpoint": {"parent_checkpoint_id": "before"},
             "system_prompt": "Do science",
@@ -651,8 +650,6 @@ class TestStoreBranching(ConversationStoreFixture):
         saved = self._state(branch)
         self.assertEqual(saved["turns"],
                          [{"question": "Original", "answer": "Yes"}])
-        self.assertEqual(saved["chat_messages"],
-                         [{"role": "user", "content": "Original"}])
         self.assertEqual(saved["system_prompt"], "Do science")
         self.assertEqual(saved["checkpoint_id"], "checkpoint-123")
         self.assertEqual(saved["profile"], {"kind": "literature"})
@@ -677,20 +674,21 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(self._state(parent)["conversation_id"],
                          parent.conversation_id)
 
-    def test_branch_from_legacy_conversation_is_grouped(self):
-        old_path = self._candidate(
-            "conversation_legacy.json", grouped=False,
-            checkpoint_id="legacy-cp", turns=[{"question": "Old"}],
+    def test_branch_from_imported_conversation_uses_canonical_state(self):
+        source = self._candidate(
+            "conversation_external.json",
+            checkpoint_id="source-checkpoint",
+            turns=[{"question": "Old"}],
         )
         self.store.ensure()
-        branch = self.store.create(branch_from="conversation_legacy")
+        branch = self.store.create(branch_from="conversation_external")
         payload = self._saved(self.store.state_path(branch))
         self.assertNotIn("conversation", payload)
-        self.assertIn("sessions", payload)
-        self.assertEqual(branch.origin_checkpoint_id, "legacy-cp")
+        self.assertIn(CONVERSATION_SESSION_KEY, payload["sessions"])
+        self.assertEqual(branch.origin_checkpoint_id, "source-checkpoint")
         self.assertEqual(self._state(branch)["turns"],
                          [{"question": "Old"}])
-        self.assertTrue(old_path.is_file())
+        self.assertTrue(source.is_file())
 
     def test_multiple_branches_increment_names(self):
         parent = self.store.create()
@@ -765,58 +763,32 @@ class TestStoreMetadata(ConversationStoreFixture):
                          [{"question": "keep"}])
         self.assertEqual(self._state(item)["checkpoint_id"], "unchanged")
 
-    def test_rename_migrates_grouped_legacy_state_without_data_loss(self):
+    def test_rename_rejects_grouped_legacy_field_without_rewriting(self):
         item = self.store.create()
         path = self.store.state_path(item)
         payload = self._saved(path)
         session = payload["sessions"][CONVERSATION_SESSION_KEY]
-        state = session.pop("resume_state")
-        state.update({
-            "turns": [{"question": "Original question"}],
-            "checkpoint_id": "previous-checkpoint",
-        })
-        session["conversation"] = state
+        session["conversation"] = session.pop("resume_state")
         session["turns"] = {"turn_0001": {"title": "Saved event"}}
         path.write_text(json.dumps(payload), encoding="utf-8")
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            self.store.rename(item.conversation_id, "New name")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.store.active(), item)
 
-        renamed = self.store.rename(item.conversation_id, "New name")
-
-        saved = self._saved(path)
-        group = saved["sessions"][CONVERSATION_SESSION_KEY]
-        self.assertNotIn("conversation", group)
-        self.assertEqual(group["resume_state"]["name"], "New name")
-        self.assertEqual(group["resume_state"]["turns"],
-                         [{"question": "Original question"}])
-        self.assertEqual(group["resume_state"]["checkpoint_id"],
-                         "previous-checkpoint")
-        self.assertEqual(group["turns"],
-                         {"turn_0001": {"title": "Saved event"}})
-        self.assertEqual(renamed.name, "New name")
-
-    def test_touch_preserves_noncanonical_grouped_legacy_state(self):
+    def test_touch_rejects_noncanonical_session_without_rewriting(self):
         item = self.store.create()
         path = self.store.state_path(item)
         payload = self._saved(path)
         session = payload["sessions"].pop(CONVERSATION_SESSION_KEY)
-        state = session.pop("resume_state")
-        state["checkpoint_id"] = "persisted"
-        session["conversation"] = state
-        session["operations"] = {"01_old": {"title": "Previous"}}
         payload["sessions"]["prior_conversation"] = session
         path.write_text(json.dumps(payload), encoding="utf-8")
-
-        touched = self.store.touch(item.conversation_id)
-
-        saved = self._saved(path)
-        self.assertEqual(tuple(saved["sessions"]), ("prior_conversation",))
-        group = saved["sessions"]["prior_conversation"]
-        self.assertNotIn("conversation", group)
-        self.assertEqual(group["resume_state"]["checkpoint_id"],
-                         "persisted")
-        self.assertEqual(group["resume_state"]["updated_at_utc"],
-                         touched.updated_at_utc)
-        self.assertEqual(group["operations"],
-                         {"01_old": {"title": "Previous"}})
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            self.store.touch(item.conversation_id)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.store.active(), item)
 
     def test_rename_name_limits(self):
         item = self.store.create()
@@ -899,15 +871,17 @@ class TestStoreMetadata(ConversationStoreFixture):
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(self.store.active(), item)
 
-    def test_rename_updates_legacy_state_without_converting_format(self):
-        self._candidate("conversation_old.json", grouped=False)
-        self.store.ensure()
-        self.store.rename("conversation_old", "Converted label")
-        payload = self._saved(self.store.state_path("conversation_old"))
-        self.assertIn("conversation", payload)
-        self.assertNotIn("sessions", payload)
-        self.assertEqual(payload["conversation"]["name"],
-                         "Converted label")
+    def test_rename_rejects_top_level_legacy_without_rewriting(self):
+        item = self.store.create()
+        path = self.store.state_path(item)
+        path.write_text(json.dumps({
+            "conversation": self._state(item),
+        }), encoding="utf-8")
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "invalid"):
+            self.store.rename(item.conversation_id, "Other")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.store.active(), item)
 
     def test_touch_and_rename_persist_across_new_store(self):
         item = self.store.create()

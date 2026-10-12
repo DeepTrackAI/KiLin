@@ -6,9 +6,9 @@ creates empty conversations, and branches by copying a saved resumable state.
 A branch records its parent's identifier and checkpoint reference; it does
 not duplicate the parent's complete trace-event history.
 
-Files support both legacy top-level conversation records and grouped trace
-sessions through the shared internal conversation-format contract. Writes
-use securely created temporary files and atomic single-file replacement,
+Files use only the canonical grouped conversation-session record through
+the shared internal conversation-format contract. Writes use securely
+created temporary files and atomic single-file replacement,
 but the module provides no multi-process lock or transaction across
 registry and filesystem updates.
 Conversation files can contain full questions, answers, and source excerpts.
@@ -26,10 +26,9 @@ Key Features
     Record parent identity and the saved checkpoint from which a branch was
     created.
 
-- **Compatible storage**
+- **Canonical storage**
 
-    Read supported legacy and grouped conversation records without starting
-    model inference.
+    Read validated grouped conversation records without starting inference.
 
 Module Structure
 ----------------

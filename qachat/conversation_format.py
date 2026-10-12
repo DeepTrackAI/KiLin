@@ -1,50 +1,47 @@
-"""Define the persisted conversation-record structure used by QAChat.
+"""Define the canonical persisted conversation-record structure in QAChat.
 
-This module owns the small JSON vocabulary shared by conversation storage,
-RAG persistence, and structured tracing. It also provides the canonical
-helper for locating resumable conversation state in both the current grouped
-trace format and the supported legacy top-level format.
+Conversation storage, RAG persistence, and structured tracing share one JSON
+format. Resumable state belongs exclusively to the ``resume_state`` mapping
+under ``sessions["05_conversations"]``. Other trace sessions may coexist,
+but cannot claim the conversation category.
 
-The module is intentionally dependency-light. It does not know about models,
-projects, tracing behavior, or GUI state. Higher-level components use it to
-interpret the same persisted representation without duplicating the format
-contract.
+The module is dependency-light. It does not manage models, projects, tracing
+behavior, or GUI state. Callers use the shared contract to avoid interpreting
+the same stored record differently.
 
 Key Features
 ------------
 
-- **Shared format vocabulary**
+- **One conversation session**
 
-    Define the grouped conversation-session key, category, title, and resume
-    state field in one place.
+    Identify resumable state by its reserved grouped-session key.
 
-- **Legacy compatibility**
+- **Strict persisted structure**
 
-    Recognize historical top-level and grouped ``conversation`` mappings
-    without discarding saved state during a write.
+    Reject obsolete fields, conflicting sessions, and malformed state without
+    modifying the input document.
 
-- **Canonical state lookup**
+- **Explicit creation**
 
-    Locate resumable state consistently and optionally create the grouped
-    container in place when persistence needs it.
+    Create the complete grouped session only when it is absent and creation
+    has been requested.
 
 Module Structure
 ----------------
 
 - ``CONVERSATION_*`` constants
 
-    Canonical identifiers used by the persisted conversation JSON format.
+    Canonical identifiers shared by conversation JSON readers and writers.
 
 - ``conversation_state``
 
-    Locate or create the mutable resumable-state mapping in a payload.
+    Locate or create the mutable resumable-state mapping in a document.
 
 - ``new_conversation_session``
 
-    Build a new grouped conversation-session record.
+    Construct a complete grouped conversation-session record.
 
-This module describes an internal storage contract. Its names are not exposed
-through the package-level ``qachat`` API.
+The names are internal to persistence and are not exported by ``qachat``.
 
 Examples
 --------
@@ -64,7 +61,6 @@ __all__ = [
     "CONVERSATION_SESSION_TITLE",
     "CONVERSATION_SESSION_CATEGORY",
     "CONVERSATION_RESUME_STATE_KEY",
-    "LEGACY_CONVERSATION_KEY",
     "new_conversation_session",
     "conversation_state",
 ]
@@ -73,24 +69,23 @@ CONVERSATION_SESSION_KEY: Final[str] = "05_conversations"
 CONVERSATION_SESSION_TITLE: Final[str] = "Conversation turns"
 CONVERSATION_SESSION_CATEGORY: Final[str] = "conversations"
 CONVERSATION_RESUME_STATE_KEY: Final[str] = "resume_state"
-LEGACY_CONVERSATION_KEY: Final[str] = "conversation"
 
 
 def new_conversation_session(
     resume_state: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Build one grouped conversation-session record.
+    """Build a complete grouped conversation-session record.
 
     Parameters
     ----------
     resume_state: dict[str, object] | None, optional
-        Initial resumable state. Defaults to ``None``, which creates an
-        empty state. A supplied mapping is stored by reference.
+        Initial resumable state. ``None`` creates an empty state. A supplied
+        mapping is stored by reference.
 
     Returns
     -------
     dict[str, object]
-        New conversation-session mapping with empty turn and operation groups.
+        New session with independent empty turn and operation groups.
 
     """
 
@@ -107,84 +102,90 @@ def new_conversation_session(
 def conversation_state(
     payload: dict[str, object], *, create: bool = False
 ) -> dict[str, object]:
-    """Locate resumable conversation state in a persisted payload.
+    """Locate resumable state in the canonical grouped conversation session.
 
     Parameters
     ----------
     payload: dict[str, object]
         Decoded conversation or trace JSON document.
     create: bool, optional
-        Whether a missing grouped conversation session may be inserted into
-        ``payload``. Defaults to ``False``.
+        Create a complete canonical session if absent. Defaults to ``False``.
 
     Returns
     -------
     dict[str, object]
-        Mutable legacy conversation or grouped resume-state mapping contained
-        in ``payload``.
+        The stored mutable ``resume_state`` mapping, without copying it.
 
     Raises
     ------
     ValueError
-        If no valid state exists and creation is disabled, the grouped
-        sessions container is invalid, or the reserved session key is already
-        occupied when a new session would be created.
+        If the payload is malformed, contains obsolete conversation fields,
+        reserves the session key for another purpose, or has an ambiguous
+        conversation category. Reading never modifies the supplied payload.
 
     Notes
     -----
-    The supported legacy top-level ``conversation`` mapping takes precedence
-    over grouped sessions. With ``create=True``, an older grouped
-    ``conversation`` mapping is moved to ``resume_state`` without copying its
-    contents. An occupied canonical session key is never overwritten. The
-    supplied payload may be modified in place.
+    Creation does not migrate obsolete records. Both modes reject invalid
+    existing data before making any change. Unrelated valid trace sessions
+    and top-level metadata are retained.
 
     """
 
-    legacy = payload.get(LEGACY_CONVERSATION_KEY)
-    if isinstance(legacy, dict):
-        return legacy
+    invalid = "The saved conversation is invalid."
+    if not isinstance(payload, dict) or "conversation" in payload:
+        raise ValueError(invalid)
+    trace = payload.get("trace")
+    if isinstance(trace, dict) and "sessions" in trace:
+        raise ValueError(invalid)
 
-    sessions = (
-        payload.setdefault("sessions", {})
-        if create
-        else payload.get("sessions")
-    )
+    sessions = payload.get("sessions")
+    if sessions is None and "sessions" not in payload:
+        if not create:
+            raise ValueError(invalid)
+        sessions = {}
     if not isinstance(sessions, dict):
-        raise ValueError("The saved conversation is invalid.")
+        raise ValueError(invalid)
 
-    for session in sessions.values():
+    # A category-only search is ambiguous. The reserved key is the sole
+    # supported location even when another trace session claims this category.
+    for key, session in sessions.items():
         if (
-            isinstance(session, dict)
+            key != CONVERSATION_SESSION_KEY
+            and isinstance(session, dict)
             and session.get("category") == CONVERSATION_SESSION_CATEGORY
         ):
-            if create:
-                if CONVERSATION_RESUME_STATE_KEY not in session:
-                    legacy_state = session.get(LEGACY_CONVERSATION_KEY)
-                    if isinstance(legacy_state, dict):
-                        session[CONVERSATION_RESUME_STATE_KEY] = (
-                            session.pop(LEGACY_CONVERSATION_KEY)
-                        )
-                    else:
-                        session[CONVERSATION_RESUME_STATE_KEY] = {}
-                state = session[CONVERSATION_RESUME_STATE_KEY]
-            else:
-                state = session.get(
-                    CONVERSATION_RESUME_STATE_KEY,
-                    session.get(LEGACY_CONVERSATION_KEY),
-                )
-            if isinstance(state, dict):
-                return state
-
-    if create:
-        if CONVERSATION_SESSION_KEY in sessions:
             raise ValueError(
-                "The saved conversation is invalid: the reserved session "
-                f"key {CONVERSATION_SESSION_KEY!r} is occupied."
+                f"{invalid} Conflicting conversation session {key!r}."
             )
-        session = new_conversation_session()
-        sessions[CONVERSATION_SESSION_KEY] = session
-        state = session[CONVERSATION_RESUME_STATE_KEY]
-        if isinstance(state, dict):
-            return state
 
-    raise ValueError("The saved conversation is invalid.")
+    if CONVERSATION_SESSION_KEY not in sessions:
+        if not create:
+            raise ValueError(invalid)
+        session = new_conversation_session()
+        state = session.get(CONVERSATION_RESUME_STATE_KEY)
+        if not isinstance(state, dict):
+            raise ValueError(invalid)
+        # Do not mutate the payload until construction has succeeded.
+        if "sessions" not in payload:
+            payload["sessions"] = sessions
+        sessions[CONVERSATION_SESSION_KEY] = session
+        return state
+
+    session = sessions[CONVERSATION_SESSION_KEY]
+    if (
+        not isinstance(session, dict)
+        or session.get("category") != CONVERSATION_SESSION_CATEGORY
+        or not isinstance(session.get("title"), str)
+        or not isinstance(session.get("turns"), dict)
+        or not isinstance(session.get("operations"), dict)
+        or "conversation" in session
+    ):
+        raise ValueError(
+            f"{invalid} Invalid reserved session "
+            f"{CONVERSATION_SESSION_KEY!r}."
+        )
+
+    state = session.get(CONVERSATION_RESUME_STATE_KEY)
+    if not isinstance(state, dict) or "chat_messages" in state:
+        raise ValueError(invalid)
+    return state

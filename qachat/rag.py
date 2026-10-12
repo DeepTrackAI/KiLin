@@ -3499,8 +3499,8 @@ class RAGSession:
 
         Notes
         -----
-        Recognizes legacy and grouped trace conversation records. It does not
-        validate that saved messages, turns, evidence, profile, and indexes are
+        Reads only the canonical grouped conversation record. It does not
+        validate that saved turns, evidence, profile, and indexes are
         mutually consistent.
 
         """
@@ -3514,24 +3514,14 @@ class RAGSession:
             turns = [
                 _turn_from_data(item) for item in conversation.get("turns", [])
             ]
-            legacy_messages = conversation.get("chat_messages")
-            if isinstance(legacy_messages, list):
-                messages = [
-                    {
-                        "role": str(message["role"]),
-                        "content": str(message["content"]),
-                    }
-                    for message in legacy_messages
-                ]
-            else:
-                system_prompt = str(
-                    conversation.get("system_prompt", _SYSTEM_PROMPT)
-                )
-                messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
-                # Earlier evidence stays with its turn; history is Q/A only.
-                messages.extend(
-                    history_messages(turns, list(range(1, len(turns) + 1)))
-                )
+            system_prompt = str(
+                conversation.get("system_prompt", _SYSTEM_PROMPT)
+            )
+            messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
+            # Earlier evidence stays with its turn; history is Q/A only.
+            messages.extend(
+                history_messages(turns, list(range(1, len(turns) + 1)))
+            )
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("The saved conversation is invalid.") from error
         checkpoint_id = conversation.get("checkpoint_id")
@@ -3620,8 +3610,9 @@ class RAGSession:
             payload: dict[str, object] = {"sessions": {}}
             if path.is_file():
                 loaded = json.loads(path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    payload = loaded
+                if not isinstance(loaded, dict):
+                    raise ValueError("The saved conversation is invalid.")
+                payload = loaded
             stored = conversation_state(payload, create=True)
             stored.update(saved_state)
             _write_json(path, payload)

@@ -1,8 +1,8 @@
-"""Test shared persisted conversation and tracing format contracts.
+"""Test the single canonical persisted conversation format.
 
-Use plain dictionaries to exercise the legacy and grouped layouts, reference
-semantics, and in-place creation without requiring models, GUI, or filesystem
-access. Invalid structures must not be silently interpreted as valid state.
+Use plain mappings to validate reference semantics, strict read-only lookup,
+non-mutating rejection, and creation of the reserved grouped session. The
+retired top-level, grouped, and alternative-key formats must not be accepted.
 
 """
 
@@ -12,6 +12,7 @@ access. Invalid structures must not be silently interpreted as valid state.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
@@ -19,46 +20,42 @@ from qachat import conversation_format as fmt
 
 
 class TestConversationFormatConstants(unittest.TestCase):
-    """Check the vocabulary shared by persistence and trace components."""
+    """Check the public vocabulary shared by the persistence components."""
 
-    def test_public_module_exports_match_the_storage_contract(self) -> None:
+    def test_public_exports_are_canonical(self) -> None:
         expected = {
             "CONVERSATION_SESSION_KEY",
             "CONVERSATION_SESSION_TITLE",
             "CONVERSATION_SESSION_CATEGORY",
             "CONVERSATION_RESUME_STATE_KEY",
-            "LEGACY_CONVERSATION_KEY",
             "new_conversation_session",
             "conversation_state",
         }
         self.assertEqual(set(fmt.__all__), expected)
         for name in expected:
             self.assertTrue(hasattr(fmt, name))
+        self.assertFalse(hasattr(fmt, "LEGACY_CONVERSATION_KEY"))
 
     def test_session_identifiers_are_stable(self) -> None:
         self.assertEqual(fmt.CONVERSATION_SESSION_KEY, "05_conversations")
         self.assertEqual(fmt.CONVERSATION_SESSION_TITLE, "Conversation turns")
         self.assertEqual(fmt.CONVERSATION_SESSION_CATEGORY, "conversations")
         self.assertEqual(fmt.CONVERSATION_RESUME_STATE_KEY, "resume_state")
-        self.assertEqual(fmt.LEGACY_CONVERSATION_KEY, "conversation")
 
 
 class TestNewConversationSession(unittest.TestCase):
-    """Verify the shape and reference semantics of new session records."""
+    """Verify the structure and reference semantics of new sessions."""
 
-    def test_default_is_a_fresh_empty_session(self) -> None:
+    def test_default_is_an_independent_complete_session(self) -> None:
         first = fmt.new_conversation_session()
         second = fmt.new_conversation_session()
-        self.assertEqual(
-            first,
-            {
-                "title": fmt.CONVERSATION_SESSION_TITLE,
-                "category": fmt.CONVERSATION_SESSION_CATEGORY,
-                "turns": {},
-                "operations": {},
-                "resume_state": {},
-            },
-        )
+        self.assertEqual(first, {
+            "title": fmt.CONVERSATION_SESSION_TITLE,
+            "category": fmt.CONVERSATION_SESSION_CATEGORY,
+            "turns": {},
+            "operations": {},
+            "resume_state": {},
+        })
         self.assertIsNot(first, second)
         for name in ("turns", "operations", "resume_state"):
             self.assertIsNot(first[name], second[name])
@@ -66,7 +63,7 @@ class TestNewConversationSession(unittest.TestCase):
     def test_supplied_state_is_retained_by_identity(self) -> None:
         saved = {"turns": [{"question": "Hi"}], "checkpoint_id": "c1"}
         session = fmt.new_conversation_session(saved)
-        self.assertIs(session[fmt.CONVERSATION_RESUME_STATE_KEY], saved)
+        self.assertIs(session["resume_state"], saved)
         saved["checkpoint_id"] = "c2"
         self.assertEqual(session["resume_state"]["checkpoint_id"], "c2")
 
@@ -75,7 +72,7 @@ class TestNewConversationSession(unittest.TestCase):
         self.assertIs(fmt.new_conversation_session(saved)["resume_state"],
                       saved)
 
-    def test_operation_and_turn_containers_are_independent(self) -> None:
+    def test_readable_groups_and_resume_turns_are_independent(self) -> None:
         session = fmt.new_conversation_session({"turns": [1]})
         session["turns"]["turn_0001"] = {"question": "Q"}
         self.assertEqual(session["operations"], {})
@@ -83,150 +80,58 @@ class TestNewConversationSession(unittest.TestCase):
 
 
 class TestConversationState(unittest.TestCase):
-    """Check lookup, compatibility, validation, and creation in place."""
+    """Check canonical lookup, creation, and rejection without data loss."""
 
-    def test_legacy_top_level_state_is_returned_by_identity(self) -> None:
-        state = {"turns": [1]}
-        payload = {"conversation": state, "trace": {"events": []}}
-        self.assertIs(fmt.conversation_state(payload), state)
-
-    def test_legacy_top_level_state_has_precedence_over_grouped(self):
-        legacy = {"checkpoint_id": "legacy"}
-        grouped = {"checkpoint_id": "grouped"}
-        payload = {
-            "conversation": legacy,
-            "sessions": {
-                fmt.CONVERSATION_SESSION_KEY:
-                    fmt.new_conversation_session(grouped),
-            },
-        }
-        self.assertIs(fmt.conversation_state(payload), legacy)
-        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
-        self.assertIs(
-            payload["sessions"][fmt.CONVERSATION_SESSION_KEY]
-            ["resume_state"], grouped,
-        )
-
-    def test_legacy_null_falls_through_to_grouped(self) -> None:
-        state = {"checkpoint_id": "grouped"}
-        payload = {
-            "conversation": None,
-            "sessions": {"custom": fmt.new_conversation_session(state)},
-        }
-        self.assertIs(fmt.conversation_state(payload), state)
-
-    def test_grouped_lookup_does_not_depend_on_session_key(self) -> None:
-        state = {"turns": [1]}
-        payload = {
-            "sessions": {
-                "01_runtime": {"category": "runtime", "resume_state": {}},
-                "custom_key": fmt.new_conversation_session(state),
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload), state)
-
-    def test_grouped_lookup_skips_invalid_non_conversation_entries(self):
-        expected = {"checkpoint_id": "ok"}
-        payload = {
-            "sessions": {
-                "none": None,
-                "list": ["not a session"],
-                "other": {"category": "other", "resume_state": {}},
-                "actual": fmt.new_conversation_session(expected),
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload), expected)
-
-    def test_grouped_legacy_key_is_read_when_resume_state_missing(self):
-        state = {"turns": ["older"]}
-        payload = {
-            "sessions": {
-                "old": {
-                    "category": fmt.CONVERSATION_SESSION_CATEGORY,
-                    "conversation": state,
-                }
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload), state)
-
-    def test_resume_state_has_precedence_over_grouped_legacy_field(self):
-        current = {"checkpoint_id": "current"}
-        payload = {
-            "sessions": {
-                "old": {
-                    "category": fmt.CONVERSATION_SESSION_CATEGORY,
-                    "conversation": {"checkpoint_id": "old"},
-                    "resume_state": current,
-                }
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload), current)
-        self.assertIs(fmt.conversation_state(payload, create=True), current)
-        session = payload["sessions"]["old"]
-        self.assertEqual(session["conversation"], {"checkpoint_id": "old"})
-
-    def test_later_matching_session_is_used_if_earlier_invalid(self):
-        expected = {"turns": [1]}
-        payload = {
-            "sessions": {
-                "bad": {"category": "conversations", "resume_state": []},
-                "ok": fmt.new_conversation_session(expected),
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload), expected)
-
-    def test_missing_session_without_creation_rejected_without_mutation(self):
-        for payload in ({}, {"sessions": {}},
-                        {"sessions": {"other": {"category": "other"}}}):
-            with self.subTest(payload=payload):
-                before = repr(payload)
-                with self.assertRaisesRegex(ValueError, "invalid"):
-                    fmt.conversation_state(payload)
-                self.assertEqual(repr(payload), before)
-
-    def test_non_mapping_sessions_are_rejected_in_both_modes(self):
-        for value in (None, [], "data", 3, False):
-            for create in (False, True):
-                with self.subTest(value=value, create=create):
-                    payload = {"sessions": value}
-                    with self.assertRaisesRegex(ValueError, "invalid"):
-                        fmt.conversation_state(payload, create=create)
-                    self.assertIs(payload["sessions"], value)
-
-    def test_non_mapping_legacy_is_not_accepted_as_valid_state(self):
-        for invalid in (None, [], "old", 0, True):
-            with self.subTest(invalid=invalid):
-                with self.assertRaisesRegex(ValueError, "invalid"):
-                    fmt.conversation_state({"conversation": invalid})
-
-    def test_grouped_session_without_resume_state_is_invalid(self):
-        payload = {
-            "sessions": {
-                fmt.CONVERSATION_SESSION_KEY: {"category": "conversations"}
-            }
-        }
+    def _assert_invalid_unchanged(
+        self, payload: object, *, create: bool
+    ) -> None:
+        before = deepcopy(payload)
         with self.assertRaisesRegex(ValueError, "invalid"):
-            fmt.conversation_state(payload)
+            fmt.conversation_state(payload, create=create)
+        self.assertEqual(payload, before)
 
-    def test_create_missing_sessions_preserves_unrelated_payload(self):
-        payload = {"trace": {"events": [1]}}
-        state = fmt.conversation_state(payload, create=True)
-        self.assertEqual(state, {})
-        self.assertEqual(payload["trace"], {"events": [1]})
-        session = payload["sessions"][fmt.CONVERSATION_SESSION_KEY]
-        self.assertIs(session["resume_state"], state)
-        self.assertEqual(session["turns"], {})
-        self.assertEqual(session["operations"], {})
+    def test_valid_state_is_read_by_reference_without_mutation(self) -> None:
+        saved = {"checkpoint_id": "retained"}
+        payload = {"sessions": {
+            "01_runtime": {"category": "runtime"},
+            fmt.CONVERSATION_SESSION_KEY:
+                fmt.new_conversation_session(saved),
+        }, "trace_id": "t1"}
+        before = deepcopy(payload)
+        self.assertIs(fmt.conversation_state(payload), saved)
+        self.assertIs(fmt.conversation_state(payload, create=True), saved)
+        self.assertEqual(payload, before)
 
-    def test_create_empty_sessions_preserves_unrelated_categories(self):
-        runtime = {"category": "runtime", "operation": [1]}
-        payload = {"sessions": {"runtime": runtime}}
-        state = fmt.conversation_state(payload, create=True)
-        self.assertEqual(state, {})
-        self.assertIs(payload["sessions"]["runtime"], runtime)
-        self.assertIn(fmt.CONVERSATION_SESSION_KEY, payload["sessions"])
+    def test_missing_session_rejected_when_creation_disabled(self) -> None:
+        for payload in ({}, {"sessions": {}},
+                        {"sessions": {"01_runtime": {"category": "runtime"}}}):
+            with self.subTest(payload=payload):
+                self._assert_invalid_unchanged(payload, create=False)
 
-    def test_create_is_idempotent_for_an_existing_grouped_state(self):
+    def test_create_adds_complete_session_without_changing_other_data(
+        self,
+    ) -> None:
+        for payload in ({"trace": {"events": [1]}},
+                        {"sessions": {"runtime": {"category": "runtime"}}}):
+            with self.subTest(payload=payload):
+                old = deepcopy(payload)
+                state = fmt.conversation_state(payload, create=True)
+                self.assertEqual(state, {})
+                session = payload["sessions"][fmt.CONVERSATION_SESSION_KEY]
+                self.assertIs(session["resume_state"], state)
+                self.assertEqual(session["turns"], {})
+                self.assertEqual(session["operations"], {})
+                self.assertEqual(session["title"],
+                                 fmt.CONVERSATION_SESSION_TITLE)
+                for key, value in old.items():
+                    if key == "sessions":
+                        for old_key, old_value in value.items():
+                            self.assertEqual(payload["sessions"][old_key],
+                                             old_value)
+                    else:
+                        self.assertEqual(payload[key], value)
+
+    def test_create_is_idempotent(self) -> None:
         payload = {"sessions": {}}
         first = fmt.conversation_state(payload, create=True)
         first["checkpoint_id"] = "saved"
@@ -234,173 +139,123 @@ class TestConversationState(unittest.TestCase):
         self.assertIs(first, second)
         self.assertEqual(len(payload["sessions"]), 1)
 
-    def test_create_fills_missing_resume_state_on_existing_session(self):
-        payload = {
-            "sessions": {
-                "one": {
-                    "category": "conversations", "turns": {"a": 1}
-                }
-            }
-        }
-        state = fmt.conversation_state(payload, create=True)
-        self.assertEqual(state, {})
-        self.assertIs(payload["sessions"]["one"]["resume_state"], state)
-        self.assertEqual(payload["sessions"]["one"]["turns"], {"a": 1})
+    def test_reject_non_mapping_documents(self) -> None:
+        for invalid in (None, [], "text", 7, False):
+            for create in (False, True):
+                with self.subTest(invalid=invalid, create=create):
+                    self._assert_invalid_unchanged(invalid, create=create)
 
-    def test_create_with_invalid_existing_state_uses_canonical_session(self):
-        payload = {
-            "sessions": {
-                "broken": {
-                    "category": "conversations", "resume_state": None
-                }
-            }
-        }
-        state = fmt.conversation_state(payload, create=True)
-        self.assertEqual(state, {})
-        self.assertEqual(payload["sessions"]["broken"]["resume_state"],
-                         None)
-        self.assertIn(fmt.CONVERSATION_SESSION_KEY, payload["sessions"])
+    def test_reject_invalid_sessions_containers(self) -> None:
+        for invalid in (None, [], "text", 7, False):
+            for create in (False, True):
+                with self.subTest(invalid=invalid, create=create):
+                    self._assert_invalid_unchanged(
+                        {"sessions": invalid}, create=create
+                    )
 
-    def test_create_rejects_invalid_new_session_state(self):
-        """An unexpectedly malformed session still raises ValueError."""
-        with patch.object(
-            fmt, "new_conversation_session",
-            return_value={"resume_state": []},
-        ):
-            with self.assertRaisesRegex(ValueError, "invalid"):
-                fmt.conversation_state({}, create=True)
-
-    def test_create_rejects_conflicting_canonical_session_key(self):
-        """A reserved key with another category must not be overwritten."""
-        payload = {
-            "sessions": {
-                fmt.CONVERSATION_SESSION_KEY: {
-                    "category": "runtime", "important": "retain",
-                }
-            }
-        }
-        with self.assertRaisesRegex(ValueError, "invalid"):
-            fmt.conversation_state(payload, create=True)
-        self.assertEqual(
-            payload["sessions"][fmt.CONVERSATION_SESSION_KEY]["important"],
-            "retain",
-        )
-
-    def test_create_does_not_discard_grouped_legacy_resume_state(self):
-        """A metadata write must preserve legacy grouped state."""
-        legacy = {"turns": [{"question": "Keep"}]}
-        payload = {
-            "sessions": {
-                "older": {
-                    "category": "conversations", "conversation": legacy,
-                }
-            }
-        }
-        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
-
-
-    def test_create_migrates_grouped_legacy_state_without_copying(self):
-        legacy = {"turns": [{"question": "Preserve"}], "checkpoint_id": "old"}
-        original_turns = {"turn_0001": {"title": "Past turn"}}
-        original_operations = {"01_action": {"title": "Past action"}}
-        session = {
-            "category": "conversations",
-            "title": "Older session",
-            "turns": original_turns,
-            "operations": original_operations,
-            "conversation": legacy,
-        }
-        payload = {"sessions": {"custom": session}, "version": 1}
-
-        result = fmt.conversation_state(payload, create=True)
-
-        self.assertIs(result, legacy)
-        self.assertIs(session["resume_state"], legacy)
-        self.assertNotIn("conversation", session)
-        self.assertIs(session["turns"], original_turns)
-        self.assertIs(session["operations"], original_operations)
-        self.assertEqual(session["title"], "Older session")
-        self.assertEqual(payload["version"], 1)
-        self.assertEqual(tuple(payload["sessions"]), ("custom",))
-        self.assertIs(fmt.conversation_state(payload), legacy)
-        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
-
-    def test_create_migrates_legacy_state_at_reserved_session_key(self):
-        legacy = {"checkpoint_id": "checkpoint-1", "turns": [1]}
-        session = {
-            "category": fmt.CONVERSATION_SESSION_CATEGORY,
-            "turns": {"turn_0001": {"title": "A turn"}},
-            "conversation": legacy,
-        }
-        payload = {"sessions": {fmt.CONVERSATION_SESSION_KEY: session}}
-        state = fmt.conversation_state(payload, create=True)
-        self.assertIs(state, legacy)
-        self.assertEqual(len(payload["sessions"]), 1)
-        self.assertIs(session["resume_state"], legacy)
-        self.assertNotIn("conversation", session)
-        self.assertEqual(session["turns"]["turn_0001"]["title"],
-                         "A turn")
-
-    def test_create_rejects_all_occupied_canonical_slots_without_mutation(
+    def test_reject_top_level_legacy_field_even_if_current_exists(
         self,
-    ):
-        occupied = (
+    ) -> None:
+        for old_state in ({"checkpoint_id": "old"}, None, [], "text"):
+            for create in (False, True):
+                with self.subTest(old_state=old_state, create=create):
+                    payload = {"conversation": old_state, "sessions": {
+                        fmt.CONVERSATION_SESSION_KEY:
+                            fmt.new_conversation_session({"turns": []}),
+                    }}
+                    self._assert_invalid_unchanged(payload, create=create)
+
+    def test_reject_nested_legacy_trace_sessions(self) -> None:
+        for create in (False, True):
+            payload = {"sessions": {
+                fmt.CONVERSATION_SESSION_KEY: fmt.new_conversation_session(),
+            }, "trace": {"sessions": {"old": {"title": "Old"}}}}
+            self._assert_invalid_unchanged(payload, create=create)
+
+    def test_reject_missing_or_malformed_canonical_session(self) -> None:
+        invalid = (
             None,
             [],
             "invalid",
             {"category": "runtime", "resume_state": {}},
-            {"category": "conversations", "resume_state": None},
-            {"category": "conversations", "resume_state": []},
-            {"title": "Missing category"},
+            {"category": "conversations", "resume_state": {}},
+            {"title": "Missing category", "resume_state": {}},
+            {"title": 12, "category": "conversations", "turns": {},
+             "operations": {}, "resume_state": {}},
+            {"title": "T", "category": "conversations", "turns": [],
+             "operations": {}, "resume_state": {}},
+            {"title": "T", "category": "conversations", "turns": {},
+             "operations": None, "resume_state": {}},
+            {"title": "T", "category": "conversations", "turns": {},
+             "operations": {}, "resume_state": []},
         )
-        for value in occupied:
-            with self.subTest(value=value):
-                payload = {"sessions": {fmt.CONVERSATION_SESSION_KEY: value}}
-                before = repr(payload)
-                with self.assertRaisesRegex(ValueError, "invalid"):
-                    fmt.conversation_state(payload, create=True)
-                self.assertEqual(repr(payload), before)
+        for value in invalid:
+            for create in (False, True):
+                with self.subTest(value=value, create=create):
+                    self._assert_invalid_unchanged({"sessions": {
+                        fmt.CONVERSATION_SESSION_KEY: value,
+                    }}, create=create)
 
-    def test_conflicting_canonical_key_preserves_neighbor_sessions(self):
-        other = {"category": "runtime", "operations": {"saved": 1}}
-        conflicting = {"category": "runtime", "important": "retain"}
+    def test_reject_grouped_legacy_field_in_reserved_session(self) -> None:
+        for create in (False, True):
+            session = fmt.new_conversation_session()
+            session["conversation"] = {"turns": [1]}
+            self._assert_invalid_unchanged({"sessions": {
+                fmt.CONVERSATION_SESSION_KEY: session,
+            }}, create=create)
+
+    def test_reject_noncanonical_conversation_key(self) -> None:
+        for create in (False, True):
+            payload = {"sessions": {
+                "custom": fmt.new_conversation_session({"turns": [1]}),
+            }}
+            self._assert_invalid_unchanged(payload, create=create)
+
+    def test_reject_duplicate_conversation_category(self) -> None:
+        for create in (False, True):
+            payload = {"sessions": {
+                fmt.CONVERSATION_SESSION_KEY: fmt.new_conversation_session(),
+                "custom": fmt.new_conversation_session(),
+            }}
+            self._assert_invalid_unchanged(payload, create=create)
+
+    def test_unrelated_trace_entries_do_not_block_canonical_session(
+        self,
+    ) -> None:
         payload = {"sessions": {
-            "runtime": other,
-            fmt.CONVERSATION_SESSION_KEY: conflicting,
+            "broken_unrelated": None,
+            "01_runtime": {"category": "runtime", "operations": {}},
+            fmt.CONVERSATION_SESSION_KEY: fmt.new_conversation_session(),
         }}
-        with self.assertRaisesRegex(ValueError, "05_conversations"):
-            fmt.conversation_state(payload, create=True)
-        self.assertIs(payload["sessions"]["runtime"], other)
-        self.assertIs(
-            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
-            conflicting,
-        )
-        self.assertEqual(other["operations"], {"saved": 1})
+        self.assertEqual(fmt.conversation_state(payload), {})
 
-    def test_existing_valid_grouped_state_is_not_blocked_by_conflict(self):
-        valid = {"checkpoint_id": "retained"}
+    def test_reject_obsolete_chat_messages_in_resume_state(self) -> None:
+        for create in (False, True):
+            session = fmt.new_conversation_session({
+                "turns": [], "chat_messages": [{"role": "user"}],
+            })
+            payload = {"sessions": {fmt.CONVERSATION_SESSION_KEY: session}}
+            self._assert_invalid_unchanged(payload, create=create)
+
+    def test_reject_bad_new_session_without_mutating_payload(self) -> None:
+        with patch.object(
+            fmt, "new_conversation_session",
+            return_value={"resume_state": []},
+        ):
+            self._assert_invalid_unchanged({"trace_id": "retained"},
+                                           create=True)
+
+    def test_conflicting_reserved_key_preserves_other_sessions(self) -> None:
+        runtime = {"category": "runtime", "operations": {"saved": 1}}
         payload = {"sessions": {
-            fmt.CONVERSATION_SESSION_KEY: {"category": "runtime"},
-            "custom": fmt.new_conversation_session(valid),
+            "runtime": runtime,
+            fmt.CONVERSATION_SESSION_KEY: {
+                "category": "runtime", "important": "retain",
+            },
         }}
-        self.assertIs(fmt.conversation_state(payload, create=True), valid)
-        self.assertEqual(
-            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
-            {"category": "runtime"},
-        )
-
-    def test_legacy_top_level_state_bypasses_conflicting_grouped_key(self):
-        legacy = {"checkpoint_id": "top-level"}
-        conflicting = {"category": "runtime", "unchanged": True}
-        payload = {
-            "conversation": legacy,
-            "sessions": {fmt.CONVERSATION_SESSION_KEY: conflicting},
-        }
-        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
-        self.assertIs(
-            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
-            conflicting,
-        )
+        for create in (False, True):
+            self._assert_invalid_unchanged(payload, create=create)
+        self.assertIs(payload["sessions"]["runtime"], runtime)
 
 
 if __name__ == "__main__":
