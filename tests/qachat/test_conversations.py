@@ -322,7 +322,6 @@ class TestStoreDiscovery(ConversationStoreFixture):
                             older.conversation_id)
         self.assertEqual(len(self.store.conversations()), 1)
 
-    @unittest.expectedFailure
     def test_malformed_unhashable_id_does_not_interrupt_discovery(self):
         """One corrupt file must not interrupt valid record discovery."""
         self._candidate("conversation_good.json")
@@ -331,13 +330,196 @@ class TestStoreDiscovery(ConversationStoreFixture):
         self.assertEqual(selected.conversation_id, "conversation_good")
         self.assertEqual(len(self.store.conversations()), 1)
 
-    @unittest.expectedFailure
     def test_malformed_timestamp_does_not_interrupt_discovery(self):
         """Type-invalid metadata should be skipped, not used for sorting."""
         self._candidate("conversation_good.json")
         self._candidate("conversation_bad.json", updated_at_utc=None)
         selected = self.store.ensure()
         self.assertEqual(selected.conversation_id, "conversation_good")
+
+
+    def test_metadata_validator_rejects_invalid_identifiers(self):
+        invalid = (
+            None, False, 123, [], {}, "", " ", "bad id", "bad/id",
+            "bad\nline", "_leading", "-leading", "name.with.dot",
+        )
+        good = self._candidate("conversation_good.json")
+        for index, value in enumerate(invalid):
+            with self.subTest(value=value):
+                candidate = self._candidate(
+                    f"conversation_bad_{index}.json",
+                    conversation_id=value,
+                )
+                self.assertEqual(
+                    self.store.ensure().conversation_id,
+                    "conversation_good",
+                )
+                self.assertEqual(len(self.store.conversations()), 1)
+                self.assertTrue(candidate.exists())
+                self.assertEqual(
+                    self.store.state_path("conversation_good"), good
+                )
+
+    def test_metadata_validator_rejects_missing_and_invalid_names(self):
+        invalid = (None, False, 0, [], {}, "", "   ", "x" * 81)
+        self._candidate("conversation_good.json")
+        for index, value in enumerate(invalid):
+            with self.subTest(value=value):
+                self._candidate(
+                    f"conversation_bad_{index}.json", name=value
+                )
+                selected = self.store.ensure()
+                self.assertEqual(
+                    selected.conversation_id, "conversation_good"
+                )
+                self.assertEqual(len(self.store.conversations()), 1)
+
+    def test_metadata_validator_checks_optional_parent_and_checkpoint(self):
+        self._candidate("conversation_good.json")
+        invalid_fields = {
+            "parent_conversation_id": (
+                False, 42, [], {}, "", "bad parent", "bad/id"
+            ),
+            "origin_checkpoint_id": (False, 2, [], {}, ""),
+        }
+        number = 0
+        for field, values in invalid_fields.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self._candidate(
+                        f"conversation_bad_{number}.json",
+                        **{field: value},
+                    )
+                    number += 1
+                    self.assertEqual(
+                        self.store.ensure().conversation_id,
+                        "conversation_good",
+                    )
+                    self.assertEqual(len(self.store.conversations()), 1)
+
+    def test_metadata_validator_rejects_invalid_utc_timestamps(self):
+        invalid = (
+            None, False, 5, [], {}, "", "not-a-date",
+            "2026-10-10", "2026-10-10T10:00:00",
+            "2026-10-10T10:00:00+01:00",
+            "2026-10-10T10:00:00-00:00",
+            "2026-10-10T10:00:00.1234567Z",
+            "2026-13-10T10:00:00Z",
+            "2026-02-30T10:00:00Z",
+            "2026-10-10T25:00:00Z",
+            " 2026-10-10T10:00:00Z",
+        )
+        self._candidate("conversation_good.json")
+        for field in ("created_at_utc", "updated_at_utc"):
+            for index, value in enumerate(invalid):
+                with self.subTest(field=field, value=value):
+                    self._candidate(
+                        f"conversation_bad_{field}_{index}.json",
+                        **{field: value},
+                    )
+                    self.assertEqual(
+                        self.store.ensure().conversation_id,
+                        "conversation_good",
+                    )
+                    self.assertEqual(len(self.store.conversations()), 1)
+
+    def test_metadata_validator_skips_missing_required_fields(self):
+        self._candidate("conversation_good.json")
+        missing = (
+            "conversation_id", "name", "parent_conversation_id",
+            "origin_checkpoint_id", "created_at_utc",
+            "updated_at_utc",
+        )
+        for index, field in enumerate(missing):
+            with self.subTest(field=field):
+                candidate = self._candidate(
+                    f"conversation_missing_{index}.json"
+                )
+                payload = self._saved(candidate)
+                payload["sessions"][CONVERSATION_SESSION_KEY][
+                    "resume_state"
+                ].pop(field)
+                candidate.write_text(json.dumps(payload), encoding="utf-8")
+                self.assertEqual(
+                    self.store.ensure().conversation_id,
+                    "conversation_good",
+                )
+                self.assertEqual(len(self.store.conversations()), 1)
+
+    def test_malformed_first_duplicate_does_not_hide_valid_record(self):
+        broken = self._candidate(
+            "conversation_01.json", conversation_id="same",
+            updated_at_utc=None,
+        )
+        valid = self._candidate(
+            "conversation_02.json", conversation_id="same"
+        )
+        self.assertEqual(self.store.ensure().conversation_id, "same")
+        self.assertEqual(self.store.state_path("same"), valid)
+        self.assertTrue(broken.is_file())
+
+    def test_utc_offsets_and_fractional_precisions_sort_by_actual_time(self):
+        self._candidate(
+            "conversation_early.json",
+            created_at_utc="2026-10-10T10:00:00.050Z",
+            updated_at_utc="2026-10-10T10:00:00.050Z",
+        )
+        self._candidate(
+            "conversation_late.json",
+            created_at_utc="2026-10-10T10:00:00.100+00:00",
+            updated_at_utc="2026-10-10T10:00:00.100+00:00",
+        )
+        self._candidate(
+            "conversation_first.json",
+            created_at_utc="2026-10-10T10:00:00+00:00",
+            updated_at_utc="2026-10-10T10:00:00+00:00",
+        )
+        selected = self.store.ensure()
+        self.assertEqual(selected.conversation_id, "conversation_late")
+        self.assertEqual(
+            [item.conversation_id for item in self.store.conversations()],
+            ["conversation_first", "conversation_early",
+             "conversation_late"],
+        )
+        # Discovery must not rewrite metadata or normalize its spelling.
+        saved = self._saved(self.store.state_path(selected))
+        self.assertEqual(
+            conversation_state(saved)["updated_at_utc"],
+            "2026-10-10T10:00:00.100+00:00",
+        )
+
+    def test_archive_selects_most_recent_timestamp_not_text_order(self):
+        self._candidate(
+            "conversation_older.json",
+            updated_at_utc="2026-10-10T10:00:00Z",
+        )
+        self._candidate(
+            "conversation_newer.json",
+            updated_at_utc="2026-10-10T10:00:00.100Z",
+        )
+        self._candidate(
+            "conversation_archived.json",
+            updated_at_utc="2026-10-10T11:00:00Z",
+        )
+        selected = self.store.ensure()
+        self.assertEqual(selected.conversation_id, "conversation_archived")
+        remaining, archived = self.store.archive(selected.conversation_id)
+        self.assertEqual(remaining.conversation_id, "conversation_newer")
+        self.assertTrue(archived.is_file())
+
+    def test_valid_legacy_metadata_and_unicode_names_are_preserved(self):
+        original = self._candidate(
+            "conversation_legacy.json", grouped=False,
+            name="Vetenskap 日本語", parent_conversation_id="parent_01",
+            origin_checkpoint_id="step:12/xyz",
+            created_at_utc="2026-10-10T09:00:00+00:00",
+            updated_at_utc="2026-10-10T09:00:00.5Z",
+        )
+        selected = self.store.ensure()
+        self.assertEqual(selected.name, "Vetenskap 日本語")
+        self.assertEqual(selected.parent_conversation_id, "parent_01")
+        self.assertEqual(selected.origin_checkpoint_id, "step:12/xyz")
+        self.assertEqual(self.store.state_path(selected), original)
 
 
 class TestStoreSelectionAndCreation(ConversationStoreFixture):

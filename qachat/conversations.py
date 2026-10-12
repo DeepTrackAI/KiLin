@@ -62,6 +62,7 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
@@ -72,6 +73,18 @@ from qachat.conversation_format import (
 )
 
 __all__ = ["ConversationInfo", "ConversationStore"]
+
+# Accept existing opaque IDs as well as generated ``conversation_<hex>`` IDs.
+# Do not constrain loaded IDs to the generated UUID format: older records and
+# imported conversations may use other alphanumeric identifiers.
+_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+# Saved metadata uses UTC ISO 8601 timestamps, with optional fractions.
+# Both the current ``Z`` spelling and historical ``+00:00`` are accepted.
+_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|\+00:00)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,7 +243,9 @@ class ConversationStore:
             return self.create()
         newest = max(
             self._items.values(),
-            key=lambda item: (item.updated_at_utc, item.conversation_id),
+            key=lambda item: (
+                _utc_datetime(item.updated_at_utc), item.conversation_id
+            ),
         )
         self._active_id = newest.conversation_id
         return newest
@@ -267,7 +282,9 @@ class ConversationStore:
 
         return sorted(
             self._items.values(),
-            key=lambda item: (item.created_at_utc, item.conversation_id),
+            key=lambda item: (
+                _utc_datetime(item.created_at_utc), item.conversation_id
+            ),
         )
 
     def select(self, conversation_id: str) -> ConversationInfo:
@@ -535,7 +552,7 @@ class ConversationStore:
             replacement = max(
                 self._items.values(),
                 key=lambda candidate: (
-                    candidate.updated_at_utc,
+                    _utc_datetime(candidate.updated_at_utc),
                     candidate.conversation_id,
                 ),
             )
@@ -576,8 +593,8 @@ class ConversationStore:
         """Rebuild the registry from recognizable conversation files.
 
         Symbolic links, non-files, malformed JSON/state, missing metadata, and
-        duplicate identifiers after the first are skipped. This does not
-        validate every metadata value against its annotation.
+        duplicate identifiers after the first are skipped. Persisted metadata
+        is validated before records enter the registry.
 
         """
 
@@ -590,12 +607,7 @@ class ConversationStore:
                 record = conversation_state(_read_json(path))
                 if not isinstance(record, dict):
                     continue
-                item = ConversationInfo(
-                    **{
-                        field: record[field]
-                        for field in ConversationInfo.__dataclass_fields__
-                    }
-                )
+                item = _validated_metadata(record)
             except (KeyError, TypeError, ValueError):
                 continue
             if item.conversation_id not in self._items:
@@ -722,6 +734,110 @@ class ConversationStore:
         record = conversation_state(_read_json(path))
         value = record.get("checkpoint_id")
         return value if isinstance(value, str) and value else None
+
+
+def _utc_datetime(value: object) -> datetime:
+    """Parse a valid persisted UTC timestamp for chronological ordering.
+
+    Parameters
+    ----------
+    value: object
+        Candidate ISO 8601 timestamp from saved metadata.
+
+    Returns
+    -------
+    datetime.datetime
+        Timezone-aware UTC datetime for comparing saved records.
+
+    Raises
+    ------
+    ValueError
+        If the timestamp is not a valid UTC date and time.
+
+    """
+
+    if (
+        not isinstance(value, str)
+        or _UTC_TIMESTAMP_PATTERN.fullmatch(value) is None
+    ):
+        raise ValueError("The saved conversation timestamp is invalid.")
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(
+            "The saved conversation timestamp is invalid."
+        ) from error
+
+
+def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
+    """Validate metadata before registering a persisted conversation.
+
+    Parameters
+    ----------
+    record: dict[str, object]
+        Saved resumable conversation state containing metadata fields.
+
+    Returns
+    -------
+    ConversationInfo
+        Metadata with validated identifiers, text, and UTC timestamps.
+
+    Raises
+    ------
+    ValueError
+        If any required field is missing or has an invalid value.
+
+    Notes
+    -----
+    Extra fields belong to saved RAG state and are retained in the JSON.
+    Validation never rewrites, repairs, or deletes an invalid file. Discovery
+    skips invalid records so other conversations remain accessible.
+
+    """
+
+    try:
+        metadata = {
+            field: record[field]
+            for field in ConversationInfo.__dataclass_fields__
+        }
+    except KeyError as error:
+        raise ValueError(
+            "The saved conversation metadata is incomplete."
+        ) from error
+
+    identifier = metadata["conversation_id"]
+    if (
+        not isinstance(identifier, str)
+        or _ID_PATTERN.fullmatch(identifier) is None
+    ):
+        raise ValueError("The saved conversation ID is invalid.")
+
+    name = metadata["name"]
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name) > 80
+    ):
+        raise ValueError("The saved conversation name is invalid.")
+
+    parent = metadata["parent_conversation_id"]
+    if (
+        parent is not None
+        and (
+            not isinstance(parent, str)
+            or _ID_PATTERN.fullmatch(parent) is None
+        )
+    ):
+        raise ValueError("The saved conversation parent ID is invalid.")
+
+    origin = metadata["origin_checkpoint_id"]
+    if origin is not None and (not isinstance(origin, str) or not origin):
+        raise ValueError("The saved conversation checkpoint is invalid.")
+
+    _utc_datetime(metadata["created_at_utc"])
+    _utc_datetime(metadata["updated_at_utc"])
+    return ConversationInfo(**metadata)
 
 
 def _read_json(path: Path) -> dict[str, object]:
