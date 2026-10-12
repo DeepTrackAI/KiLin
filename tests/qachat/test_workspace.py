@@ -21,6 +21,7 @@ from dataclasses import replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import os
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
@@ -765,6 +766,17 @@ class TestSnapshotBehavior(WorkspaceFixture):
             ["model.py", renamed],
         )
 
+    def test_collision_named_file_records_original_filename(self) -> None:
+        """Renamed single-file snapshots retain their original provenance."""
+
+        first = self._file("one/code.py")
+        second = self._file("two/code.py", "second = 2\n")
+        self._prepare([first, second])
+        records = self._records()
+        self.assertNotEqual(records[0]["name"], records[1]["name"])
+        self.assertEqual(records[0]["files"], ["code.py"])
+        self.assertEqual(records[1]["files"], ["code.py"])
+
     def test_reimport_reuses_persisted_collision_name(self) -> None:
         """An existing original retains its name after other imports."""
 
@@ -820,7 +832,6 @@ class TestSnapshotBehavior(WorkspaceFixture):
         self._prepare([original])
         self.assertEqual(snapshot.read_text(), "local = 10\n")
 
-    @unittest.expectedFailure
     def test_reselection_manifest_lists_all_retained_snapshots(self) -> None:
         """Provenance must not forget earlier snapshots still on disk."""
 
@@ -840,7 +851,6 @@ class TestSnapshotBehavior(WorkspaceFixture):
             sorted(self._records()[0]["files"]), ["a.py", "b.py"]
         )
 
-    @unittest.expectedFailure
     def test_unmatched_selection_mapping_must_not_import_all_files(
         self,
     ) -> None:
@@ -855,6 +865,113 @@ class TestSnapshotBehavior(WorkspaceFixture):
                 [folder],
                 selected_files={wrong_key: ["selected.py"]},
             )
+
+
+    def test_partial_selection_mapping_does_not_copy_anything(
+        self,
+    ) -> None:
+        """An omitted key must not widen that source's selection."""
+
+        first = self._folder("first")
+        second = self._folder("second")
+        self._file("first/keep.py")
+        self._file("second/private.py")
+        with self.assertRaisesRegex(ValueError, "selection"):
+            self._prepare(
+                [first, second],
+                selected_files={str(first): ["keep.py"]},
+            )
+        self.assertFalse(self.destination.exists())
+
+    def test_selection_paths_can_be_normalized(self) -> None:
+        """A relative-looking source key resolves to the chosen source."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        self._file("research/private.py")
+        alias = str(folder / ".." / "research")
+        self._prepare(
+            [folder],
+            selected_files={alias: ["keep.py"]},
+        )
+        self.assertTrue(
+            (self.destination / "sources/research/keep.py").is_file()
+        )
+        self.assertFalse(
+            (self.destination / "sources/research/private.py").exists()
+        )
+
+    def test_duplicate_normalized_selection_keys_are_rejected(self) -> None:
+        """Equivalent selection paths must not silently override a subset."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        with self.assertRaisesRegex(ValueError, "Duplicate source selection"):
+            self._prepare(
+                [folder],
+                selected_files={
+                    str(folder): ["keep.py"],
+                    str(folder / ".." / "research"): ["keep.py"],
+                },
+            )
+        self.assertFalse(self.destination.exists())
+
+    def test_invalid_selection_mapping_values_are_rejected(self) -> None:
+        """File selections must be sequences, not raw strings or scalars."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        candidates = (
+            {str(folder): "keep.py"},
+            {str(folder): None},
+            {str(folder): [42]},
+            {str(folder): ("keep.py", None)},
+        )
+        for selections in candidates:
+            with self.subTest(selections=selections):
+                with self.assertRaisesRegex(ValueError, "file selection"):
+                    self._prepare([folder], selected_files=selections)
+                self.assertFalse(self.destination.exists())
+
+    def test_selection_argument_must_be_a_mapping(self) -> None:
+        """A malformed mapping must produce a descriptive error."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        with self.assertRaisesRegex(ValueError, "selection"):
+            self._prepare([folder], selected_files=["keep.py"])
+        self.assertFalse(self.destination.exists())
+
+    def test_empty_or_nonpath_selection_keys_are_rejected(self) -> None:
+        """Malformed keys cannot describe a selected original."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        for key in ("", None, 5):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(
+                    ValueError, "source selection"
+                ):
+                    self._prepare(
+                        [folder], selected_files={key: ["keep.py"]}
+                    )
+                self.assertFalse(self.destination.exists())
+
+    def test_extra_selection_key_is_rejected(self) -> None:
+        """An extraneous path must not be ignored during source import."""
+
+        folder = self._folder("research")
+        self._file("research/keep.py")
+        unexpected = self._folder("unrequested")
+        with self.assertRaisesRegex(ValueError, "selection"):
+            self._prepare(
+                [folder],
+                selected_files={
+                    str(folder): ["keep.py"],
+                    str(unexpected): ["something.py"],
+                },
+            )
+        self.assertFalse(self.destination.exists())
 
 
 class TestWorkspaceValidation(WorkspaceFixture):
@@ -1051,7 +1168,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
 
         original = self._file("code.py")
         with patch.object(
-            workspace.shutil, "copy2", side_effect=OSError("disk full")
+            workspace.shutil, "copyfileobj", side_effect=OSError("disk full")
         ):
             with self.assertRaisesRegex(OSError, "disk full"):
                 self._prepare([original])
@@ -1067,7 +1184,53 @@ class TestWorkspaceValidation(WorkspaceFixture):
         self.assertTrue((self.destination / "sources/one.py").exists())
         self.assertEqual(len(self._records()), 1)
 
-    @unittest.expectedFailure
+    def test_copy_preserves_source_metadata(self) -> None:
+        """Copied snapshots retain the source file modification time."""
+
+        original = self._file("code.py", "test = True\n")
+        os.utime(original, ns=(1_000_000_000, 2_000_000_000))
+        project = self._prepare([original])
+        snapshot = project.source / "code.py"
+        self.assertEqual(
+            snapshot.stat().st_mtime_ns, original.stat().st_mtime_ns
+        )
+
+    def test_failed_copy_removes_random_temporary_file(self) -> None:
+        """Copy failure leaves no temporary file and preserves the copy."""
+
+        original = self._file("code.py", "initial = 1\n")
+        project = self._prepare([original])
+        snapshot = project.source / "code.py"
+        original.write_text("updated = 2\n", encoding="utf-8")
+        with patch.object(
+            workspace.shutil,
+            "copyfileobj",
+            side_effect=OSError("write failed"),
+        ):
+            with self.assertRaisesRegex(OSError, "write failed"):
+                self._prepare([original])
+        self.assertEqual(snapshot.read_text(), "initial = 1\n")
+        self.assertFalse(list(snapshot.parent.glob(".code.py.*.tmp")))
+
+    def test_failed_copy_temporary_creation_keeps_old_snapshot(
+        self,
+    ) -> None:
+        """A temp-file allocation error must not alter an existing copy."""
+
+        original = self._file("code.py", "initial = 1\n")
+        project = self._prepare([original])
+        original.write_text("updated = 2\n", encoding="utf-8")
+        with patch.object(
+            workspace,
+            "NamedTemporaryFile",
+            side_effect=OSError("no temporary file"),
+        ):
+            with self.assertRaisesRegex(OSError, "no temporary file"):
+                self._prepare([original])
+        self.assertEqual(
+            (project.source / "code.py").read_text(), "initial = 1\n"
+        )
+
     def test_temporary_copy_symlink_must_not_modify_external_file(
         self,
     ) -> None:
@@ -1184,7 +1347,43 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         self.assertTrue(raw.endswith("\n"))
         self.assertEqual(json.loads(raw)["version"], 1)
 
-    @unittest.expectedFailure
+    def test_failed_manifest_replacement_cleans_temporary_file(
+        self,
+    ) -> None:
+        """A failed metadata replacement retains the previous manifest."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        manifest = self.destination / "sources.json"
+        before = manifest.read_bytes()
+        with patch.object(
+            workspace.Path,
+            "replace",
+            side_effect=OSError("replace failed"),
+        ):
+            with self.assertRaisesRegex(OSError, "replace failed"):
+                self._prepare([original])
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertFalse(list(self.destination.glob(".sources.json.*.tmp")))
+
+    def test_manifest_temporary_creation_error_preserves_old_data(
+        self,
+    ) -> None:
+        """A failed temporary creation must not remove metadata."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        manifest = self.destination / "sources.json"
+        before = manifest.read_bytes()
+        with patch.object(
+            workspace,
+            "NamedTemporaryFile",
+            side_effect=OSError("no temporary file"),
+        ):
+            with self.assertRaisesRegex(OSError, "no temporary file"):
+                self._prepare([original])
+        self.assertEqual(manifest.read_bytes(), before)
+
     def test_temporary_manifest_symlink_must_not_modify_external_file(
         self,
     ) -> None:
@@ -1198,7 +1397,6 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         self._prepare([second])
         self.assertEqual(protected.read_text(), "PROTECTED\n")
 
-    @unittest.expectedFailure
     def test_duplicate_stored_names_must_be_rejected(self) -> None:
         """Two originals cannot legitimately own the same copied filename."""
 
@@ -1211,6 +1409,151 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         ])
         with self.assertRaisesRegex(ValueError, "duplicate|conflict"):
             self._prepare([second])
+
+
+    def test_duplicate_stored_originals_must_be_rejected(self) -> None:
+        """One source cannot acquire two different destination names."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        self._write_records([
+            {"original": str(original), "name": "code.py"},
+            {"original": str(original), "name": "duplicate.py"},
+        ])
+        with self.assertRaisesRegex(ValueError, "Duplicate|conflict"):
+            self._prepare([])
+
+    def test_invalid_stored_file_inventories_are_rejected(self) -> None:
+        """Persisted file names must be safe, unique relative paths."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        invalid = (
+            "code.py",
+            None,
+            [4],
+            [""],
+            ["."],
+            ["C:/outside.py"],
+            ["C:outside.py"],
+            ["../outside.py"],
+            ["directory/../../outside.py"],
+            ["/outside.py"],
+            ["directory//code.py"],
+            ["./code.py"],
+            ["folder\\code.py"],
+            ["code.py", "code.py"],
+        )
+        for inventory in invalid:
+            with self.subTest(inventory=inventory):
+                self._write_records([
+                    {
+                        "original": str(original),
+                        "name": "code.py",
+                        "files": inventory,
+                    }
+                ])
+                with self.assertRaisesRegex(ValueError, "inventory"):
+                    self._prepare([])
+
+    def test_legacy_record_without_inventory_is_accepted(self) -> None:
+        """Old ownership records lacking files remain readable."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        self._write_records([
+            {"original": str(original), "name": "code.py"}
+        ])
+        self._prepare([])
+        self.assertNotIn("files", self._records()[0])
+
+    def test_inventory_removes_locally_deleted_retained_files(
+        self,
+    ) -> None:
+        """A missing prior snapshot is not reported as still present."""
+
+        folder = self._folder("research")
+        self._file("research/old.py")
+        self._file("research/current.py")
+        self._prepare([folder])
+        (self.destination / "sources/research/old.py").unlink()
+        self._prepare(
+            [folder],
+            selected_files={str(folder): ["current.py"]},
+        )
+        self.assertEqual(self._records()[0]["files"], ["current.py"])
+
+    def test_inventory_excludes_old_symlink_substitutions(self) -> None:
+        """Do not claim that a substituted symlink is an imported file."""
+
+        folder = self._folder("research")
+        self._file("research/old.py")
+        self._file("research/current.py")
+        self._prepare([folder])
+        old = self.destination / "sources/research/old.py"
+        old.unlink()
+        old.symlink_to(self._file("outside/file.py"))
+        self._prepare(
+            [folder],
+            selected_files={str(folder): ["current.py"]},
+        )
+        self.assertEqual(self._records()[0]["files"], ["current.py"])
+
+    def test_inventory_excludes_nested_symlink_parent(self) -> None:
+        """Do not traverse a substituted directory link for old files."""
+
+        folder = self._folder("research")
+        self._file("research/subdir/old.py")
+        self._file("research/current.py")
+        self._prepare([folder])
+        nested = self.destination / "sources/research/subdir"
+        outside = self._folder("outside")
+        self._file("outside/old.py")
+        (nested / "old.py").unlink()
+        nested.rmdir()
+        nested.symlink_to(outside, target_is_directory=True)
+        self._prepare(
+            [folder],
+            selected_files={str(folder): ["current.py"]},
+        )
+        self.assertEqual(self._records()[0]["files"], ["current.py"])
+
+    def test_cross_platform_drive_qualified_owner_is_rejected(
+        self,
+    ) -> None:
+        """An ownership name cannot escape through a Windows drive."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        self._write_records([
+            {"original": str(original), "name": "C:code.py"}
+        ])
+        with self.assertRaisesRegex(ValueError, "source name"):
+            self._prepare([])
+
+    def test_empty_original_provenance_is_rejected(self) -> None:
+        """A blank original cannot legitimately own a snapshot."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        self._write_records([
+            {"original": " ", "name": "code.py"}
+        ])
+        with self.assertRaisesRegex(ValueError, "source entry"):
+            self._prepare([])
+
+    def test_invalid_cross_platform_source_names_are_rejected(
+        self,
+    ) -> None:
+        """Reject Windows separators regardless of the host platform."""
+
+        original = self._file("code.py")
+        self._prepare([original])
+        self._write_records([
+            {"original": str(original), "name": "folder\\code.py"}
+        ])
+        with self.assertRaisesRegex(ValueError, "source name"):
+            self._prepare([])
 
 
 class TestWorkspaceTracing(WorkspaceFixture):
