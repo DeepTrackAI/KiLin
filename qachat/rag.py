@@ -996,8 +996,10 @@ class RAGSession:
             later questions, until changed again. Defaults to ``None``.
         phase_callback: AnswerPhaseCallback | None, optional
             Optional callback receiving (phase_name, details_dict) for answer
-            phases. Its exceptions propagate; it is not an asynchronous
-            notification queue. Defaults to ``None``.
+            phases. Exceptions during processing propagate. An exception from
+            the final completed-phase notification is recorded in the trace
+            without invalidating a committed answer, unless strict trace
+            logging itself fails. Defaults to ``None``.
         answer_guidance: str | None, optional
             Extra answer instruction appended to this question's prompt, such
             as a length target. An intent with its own ``answer_guidance``
@@ -1053,8 +1055,10 @@ class RAGSession:
         -----
         A generated turn is committed to memory only after its resumable
         checkpoint has been written. If persistence fails, the previous
-        chat-model history is restored. Exceptions after the checkpoint
-        commit (including late phase callbacks) do not undo the saved turn.
+        chat-model history is restored. The final completed-phase callback
+        runs after the turn span closes; its failure is traced separately and
+        does not invalidate the answer. Other callback errors and explicit
+        strict diagnostic-write failures can still propagate after commit.
         Evidence is supplied in the prompt but generated claims/citations
         are not checked. Full chat history and expanded evidence are used
         without an aggregate token-budget guard.
@@ -1519,12 +1523,24 @@ class RAGSession:
                 if not self.turns or self.turns[-1] is not turn:
                     self.chat_session.restore_history(committed_messages)
                 raise
+        # Completion notifications are observers, not part of the committed
+        # turn. Close the successful turn span before invoking the callback so
+        # a presentation failure cannot be mistaken for a generation failure.
+        try:
             report_phase(
                 ANSWER_PHASE_COMPLETED,
                 message="Answer ready",
                 evidence_count=len(evidence),
             )
-            return answer
+        except Exception as error:
+            trace.exception(
+                "turn.notification.failed",
+                error,
+                component="rag",
+                data={"phase": ANSWER_PHASE_COMPLETED},
+                turn_id=turn_id,
+            )
+        return answer
 
     def switch_conversation(
         self,

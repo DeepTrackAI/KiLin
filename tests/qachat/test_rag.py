@@ -20,6 +20,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import DEFAULT, MagicMock, Mock, patch, sentinel
+import warnings
 
 from qachat import rag
 from qachat.conversation_format import (
@@ -41,8 +42,11 @@ from qachat.runtime import BACKEND_MLX
 from qachat.tools import ToolResult, ToolUse
 from qachat.trace_logging import (
     DEFAULT_TRACE_MODE,
+    FAILURE_POLICY_RAISE,
+    FAILURE_POLICY_WARN,
     TRACE_MODE_FORENSIC,
     TRACE_MODE_STANDARD,
+    FailurePolicy,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -2589,6 +2593,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
         mode: str = TRACE_MODE_STANDARD,
         *,
         owned: bool = False,
+        failure_policy: FailurePolicy = FAILURE_POLICY_WARN,
     ) -> TraceLogger:
         """Connect a real logger to the RAG conversation's exact path."""
         trace = TraceLogger(
@@ -2596,6 +2601,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
                 enabled=True,
                 output_path=self.session.conversation_path,
                 mode=mode,
+                failure_policy=failure_policy,
             ),
             default_directory=self.root,
         )
@@ -2617,13 +2623,19 @@ class TestRAGTraceIntegration(unittest.TestCase):
         self,
         question: str,
         intent: Intent,
+        *,
+        phase_callback: rag.AnswerPhaseCallback | None = None,
     ) -> str:
         """Run the real turn state machine and real checkpoint writer."""
         with _answer_patches(self.session, intent) as mocks:
             mocks.save.side_effect = lambda **options: (
                 rag.RAGSession._save_conversation(self.session, **options)
             )
-            return self.session.ask(question, use_router=False)
+            return self.session.ask(
+                question,
+                use_router=False,
+                phase_callback=phase_callback,
+            )
 
     def test_standard_trace_persists_metadata_and_checkpoint(
         self,
@@ -2951,38 +2963,338 @@ class TestRAGTraceIntegration(unittest.TestCase):
             "failed",
         )
 
-    def test_late_callback_failure_keeps_saved_checkpoint_and_failure(
+    def test_checkpoint_event_write_warning_keeps_committed_answer(
         self,
     ) -> None:
-        """Record failure after saving without discarding persisted state."""
+        """Return the answer when optional post-save trace I/O fails."""
+        trace = self._bind_trace(failure_policy=FAILURE_POLICY_WARN)
+        write = trace._write_readable_trace
+
+        def write_or_fail() -> None:
+            """Refuse the checkpoint event after its state is durable."""
+            if trace._events[-1]["event_type"] == (
+                "state.checkpoint.committed"
+            ):
+                raise OSError("diagnostic write failed")
+            write()
+
+        with patch.object(
+            trace, "_write_readable_trace", side_effect=write_or_fail
+        ), warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", RuntimeWarning)
+            answer = self._ask_with_real_save(
+                "Saved despite warning", _intent()
+            )
+        self.assertEqual(answer, "model answer")
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertTrue(any(
+            "diagnostic write failed" in str(item.message)
+            for item in captured
+        ))
+        self.assertEqual(
+            self._conversation()["resume_state"]["checkpoint_id"],
+            self.session._checkpoint_id,
+        )
+
+    def test_checkpoint_event_write_strict_failure_keeps_state(
+        self,
+    ) -> None:
+        """Raise for strict diagnostics without undoing the checkpoint."""
+        trace = self._bind_trace(failure_policy=FAILURE_POLICY_RAISE)
+        write = trace._write_readable_trace
+
+        def write_or_fail() -> None:
+            """Refuse the checkpoint event but permit the state write."""
+            if trace._events[-1]["event_type"] == (
+                "state.checkpoint.committed"
+            ):
+                raise OSError("strict diagnostic failure")
+            write()
+
+        with patch.object(
+            trace, "_write_readable_trace", side_effect=write_or_fail
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Could not write QAChat trace"
+            ):
+                self._ask_with_real_save(
+                    "Saved despite strict failure", _intent()
+                )
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(
+            self._conversation()["resume_state"]["checkpoint_id"],
+            self.session._checkpoint_id,
+        )
+
+    def test_intermediate_callback_failure_remains_a_failed_turn(
+        self,
+    ) -> None:
+        """Propagate an observer error before the checkpoint is saved."""
+        self._bind_trace()
+        observed_phases: list[str] = []
+
+        def phase_callback(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Interrupt the answer during evidence retrieval."""
+            observed_phases.append(phase)
+            if phase == rag.ANSWER_PHASE_RETRIEVING:
+                raise RuntimeError("early notification failed")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "early notification failed"
+        ):
+            self._ask_with_real_save(
+                "Interrupted answer", _intent(),
+                phase_callback=phase_callback,
+            )
+        self.assertIn(rag.ANSWER_PHASE_RETRIEVING, observed_phases)
+        self.assertNotIn(rag.ANSWER_PHASE_COMPLETED, observed_phases)
+        self.assertEqual(self.session.turns, [])
+        self.assertEqual(self._conversation()["resume_state"], {})
+        self.assertEqual(
+            self._conversation()["turns"]["turn_0001"]["stages"][
+                "01_question"
+            ]["operations"]["01_turn"]["event"]["status"],
+            "failed",
+        )
+
+    def test_completed_callback_sees_committed_and_completed_turn(
+        self,
+    ) -> None:
+        """Notify completion after saving and closing the successful span."""
+        self._bind_trace()
+        completed_state: list[tuple[str, int, object]] = []
+
+        def phase_callback(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Inspect the stored trace at the completion notification."""
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                turn = self._conversation()["turns"]["turn_0001"]
+                turn_status = (
+                    turn["stages"]["01_question"]["operations"][
+                        "01_turn"
+                    ]["event"]["status"]
+                )
+                completed_state.append((
+                    turn_status,
+                    len(self._conversation()["resume_state"]["turns"]),
+                    details["evidence_count"],
+                ))
+
+        answer = self._ask_with_real_save(
+            "Completed notification", _intent(),
+            phase_callback=phase_callback,
+        )
+        self.assertEqual(answer, "model answer")
+        self.assertEqual(completed_state, [("completed", 1, 1)])
+
+    def test_late_callback_failure_returns_committed_answer(self) -> None:
+        """Record an observer error without marking the saved turn failed."""
         self._bind_trace()
 
-        def phase_callback(phase: str, details: object) -> None:
-            """Fail after the checkpoint is committed for this turn."""
+        def phase_callback(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Fail only after the conversation checkpoint is committed."""
             if phase == rag.ANSWER_PHASE_COMPLETED:
                 raise RuntimeError("UI callback failed")
 
-        with _answer_patches(self.session, _intent()) as mocks:
-            mocks.save.side_effect = lambda **options: (
-                rag.RAGSession._save_conversation(self.session, **options)
-            )
-            with self.assertRaisesRegex(RuntimeError, "UI callback failed"):
-                self.session.ask(
-                    "Callback failure", use_router=False,
-                    phase_callback=phase_callback,
-                )
+        answer = self._ask_with_real_save(
+            "Callback failure", _intent(),
+            phase_callback=phase_callback,
+        )
+        self.assertEqual(answer, "model answer")
         turn = self._conversation()["turns"]["turn_0001"]
+        operations = turn["stages"]["01_question"]["operations"]
         self.assertEqual(
-            turn["stages"]["01_question"]["operations"][
-                "01_turn"
-            ]["event"]["status"],
-            "failed",
+            operations["01_turn"]["event"]["status"], "completed"
         )
         saved = turn["stages"]["05_generation"]["operations"][
             "01_state_checkpoint_committed"
         ]
         self.assertEqual(saved["event"]["status"], "completed")
-        self.assertEqual(len(self._conversation()["resume_state"]["turns"]), 1)
+        self.assertEqual(
+            len(self._conversation()["resume_state"]["turns"]), 1
+        )
+        self.assertEqual(len(self.session.turns), 1)
+        notification = [
+            operation for key, operation in operations.items()
+            if key.endswith("turn_notification_failed")
+        ]
+        self.assertEqual(len(notification), 1)
+        self.assertEqual(notification[0]["event"]["status"], "failed")
+        self.assertEqual(
+            notification[0]["details"]["phase"],
+            rag.ANSWER_PHASE_COMPLETED,
+        )
+        self.assertEqual(
+            notification[0]["details"]["error_type"], "RuntimeError"
+        )
+        self.assertEqual(
+            notification[0]["details"]["message"], "UI callback failed"
+        )
+        self.assertIn(
+            "UI callback failed", notification[0]["details"]["traceback"]
+        )
+
+        first_checkpoint = self.session._checkpoint_id
+        self._ask_with_real_save("Second answer", _intent())
+        self.assertEqual(len(self.session.turns), 2)
+        self.assertEqual(
+            self._conversation()["resume_state"]["checkpoint"][
+                "parent_checkpoint_id"
+            ],
+            first_checkpoint,
+        )
+
+    def test_late_callback_failure_without_tracing_returns_answer(
+        self,
+    ) -> None:
+        """Allow a completed turn to succeed with tracing disabled."""
+        phases: list[str] = []
+
+        def phase_callback(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Record the phase and fail only on final notification."""
+            phases.append(phase)
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                raise RuntimeError("optional notification unavailable")
+
+        answer = self._ask_with_real_save(
+            "Untraced callback failure", _intent(),
+            phase_callback=phase_callback,
+        )
+        self.assertEqual(answer, "model answer")
+        self.assertEqual(phases[-1], rag.ANSWER_PHASE_COMPLETED)
+        self.assertEqual(len(self.session.turns), 1)
+        saved = self._conversation()["resume_state"]["turns"]
+        self.assertEqual(saved[0]["question"], "Untraced callback failure")
+
+    def test_tool_answer_survives_final_callback_failure(self) -> None:
+        """Keep a tool-written answer when the final observer fails."""
+        self._bind_trace()
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("project_inventory", object()),
+        )
+
+        def phase_callback(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Fail only the post-checkpoint presentation notification."""
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                raise RuntimeError("tool view disconnected")
+
+        answer = self._ask_with_real_save(
+            "Tool output", intent, phase_callback=phase_callback
+        )
+        self.assertEqual(answer, "tool answer")
+        self.session.chat_session.reply.assert_not_called()
+        self.assertEqual(
+            self._conversation()["resume_state"]["turns"][0]["answer"],
+            "tool answer",
+        )
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertEqual(
+            turn["stages"]["01_question"]["operations"][
+                "01_turn"
+            ]["event"]["status"],
+            "completed",
+        )
+
+    def test_notification_trace_write_warning_keeps_saved_answer(
+        self,
+    ) -> None:
+        """Ignore optional failed-event I/O under warn policy."""
+        trace = self._bind_trace(failure_policy=FAILURE_POLICY_WARN)
+        write = trace._write_readable_trace
+
+        def write_or_fail() -> None:
+            """Simulate a diagnostic write failure after the checkpoint."""
+            if trace._events[-1]["event_type"] == (
+                "turn.notification.failed"
+            ):
+                raise OSError("trace disk unavailable")
+            write()
+
+        def fail_when_completed(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Raise an ordinary presentation exception after commit."""
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                raise RuntimeError("observer failed")
+
+        with patch.object(
+            trace, "_write_readable_trace", side_effect=write_or_fail
+        ), warnings.catch_warnings(record=True) as captured:
+            warnings.simplefilter("always", RuntimeWarning)
+            answer = self._ask_with_real_save(
+                "Warn on failed event", _intent(),
+                phase_callback=fail_when_completed,
+            )
+        self.assertEqual(answer, "model answer")
+        self.assertTrue(any(
+            "trace disk unavailable" in str(item.message)
+            for item in captured
+        ))
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(
+            self._conversation()["resume_state"]["checkpoint_id"],
+            self.session._checkpoint_id,
+        )
+        self.assertEqual(
+            self._conversation()["turns"]["turn_0001"]["stages"][
+                "01_question"
+            ]["operations"]["01_turn"]["event"]["status"],
+            "completed",
+        )
+
+    def test_notification_trace_write_strict_policy_propagates(
+        self,
+    ) -> None:
+        """Preserve strict trace errors after a committed RAG answer."""
+        trace = self._bind_trace(failure_policy=FAILURE_POLICY_RAISE)
+        write = trace._write_readable_trace
+
+        def write_or_fail() -> None:
+            """Refuse the notification-error diagnostic event only."""
+            if trace._events[-1]["event_type"] == (
+                "turn.notification.failed"
+            ):
+                raise OSError("trace disk unavailable")
+            write()
+
+        def fail_when_completed(
+            phase: str, details: dict[str, object]
+        ) -> None:
+            """Raise after commit to trigger strict diagnostic writing."""
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                raise RuntimeError("observer failed")
+
+        with patch.object(
+            trace, "_write_readable_trace", side_effect=write_or_fail
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "Could not write QAChat trace"
+            ):
+                self._ask_with_real_save(
+                    "Strict failed event", _intent(),
+                    phase_callback=fail_when_completed,
+                )
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertEqual(
+            self._conversation()["resume_state"]["checkpoint_id"],
+            self.session._checkpoint_id,
+        )
+        self.assertEqual(
+            self._conversation()["turns"]["turn_0001"]["stages"][
+                "01_question"
+            ]["operations"]["01_turn"]["event"]["status"],
+            "completed",
+        )
 
     def test_tool_answer_commits_trace_without_chat_reply(self) -> None:
         """Persist tool-produced turns without invoking the chat model."""
