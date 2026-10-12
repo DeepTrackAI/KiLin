@@ -161,6 +161,9 @@ class TestConversationState(unittest.TestCase):
             }
         }
         self.assertIs(fmt.conversation_state(payload), current)
+        self.assertIs(fmt.conversation_state(payload, create=True), current)
+        session = payload["sessions"]["old"]
+        self.assertEqual(session["conversation"], {"checkpoint_id": "old"})
 
     def test_later_matching_session_is_used_if_earlier_invalid(self):
         expected = {"turns": [1]}
@@ -267,7 +270,6 @@ class TestConversationState(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "invalid"):
                 fmt.conversation_state({}, create=True)
 
-    @unittest.expectedFailure
     def test_create_rejects_conflicting_canonical_session_key(self):
         """A reserved key with another category must not be overwritten."""
         payload = {
@@ -284,7 +286,6 @@ class TestConversationState(unittest.TestCase):
             "retain",
         )
 
-    @unittest.expectedFailure
     def test_create_does_not_discard_grouped_legacy_resume_state(self):
         """A metadata write must preserve legacy grouped state."""
         legacy = {"turns": [{"question": "Keep"}]}
@@ -296,6 +297,110 @@ class TestConversationState(unittest.TestCase):
             }
         }
         self.assertIs(fmt.conversation_state(payload, create=True), legacy)
+
+
+    def test_create_migrates_grouped_legacy_state_without_copying(self):
+        legacy = {"turns": [{"question": "Preserve"}], "checkpoint_id": "old"}
+        original_turns = {"turn_0001": {"title": "Past turn"}}
+        original_operations = {"01_action": {"title": "Past action"}}
+        session = {
+            "category": "conversations",
+            "title": "Older session",
+            "turns": original_turns,
+            "operations": original_operations,
+            "conversation": legacy,
+        }
+        payload = {"sessions": {"custom": session}, "version": 1}
+
+        result = fmt.conversation_state(payload, create=True)
+
+        self.assertIs(result, legacy)
+        self.assertIs(session["resume_state"], legacy)
+        self.assertNotIn("conversation", session)
+        self.assertIs(session["turns"], original_turns)
+        self.assertIs(session["operations"], original_operations)
+        self.assertEqual(session["title"], "Older session")
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(tuple(payload["sessions"]), ("custom",))
+        self.assertIs(fmt.conversation_state(payload), legacy)
+        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
+
+    def test_create_migrates_legacy_state_at_reserved_session_key(self):
+        legacy = {"checkpoint_id": "checkpoint-1", "turns": [1]}
+        session = {
+            "category": fmt.CONVERSATION_SESSION_CATEGORY,
+            "turns": {"turn_0001": {"title": "A turn"}},
+            "conversation": legacy,
+        }
+        payload = {"sessions": {fmt.CONVERSATION_SESSION_KEY: session}}
+        state = fmt.conversation_state(payload, create=True)
+        self.assertIs(state, legacy)
+        self.assertEqual(len(payload["sessions"]), 1)
+        self.assertIs(session["resume_state"], legacy)
+        self.assertNotIn("conversation", session)
+        self.assertEqual(session["turns"]["turn_0001"]["title"],
+                         "A turn")
+
+    def test_create_rejects_all_occupied_canonical_slots_without_mutation(
+        self,
+    ):
+        occupied = (
+            None,
+            [],
+            "invalid",
+            {"category": "runtime", "resume_state": {}},
+            {"category": "conversations", "resume_state": None},
+            {"category": "conversations", "resume_state": []},
+            {"title": "Missing category"},
+        )
+        for value in occupied:
+            with self.subTest(value=value):
+                payload = {"sessions": {fmt.CONVERSATION_SESSION_KEY: value}}
+                before = repr(payload)
+                with self.assertRaisesRegex(ValueError, "invalid"):
+                    fmt.conversation_state(payload, create=True)
+                self.assertEqual(repr(payload), before)
+
+    def test_conflicting_canonical_key_preserves_neighbor_sessions(self):
+        other = {"category": "runtime", "operations": {"saved": 1}}
+        conflicting = {"category": "runtime", "important": "retain"}
+        payload = {"sessions": {
+            "runtime": other,
+            fmt.CONVERSATION_SESSION_KEY: conflicting,
+        }}
+        with self.assertRaisesRegex(ValueError, "05_conversations"):
+            fmt.conversation_state(payload, create=True)
+        self.assertIs(payload["sessions"]["runtime"], other)
+        self.assertIs(
+            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
+            conflicting,
+        )
+        self.assertEqual(other["operations"], {"saved": 1})
+
+    def test_existing_valid_grouped_state_is_not_blocked_by_conflict(self):
+        valid = {"checkpoint_id": "retained"}
+        payload = {"sessions": {
+            fmt.CONVERSATION_SESSION_KEY: {"category": "runtime"},
+            "custom": fmt.new_conversation_session(valid),
+        }}
+        self.assertIs(fmt.conversation_state(payload, create=True), valid)
+        self.assertEqual(
+            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
+            {"category": "runtime"},
+        )
+
+    def test_legacy_top_level_state_bypasses_conflicting_grouped_key(self):
+        legacy = {"checkpoint_id": "top-level"}
+        conflicting = {"category": "runtime", "unchanged": True}
+        payload = {
+            "conversation": legacy,
+            "sessions": {fmt.CONVERSATION_SESSION_KEY: conflicting},
+        }
+        self.assertIs(fmt.conversation_state(payload, create=True), legacy)
+        self.assertIs(
+            payload["sessions"][fmt.CONVERSATION_SESSION_KEY],
+            conflicting,
+        )
 
 
 if __name__ == "__main__":

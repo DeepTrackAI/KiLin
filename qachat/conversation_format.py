@@ -20,8 +20,8 @@ Key Features
 
 - **Legacy compatibility**
 
-    Recognize the historical top-level ``conversation`` mapping before the
-    grouped sessions representation.
+    Recognize historical top-level and grouped ``conversation`` mappings
+    without discarding saved state during a write.
 
 - **Canonical state lookup**
 
@@ -126,14 +126,17 @@ def conversation_state(
     Raises
     ------
     ValueError
-        If no valid state exists and creation is disabled, or if the grouped
-        sessions container has an invalid structure.
+        If no valid state exists and creation is disabled, the grouped
+        sessions container is invalid, or the reserved session key is already
+        occupied when a new session would be created.
 
     Notes
     -----
     The supported legacy top-level ``conversation`` mapping takes precedence
-    over grouped sessions. With ``create=True``, the supplied payload may be
-    modified in place.
+    over grouped sessions. With ``create=True``, an older grouped
+    ``conversation`` mapping is moved to ``resume_state`` without copying its
+    contents. An occupied canonical session key is never overwritten. The
+    supplied payload may be modified in place.
 
     """
 
@@ -154,18 +157,30 @@ def conversation_state(
             isinstance(session, dict)
             and session.get("category") == CONVERSATION_SESSION_CATEGORY
         ):
-            state = (
-                session.setdefault(CONVERSATION_RESUME_STATE_KEY, {})
-                if create
-                else session.get(
+            if create:
+                if CONVERSATION_RESUME_STATE_KEY not in session:
+                    legacy_state = session.get(LEGACY_CONVERSATION_KEY)
+                    if isinstance(legacy_state, dict):
+                        session[CONVERSATION_RESUME_STATE_KEY] = (
+                            session.pop(LEGACY_CONVERSATION_KEY)
+                        )
+                    else:
+                        session[CONVERSATION_RESUME_STATE_KEY] = {}
+                state = session[CONVERSATION_RESUME_STATE_KEY]
+            else:
+                state = session.get(
                     CONVERSATION_RESUME_STATE_KEY,
                     session.get(LEGACY_CONVERSATION_KEY),
                 )
-            )
             if isinstance(state, dict):
                 return state
 
     if create:
+        if CONVERSATION_SESSION_KEY in sessions:
+            raise ValueError(
+                "The saved conversation is invalid: the reserved session "
+                f"key {CONVERSATION_SESSION_KEY!r} is occupied."
+            )
         session = new_conversation_session()
         sessions[CONVERSATION_SESSION_KEY] = session
         state = session[CONVERSATION_RESUME_STATE_KEY]

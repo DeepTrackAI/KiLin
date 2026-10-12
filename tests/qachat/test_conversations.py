@@ -3,7 +3,7 @@
 Use real JSON files in isolated temporary directories without loading models.
 Exercise the public ConversationStore operations, legacy/grouped compatibility,
 file naming, recoverable archiving, and filesystem and corruption boundaries.
-Confirmed core defects are isolated as expected-failure regression tests.
+Regression tests cover malformed records and preservation on updates.
 
 """
 
@@ -765,6 +765,59 @@ class TestStoreMetadata(ConversationStoreFixture):
                          [{"question": "keep"}])
         self.assertEqual(self._state(item)["checkpoint_id"], "unchanged")
 
+    def test_rename_migrates_grouped_legacy_state_without_data_loss(self):
+        item = self.store.create()
+        path = self.store.state_path(item)
+        payload = self._saved(path)
+        session = payload["sessions"][CONVERSATION_SESSION_KEY]
+        state = session.pop("resume_state")
+        state.update({
+            "turns": [{"question": "Original question"}],
+            "checkpoint_id": "previous-checkpoint",
+        })
+        session["conversation"] = state
+        session["turns"] = {"turn_0001": {"title": "Saved event"}}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        renamed = self.store.rename(item.conversation_id, "New name")
+
+        saved = self._saved(path)
+        group = saved["sessions"][CONVERSATION_SESSION_KEY]
+        self.assertNotIn("conversation", group)
+        self.assertEqual(group["resume_state"]["name"], "New name")
+        self.assertEqual(group["resume_state"]["turns"],
+                         [{"question": "Original question"}])
+        self.assertEqual(group["resume_state"]["checkpoint_id"],
+                         "previous-checkpoint")
+        self.assertEqual(group["turns"],
+                         {"turn_0001": {"title": "Saved event"}})
+        self.assertEqual(renamed.name, "New name")
+
+    def test_touch_preserves_noncanonical_grouped_legacy_state(self):
+        item = self.store.create()
+        path = self.store.state_path(item)
+        payload = self._saved(path)
+        session = payload["sessions"].pop(CONVERSATION_SESSION_KEY)
+        state = session.pop("resume_state")
+        state["checkpoint_id"] = "persisted"
+        session["conversation"] = state
+        session["operations"] = {"01_old": {"title": "Previous"}}
+        payload["sessions"]["prior_conversation"] = session
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        touched = self.store.touch(item.conversation_id)
+
+        saved = self._saved(path)
+        self.assertEqual(tuple(saved["sessions"]), ("prior_conversation",))
+        group = saved["sessions"]["prior_conversation"]
+        self.assertNotIn("conversation", group)
+        self.assertEqual(group["resume_state"]["checkpoint_id"],
+                         "persisted")
+        self.assertEqual(group["resume_state"]["updated_at_utc"],
+                         touched.updated_at_utc)
+        self.assertEqual(group["operations"],
+                         {"01_old": {"title": "Previous"}})
+
     def test_rename_name_limits(self):
         item = self.store.create()
         accepted = self.store.rename(item.conversation_id, "x" * 80)
@@ -828,6 +881,22 @@ class TestStoreMetadata(ConversationStoreFixture):
         path.write_text(json.dumps({"sessions": []}))
         with self.assertRaisesRegex(ValueError, "invalid"):
             self.store.touch(item.conversation_id)
+        self.assertEqual(self.store.active(), item)
+
+    def test_touch_rejects_conflicting_canonical_slot_without_writing(self):
+        item = self.store.create()
+        path = self.store.state_path(item)
+        payload = self._saved(path)
+        payload["sessions"][CONVERSATION_SESSION_KEY] = {
+            "category": "runtime", "important": "keep",
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        before = path.read_bytes()
+
+        with self.assertRaisesRegex(ValueError, "reserved session"):
+            self.store.touch(item.conversation_id)
+
+        self.assertEqual(path.read_bytes(), before)
         self.assertEqual(self.store.active(), item)
 
     def test_rename_updates_legacy_state_without_converting_format(self):

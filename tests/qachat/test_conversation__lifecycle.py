@@ -414,6 +414,34 @@ class TestConversationStoreIntegration(unittest.TestCase):
                             item.conversation_id)
         self.assertFalse(archived.is_symlink())
 
+    def test_untraced_rag_checkpoint_migrates_old_grouped_state(self):
+        item = self.store.ensure()
+        path = self.store.state_path(item)
+        payload = _read(path)
+        group = payload["sessions"][CONVERSATION_SESSION_KEY]
+        legacy = group.pop("resume_state")
+        legacy["custom_note"] = {"origin": "earlier-session"}
+        group["conversation"] = legacy
+        group["operations"] = {"01_action": {"title": "Retained"}}
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        session = _session(self.root, NullTraceLogger())
+        session.conversation_path = path
+        session._checkpoint_id = None
+        session._save_conversation()
+
+        saved = _read(path)["sessions"][CONVERSATION_SESSION_KEY]
+        self.assertNotIn("conversation", saved)
+        self.assertEqual(saved["resume_state"]["custom_note"],
+                         {"origin": "earlier-session"})
+        self.assertEqual(saved["resume_state"]["conversation_id"],
+                         item.conversation_id)
+        self.assertTrue(saved["resume_state"]["checkpoint_id"])
+        self.assertEqual(saved["operations"],
+                         {"01_action": {"title": "Retained"}})
+        self.assertEqual(ConversationStore(self.root).ensure().name,
+                         item.name)
+
     def test_disabled_trace_checkpoint_remains_discoverable(self):
         item = self.store.ensure()
         session = _session(self.root, NullTraceLogger())
