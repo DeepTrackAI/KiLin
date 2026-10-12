@@ -39,7 +39,13 @@ from qachat.retrievals import DocumentSelection, RetrievalPlan
 from qachat.retrievals.code_graph import CodeGraph
 from qachat.runtime import BACKEND_MLX
 from qachat.tools import ToolResult, ToolUse
-from qachat.trace_logging import NullTraceLogger, TraceConfig
+from qachat.trace_logging import (
+    TRACE_MODE_FORENSIC,
+    TRACE_MODE_STANDARD,
+    NullTraceLogger,
+    TraceConfig,
+    TraceLogger,
+)
 from tests.qachat.retrievals._support import (
     FakeEmbeddings,
     chunk,
@@ -190,6 +196,7 @@ class TestRAGRecords(unittest.TestCase):
     """Keep the public phase vocabulary and evidence records stable."""
 
     def test_answer_phases_are_unique_and_ordered(self) -> None:
+        """Keep the public answer-phase identifiers unique and ordered."""
         self.assertEqual(len(rag.ANSWER_PHASE_CHOICES), 8)
         self.assertEqual(len(set(rag.ANSWER_PHASE_CHOICES)), 8)
         self.assertEqual(
@@ -201,6 +208,7 @@ class TestRAGRecords(unittest.TestCase):
         )
 
     def test_records_are_frozen_with_optional_fields(self) -> None:
+        """Retain immutable RAG records and their optional metadata."""
         evidence = _evidence()
         self.assertIsNone(evidence.cell)
         with self.assertRaises(FrozenInstanceError):
@@ -219,6 +227,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
     """Check prompt construction and evidence provenance preservation."""
 
     def test_answer_prompt_without_evidence_preserves_question(self) -> None:
+        """Preserve the question when no supporting evidence is available."""
         self.assertEqual(rag._answer_prompt("how are you?", ()),
                          "how are you?")
         self.assertEqual(
@@ -231,6 +240,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
             )
 
     def test_answer_prompt_formats_citations_and_guidance(self) -> None:
+        """Format cited evidence and optional answering instructions."""
         evidence = (
             _evidence(text="First excerpt"),
             replace(_evidence(2), symbol=None, cell=3),
@@ -245,6 +255,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertNotIn("Short.", rag._answer_prompt("Q", evidence, 3))
 
     def test_document_helpers_retain_selected_source_order(self) -> None:
+        """Preserve document order and metadata when preparing evidence."""
         chunks = (
             replace(chunk("one", "first"), cell=2),
             chunk("two", "second", start=4),
@@ -283,6 +294,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
                          "No document found to read")
 
     def test_merge_evidence_deduplicates_and_keeps_newest_limit(self) -> None:
+        """Deduplicate evidence and respect the maximum result count."""
         original = _evidence()
         same = replace(original, citation=8, text="newer text")
         merged = rag._merge_evidence([(original,), (same,)])
@@ -299,6 +311,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertEqual(rag._merge_evidence([]), ())
 
     def test_related_evidence_uses_citations_newest_first(self) -> None:
+        """Follow cited references from newer conversation turns first."""
         fresh = (_evidence(),)
         older = _turn(
             answer="Earlier [1, 2]", evidence=(
@@ -314,6 +327,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertEqual([item.citation for item in combined], [1, 2, 3])
 
     def test_related_evidence_without_citations_is_limited(self) -> None:
+        """Limit related evidence when earlier answers cite no sources."""
         earlier = _turn(
             answer="No source numbers", evidence=tuple(
                 _evidence(number + 1, start=number * 4)
@@ -333,6 +347,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         )
 
     def test_turn_serialization_roundtrip_with_notebook_cell(self) -> None:
+        """Round-trip conversation turns with notebook-cell provenance."""
         evidence = replace(_evidence(), cell=4)
         original = _turn(
             "What?", "Answer [1]", (evidence,), {"count": 3}
@@ -349,6 +364,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
                          2)
 
     def test_turn_deserialization_rejects_invalid_records(self) -> None:
+        """Reject malformed persisted turn and evidence records."""
         payload = rag._turn_to_data(_turn(evidence=(_evidence(),)))
         with self.assertRaisesRegex(ValueError, "evidence must be a list"):
             rag._turn_from_data({**payload, "evidence": "bad"})
@@ -366,6 +382,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
             })
 
     def test_checkpoint_identifier_is_canonical(self) -> None:
+        """Derive the same checkpoint identifier from equivalent snapshots."""
         first = rag._resume_checkpoint_id({"b": 2, "a": "å"})
         second = rag._resume_checkpoint_id({"a": "å", "b": 2})
         self.assertEqual(first, second)
@@ -374,6 +391,7 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertNotEqual(first, rag._resume_checkpoint_id({"b": 3}))
 
     def test_chunk_and_rank_trace_hide_text_by_default(self) -> None:
+        """Exclude source text from compact chunk and ranking records."""
         value = chunk("id", "secret text")
         row = rag._chunk_trace_data(value, include_text=False)
         self.assertEqual(row["text_sha256"],
@@ -427,6 +445,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_retrieval_uses_formatted_semantic_and_raw_lexical_query(
         self,
     ) -> None:
+        """Keep embedding-query formatting separate from lexical search."""
         session = _session()
         session._format_query = Mock(return_value="formatted question")
         with _search_patches() as mocks:
@@ -448,6 +467,7 @@ class TestRAGRetrieval(unittest.TestCase):
         session._format_query.assert_called_once_with("question")
 
     def test_retrieval_reports_all_search_stages(self) -> None:
+        """Report the expected retrieval stages in execution order."""
         session = _session()
         messages = []
         with _search_patches() as mocks:
@@ -464,6 +484,7 @@ class TestRAGRetrieval(unittest.TestCase):
         self.assertEqual(messages[0], "Formatting the search query")
 
     def test_code_graph_search_is_conditional_on_entities(self) -> None:
+        """Use code-graph retrieval only when entities are available."""
         session = _session()
         session.indexes.code_graph = graph("module.func")
         session.chunks = [chunk("a", "def func(): pass")]
@@ -479,6 +500,7 @@ class TestRAGRetrieval(unittest.TestCase):
                          1)
 
     def test_retrieval_renumbers_expanded_chunks_and_keeps_cells(self) -> None:
+        """Renumber evidence while retaining notebook cell locations."""
         session = _session()
         first = chunk("a", "first", path="a.py", start=3)
         second = replace(chunk("b", "second", path="b.ipynb"), cell=2)
@@ -498,6 +520,7 @@ class TestRAGRetrieval(unittest.TestCase):
         )
 
     def test_single_document_scope_uses_full_ranking(self) -> None:
+        """Apply full ranking to evidence scoped to a single document."""
         session = _session()
         first = ranked(chunk("a", path="other.py"))
         focused = ranked(chunk("b", path="target.py"))
@@ -515,6 +538,7 @@ class TestRAGRetrieval(unittest.TestCase):
         )
 
     def test_empty_scoped_ranking_retains_general_results(self) -> None:
+        """Fall back to general ranking when scoped results are empty."""
         session = _session()
         general = ranked(chunk("a", path="other.py"))
         session._rank_everything = Mock(return_value=[general])
@@ -527,6 +551,7 @@ class TestRAGRetrieval(unittest.TestCase):
         )
 
     def test_multiple_scoped_paths_do_not_focus_ranking(self) -> None:
+        """Avoid special single-document handling for multiple paths."""
         session = _session()
         session._rank_everything = Mock()
         with _search_patches():
@@ -534,6 +559,7 @@ class TestRAGRetrieval(unittest.TestCase):
         session._rank_everything.assert_not_called()
 
     def test_retrieval_emits_content_only_in_forensic_mode(self) -> None:
+        """Attach exact retrieved content only when forensic mode permits."""
         session = _session()
         session.trace = MagicMock()
         session.trace.include_content = True
@@ -560,6 +586,7 @@ class TestRAGRetrieval(unittest.TestCase):
                          "question")
 
     def test_rank_everything_requests_all_chunks(self) -> None:
+        """Pass the complete indexed set to unrestricted ranking."""
         session = _session()
         session.chunks = [chunk("a"), chunk("b")]
         session._format_query = Mock(return_value="formatted")
@@ -578,12 +605,14 @@ class TestRAGRetrieval(unittest.TestCase):
         mocks["code_search"].assert_called_once()
 
     def test_document_selection_skips_empty_index(self) -> None:
+        """Skip document selection when no source chunks are indexed."""
         session = _session()
         session._rank_everything = Mock()
         self.assertIsNone(session._read_document("question", 1000))
         session._rank_everything.assert_not_called()
 
     def test_document_selection_delegates_with_token_budget(self) -> None:
+        """Forward document-selection limits and query metadata."""
         session = _session()
         session.chunks = [chunk("a")]
         session._rank_everything = Mock(return_value=[
@@ -606,6 +635,7 @@ class TestRAGRetrieval(unittest.TestCase):
         )
 
     def test_query_format_plain_and_qwen3(self) -> None:
+        """Apply the selected embedding query format consistently."""
         session = _session()
         self.assertEqual(session._format_query("  Question  "),
                          "  Question  ")
@@ -626,6 +656,7 @@ class TestRAGProgress(unittest.TestCase):
     """Verify progress counts, callback delivery, and trace throttling."""
 
     def test_progress_events_include_all_counts(self) -> None:
+        """Preserve progress counts and percentages for UI consumers."""
         session = _session()
         session.trace = MagicMock()
         received = []
@@ -648,6 +679,7 @@ class TestRAGProgress(unittest.TestCase):
         )
 
     def test_progress_trace_throttling_and_completion(self) -> None:
+        """Throttle ordinary progress traces while recording completion."""
         session = _session()
         session.trace = MagicMock()
         session._emit_progress("scan", 0, "Start")
@@ -660,6 +692,7 @@ class TestRAGProgress(unittest.TestCase):
         self.assertEqual(session.trace.emit.call_count, 4)
 
     def test_count_progress_rejects_invalid_counts(self) -> None:
+        """Reject invalid progress totals and processed counts."""
         session = _session()
         for current, total in ((-1, 5), (6, 5), (0, -1)):
             with self.subTest(current=current, total=total):
@@ -669,6 +702,7 @@ class TestRAGProgress(unittest.TestCase):
                     )
 
     def test_count_progress_endpoints_and_eta(self) -> None:
+        """Report progress endpoints and estimated remaining time."""
         session = _session()
         session._emit_progress = Mock()
         with patch.object(
@@ -699,6 +733,7 @@ class TestRAGProgress(unittest.TestCase):
         self.assertEqual(session._emit_progress.call_args.args[1], 20.0)
 
     def test_count_progress_throttles_intermediate_updates(self) -> None:
+        """Avoid redundant intermediate progress notifications."""
         session = _session()
         session._emit_progress = Mock()
         with patch.object(rag, "perf_counter", return_value=10.0):
@@ -750,12 +785,14 @@ class TestRAGAnswerValidation(unittest.TestCase):
     """Reject invalid answer requests before retrieval or generation."""
 
     def test_closed_session_rejects_questions(self) -> None:
+        """Reject new questions after the RAG session is closed."""
         session = _session()
         session._closed = True
         with self.assertRaisesRegex(RuntimeError, "closed"):
             session.ask("Question")
 
     def test_empty_and_nonstring_questions_are_rejected(self) -> None:
+        """Validate question types and nonblank content before work."""
         session = _session()
         for value in ("", " \t ", None, 123, []):
             with self.subTest(value=value):
@@ -763,6 +800,7 @@ class TestRAGAnswerValidation(unittest.TestCase):
                     session.ask(value)
 
     def test_invalid_optional_arguments_are_rejected(self) -> None:
+        """Validate optional question arguments before running models."""
         session = _session()
         invalid = (
             {"answer_guidance": 42},
@@ -789,6 +827,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
     """Exercise the configured answer modes and their saved turn records."""
 
     def test_search_answer_tracks_phases_and_persists_turn(self) -> None:
+        """Route, retrieve, answer, and save a search-mode turn."""
         session = _session()
         session.chunks = [chunk("a", "text")]
         phases = []
@@ -836,6 +875,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         tokens.assert_not_called()
 
     def test_search_adds_related_evidence_and_history(self) -> None:
+        """Combine related evidence with the selected conversation history."""
         session = _session()
         session.turns = [
             _turn("Prior", "Prior answer [1]", (_evidence(start=20),))
@@ -860,6 +900,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(mocks.retrieve.call_count, 1)
 
     def test_search_uses_document_scope_candidates(self) -> None:
+        """Pass detected document candidates to the retrieval operation."""
         session = _session()
         session.chunks = [
             chunk("a", path="one.py"),
@@ -879,6 +920,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
                          (Path("one.py"),))
 
     def test_document_answer_keeps_document_metadata(self) -> None:
+        """Retain selected-document provenance and answer parameters."""
         session = _session()
         sample = chunk("a", "first", path="paper.md")
         selection = DocumentSelection(
@@ -899,6 +941,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.retrieve.assert_not_called()
 
     def test_document_not_found_produces_no_evidence(self) -> None:
+        """Handle missing documents without inventing evidence."""
         session = _session()
         with _answer_patches(
             session, _intent(RETRIEVAL_MODE_DOCUMENT)
@@ -909,6 +952,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.read.assert_called_once()
 
     def test_none_mode_skips_retrieval(self) -> None:
+        """Generate an answer without retrieval in no-retrieval mode."""
         session = _session()
         phases = []
         with _answer_patches(
@@ -929,6 +973,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
                          "Hello")
 
     def test_reuse_mode_combines_prior_turns_without_search(self) -> None:
+        """Reuse referenced evidence without invoking a new search."""
         session = _session()
         session.turns = [
             _turn("One", evidence=(_evidence(start=10),)),
@@ -949,6 +994,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.retrieve.assert_not_called()
 
     def test_reuse_evidence_override_uses_last_turn(self) -> None:
+        """Honor explicit reuse of evidence from the previous answer."""
         session = _session()
         session.turns = [_turn(evidence=(_evidence(),))]
         with _answer_patches(session, _intent()) as mocks:
@@ -961,6 +1007,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
     def test_reuse_without_matching_evidence_falls_back_to_search(
         self,
     ) -> None:
+        """Search when requested earlier evidence cannot be reused."""
         session = _session()
         session.turns = [_turn(evidence=())]
         with _answer_patches(
@@ -972,6 +1019,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.retrieve.assert_called_once()
 
     def test_intent_guidance_overrides_caller_guidance(self) -> None:
+        """Give configured intent guidance precedence over caller text."""
         session = _session()
         with _answer_patches(
             session, _intent(guidance="Configured guidance")
@@ -985,6 +1033,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
                          "Configured guidance")
 
     def test_generation_settings_and_finish_reason_are_recorded(self) -> None:
+        """Persist effective generation settings and valid finish reasons."""
         session = _session()
         session.chat_session.last_finish_reason = "length"
         with _answer_patches(session, _intent()) as mocks:
@@ -1009,6 +1058,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertNotIn("finish_reason", session.turns[-1].parameters)
 
     def test_tool_answer_bypasses_chat_and_streams_once(self) -> None:
+        """Use the selected tool instead of an answering model."""
         session = _session()
         use = ToolUse("project_inventory", object())
         tokens = Mock()
@@ -1027,6 +1077,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
                          tokens)
 
     def test_tool_that_streamed_does_not_repeat_answer(self) -> None:
+        """Avoid replaying an answer already streamed by the tool."""
         session = _session()
         use = ToolUse("project_inventory", object())
         tokens = Mock()
@@ -1042,6 +1093,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(session.turns[-1].answer, "streamed")
 
     def test_generation_failure_does_not_append_turn(self) -> None:
+        """Avoid appending a turn when generation raises an error."""
         session = _session()
         session.chat_session.reply.side_effect = RuntimeError("model failed")
         with _answer_patches(session, _intent()) as mocks:
@@ -1051,6 +1103,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         mocks.save.assert_not_called()
 
     def test_save_failure_keeps_appended_turn(self) -> None:
+        """Document in-memory turn state after a checkpoint write failure."""
         session = _session()
         with _answer_patches(session, _intent()) as mocks:
             mocks.save.side_effect = OSError("disk full")
@@ -1059,6 +1112,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(len(session.turns), 1)
 
     def test_phase_callback_exception_propagates(self) -> None:
+        """Propagate exceptions raised by the interface phase callback."""
         session = _session()
         def fail(phase: str, details: dict) -> None:
             """Simulate a GUI callback failure."""
@@ -1074,6 +1128,7 @@ class TestRAGLifecycle(unittest.TestCase):
     """Test model ownership, switching, refresh, and token bookkeeping."""
 
     def test_close_releases_sessions_once(self) -> None:
+        """Close model resources exactly once per RAG session."""
         session = _session()
         session.close()
         session.close()
@@ -1082,6 +1137,7 @@ class TestRAGLifecycle(unittest.TestCase):
         session.embedding_session.close.assert_called_once_with()
 
     def test_close_releases_distinct_router_and_owned_trace(self) -> None:
+        """Release a separate router and owned trace on shutdown."""
         session = _session()
         router = MagicMock()
         session._router_session = router
@@ -1093,6 +1149,7 @@ class TestRAGLifecycle(unittest.TestCase):
         session.trace.close.assert_called_once()
 
     def test_close_marks_closed_even_if_model_cleanup_fails(self) -> None:
+        """Mark the session closed despite cleanup exceptions."""
         session = _session()
         session.chat_session.close.side_effect = OSError("close failed")
         session.trace = MagicMock()
@@ -1104,6 +1161,7 @@ class TestRAGLifecycle(unittest.TestCase):
         session.embedding_session.close.assert_not_called()
 
     def test_refresh_sources_replaces_only_retrieval_state(self) -> None:
+        """Refresh indexed sources without reloading chat resources."""
         session = _session()
         previous_chat = session.chat_session
         new_project = SimpleNamespace(root=Path("/new"))
@@ -1118,6 +1176,7 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertIs(session.chat_session, previous_chat)
 
     def test_refresh_failure_keeps_old_index_but_new_project(self) -> None:
+        """Preserve the existing index after a failed source refresh."""
         session = _session()
         original_index = session.indexes
         project = SimpleNamespace(root=Path("/new"))
@@ -1128,6 +1187,7 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertIs(session.indexes, original_index)
 
     def test_switch_chat_model_rejects_closed_or_wrong_backend(self) -> None:
+        """Reject unsupported model switches and closed sessions."""
         session = _session()
         session._closed = True
         with self.assertRaisesRegex(RuntimeError, "closed"):
@@ -1138,6 +1198,7 @@ class TestRAGLifecycle(unittest.TestCase):
             session.use_chat_model("other")
 
     def test_switch_chat_model_noop_and_new_session(self) -> None:
+        """Reuse the current model or create a replacement as required."""
         session = _session()
         session.router_model = "different-router"
         original = session.chat_session
@@ -1161,6 +1222,7 @@ class TestRAGLifecycle(unittest.TestCase):
         )
 
     def test_switch_chat_model_reuses_loaded_router(self) -> None:
+        """Reuse a loaded router when it already matches the chat model."""
         session = _session()
         session.router_model = "different-router"
         original = session.chat_session
@@ -1174,6 +1236,7 @@ class TestRAGLifecycle(unittest.TestCase):
         original.close.assert_called_once()
 
     def test_switch_chat_model_preserves_old_router_when_shared(self) -> None:
+        """Avoid closing a router still shared with another session."""
         session = _session()
         original = session.chat_session
         session.router_model = original.model_id
@@ -1185,6 +1248,7 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertIs(session.chat_session, replacement)
 
     def test_switch_chat_model_rolls_back_failed_new_load(self) -> None:
+        """Keep the previous chat model if loading its replacement fails."""
         session = _session()
         session.router_model = "different-router"
         original = session.chat_session
@@ -1201,6 +1265,7 @@ class TestRAGLifecycle(unittest.TestCase):
         )
 
     def test_switch_chat_model_keeps_shared_router_on_failure(self) -> None:
+        """Preserve shared router ownership after failed model loading."""
         session = _session()
         original = session.chat_session
         session.router_model = original.model_id
@@ -1211,6 +1276,7 @@ class TestRAGLifecycle(unittest.TestCase):
         original.close.assert_not_called()
 
     def test_router_model_change_closes_only_separate_session(self) -> None:
+        """Close the old router only when it owns a separate session."""
         session = _session()
         router = MagicMock()
         session._router_session = router
@@ -1225,6 +1291,7 @@ class TestRAGLifecycle(unittest.TestCase):
             session.use_router_model("again")
 
     def test_router_session_is_shared_or_loaded_lazily(self) -> None:
+        """Share an existing chat model or load a router on demand."""
         session = _session()
         self.assertIs(session._router_chat(), session.chat_session)
         session.router_model = "router"
@@ -1235,6 +1302,7 @@ class TestRAGLifecycle(unittest.TestCase):
         session._new_chat_session.assert_called_once_with("router")
 
     def test_router_reply_delegates_to_side_reply(self) -> None:
+        """Use the router session for classification-only replies."""
         session = _session()
         with patch.object(rag, "side_reply", return_value="yes") as side:
             self.assertEqual(session.router_reply("system", "question",
@@ -1246,6 +1314,7 @@ class TestRAGLifecycle(unittest.TestCase):
                          {"max_new_tokens": 9})
 
     def test_new_chat_session_uses_project_backend_and_trace(self) -> None:
+        """Construct new chat models with the project runtime and trace."""
         session = _session()
         with patch.object(rag, "ChatSession") as constructor:
             self.assertIs(
@@ -1259,6 +1328,7 @@ class TestRAGLifecycle(unittest.TestCase):
         self.assertFalse(constructor.call_args.kwargs["allow_download"])
 
     def test_usage_counters_include_distinct_router_only(self) -> None:
+        """Avoid double-counting token usage for a shared router."""
         session = _session()
         session._router_session = session.chat_session
         self.assertEqual(len(session.usage_mark()), 1)
@@ -1286,11 +1356,13 @@ class TestRAGLifecycle(unittest.TestCase):
         )
 
     def test_model_sessions_ignores_missing_counters(self) -> None:
+        """Tolerate model sessions without optional usage counters."""
         session = _session()
         session._router_session = object()
         self.assertEqual(session._model_sessions(), [session.chat_session])
 
     def test_index_metadata_and_turn_parameters(self) -> None:
+        """Expose index provenance and effective turn parameters."""
         session = _session()
         metadata = session._index_metadata()
         self.assertEqual(metadata["embedding_model"], "embedding-model")
@@ -1316,6 +1388,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
     """Test intent routing, prior-turn references, and tool adapters."""
 
     def test_routing_off_uses_default_without_loading_router(self) -> None:
+        """Select the default intent without loading a routing model."""
         session = _session()
         kind = _kind(_intent())
         session._router_chat = Mock()
@@ -1332,6 +1405,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         ).standalone)
 
     def test_routing_on_records_classification_and_fallback(self) -> None:
+        """Trace route decisions and recover from invalid classifications."""
         session = _session()
         kind = _kind(_intent())
         session.trace = MagicMock()
@@ -1361,6 +1435,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                          [{"turn_id": 2, "reason": "invalid"}])
 
     def test_earlier_turns_walks_related_chain_and_marks_last(self) -> None:
+        """Follow related-turn links and identify the latest turn."""
         session = _session()
         session.turns = [
             _turn("First", evidence=(_evidence(start=1),)),
@@ -1379,6 +1454,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertEqual(earlier[-1].lines, (1,))
 
     def test_earlier_turns_handles_back_reference_without_links(self) -> None:
+        """Resolve backward references when explicit links are missing."""
         session = _session()
         session.turns = [_turn("First")]
         self.assertEqual(session._earlier_turns(
@@ -1391,6 +1467,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertTrue(earlier[0].linked)
 
     def test_earlier_turns_rejects_invalid_links_and_caps_length(self) -> None:
+        """Reject invalid earlier-turn links and cap the history depth."""
         session = _session()
         session.turns = [
             _turn(str(number), parameters={"related_turn_ids": [
@@ -1407,6 +1484,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertEqual(earlier[-1].number, 9)
 
     def test_run_tool_builds_context_and_preserves_callbacks(self) -> None:
+        """Pass required context and callbacks to the selected tool."""
         session = _session()
         session.chunks = [chunk("one")]
         session._rank_everything = Mock(return_value=[ranked(chunk("one"))])
@@ -1451,6 +1529,7 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                          use.name)
 
     def test_tool_side_question_and_writer_use_isolated_reply(self) -> None:
+        """Keep auxiliary tool replies separate from conversation history."""
         session = _session()
         session._rank_everything = Mock(return_value=[])
         use = ToolUse("project_inventory", object())
@@ -1476,6 +1555,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
     """Verify resumable turns, checkpoint identities, and path containment."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -1483,9 +1563,11 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.session.conversation_path.parent.mkdir(parents=True)
 
     def test_absent_conversation_has_empty_state(self) -> None:
+        """Treat a missing conversation file as a new conversation."""
         self.assertEqual(self.session._load_conversation(), ([], [], None))
 
     def test_save_and_reload_grouped_conversation_without_trace(self) -> None:
+        """Round-trip saved turns and checkpoints without active tracing."""
         session = self.session
         session.turns = [
             _turn("Question", "Answer [1]", (_evidence(),))
@@ -1512,6 +1594,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertNotEqual(saved["checkpoint_id"], first)
 
     def test_save_conversation_with_trace_uses_same_record(self) -> None:
+        """Write resumable state into the enabled trace conversation file."""
         session = self.session
         session.trace = MagicMock()
         session.trace.enabled = True
@@ -1525,6 +1608,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertFalse(session.conversation_path.exists())
 
     def test_load_canonical_turns_reconstructs_model_history(self) -> None:
+        """Restore chat messages and turns from canonical saved records."""
         session = self.session
         data = {"sessions": {CONVERSATION_SESSION_KEY:
                              new_conversation_session({
@@ -1541,6 +1625,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertEqual(checkpoint, "checkpoint_previous")
 
     def test_load_conversation_rejects_corrupt_records(self) -> None:
+        """Reject corrupt and obsolete conversation representations."""
         session = self.session
         session.conversation_path.write_text("not JSON")
         with self.assertRaisesRegex(ValueError, "invalid"):
@@ -1566,6 +1651,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
                     session._load_conversation()
 
     def test_load_conversation_ignores_invalid_checkpoint(self) -> None:
+        """Ignore invalid checkpoint identifiers while restoring turns."""
         session = self.session
         session.conversation_path.write_text(json.dumps({
             "sessions": {CONVERSATION_SESSION_KEY:
@@ -1576,6 +1662,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertIsNone(session._load_conversation()[2])
 
     def test_save_preserves_existing_unrelated_sessions(self) -> None:
+        """Keep unrelated trace sessions when saving without tracing."""
         session = self.session
         session.conversation_path.write_text(json.dumps({
             "sessions": {"custom": {"title": "Keep"}},
@@ -1586,6 +1673,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
                          {"title": "Keep"})
 
     def test_untraced_save_does_not_convert_obsolete_state(self) -> None:
+        """Refuse to overwrite obsolete conversation data implicitly."""
         session = self.session
         session.conversation_path.write_text(json.dumps({
             "conversation": {"turns": [{"question": "Do not replace"}]},
@@ -1596,6 +1684,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertEqual(session.conversation_path.read_bytes(), before)
 
     def test_untraced_save_preserves_invalid_grouped_state(self) -> None:
+        """Leave invalid grouped records unchanged after save failure."""
         session = self.session
         bad_group = new_conversation_session({
             "turns": [], "checkpoint_id": "old",
@@ -1610,6 +1699,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertEqual(session.conversation_path.read_bytes(), before)
 
     def test_write_json_is_atomic_and_replaces_existing_data(self) -> None:
+        """Replace JSON atomically without leftover temporary files."""
         path = self.root / "payload.json"
         rag._write_json(path, {"a": 1})
         rag._write_json(path, {"a": 2})
@@ -1617,6 +1707,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertFalse((self.root / "payload.json.tmp").exists())
 
     def test_resolve_conversation_path_validation(self) -> None:
+        """Enforce project containment and supported conversation paths."""
         session = self.session
         expected = session._resolve_conversation_path(
             "logs/traces/conversation_custom.json"
@@ -1638,6 +1729,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
                     session._resolve_conversation_path(name)
 
     def test_resolve_conversation_allocates_unique_default_names(self) -> None:
+        """Allocate distinct conversation names when none are specified."""
         session = self.session
         first = session._resolve_conversation_path(None)
         first.write_text("{}")
@@ -1647,6 +1739,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertTrue(second.parent.is_dir())
 
     def test_resolve_rejects_symlink_escape(self) -> None:
+        """Reject conversation paths escaping through symbolic links."""
         session = self.session
         outside = self.root / "elsewhere"
         outside.mkdir()
@@ -1658,6 +1751,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
             )
 
     def test_archive_conversation_moves_existing_file(self) -> None:
+        """Archive an existing conversation without destroying its file."""
         session = self.session
         self.assertIsNone(session._archive_conversation())
         session.conversation_path.write_text("original")
@@ -1668,6 +1762,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertTrue(archive.name.startswith("conversation_"))
 
     def test_reset_archives_turns_and_preserves_models(self) -> None:
+        """Reset conversation state while retaining loaded model sessions."""
         session = self.session
         session.trace = MagicMock()
         session.turns = [_turn()]
@@ -1688,6 +1783,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
     def test_switch_conversation_reuses_models_and_restores_settings(
         self,
     ) -> None:
+        """Restore another conversation without reloading model resources."""
         session = self.session
         target = session._resolve_conversation_path(
             "logs/traces/conversation_second.json"
@@ -1720,6 +1816,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
     def test_switch_conversation_uses_profile_defaults_without_turns(
         self,
     ) -> None:
+        """Use profile generation defaults for a conversation with no turns."""
         session = self.session
         session._owns_trace = True
         old_trace = MagicMock()
@@ -1737,6 +1834,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         )
 
     def test_switch_rejects_closed_session_and_mismatched_trace(self) -> None:
+        """Reject switching after close or with an unrelated trace."""
         session = self.session
         session._closed = True
         with self.assertRaisesRegex(RuntimeError, "closed"):
@@ -1754,6 +1852,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
             )
 
     def test_trace_configuration_is_bound_to_conversation_path(self) -> None:
+        """Bind newly created RAG traces to the conversation JSON path."""
         path = self.session.conversation_path.resolve()
         disabled, owned = rag._conversation_trace(
             TraceConfig(enabled=False), path
@@ -1772,6 +1871,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
             )
 
     def test_trace_sink_must_match_exact_path_when_enabled(self) -> None:
+        """Reject enabled trace sinks pointing outside the conversation."""
         path = self.session.conversation_path.resolve()
         disabled = NullTraceLogger()
         rag._check_conversation_trace(disabled, path)
@@ -1787,6 +1887,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         rag._check_conversation_trace(bad, path)
 
     def test_source_text_cache_discards_invalid_entries(self) -> None:
+        """Ignore malformed cached source text and retain valid records."""
         indexes = self.root / "indexes"
         self.assertEqual(rag._read_text_cache(indexes), {})
         rag._write_text_cache(indexes, {
@@ -1812,6 +1913,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
     """Check extracted-text caching and incremental source chunk reuse."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -1836,6 +1938,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         }
 
     def test_source_preparation_extracts_chunks_and_code_graph(self) -> None:
+        """Build source chunks and code graphs from the repository."""
         chunks, code_graph = self.session._prepare_source(
             self.embedding, report=self._report()
         )
@@ -1847,6 +1950,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertIn("return 1", cached["a.py"]["text"])
 
     def test_unchanged_text_cache_skips_source_reader(self) -> None:
+        """Reuse unchanged text without rereading the original source."""
         self.session._prepare_source(self.embedding, report=self._report())
         with patch.object(
             rag, "read_repository_files",
@@ -1858,6 +1962,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertTrue(chunks)
 
     def test_changed_source_reuses_other_file_chunks(self) -> None:
+        """Reprocess modified sources while preserving unaffected chunks."""
         chunks, _ = self.session._prepare_source(
             self.embedding, report=self._report()
         )
@@ -1888,6 +1993,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertTrue(any("999" in value.text for value in updated))
 
     def test_removed_sources_are_pruned_from_text_cache(self) -> None:
+        """Remove cached text for files no longer in the repository."""
         self.session._prepare_source(self.embedding, report=self._report())
         chunks, _ = self.session._prepare_source(
             self.embedding, report=self._report(["b.py"])
@@ -1898,6 +2004,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         )), {"b.py"})
 
     def test_empty_source_returns_empty_graph_and_chunks(self) -> None:
+        """Handle empty source files without generating false entities."""
         chunks, code_graph = self.session._prepare_source(
             self.embedding, report=self._report([])
         )
@@ -1905,6 +2012,7 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.assertEqual(code_graph, CodeGraph((), ()))
 
     def test_disabled_code_graph_skips_graph_extraction(self) -> None:
+        """Skip code-graph work when the profile disables that feature."""
         with patch.object(rag, "project_type") as project:
             project.return_value.code_graph = False
             with patch.object(rag, "build_code_graph") as build:
@@ -1916,12 +2024,14 @@ class TestRAGSourcePreparation(unittest.TestCase):
         build.assert_not_called()
 
     def test_missing_source_fails_instead_of_using_stale_text(self) -> None:
+        """Fail on missing files instead of relying on cached source text."""
         with self.assertRaises(OSError):
             self.session._prepare_source(
                 self.embedding, report=self._report(["missing.py"])
             )
 
     def test_source_preparation_scans_when_no_report_is_supplied(self) -> None:
+        """Scan the repository when no source report was provided."""
         with patch.object(
             rag, "scan_repository", return_value=self._report()
         ) as scan:
@@ -1935,12 +2045,14 @@ class TestRAGSourceInventory(unittest.TestCase):
     """Keep tool file inventories aligned with the source manifest."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.session = _session(Path(temporary.name))
         self.session.project.indexes.mkdir()
 
     def test_source_files_reads_manifest_sizes(self) -> None:
+        """Read source inventory and file sizes from the saved manifest."""
         manifest = self.session.project.indexes / "source_manifest.json"
         manifest.write_text(json.dumps({
             "files": {
@@ -1958,6 +2070,7 @@ class TestRAGSourceInventory(unittest.TestCase):
         )
 
     def test_invalid_source_manifest_yields_empty_inventory(self) -> None:
+        """Return an empty inventory for malformed manifests."""
         manifest = self.session.project.indexes / "source_manifest.json"
         self.assertEqual(self.session._source_files(), {})
         for value in ("bad JSON", "{}", '{"files": []}',
@@ -1971,6 +2084,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     """Verify startup, restored history, and partial-initialization cleanup."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -2020,12 +2134,14 @@ class TestRAGSessionConstruction(unittest.TestCase):
             )
 
     def test_constructor_rejects_noncallable_progress_callback(self) -> None:
+        """Reject progress callbacks that cannot be invoked."""
         with patch.object(rag, "open_project") as opened:
             with self.assertRaisesRegex(ValueError, "progress_callback"):
                 rag.RAGSession(self.root, progress_callback=3)
         opened.assert_not_called()
 
     def test_constructor_loads_models_and_reports_ready(self) -> None:
+        """Initialize the session and report successful preparation."""
         progress = []
         with self._construction_patches() as mocks:
             session = rag.RAGSession(
@@ -2051,6 +2167,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     def test_constructor_restores_history_and_generation_settings(
         self,
     ) -> None:
+        """Restore saved conversation and effective model settings."""
         previous = _turn(parameters={
             "thinking": True, "temperature": 0.3,
             "max_new_tokens": 64,
@@ -2073,6 +2190,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     def test_constructor_closes_models_and_trace_on_index_failure(
         self,
     ) -> None:
+        """Release owned resources after index initialization fails."""
         with self._construction_patches() as mocks:
             mocks.prepared.side_effect = OSError("index failed")
             with self.assertRaisesRegex(OSError, "index failed"):
@@ -2083,6 +2201,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
         mocks.trace.exception.assert_called_once()
 
     def test_constructor_closes_both_models_on_restore_failure(self) -> None:
+        """Close loaded models if conversation restoration fails."""
         with self._construction_patches() as mocks:
             mocks.loaded.side_effect = ValueError("bad conversation")
             with self.assertRaisesRegex(ValueError, "bad conversation"):
@@ -2094,6 +2213,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     def test_constructor_closes_trace_on_embedding_load_failure(
         self,
     ) -> None:
+        """Close owned tracing when embedding initialization fails."""
         with self._construction_patches() as mocks:
             mocks.embeddings.side_effect = OSError("missing model")
             with self.assertRaisesRegex(OSError, "missing model"):
@@ -2107,6 +2227,7 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
     """Check recovery from malformed manifest and metadata files."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.session = _session(Path(temporary.name))
@@ -2151,6 +2272,7 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
             yield SimpleNamespace(compare=compare, prepare=prepare)
 
     def test_invalid_manifest_json_triggers_clean_rebuild(self) -> None:
+        """Rebuild indexes when the saved manifest is malformed."""
         self.manifest.write_text("invalid JSON")
         with self._index_patches() as mocks:
             _, _, status, _ = self.session._prepare_retrieval(
@@ -2161,12 +2283,14 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
         self.assertIsInstance(json.loads(self.manifest.read_text()), dict)
 
     def test_nonmapping_manifest_is_treated_as_missing(self) -> None:
+        """Treat a non-object manifest as unavailable metadata."""
         self.manifest.write_text("[]")
         with self._index_patches() as mocks:
             self.session._prepare_retrieval(self.embedding)
         self.assertIsNone(mocks.compare.call_args.args[0])
 
     def test_invalid_settings_json_triggers_clean_rebuild(self) -> None:
+        """Rebuild indexes after invalid stored settings JSON."""
         self.settings.write_text("invalid JSON")
         with self._index_patches():
             _, _, status, _ = self.session._prepare_retrieval(
@@ -2177,12 +2301,14 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
                       json.loads(self.settings.read_text()))
 
     def test_nonmapping_settings_are_replaced(self) -> None:
+        """Replace saved settings that are not object mappings."""
         self.settings.write_text("[]")
         with self._index_patches():
             self.session._prepare_retrieval(self.embedding)
         self.assertIsInstance(json.loads(self.settings.read_text()), dict)
 
     def test_invalid_saved_manifest_is_compared_against_none(self) -> None:
+        """Ignore malformed prior manifests during change comparison."""
         self.manifest.write_text('{"files": {}}')
         with self._index_patches() as mocks:
             mocks.compare.side_effect = [
@@ -2193,6 +2319,7 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
         self.assertIsNone(mocks.compare.call_args.args[0])
 
     def test_missing_model_source_is_rejected(self) -> None:
+        """Reject incomplete model-source descriptions."""
         self.embedding.model_source = None
         with self._index_patches() as mocks:
             with self.assertRaisesRegex(ValueError, "source"):
@@ -2204,6 +2331,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
     """Cover optional trace content and metadata-preserving fallbacks."""
 
     def test_forensic_trace_includes_question_in_turn_span(self) -> None:
+        """Include exact question text in forensic turn metadata."""
         session = _session()
         session.trace = MagicMock()
         session.trace.include_content = True
@@ -2217,6 +2345,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
                          "Private question")
 
     def test_document_override_records_effective_query(self) -> None:
+        """Record the effective query used for document retrieval."""
         session = _session()
         with _answer_patches(
             session, _intent(RETRIEVAL_MODE_DOCUMENT)
@@ -2228,12 +2357,14 @@ class TestRAGAdditionalBranches(unittest.TestCase):
         self.assertEqual(mocks.read.call_args.args[0], "a.py")
 
     def test_router_change_without_separate_session(self) -> None:
+        """Update router preference without replacing a shared session."""
         session = _session()
         session.use_router_model("another-router")
         self.assertEqual(session.router_model, "another-router")
         session.chat_session.close.assert_not_called()
 
     def test_save_conversation_rejects_nonmapping_json(self) -> None:
+        """Reject a non-object conversation file without overwriting it."""
         with TemporaryDirectory() as directory:
             session = _session(Path(directory))
             session.conversation_path.parent.mkdir(parents=True)
@@ -2244,6 +2375,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
             self.assertEqual(session.conversation_path.read_bytes(), before)
 
     def test_explicit_enabled_trace_config_is_bound(self) -> None:
+        """Bind explicit enabled trace configurations to the target path."""
         with TemporaryDirectory() as directory:
             path = (Path(directory) / "conversation_1.json").resolve()
             for config in (
@@ -2259,6 +2391,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
     def test_constructor_does_not_close_caller_owned_trace_on_error(
         self,
     ) -> None:
+        """Preserve a caller-owned trace after constructor failure."""
         with TemporaryDirectory() as directory:
             from qachat.project import QAProject, default_project_profile
             root = Path(directory)
@@ -2287,6 +2420,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
     """Exercise guards for invalid cached vectors and changed source sets."""
 
     def setUp(self) -> None:
+        """Create isolated state and arrange test-specific fixtures."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -2342,6 +2476,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
             yield source
 
     def test_invalid_cached_vectors_force_reembedding(self) -> None:
+        """Recompute embeddings when cached vectors are invalid."""
         bad = SimpleNamespace(
             embedding_model_identity="model-hash",
             semantic=SimpleNamespace(
@@ -2358,6 +2493,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
         self.assertEqual(self.embedding.calls, [["alpha beta"]])
 
     def test_removed_file_vectors_are_not_reused(self) -> None:
+        """Exclude vectors belonging to source files that were removed."""
         obsolete = chunk("old", "obsolete", path="obsolete.py")
         saved = SimpleNamespace(
             embedding_model_identity="model-hash",
@@ -2380,6 +2516,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
         self.assertEqual(indexes.semantic.embeddings, ((1.0, 2.0),))
 
     def test_conversation_path_rechecks_symlink_before_creation(self) -> None:
+        """Revalidate resolved paths before creating conversation files."""
         with TemporaryDirectory() as directory:
             session = _session(Path(directory))
             session.project.logs.mkdir()
@@ -2392,3 +2529,337 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRAGTraceIntegration(unittest.TestCase):
+    """Verify RAG turn outcomes in real grouped conversation-trace files."""
+
+    def setUp(self) -> None:
+        """Isolate conversation files without loading any model or index."""
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.session = _session(self.root)
+        self.session.conversation_path.parent.mkdir(parents=True)
+
+    def _bind_trace(
+        self,
+        mode: str = TRACE_MODE_STANDARD,
+        *,
+        owned: bool = False,
+    ) -> TraceLogger:
+        """Connect a real logger to the RAG conversation's exact path."""
+        trace = TraceLogger(
+            TraceConfig(
+                enabled=True,
+                output_path=self.session.conversation_path,
+                mode=mode,
+            ),
+            default_directory=self.root,
+        )
+        self.addCleanup(trace.close)
+        self.session.trace = trace
+        self.session._owns_trace = owned
+        return trace
+
+    def _payload(self, path: Path | None = None) -> dict[str, object]:
+        """Read the single persisted trace and conversation document."""
+        selected = path or self.session.conversation_path
+        return json.loads(selected.read_text(encoding="utf-8"))
+
+    def _conversation(self) -> dict[str, object]:
+        """Return the readable conversation session from the active file."""
+        return self._payload()["sessions"][CONVERSATION_SESSION_KEY]
+
+    def _ask_with_real_save(
+        self,
+        question: str,
+        intent: Intent,
+    ) -> str:
+        """Run the real turn state machine and real checkpoint writer."""
+        with _answer_patches(self.session, intent) as mocks:
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            return self.session.ask(question, use_router=False)
+
+    def test_standard_trace_persists_metadata_and_checkpoint(
+        self,
+    ) -> None:
+        """Keep standard-mode metadata and resumable state in one file."""
+        trace = self._bind_trace()
+        answer = self._ask_with_real_save("Sensitive question", _intent())
+        trace.close()
+        self.assertEqual(answer, "model answer")
+        payload = self._payload()
+        self.assertEqual(payload["event_count"], 13)
+        session = self._conversation()
+        self.assertEqual(len(session["turns"]), 1)
+        turn = session["turns"]["turn_0001"]
+        self.assertEqual(turn["title"], "Turn 1")
+        self.assertEqual(
+            turn["stages"]["03_retrieval"]["operations"][
+                "02_retrieval_result"
+            ]["details"]["evidence_count"],
+            1,
+        )
+        checkpoint = turn["stages"]["05_generation"]["operations"][
+            "01_state_checkpoint_committed"
+        ]["details"]
+        self.assertEqual(
+            checkpoint["checkpoint_id"], session["resume_state"][
+                "checkpoint_id"
+            ]
+        )
+        self.assertEqual(checkpoint["turn_count"], 1)
+        self.assertEqual(
+            checkpoint["conversation_path"], str(trace.output_path)
+        )
+        self.assertEqual(
+            session["resume_state"]["turns"][0]["question"],
+            "Sensitive question",
+        )
+        question_ops = turn["stages"]["01_question"]["operations"]
+        self.assertNotIn("question", question_ops["01_turn"]["details"])
+        self.assertEqual(
+            question_ops["06_conversation_turn_representation"][
+                "details"
+            ]["question"],
+            "Sensitive question",
+        )
+        self.assertFalse(trace.output_path.with_suffix(".json.tmp").exists())
+
+    def test_forensic_trace_keeps_question_and_related_turn_operations(
+        self,
+    ) -> None:
+        """Keep forensic question text and every phase in the same turn."""
+        self._bind_trace(mode=TRACE_MODE_FORENSIC)
+        self._ask_with_real_save("Exact forensic question", _intent())
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertEqual(turn["title"], "Turn 1: Exact forensic question")
+        question = turn["stages"]["01_question"]["operations"]
+        self.assertEqual(
+            question["01_turn"]["details"]["question"],
+            "Exact forensic question",
+        )
+        self.assertEqual(question["01_turn"]["event"]["status"],
+                         "completed")
+        self.assertIn("03_retrieval", turn["stages"])
+        self.assertIn("05_generation", turn["stages"])
+        self.assertEqual(self._payload()["progress_checkpoint_count"], 0)
+
+    def test_answer_without_retrieval_is_traced_and_saved(self) -> None:
+        """Record explicit no-retrieval decisions and a valid checkpoint."""
+        self._bind_trace()
+        self._ask_with_real_save("Hello", _intent(RETRIEVAL_MODE_NONE))
+        turn = self._conversation()["turns"]["turn_0001"]
+        retrieval = turn["stages"]["03_retrieval"]["operations"]
+        self.assertEqual(
+            retrieval["02_retrieval_result"]["details"]["mode"],
+            RETRIEVAL_MODE_NONE,
+        )
+        self.assertEqual(
+            retrieval["02_retrieval_result"]["details"]["evidence_count"],
+            0,
+        )
+        self.assertEqual(
+            len(self._conversation()["resume_state"]["turns"]), 1
+        )
+
+    def test_generation_failure_is_logged_without_committing_a_turn(
+        self,
+    ) -> None:
+        """Persist a failed turn span but no successful checkpoint event."""
+        self._bind_trace()
+        self.session.chat_session.reply.side_effect = RuntimeError(
+            "model unavailable"
+        )
+        with self.assertRaisesRegex(RuntimeError, "model unavailable"):
+            self._ask_with_real_save("Failing question", _intent())
+        self.assertEqual(self.session.turns, [])
+        turn = self._conversation()["turns"]["turn_0001"]
+        summary = turn["stages"]["01_question"]["operations"][
+            "01_turn"
+        ]
+        self.assertEqual(summary["event"]["status"], "failed")
+        self.assertEqual(summary["result"]["error_type"], "RuntimeError")
+        self.assertIn("model unavailable", summary["result"]["traceback"])
+        self.assertNotIn("05_generation", turn["stages"])
+        self.assertEqual(self._conversation()["resume_state"], {})
+
+    def test_retrieval_failure_is_logged_before_generation(self) -> None:
+        """Report retrieval errors without falsely recording model output."""
+        self._bind_trace()
+        with _answer_patches(self.session, _intent()) as mocks:
+            mocks.retrieve.side_effect = OSError("retrieval failed")
+            with self.assertRaisesRegex(OSError, "retrieval failed"):
+                self.session.ask("Search failure", use_router=False)
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertEqual(
+            turn["stages"]["01_question"]["operations"][
+                "01_turn"
+            ]["event"]["status"],
+            "failed",
+        )
+        self.assertNotIn("05_generation", turn["stages"])
+        self.assertEqual(len(self.session.turns), 0)
+
+    def test_two_turns_preserve_order_and_checkpoint_parent(self) -> None:
+        """Maintain distinct trace turns with linked resumable checkpoints."""
+        self._bind_trace()
+        self._ask_with_real_save("First question", _intent())
+        earlier = self.session._checkpoint_id
+        self._ask_with_real_save("Second question", _intent())
+        session = self._conversation()
+        self.assertEqual(list(session["turns"]), [
+            "turn_0001", "turn_0002"
+        ])
+        self.assertEqual(len(session["resume_state"]["turns"]), 2)
+        checkpoint = session["turns"]["turn_0002"]["stages"][
+            "05_generation"
+        ]["operations"]["01_state_checkpoint_committed"]["details"]
+        self.assertEqual(checkpoint["parent_checkpoint_id"], earlier)
+        self.assertEqual(checkpoint["turn_count"], 2)
+        self.assertNotEqual(checkpoint["checkpoint_id"], earlier)
+
+    def test_reset_archives_previous_trace_without_retaining_old_turns(
+        self,
+    ) -> None:
+        """Keep archived evidence intact while starting a fresh transcript."""
+        self._bind_trace()
+        self._ask_with_real_save("Before reset", _intent())
+        prior_checkpoint = self.session._checkpoint_id
+        archived = self.session.reset()
+        self.assertIsNotNone(archived)
+        self.assertTrue(archived.is_file())
+        archived_session = self._payload(archived)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]
+        self.assertEqual(len(archived_session["turns"]), 1)
+        self.assertEqual(
+            archived_session["resume_state"]["checkpoint_id"],
+            prior_checkpoint,
+        )
+        active = self._conversation()
+        self.assertEqual(active["turns"], {})
+        self.assertEqual(active["resume_state"], {})
+        self._ask_with_real_save("After reset", _intent())
+        self.assertEqual(list(self._conversation()["turns"]), ["turn_0001"])
+        self.assertEqual(self.session._checkpoint_id,
+                         self._conversation()["resume_state"]["checkpoint_id"])
+
+    def test_switch_conversation_keeps_trace_and_resume_paths_separate(
+        self,
+    ) -> None:
+        """Close the owned old logger before switching to a new trace."""
+        self._bind_trace(owned=True)
+        self._ask_with_real_save("Old conversation", _intent())
+        old_path = self.session.conversation_path
+        new_path = old_path.with_name("conversation_second.json")
+        next_trace = TraceLogger(
+            TraceConfig(enabled=True, output_path=new_path),
+            default_directory=self.root,
+        )
+        self.addCleanup(next_trace.close)
+        restored = self.session.switch_conversation(
+            new_path, trace=next_trace
+        )
+        self.assertEqual(restored, [])
+        old_trace_events = self._payload(old_path)["sessions"][
+            "01_trace"
+        ]["operations"]
+        self.assertIn("02_trace_closed", old_trace_events)
+        self.assertEqual(
+            self.session.conversation_path, new_path.resolve()
+        )
+        self._ask_with_real_save("New conversation", _intent())
+        self.assertEqual(
+            self._payload(old_path)["sessions"][CONVERSATION_SESSION_KEY][
+                "resume_state"
+            ]["turns"][0]["question"],
+            "Old conversation",
+        )
+        self.assertEqual(
+            self._payload(new_path)["sessions"][CONVERSATION_SESSION_KEY][
+                "resume_state"
+            ]["turns"][0]["question"],
+            "New conversation",
+        )
+        self.assertEqual(len(self._payload(old_path)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]["turns"]), 1)
+        self.assertEqual(len(self._payload(new_path)["sessions"][
+            CONVERSATION_SESSION_KEY
+        ]["turns"]), 1)
+
+    def test_conversation_write_failure_records_no_committed_checkpoint(
+        self,
+    ) -> None:
+        """Report a failed save without claiming the checkpoint succeeded."""
+        trace = self._bind_trace()
+        with patch.object(
+            trace, "update_conversation", side_effect=OSError("no space")
+        ):
+            with self.assertRaisesRegex(OSError, "no space"):
+                self._ask_with_real_save("Save failure", _intent())
+        self.assertEqual(len(self.session.turns), 1)
+        self.assertIsNone(self.session._checkpoint_id)
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertEqual(
+            turn["stages"]["01_question"]["operations"][
+                "01_turn"
+            ]["event"]["status"],
+            "failed",
+        )
+        self.assertNotIn("05_generation", turn["stages"])
+        self.assertEqual(self._conversation()["resume_state"], {})
+
+    def test_late_callback_failure_keeps_saved_checkpoint_and_failure(
+        self,
+    ) -> None:
+        """Record failure after saving without discarding persisted state."""
+        self._bind_trace()
+
+        def phase_callback(phase: str, details: object) -> None:
+            """Fail after the checkpoint is committed for this turn."""
+            if phase == rag.ANSWER_PHASE_COMPLETED:
+                raise RuntimeError("UI callback failed")
+
+        with _answer_patches(self.session, _intent()) as mocks:
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            with self.assertRaisesRegex(RuntimeError, "UI callback failed"):
+                self.session.ask(
+                    "Callback failure", use_router=False,
+                    phase_callback=phase_callback,
+                )
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertEqual(
+            turn["stages"]["01_question"]["operations"][
+                "01_turn"
+            ]["event"]["status"],
+            "failed",
+        )
+        saved = turn["stages"]["05_generation"]["operations"][
+            "01_state_checkpoint_committed"
+        ]
+        self.assertEqual(saved["event"]["status"], "completed")
+        self.assertEqual(len(self._conversation()["resume_state"]["turns"]), 1)
+
+    def test_tool_answer_commits_trace_without_chat_reply(self) -> None:
+        """Persist tool-produced turns without invoking the chat model."""
+        self._bind_trace()
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("project_inventory", object()),
+        )
+        answer = self._ask_with_real_save("Inventory", intent)
+        self.assertEqual(answer, "tool answer")
+        self.session.chat_session.reply.assert_not_called()
+        turn = self._conversation()["turns"]["turn_0001"]
+        self.assertIn("05_generation", turn["stages"])
+        self.assertEqual(
+            self._conversation()["resume_state"]["turns"][0]["answer"],
+            "tool answer",
+        )
