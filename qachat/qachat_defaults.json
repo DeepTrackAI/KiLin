@@ -67,8 +67,5 @@
       ".pth",
       ".safetensors"
     ]
-  },
-  "TRACE": {
-    "DEFAULT_MODE": "forensic"
   }
 }

@@ -28,9 +28,7 @@ from qachat.conversation_format import (
 from qachat.rag import RAGSession, _conversation_trace
 from qachat.conversations import ConversationStore
 from qachat.trace_logging import (
-    DEFAULT_TRACE_MODE,
     NullTraceLogger,
-    TRACE_MODE_FORENSIC,
     TraceConfig,
     TraceLogger,
 )
@@ -73,7 +71,7 @@ def _group(path: Path) -> dict:
 
 
 def _logger(path: Path) -> TraceLogger:
-    """Create a real forensic trace logger bound to one local file.
+    """Create a real full-detail trace logger bound to one local file.
 
     Parameters
     ----------
@@ -88,7 +86,7 @@ def _logger(path: Path) -> TraceLogger:
     """
 
     return TraceLogger(
-        TraceConfig(enabled=True, output_path=path, mode=TRACE_MODE_FORENSIC),
+        TraceConfig(enabled=True, output_path=path),
         default_directory=path.parent,
     )
 
@@ -561,13 +559,14 @@ class TestConversationTraceSelection(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.path = self.root / "logs" / "conversation_trace.json"
 
-    def test_missing_trace_configuration_uses_configured_mode(self):
-        """Use the packaged trace mode for a new conversation."""
+    def test_missing_trace_configuration_enables_full_logging(self):
+        """Record full diagnostics for a new conversation by default."""
         trace, owned = _conversation_trace(None, self.path)
         self.addCleanup(trace.close)
         self.assertTrue(owned)
         self.assertTrue(trace.enabled)
-        self.assertEqual(trace.config.mode, DEFAULT_TRACE_MODE)
+        self.assertTrue(trace.include_content)
+        self.assertTrue(trace.include_token_ids)
         self.assertEqual(trace.output_path, self.path)
         self.assertTrue(self.path.is_file())
 

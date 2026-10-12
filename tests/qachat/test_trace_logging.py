@@ -1,7 +1,7 @@
 """Unit tests for structured traces and persisted conversation records.
 
 Tests use temporary local files and deterministic event inputs. They verify
-observable JSON output, lifecycle handling, trace modes, and I/O failures
+observable JSON output, full diagnostic tracing, and I/O failures
 without loading models, accessing the network, or using a GUI.
 
 """
@@ -23,10 +23,10 @@ import unittest
 from unittest.mock import Mock, patch
 import warnings
 
+import qachat
 from qachat.conversation_format import CONVERSATION_SESSION_KEY
 from qachat import trace_logging
 from qachat.trace_logging import (
-    DEFAULT_TRACE_MODE,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
@@ -34,8 +34,6 @@ from qachat.trace_logging import (
     TRACE_EVENT_LLM_CALL_OUTPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
     TRACE_EVENT_PROGRESS_UPDATED,
-    TRACE_MODE_FORENSIC,
-    TRACE_MODE_STANDARD,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -71,50 +69,52 @@ def _turns(payload: dict[str, object]) -> dict[str, object]:
 class TestTraceConfig(unittest.TestCase):
     """Keep immutable tracing configuration and validation explicit."""
 
-    def test_default_flags_and_mode(self) -> None:
-        """Use the packaged trace mode without implicitly enabling tracing."""
+    def test_default_flags_and_immutable_configuration(self) -> None:
+        """Keep tracing opt-in at the low-level configuration boundary."""
         config = TraceConfig()
         self.assertFalse(config.enabled)
         self.assertIsNone(config.output_path)
-        self.assertEqual(config.mode, DEFAULT_TRACE_MODE)
-        self.assertIn(config.mode, trace_logging.TRACE_MODE_CHOICES)
         self.assertFalse(config.include_embedding_vectors)
         self.assertEqual(config.failure_policy, FAILURE_POLICY_WARN)
+        self.assertFalse(hasattr(config, "mode"))
         with self.assertRaises(FrozenInstanceError):
             config.enabled = True
 
-    def test_default_mode_matches_packaged_configuration(self) -> None:
-        """Keep the public trace default tied to the packaged JSON value."""
+    def test_packaged_defaults_do_not_select_trace_modes(self) -> None:
+        """Keep tracing detail out of package-wide settings."""
         config_path = Path(trace_logging.__file__).with_name(
             "qachat_defaults.json"
         )
         settings = json.loads(config_path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            settings["TRACE"]["DEFAULT_MODE"], DEFAULT_TRACE_MODE
-        )
-        self.assertIn(DEFAULT_TRACE_MODE, trace_logging.TRACE_MODE_CHOICES)
-        self.assertEqual(
-            TraceConfig(enabled=True).mode, DEFAULT_TRACE_MODE
-        )
-        self.assertEqual(
-            TraceConfig(enabled=True, mode=TRACE_MODE_STANDARD).mode,
-            TRACE_MODE_STANDARD,
-        )
+        self.assertNotIn("TRACE", settings)
+        self.assertNotIn("TraceMode", trace_logging.__all__)
+        self.assertNotIn("TRACE_MODE_STANDARD", trace_logging.__all__)
+        self.assertNotIn("TRACE_MODE_FORENSIC", trace_logging.__all__)
+        for name in (
+            "TraceMode",
+            "TRACE_MODE_STANDARD",
+            "TRACE_MODE_FORENSIC",
+            "TRACE_MODE_CHOICES",
+            "DEFAULT_TRACE_MODE",
+        ):
+            self.assertFalse(hasattr(qachat, name))
+        for mode in ("standard", "forensic"):
+            with self.subTest(mode=mode):
+                with self.assertRaises(TypeError):
+                    TraceConfig(enabled=True, mode=mode)
 
-    def test_accepts_supported_modes_policies_and_paths(self) -> None:
-        """Allow either mode and policy with string or Path locations."""
-        for mode in (TRACE_MODE_STANDARD, TRACE_MODE_FORENSIC):
-            for policy in (FAILURE_POLICY_WARN, FAILURE_POLICY_RAISE):
-                with self.subTest(mode=mode, policy=policy):
-                    config = TraceConfig(
-                        enabled=True,
-                        output_path=Path("trace.json"),
-                        mode=mode,
-                        include_embedding_vectors=True,
-                        failure_policy=policy,
-                    )
-                    self.assertEqual(config.mode, mode)
-                    self.assertEqual(config.failure_policy, policy)
+    def test_accepts_supported_policies_and_paths(self) -> None:
+        """Allow independent write policies and optional vector recording."""
+        for policy in (FAILURE_POLICY_WARN, FAILURE_POLICY_RAISE):
+            with self.subTest(policy=policy):
+                config = TraceConfig(
+                    enabled=True,
+                    output_path=Path("trace.json"),
+                    include_embedding_vectors=True,
+                    failure_policy=policy,
+                )
+                self.assertEqual(config.failure_policy, policy)
+                self.assertTrue(config.include_embedding_vectors)
         self.assertEqual(
             TraceConfig(output_path="trace.json").output_path,
             "trace.json",
@@ -125,7 +125,6 @@ class TestTraceConfig(unittest.TestCase):
         invalid = (
             {"enabled": 1},
             {"enabled": "yes"},
-            {"mode": "debug"},
             {"include_embedding_vectors": 1},
             {"failure_policy": "ignore"},
             {"output_path": 5},
@@ -159,7 +158,6 @@ class TestTraceLoggerEvents(unittest.TestCase):
 
     def _logger(self, **settings: object) -> TraceLogger:
         """Create a trace at the test's exact conversation path."""
-        settings.setdefault("mode", TRACE_MODE_STANDARD)
         config = TraceConfig(
             enabled=True, output_path=self.path, **settings
         )
@@ -194,7 +192,7 @@ class TestTraceLoggerEvents(unittest.TestCase):
         self.assertEqual(runtime["01_custom_ready"]["event"]["sequence"], 2)
         self.assertEqual(
             trace_events["01_trace_started"]["details"]["mode"],
-            TRACE_MODE_STANDARD,
+            "forensic",
         )
 
     def test_event_validation_precedes_mutation(self) -> None:
@@ -212,8 +210,8 @@ class TestTraceLoggerEvents(unittest.TestCase):
         self.assertEqual(payload["event_count"], 2)
         self.assertIn("01_custom_valid", _operations(payload, "runtime"))
 
-    def test_standard_suppresses_only_forensic_event_identifiers(self) -> None:
-        """Retain ordinary LLM events while excluding token-only events."""
+    def test_enabled_trace_records_all_diagnostic_event_types(self) -> None:
+        """Retain model and token events without mode-based filtering."""
         logger = self._logger()
         for event_type in (
             TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
@@ -231,42 +229,36 @@ class TestTraceLoggerEvents(unittest.TestCase):
             data={"output_count": 1},
         )
         payload = _payload(self.path)
-        self.assertEqual(payload["event_count"], 3)
+        self.assertEqual(payload["event_count"], 5)
         runtime = _operations(payload, "runtime")
-        self.assertEqual(len(runtime), 2)
-        self.assertIn("01_llm_call_input", runtime)
-        self.assertIn("02_llm_call_output", runtime)
-        self.assertFalse(logger.include_content)
-        self.assertFalse(logger.include_token_ids)
+        self.assertEqual(len(runtime), 3)
+        embedding = _operations(payload, "indexing")
+        self.assertIn("01_embedding_tokens_prepared", embedding)
+        self.assertIn("01_llm_call_output_tokens", runtime)
+        self.assertIn("02_llm_call_input", runtime)
+        self.assertIn("03_llm_call_output", runtime)
+        self.assertTrue(logger.include_content)
+        self.assertTrue(logger.include_token_ids)
 
-    def test_forensic_keeps_token_events_and_is_vector_independent(
+    def test_full_content_is_independent_of_embedding_vectors(
         self,
     ) -> None:
-        """Store token events in forensic mode irrespective of vector flag."""
-        logger = self._logger(mode=TRACE_MODE_FORENSIC)
+        """Keep full diagnostics enabled while vectors remain opt-in."""
+        logger = self._logger()
         self.assertTrue(logger.include_content)
         self.assertTrue(logger.include_token_ids)
         self.assertFalse(logger.include_embedding_vectors)
-        logger.emit(
-            TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
-            component="chat",
-            data={"ids": [2, 4]},
-        )
-        self.assertIn(
-            "01_llm_call_output_tokens",
-            _operations(_payload(self.path), "runtime"),
-        )
         with TemporaryDirectory() as directory:
             separate = TraceLogger(
                 TraceConfig(
                     enabled=True,
-                    mode=TRACE_MODE_STANDARD,
                     include_embedding_vectors=True,
                 ),
                 default_directory=directory,
             )
             self.assertTrue(separate.include_embedding_vectors)
-            self.assertFalse(separate.include_content)
+            self.assertTrue(separate.include_content)
+            self.assertTrue(separate.include_token_ids)
             separate.close()
 
     def test_settings_record_only_changed_effective_values(self) -> None:
@@ -508,7 +500,7 @@ class TestTraceArtifacts(unittest.TestCase):
     """Check inline content, conversion, and controlled legacy resolution."""
 
     def setUp(self) -> None:
-        """Initialize forensic tracing in a disposable directory."""
+        """Initialize full diagnostic tracing in a disposable directory."""
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
@@ -516,7 +508,6 @@ class TestTraceArtifacts(unittest.TestCase):
         self.logger = TraceLogger(
             TraceConfig(
                 enabled=True, output_path=self.path,
-                mode=TRACE_MODE_FORENSIC,
             ),
             default_directory=self.root,
         )
@@ -748,6 +739,35 @@ class TestTracePersistence(unittest.TestCase):
             "second",
         )
         self.assertEqual(payload["event_count"], 3)
+
+    def test_legacy_standard_trace_remains_readable_and_complete(
+        self,
+    ) -> None:
+        """Retain legacy mode metadata without filtering later events."""
+        first = self._open()
+        first.emit("custom.earlier", component="test")
+        first.close()
+        prior = _payload(self.path)
+        legacy_start = _operations(prior, "trace")["01_trace_started"]
+        legacy_start["details"]["mode"] = "standard"
+        self.path.write_text(json.dumps(prior), encoding="utf-8")
+
+        later = self._open()
+        later.emit(
+            TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
+            component="chat",
+            data={"ids": [123, 456]},
+        )
+        later.close()
+        updated = _payload(self.path)
+        self.assertEqual(
+            _operations(updated, "trace")["01_trace_started"]["details"]
+            ["mode"],
+            "standard",
+        )
+        self.assertIn("custom_earlier", self.path.read_text())
+        self.assertIn("llm_call_output_tokens", self.path.read_text())
+        self.assertIn("123", self.path.read_text())
 
     def test_reopen_advances_from_highest_number_with_gaps(self) -> None:
         """Use the highest saved turn and operation number, not their count."""

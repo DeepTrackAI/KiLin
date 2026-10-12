@@ -1495,8 +1495,8 @@ class TestBackendEmbedding(EmbeddingTestCase):
             trace.artifacts[1][1], inputs["attention_mask"].tolist()
         )
 
-    def test_mlx_trace_omits_token_ids_by_default(self) -> None:
-        """Record counts but not token arrays in standard trace mode."""
+    def test_mlx_fake_sink_can_decline_token_artifacts(self) -> None:
+        """Honor a fake sink that declines token-array recording."""
 
         trace = FakeTrace()
         session = self.make_session(backend="mlx", trace=trace)

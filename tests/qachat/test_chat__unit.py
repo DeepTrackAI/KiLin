@@ -961,7 +961,7 @@ class TestChatTracing(unittest.TestCase):
 
     @staticmethod
     def _trace(*, content: bool = False, tokens: bool = False) -> Mock:
-        """Create a trace sink supporting optional forensic artifacts."""
+        """Create a fake sink with explicit artifact capabilities."""
 
         trace = Mock()
         trace.enabled = True

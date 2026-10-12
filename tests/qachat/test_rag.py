@@ -41,11 +41,8 @@ from qachat.retrievals.code_graph import CodeGraph
 from qachat.runtime import BACKEND_MLX
 from qachat.tools import ToolResult, ToolUse
 from qachat.trace_logging import (
-    DEFAULT_TRACE_MODE,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
-    TRACE_MODE_FORENSIC,
-    TRACE_MODE_STANDARD,
     FailurePolicy,
     NullTraceLogger,
     TraceConfig,
@@ -563,8 +560,8 @@ class TestRAGRetrieval(unittest.TestCase):
             session._retrieve("question", scope=[Path("a"), Path("b")])
         session._rank_everything.assert_not_called()
 
-    def test_retrieval_emits_content_only_in_forensic_mode(self) -> None:
-        """Attach exact retrieved content only when forensic mode permits."""
+    def test_retrieval_emits_content_when_tracing_enabled(self) -> None:
+        """Attach exact retrieved content when tracing is enabled."""
         session = _session()
         session.trace = MagicMock()
         session.trace.include_content = True
@@ -1901,15 +1898,17 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertTrue(enabled.enabled)
         self.assertTrue(owned)
         self.assertEqual(enabled.output_path.resolve(), path)
-        self.assertEqual(enabled.config.mode, DEFAULT_TRACE_MODE)
+        self.assertTrue(enabled.include_content)
+        self.assertTrue(enabled.include_token_ids)
         enabled.close()
-        standard, owned = rag._conversation_trace(
-            TraceConfig(enabled=True, mode=TRACE_MODE_STANDARD),
-            path.with_name("conversation_standard.json"),
+        configured, owned = rag._conversation_trace(
+            TraceConfig(enabled=True),
+            path.with_name("conversation_configured.json"),
         )
         self.assertTrue(owned)
-        self.assertEqual(standard.config.mode, TRACE_MODE_STANDARD)
-        standard.close()
+        self.assertTrue(configured.include_content)
+        self.assertTrue(configured.include_token_ids)
+        configured.close()
         with self.assertRaisesRegex(ValueError, "conversation path"):
             rag._conversation_trace(
                 TraceConfig(enabled=True, output_path=self.root / "other"),
@@ -2419,8 +2418,8 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
 class TestRAGAdditionalBranches(unittest.TestCase):
     """Cover optional trace content and metadata-preserving fallbacks."""
 
-    def test_forensic_trace_includes_question_in_turn_span(self) -> None:
-        """Include exact question text in forensic turn metadata."""
+    def test_trace_includes_question_in_turn_span(self) -> None:
+        """Include exact question text in the detailed turn metadata."""
         session = _session()
         session.trace = MagicMock()
         session.trace.include_content = True
@@ -2633,7 +2632,6 @@ class TestRAGTraceIntegration(unittest.TestCase):
 
     def _bind_trace(
         self,
-        mode: str = TRACE_MODE_STANDARD,
         *,
         owned: bool = False,
         failure_policy: FailurePolicy = FAILURE_POLICY_WARN,
@@ -2643,7 +2641,6 @@ class TestRAGTraceIntegration(unittest.TestCase):
             TraceConfig(
                 enabled=True,
                 output_path=self.session.conversation_path,
-                mode=mode,
                 failure_policy=failure_policy,
             ),
             default_directory=self.root,
@@ -2680,10 +2677,10 @@ class TestRAGTraceIntegration(unittest.TestCase):
                 phase_callback=phase_callback,
             )
 
-    def test_standard_trace_persists_metadata_and_checkpoint(
+    def test_full_trace_persists_metadata_and_checkpoint(
         self,
     ) -> None:
-        """Keep standard-mode metadata and resumable state in one file."""
+        """Keep complete diagnostics and resumable state in one file."""
         trace = self._bind_trace()
         answer = self._ask_with_real_save("Sensitive question", _intent())
         trace.close()
@@ -2693,7 +2690,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
         session = self._conversation()
         self.assertEqual(len(session["turns"]), 1)
         turn = session["turns"]["turn_0001"]
-        self.assertEqual(turn["title"], "Turn 1")
+        self.assertEqual(turn["title"], "Turn 1: Sensitive question")
         self.assertEqual(
             turn["stages"]["03_retrieval"]["operations"][
                 "02_retrieval_result"
@@ -2717,7 +2714,10 @@ class TestRAGTraceIntegration(unittest.TestCase):
             "Sensitive question",
         )
         question_ops = turn["stages"]["01_question"]["operations"]
-        self.assertNotIn("question", question_ops["01_turn"]["details"])
+        self.assertEqual(
+            question_ops["01_turn"]["details"]["question"],
+            "Sensitive question",
+        )
         self.assertEqual(
             question_ops["06_conversation_turn_representation"][
                 "details"
@@ -2726,11 +2726,11 @@ class TestRAGTraceIntegration(unittest.TestCase):
         )
         self.assertFalse(trace.output_path.with_suffix(".json.tmp").exists())
 
-    def test_forensic_trace_keeps_question_and_related_turn_operations(
+    def test_trace_keeps_question_and_related_turn_operations(
         self,
     ) -> None:
-        """Keep forensic question text and every phase in the same turn."""
-        self._bind_trace(mode=TRACE_MODE_FORENSIC)
+        """Keep exact question text and every phase in the same turn."""
+        self._bind_trace()
         self._ask_with_real_save("Exact forensic question", _intent())
         turn = self._conversation()["turns"]["turn_0001"]
         self.assertEqual(turn["title"], "Turn 1: Exact forensic question")
@@ -2916,7 +2916,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
         self,
     ) -> None:
         """Exclude a failed turn from history, then link the next save."""
-        trace = self._bind_trace(mode=TRACE_MODE_FORENSIC)
+        trace = self._bind_trace()
         chat = self.session.chat_session
 
         def restore(messages: list[dict[str, str]]) -> None:

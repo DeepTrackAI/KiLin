@@ -239,7 +239,7 @@ class ChatEngine:
     emit: EventSink
         Callable receiving one structured event dictionary at a time.
     trace_enabled: bool, optional
-        Whether activated conversations use forensic tracing. The process entry
+        Whether activated conversations use detailed tracing. The process entry
         point passes True even though the constructor default is False.
     read_command: Callable[[], dict | None] | None, optional
         Reads the next frontend command while an answer waits for the user
@@ -317,7 +317,7 @@ class ChatEngine:
         emit: EventSink
             Callback that forwards an event to the web page.
         trace_enabled: bool, optional
-            Whether each opened project receives its own forensic trace.
+            Whether each opened project receives its own detailed trace.
             Defaults to ``False``.
         read_command: Callable[[], dict | None] | None, optional
             Returns the next frontend command, or None when input ended.
@@ -2781,7 +2781,7 @@ class ChatEngine:
         """Archive one conversation and select a remaining conversation.
 
         The frontend is notified before trace cleanup so it can remove the
-        row immediately. An active forensic trace is already durable after
+        row immediately. An active diagnostic trace is already durable after
         every accepted event, so deletion detaches it instead of appending a
         closing event that would rewrite a potentially large JSON document.
 

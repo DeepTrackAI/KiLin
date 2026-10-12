@@ -5,11 +5,11 @@ replacement of a temporary file. Span contexts link start, completion, and
 failure events. ``NullTraceLogger`` accepts the same calling pattern without
 writing, while ``TraceTextStream`` converts diagnostic output into events.
 
-Standard mode reduces detailed token/prompt event output; forensic mode lets
-callers attach complete content and token identifiers. Embedding-vector
-capture has a separate flag. These settings are not a sanitization boundary:
-conversation resume state, exceptions, or diagnostic text can still contain
-questions, answers, source excerpts, paths, and other sensitive information.
+Enabled tracing records diagnostic content and token identifiers whenever
+they are available. Embedding-vector capture has a separate opt-in flag.
+This is not a sanitization boundary: conversation resume state, exceptions,
+and diagnostic text can contain questions, answers, source excerpts, paths,
+and other sensitive information.
 Artifacts returned by this implementation are inline JSON records rather than
 separately stored artifact files.
 
@@ -34,8 +34,8 @@ Key Features
 
 - **Canonical trace vocabulary**
 
-    Provide shared identifiers for trace modes, failure policies, and core
-    event types interpreted across QAChat components.
+    Provide canonical identifiers for failure policies and shared event types
+    interpreted across QAChat components.
 
 - **Structured spans**
 
@@ -62,10 +62,6 @@ Key Features
 
 Module Structure
 ----------------
-
-- ``TRACE_MODE_*`` constants, ``DEFAULT_TRACE_MODE``, and ``TraceMode``
-
-    Canonical modes and the default read from packaged configuration.
 
 - ``FAILURE_POLICY_*`` constants and ``FailurePolicy``
 
@@ -110,7 +106,7 @@ Examples
 --------
 >>> import qachat
 >>> logger = qachat.TraceLogger(
-...     qachat.TraceConfig(enabled=True, mode=qachat.TRACE_MODE_STANDARD),
+...     qachat.TraceConfig(enabled=True),
 ...     default_directory="/path/to/local/traces",
 ... )
 >>> try:
@@ -156,7 +152,6 @@ from qachat.conversation_format import (
 )
 
 __all__ = [
-    "DEFAULT_TRACE_MODE",
     "FAILURE_POLICY_CHOICES",
     "FAILURE_POLICY_RAISE",
     "FAILURE_POLICY_WARN",
@@ -166,38 +161,17 @@ __all__ = [
     "TRACE_EVENT_LLM_CALL_OUTPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS",
     "TRACE_EVENT_PROGRESS_UPDATED",
-    "TRACE_MODE_CHOICES",
-    "TRACE_MODE_FORENSIC",
-    "TRACE_MODE_STANDARD",
     "NullTraceLogger",
     "TraceConfig",
     "TraceLogger",
-    "TraceMode",
     "TraceSink",
     "TraceTextStream",
     "create_trace_logger",
     "trace_text_preview",
 ]
 
-TraceMode: TypeAlias = Literal["standard", "forensic"]
 FailurePolicy: TypeAlias = Literal["warn", "raise"]
 
-TRACE_MODE_STANDARD: Final[TraceMode] = "standard"
-TRACE_MODE_FORENSIC: Final[TraceMode] = "forensic"
-TRACE_MODE_CHOICES: Final[tuple[TraceMode, ...]] = (
-    TRACE_MODE_STANDARD,
-    TRACE_MODE_FORENSIC,
-)
-
-# Keep the trace mode configurable without coupling RAG or the GUI to JSON.
-_TRACE_DEFAULTS = json.loads(
-    Path(__file__).with_name("qachat_defaults.json").read_text(
-        encoding="utf-8"
-    )
-)["TRACE"]
-DEFAULT_TRACE_MODE: Final[TraceMode] = _TRACE_DEFAULTS["DEFAULT_MODE"]
-if DEFAULT_TRACE_MODE not in TRACE_MODE_CHOICES:
-    raise ValueError("The configured default trace mode is invalid.")
 FAILURE_POLICY_WARN: Final[FailurePolicy] = "warn"
 FAILURE_POLICY_RAISE: Final[FailurePolicy] = "raise"
 FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
@@ -214,13 +188,6 @@ TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS: Final[str] = "llm.call.output.tokens"
 TRACE_EVENT_PROGRESS_UPDATED: Final[str] = "progress.updated"
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
-_FORENSIC_ONLY_EVENTS = frozenset(
-    {
-        TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
-        TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
-    }
-)
-
 _EXACT_CONTENT_SECTIONS = {
     "chunks_artifact": (
         "01_retrieved_chunks",
@@ -256,14 +223,9 @@ class TraceConfig:
     output_path: str | pathlib.Path | None, optional
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
-    mode: TraceMode, optional
-        Trace detail mode. Standard suppresses designated forensic events;
-        forensic enables content/token flags used by callers. Resume state and
-        arbitrary diagnostics can still contain full text in either mode.
-        Defaults to the mode in packaged ``qachat_defaults.json``.
     include_embedding_vectors: bool, optional
-        Whether callers are allowed to attach complete embedding vectors. This
-        flag is independent of mode. Defaults to ``False``.
+        Whether callers are allowed to attach complete embedding vectors.
+        Defaults to ``False``.
     failure_policy: FailurePolicy, optional
         Event-write I/O handling: warn disables later event writes and emits a
         warning, while raise converts the failure to RuntimeError. Direct
@@ -277,14 +239,9 @@ class TraceConfig:
     output_path: str | pathlib.Path | None
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
-    mode: TraceMode
-        Trace detail mode using the packaged default unless overridden.
-        Standard suppresses designated forensic events; forensic enables
-        content/token flags used by callers. Resume state and arbitrary
-        diagnostics can still contain full text in either mode.
     include_embedding_vectors: bool
         Whether callers are allowed to attach complete embedding vectors. This
-        flag is independent of mode.
+        This is the only optional diagnostic payload category.
     failure_policy: FailurePolicy
         Event-write I/O handling: warn disables later event writes and emits a
         warning, while raise converts the failure to RuntimeError. Direct
@@ -293,7 +250,7 @@ class TraceConfig:
     Raises
     ------
     ValueError
-        If Boolean fields, mode, failure policy, or output-path type fail
+        If Boolean fields, failure policy, or output-path type fail
         validation.
 
     Notes
@@ -306,7 +263,6 @@ class TraceConfig:
 
     enabled: bool = False
     output_path: str | Path | None = None
-    mode: TraceMode = DEFAULT_TRACE_MODE
     include_embedding_vectors: bool = False
     failure_policy: FailurePolicy = FAILURE_POLICY_WARN
 
@@ -316,15 +272,13 @@ class TraceConfig:
         Raises
         ------
         ValueError
-            If enabled/vector flags are not exact booleans, mode or policy is
+            If enabled/vector flags are not exact booleans, policy is
             unsupported, or output_path has an invalid type.
 
         """
 
         if type(self.enabled) is not bool:
             raise ValueError("trace enabled must be True or False.")
-        if self.mode not in TRACE_MODE_CHOICES:
-            raise ValueError("trace mode must be standard or forensic.")
         if type(self.include_embedding_vectors) is not bool:
             raise ValueError(
                 "include_embedding_vectors must be True or False."
@@ -348,8 +302,8 @@ class TraceLogger:
     Parameters
     ----------
     config: TraceConfig
-        Enabled TraceConfig controlling output location, detail flags, and
-        event-write I/O policy.
+        Enabled TraceConfig controlling output location, optional embedding
+        vectors, and event-write I/O policy.
     default_directory: str | pathlib.Path
         Fallback output directory when the configuration does not name an exact
         JSON file.
@@ -369,13 +323,13 @@ class TraceLogger:
         True for this concrete sink; it does not reflect the private
         closed/failed flags.
     include_content: bool
-        Whether mode is forensic; callers consult this before providing full
-        content.
+        Always True for a concrete logger. NullTraceLogger uses False so
+        callers can avoid preparing artifacts while tracing is disabled.
     include_token_ids: bool
-        Whether mode is forensic; callers consult this before providing token
-        IDs.
+        Always True for a concrete logger. NullTraceLogger uses False so
+        callers can avoid preparing token arrays while tracing is disabled.
     include_embedding_vectors: bool
-        Configured embedding-vector flag, independent of mode.
+        Configured embedding-vector flag, independent of tracing detail.
 
     Methods
     -------
@@ -409,8 +363,8 @@ class TraceLogger:
 
     Notes
     -----
-    Standard mode is not a privacy guarantee: resume state, tracebacks, or
-    backend text may contain sensitive data. Artifacts are inline dictionaries.
+    Enabled tracing captures available detailed diagnostics, potentially
+    including sensitive data. Artifacts are inline dictionaries.
     There is no append-only log or multi-file transaction. Opening a second
     writer for the same canonical path raises ConversationLockedError.
     Saved readable turns and conversation operations are retained;
@@ -437,8 +391,8 @@ class TraceLogger:
         Parameters
         ----------
         config: TraceConfig
-            Enabled TraceConfig controlling output location, detail flags, and
-            event-write I/O policy.
+            Enabled TraceConfig controlling output location, optional vector
+            recording, and event-write I/O policy.
         default_directory: str | pathlib.Path
             Fallback output directory when the configuration does not name an
             exact JSON file.
@@ -529,7 +483,8 @@ class TraceLogger:
                 "trace.started",
                 component="trace",
                 data={
-                    "mode": config.mode,
+                    # Historical fixed marker, not a configurable setting.
+                    "mode": "forensic",
                     "output_path": str(self.output_path),
                     "include_embedding_vectors": (
                         config.include_embedding_vectors
@@ -550,29 +505,29 @@ class TraceLogger:
 
     @property
     def include_content(self) -> bool:
-        """Return whether exact source and prompt text may be stored.
+        """Return True because enabled tracing always retains exact content.
 
         Returns
         -------
         bool
-            Whether exact source and prompt text may be stored.
+            True for a concrete active trace logger.
 
         """
 
-        return self.config.mode == TRACE_MODE_FORENSIC
+        return True
 
     @property
     def include_token_ids(self) -> bool:
-        """Return whether exact tokenizer output may be stored.
+        """Return True because enabled tracing retains available token IDs.
 
         Returns
         -------
         bool
-            Whether exact tokenizer output may be stored.
+            True for a concrete active trace logger.
 
         """
 
-        return self.config.mode == TRACE_MODE_FORENSIC
+        return True
 
     @property
     def include_embedding_vectors(self) -> bool:
@@ -659,11 +614,11 @@ class TraceLogger:
 
         Notes
         -----
-        Closed or failed loggers return before validation. Standard mode drops
-        designated forensic-only events. Event sequencing is serialized within
-        this logger. Progress-only rewrites can be throttled; other accepted
-        events trigger an output refresh. Arbitrary payload content is not
-        automatically redacted.
+        Closed or failed loggers return before validation. Enabled tracing
+        retains all supplied event types, including token diagnostics. Event
+        sequencing is serialized within this logger. Progress-only rewrites
+        can be throttled; other events trigger an output refresh. Arbitrary
+        payload content is not automatically redacted.
 
         """
 
@@ -674,12 +629,6 @@ class TraceLogger:
         if not isinstance(component, str) or not component.strip():
             raise ValueError("component must be non-empty text.")
         normalized_event_type = event_type.strip()
-        if (
-            self.config.mode == TRACE_MODE_STANDARD
-            and normalized_event_type in _FORENSIC_ONLY_EVENTS
-        ):
-            return
-
         with self._lock:
             # A queued writer must not write after close releases the lease.
             if self._closed or self._failed:
@@ -760,7 +709,7 @@ class TraceLogger:
         Notes
         -----
         Formats the complete traceback and merges error data into the event.
-        Tracebacks can reveal paths or user data in either trace mode. The
+        Tracebacks can reveal paths or user data. The
         exception is recorded, not re-raised by this method; span handles
         propagation separately.
 
@@ -979,8 +928,8 @@ class TraceLogger:
         -----
         This method returns a payload; it does not write a separate artifact
         file or emit an event. It does not enforce include_content itself.
-        Callers are responsible for checking detail/privacy flags before
-        attaching sensitive values.
+        Callers should avoid preparing artifacts when tracing is disabled
+        and protect output as potentially sensitive data.
 
         """
 
@@ -1370,8 +1319,9 @@ class NullTraceLogger:
 
     Notes
     -----
-    All detail flags and enabled are false. Calls accept trace-shaped arguments
-    without performing validation or file I/O. Correlation IDs and a span
+    Content, token, vector, and enabled flags are false. Calls accept
+    trace-shaped arguments without performing validation or file I/O.
+    Correlation IDs and a span
     context are still available so callers need not branch on tracing state.
 
     """
@@ -1671,7 +1621,7 @@ def create_trace_logger(
     Notes
     -----
     None selects a null sink at this factory layer. RAGSession changes its own
-    None default to an enabled configuration using the packaged trace mode
+    None default to an enabled configuration with full diagnostic recording
     before calling this factory. Logger-construction errors propagate.
 
     """

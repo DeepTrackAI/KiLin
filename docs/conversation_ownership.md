@@ -61,7 +61,7 @@ otherwise the store acquires a temporary lease for the target. The store
 cannot update or archive a conversation owned by another process.
 
 A tracing-disabled RAG session *still saves checkpoints* and retains
-exclusive ownership. This is important because disabling forensic logging
+exclusive ownership. This is important because disabling diagnostic tracing
 must not disable persistence protection.
 
 ## Switching, resetting, and archiving

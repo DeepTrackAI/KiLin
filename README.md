@@ -55,6 +55,18 @@ uv run --no-sync ruff check qachat setup tests
 To check formatting without changing files, add `--check` to the Black
 command. Format only the files you changed when preserving existing style.
 
+## Diagnostic tracing
+
+QAChat records complete diagnostic events for enabled tracing, including
+available prompts, generated answers, retrieved content, token IDs, errors,
+and local paths. Embedding vectors are opt-in because they can be large.
+There are no selectable trace-detail modes. `RAGSession(trace=None)` enables
+tracing, while `TraceConfig(enabled=False)` disables diagnostic events but
+retains the resumable conversation checkpoint. Both are written to the same
+JSON file when tracing is enabled. Deleting that file also removes the saved
+conversation. Protect local workspaces and do not share raw trace files as
+sanitized reports. See [trace recording](docs/trace_recording.md).
+
 ## Conversation persistence and exclusive ownership
 
 Each active conversation has a single writable `conversation_*.json` record.

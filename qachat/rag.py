@@ -20,7 +20,7 @@ When tracing is enabled for a RAG session, its trace output is required to use
 that same path; tracing therefore cannot silently redirect conversation
 persistence. The session has side effects: initialization may create files,
 rebuild indexes, load models, and download missing model files according to the
-profile. ``trace=None`` enables the packaged default trace mode here, unlike
+profile. ``trace=None`` enables full tracing here, unlike
 the low-level chat and embedding classes.
 
 History and expanded evidence have no automatic summarization or shared
@@ -508,7 +508,7 @@ class RAGSession:
         Callback exceptions propagate. Defaults to ``None``.
     trace: TraceConfig | TraceSink | None, optional
         Trace configuration or caller-owned sink. None requests a new enabled
-        logger with the packaged default mode. TraceConfig(enabled=False)
+        logger with complete diagnostic recording. TraceConfig(enabled=False)
         disables tracing but not conversation persistence. Defaults to
         ``None``.
     conversation_path: str | pathlib.Path | None, optional
@@ -585,7 +585,7 @@ class RAGSession:
     -----
     Construction acquires exclusive ownership of the conversation file and
     releases it on failure or close. A rebuilt index reads selected source
-    contents and writes index/manifest metadata. Forensic traces and
+    contents and writes index/manifest metadata. Detailed traces and
     resumable state can contain complete source excerpts and conversations. No
     automatic evidence-token budget, answer validation, or history
     summarization is supplied. Close explicitly to release owned resources.
@@ -617,7 +617,7 @@ class RAGSession:
             preparation. Callback exceptions propagate. Defaults to ``None``.
         trace: TraceConfig | TraceSink | None, optional
             Trace configuration or caller-owned sink. ``None`` requests a new
-            enabled logger using the packaged default trace mode. An enabled
+            enabled logger recording full diagnostic information. An enabled
             TraceConfig without an output path is bound there automatically.
             An enabled configuration or sink with a different output path is
             rejected. ``TraceConfig(enabled=False)`` disables tracing but not
@@ -4483,7 +4483,7 @@ def _ranked_trace_data(
     *,
     include_text: bool = False,
 ) -> dict[str, object]:
-    """Return ranked chunks, adding exact text only in forensic traces.
+    """Return ranked chunks, adding exact text when tracing is enabled.
 
     Parameters
     ----------
@@ -4497,7 +4497,7 @@ def _ranked_trace_data(
     Returns
     -------
     dict[str, object]
-        Ranked chunks, adding exact text only in forensic traces.
+        Ranked chunks, adding exact text when tracing is enabled.
 
     Notes
     -----

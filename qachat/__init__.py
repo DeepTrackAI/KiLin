@@ -198,7 +198,6 @@ from .sources import (
     read_repository_files,
 )
 from .trace_logging import (
-    DEFAULT_TRACE_MODE,
     FAILURE_POLICY_CHOICES,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
@@ -207,14 +206,10 @@ from .trace_logging import (
     TRACE_EVENT_LLM_CALL_OUTPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
     TRACE_EVENT_PROGRESS_UPDATED,
-    TRACE_MODE_CHOICES,
-    TRACE_MODE_FORENSIC,
-    TRACE_MODE_STANDARD,
     FailurePolicy,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
-    TraceMode,
     TraceSink,
 )
 from .workspace import prepare_sources_workspace
@@ -247,7 +242,6 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL_TORCH",
     "EmbeddingSession",
     "Evidence",
-    "DEFAULT_TRACE_MODE",
     "FAILURE_POLICY_CHOICES",
     "FAILURE_POLICY_RAISE",
     "FAILURE_POLICY_WARN",
@@ -284,12 +278,8 @@ __all__ = [
     "TRACE_EVENT_LLM_CALL_OUTPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS",
     "TRACE_EVENT_PROGRESS_UPDATED",
-    "TRACE_MODE_CHOICES",
-    "TRACE_MODE_FORENSIC",
-    "TRACE_MODE_STANDARD",
     "TraceConfig",
     "TraceLogger",
-    "TraceMode",
     "TraceSink",
     "USER_ROLE",
     "NullTraceLogger",
