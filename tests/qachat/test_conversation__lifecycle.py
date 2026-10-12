@@ -1,7 +1,18 @@
-"""Protect the conversation/trace contracts without downloading models."""
+"""Test conversation lifecycle integration with RAG and structured traces.
+
+Use actual JSON persistence and trace writers but replace model sessions with
+test doubles. Check resets, switches, trace restarts, archived conversations,
+and interaction with ConversationStore without downloading model weights.
+
+"""
+
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
 
 from __future__ import annotations
 
+from dataclasses import asdict
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +25,7 @@ from qachat.conversation_format import (
     conversation_state,
 )
 from qachat.rag import RAGSession, _conversation_trace
+from qachat.conversations import ConversationStore
 from qachat.trace_logging import (
     NullTraceLogger,
     TRACE_MODE_FORENSIC,
@@ -23,14 +35,56 @@ from qachat.trace_logging import (
 
 
 def _read(path: Path) -> dict:
+    """Read a saved conversation JSON document.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Local JSON file to inspect.
+
+    Returns
+    -------
+    dict
+        Parsed JSON document.
+
+    """
+
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _group(path: Path) -> dict:
+    """Read the canonical grouped conversation session.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Local trace JSON document.
+
+    Returns
+    -------
+    dict
+        Stored conversation session.
+
+    """
+
     return _read(path)["sessions"][CONVERSATION_SESSION_KEY]
 
 
 def _logger(path: Path) -> TraceLogger:
+    """Create a real forensic trace logger bound to one local file.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Target conversation JSON path.
+
+    Returns
+    -------
+    TraceLogger
+        Open trace logger for the fixture.
+
+    """
+
     return TraceLogger(
         TraceConfig(enabled=True, output_path=path, mode=TRACE_MODE_FORENSIC),
         default_directory=path.parent,
@@ -38,7 +92,21 @@ def _logger(path: Path) -> TraceLogger:
 
 
 def _session(root: Path, trace) -> RAGSession:
-    """Use real lifecycle code with model sessions replaced by test doubles."""
+    """Make a lightweight RAG session without starting inference models.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Temporary project directory.
+    trace: TraceSink
+        Real or disabled trace writer for the fixture.
+
+    Returns
+    -------
+    RAGSession
+        Session with real persistence methods and mocked model sessions.
+
+    """
 
     session = RAGSession.__new__(RAGSession)
     session.project = SimpleNamespace(
@@ -254,6 +322,205 @@ class TestTraceReopening(unittest.TestCase):
         self.assertEqual(list(group["operations"]), ["01_conversation_reset"])
         self.assertEqual(group["turns"]["turn_0001"]["turn_id"], "new")
 
+
+
+class TestConversationStoreIntegration(unittest.TestCase):
+    """Exercise storage, trace persistence, and RAG lifecycle together."""
+
+    def setUp(self) -> None:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.store = ConversationStore(self.root)
+
+    def test_new_store_record_can_receive_traced_rag_checkpoint(self):
+        item = self.store.ensure()
+        path = self.store.state_path(item)
+        trace = _logger(path)
+        self.addCleanup(trace.close)
+        session = _session(self.root, trace)
+        session.conversation_path = path
+        session._checkpoint_id = None
+        session._save_conversation()
+        state = conversation_state(_read(path))
+        self.assertEqual(state["conversation_id"], item.conversation_id)
+        self.assertEqual(state["turns"], [])
+        self.assertEqual(state["system_prompt"], "Test system")
+        self.assertTrue(state["checkpoint_id"])
+        self.assertEqual(state["checkpoint"]["index_fingerprint"],
+                         "unchanged-index")
+        self.assertTrue(self.store.is_empty(item.conversation_id))
+
+    def test_branch_and_switch_reuse_models_and_saved_checkpoint(self):
+        parent = self.store.ensure()
+        parent_path = self.store.state_path(parent)
+        old_trace = _logger(parent_path)
+        self.addCleanup(old_trace.close)
+        session = _session(self.root, old_trace)
+        session.conversation_path = parent_path
+        session._checkpoint_id = None
+        session._save_conversation()
+        checkpoint = session._checkpoint_id
+        self.assertTrue(checkpoint)
+        old_trace.emit("turn.started", component="rag", turn_id="old")
+        old_trace.close()
+
+        branch = self.store.create(branch_from=parent.conversation_id)
+        self.assertEqual(branch.origin_checkpoint_id, checkpoint)
+        path = self.store.state_path(branch)
+        self.assertEqual(_group(path)["operations"], {})
+        self.assertEqual(_group(path)["turns"], {})
+        new_trace = _logger(path)
+        self.addCleanup(new_trace.close)
+        result = session.switch_conversation(path, trace=new_trace)
+        self.assertEqual(result, [])
+        self.assertEqual(session._checkpoint_id, checkpoint)
+        self.assertEqual(session.conversation_path, path)
+        session.chat_session.reset.assert_called_once_with()
+        session.chat_session.restore_history.assert_called_once()
+        session.chat_session.configure_generation.assert_called_once_with(
+            {"temperature": 0.0, "thinking": False, "max_new_tokens": 256}
+        )
+        session.chat_session.close.assert_not_called()
+        session.embedding_session.close.assert_not_called()
+
+    def test_store_rename_and_trace_metadata_can_be_kept_in_sync(self):
+        item = self.store.ensure()
+        path = self.store.state_path(item)
+        trace = _logger(path)
+        self.addCleanup(trace.close)
+        renamed = self.store.rename(item.conversation_id, "Renamed")
+        trace.update_conversation(asdict(renamed))
+        trace.emit("conversation.renamed", component="gui_engine")
+        trace.close()
+        store = ConversationStore(self.root)
+        self.assertEqual(store.ensure().name, "Renamed")
+        self.assertEqual(conversation_state(_read(path))["name"], "Renamed")
+
+    def test_archive_trace_record_is_not_rediscovered(self):
+        item = self.store.ensure()
+        path = self.store.state_path(item)
+        trace = _logger(path)
+        trace.emit("turn.started", component="rag", turn_id="turn")
+        trace.close()
+        replacement, archived = self.store.archive(item.conversation_id)
+        self.assertTrue(archived.is_file())
+        self.assertNotEqual(replacement.conversation_id,
+                            item.conversation_id)
+        reopened = ConversationStore(self.root)
+        self.assertNotIn(item.conversation_id,
+                         [x.conversation_id for x in reopened.conversations()])
+        self.assertNotEqual(reopened.ensure().conversation_id,
+                            item.conversation_id)
+        self.assertFalse(archived.is_symlink())
+
+    def test_disabled_trace_checkpoint_remains_discoverable(self):
+        item = self.store.ensure()
+        session = _session(self.root, NullTraceLogger())
+        session.conversation_path = self.store.state_path(item)
+        session._checkpoint_id = None
+        session._save_conversation()
+        self.assertEqual(ConversationStore(self.root).ensure().conversation_id,
+                         item.conversation_id)
+        self.assertEqual(self.store.is_empty(item.conversation_id), True)
+
+
+class TestConversationTraceSelection(unittest.TestCase):
+    """Check trace binding and continuity without starting model backends."""
+
+    def setUp(self) -> None:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.path = self.root / "logs" / "conversation_trace.json"
+
+    def test_missing_trace_configuration_uses_forensic_conversation(self):
+        trace, owned = _conversation_trace(None, self.path)
+        self.addCleanup(trace.close)
+        self.assertTrue(owned)
+        self.assertTrue(trace.enabled)
+        self.assertEqual(trace.output_path, self.path)
+        self.assertTrue(self.path.is_file())
+
+    def test_explicit_matching_output_path_is_allowed(self):
+        config = TraceConfig(enabled=True, output_path=self.path)
+        trace, owned = _conversation_trace(config, self.path)
+        self.addCleanup(trace.close)
+        self.assertTrue(owned)
+        self.assertEqual(trace.output_path, self.path)
+
+    def test_existing_caller_owned_trace_is_reused(self):
+        trace = _logger(self.path)
+        self.addCleanup(trace.close)
+        result, owned = _conversation_trace(trace, self.path)
+        self.assertIs(result, trace)
+        self.assertFalse(owned)
+
+    def test_existing_mismatched_trace_is_rejected(self):
+        other = self.root / "logs" / "conversation_other.json"
+        trace = _logger(other)
+        self.addCleanup(trace.close)
+        with self.assertRaisesRegex(ValueError, "conversation path"):
+            _conversation_trace(trace, self.path)
+        self.assertFalse(self.path.exists())
+
+    def test_disabled_trace_does_not_require_conversation_path(self):
+        trace, owned = _conversation_trace(
+            TraceConfig(enabled=False, output_path=self.path), self.path
+        )
+        self.assertFalse(trace.enabled)
+        self.assertFalse(owned)
+        self.assertFalse(self.path.exists())
+
+    def test_reset_without_trace_does_not_load_models(self):
+        session = _session(self.root, NullTraceLogger())
+        session._checkpoint_id = "previous"
+        session.turns = [object()]
+        self.assertIsNone(session.reset())
+        self.assertIsNone(session._checkpoint_id)
+        self.assertEqual(session.turns, [])
+        session.chat_session.reset.assert_called_once_with()
+        session.embedding_session.close.assert_not_called()
+
+    def test_switch_rejects_closed_session_without_changing_trace(self):
+        trace = _logger(self.path)
+        self.addCleanup(trace.close)
+        session = _session(self.root, trace)
+        session._closed = True
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            session.switch_conversation(self.path, trace=trace)
+        self.assertIs(session.trace, trace)
+        session.chat_session.reset.assert_not_called()
+
+    def test_reset_closed_session_does_not_touch_disk(self):
+        session = _session(self.root, NullTraceLogger())
+        session._closed = True
+        session.conversation_path.write_text("legacy", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "closed"):
+            session.reset()
+        self.assertEqual(session.conversation_path.read_text(), "legacy")
+
+    def test_grouped_state_survives_trace_restart(self):
+        trace = _logger(self.path)
+        trace.update_conversation({"turns": [], "checkpoint_id": "saved"})
+        trace.close()
+        new_trace = _logger(self.path)
+        self.addCleanup(new_trace.close)
+        new_trace.emit("conversation.restored", component="rag")
+        self.assertEqual(
+            conversation_state(_read(self.path))["checkpoint_id"], "saved"
+        )
+
+    def test_sequential_trace_reopens_preserve_grouped_metadata(self):
+        trace = _logger(self.path)
+        trace.update_conversation({"name": "Session", "turns": []})
+        trace.close()
+        reopened = _logger(self.path)
+        self.addCleanup(reopened.close)
+        reopened.update_conversation({"checkpoint_id": "updated"})
+        state = conversation_state(_read(self.path))
+        self.assertEqual(state["name"], "Session")
+        self.assertEqual(state["checkpoint_id"], "updated")
 
 if __name__ == "__main__":
     unittest.main()
