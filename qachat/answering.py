@@ -44,6 +44,13 @@ Key Features
     ``turn_representation`` builds a compact, model-free summary of a turn.
     Invalid saved representations are rebuilt from the original turn.
 
+- **Packaged answering defaults**
+
+    The router and history heuristic limits, short-question word count,
+    reference-detection pattern, and common-word vocabulary come from the
+    ``ANSWERING`` section of ``qachat_defaults.json`` at import time.
+    See ``docs/package_defaults.md`` for every setting and its meaning.
+
 Module Structure
 ----------------
 
@@ -65,11 +72,11 @@ Module Structure
 
 - ``MAX_LISTED_TURNS``
 
-    Most earlier turns the router sees.
+    Most earlier turns the router sees, set by packaged defaults.
 
 - ``MAX_RELATED_TURNS``
 
-    Most earlier turns the router may mark as related.
+    Most earlier turns the router may mark as related, set by defaults.
 
 - ``RouteDecision``
 
@@ -130,6 +137,12 @@ import re
 from typing import Final, Literal, Protocol, TypeAlias
 
 from qachat.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_int,
+    require_default_lowercase_words,
+    require_default_pattern,
+)
 from qachat.project_type import (
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
@@ -166,50 +179,47 @@ MACHINE_STATE_ANSWERING: Final[MachineState] = "answering"
 MACHINE_STATE_CHOICES: Final[tuple[MachineState, ...]] = (
     MACHINE_STATE_ANSWERING,
 )
-# The router may point at a few older turns; more would bloat the prompt.
-MAX_RELATED_TURNS: Final[int] = 3
-# How many earlier turns the router sees, newest last.
-MAX_LISTED_TURNS: Final[int] = 30
-# Reply length for the router; one line of JSON fits easily.
-_ROUTER_MAX_TOKENS: Final[int] = 64
-# Length limits of a turn representation, so that 30 listed turns keep the
-# router prompt short.
-_REPRESENTATION_MAX_CHARACTERS: Final[int] = 200
-_REPRESENTATION_MAX_SOURCES: Final[int] = 5
-# Citation groups such as " [1]" or " [2, 3]" in an answer.
-_CITATION: Final[re.Pattern[str]] = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
-# Earlier answers keep a neutral marker where they cited. Removing citations
-# taught the model to stop citing; old numbers would point at evidence that
-# is no longer in the prompt.
-HISTORY_CITATION_MARKER: Final[str] = "[source]"
-# Words and phrases showing that a question depends on earlier turns:
-# pronouns, ordinal references, explicit pointers back, and elliptical
-# openings such as "and for X?".
-_REFERS_BACK: Final[re.Pattern[str]] = re.compile(
-    r"\b(it|its|itself|this|that|these|those|they|them|their|theirs"
-    r"|he|she|him|her|his|hers|such|same|former|latter"
-    r"|above|earlier|before|previous|previously|again|so far"
-    r"|you said|you mentioned|you wrote|your answer|your last"
-    r"|discussed|mentioned|covered|talked about|both"
-    r"|(the|these|those) (two|three|four)"
-    r"|our (conversation|discussion|chat)|the conversation"
-    r"|(the )?(first|second|third|fourth|fifth|last|other) (one|point"
-    r"|step|item|part|example|method|paper|source|option)s?"
-    r"|more|else|instead|also|too)\b"
-    r"|^\s*(and|but|or|so|then|what about|how about)\b",
-    flags=re.I,
+# Import-time configuration is shared with the rest of QAChat core.
+_ANSWERING_DEFAULTS = load_defaults_section("ANSWERING")
+
+# The router may point at only a few earlier turns.
+MAX_RELATED_TURNS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "MAX_RELATED_TURNS", "ANSWERING"
 )
-# Words too common to show that a question shares a topic with a turn.
-_COMMON_WORDS: Final[frozenset[str]] = frozenset(
-    """
-    about after also among and any are can could did does doing done each
-    explain for from give had has have how into is just like make many may
-    mean means might more most much must not now of one only other our out
-    over please right same should show some such tell than that the their
-    them then there these they thing things this those through use used
-    uses using very was way ways were what when where which while who whom
-    whose why will with work works would yes you your
-    """.split()
+# The router lists the newest eligible turns in chronological order.
+MAX_LISTED_TURNS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "MAX_LISTED_TURNS", "ANSWERING"
+)
+# Token budget for the router's one-line JSON decision.
+_ROUTER_MAX_TOKENS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "ROUTER_MAX_TOKENS", "ANSWERING"
+)
+# Maximum question and answer-summary characters in a turn representation.
+_REPRESENTATION_MAX_CHARACTERS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "REPRESENTATION_MAX_CHARACTERS", "ANSWERING"
+)
+# Maximum source labels stored with a representation.
+_REPRESENTATION_MAX_SOURCES: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "REPRESENTATION_MAX_SOURCES", "ANSWERING"
+)
+# Short questions are treated as potentially dependent on earlier turns.
+_SHORT_QUESTION_MAX_WORDS: Final[int] = require_default_int(
+    _ANSWERING_DEFAULTS, "SHORT_QUESTION_MAX_WORDS", "ANSWERING"
+)
+# Citation syntax is part of the conversation representation contract.
+_CITATION: Final[re.Pattern[str]] = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
+# A neutral marker replaces numbered citations whose evidence is not carried
+# into the conversation-history prompt.
+HISTORY_CITATION_MARKER: Final[str] = "[source]"
+
+# Reference-detection cues are compiled with case-insensitive matching.
+_REFERS_BACK: Final[re.Pattern[str]] = require_default_pattern(
+    _ANSWERING_DEFAULTS, "REFERS_BACK_PATTERN", "ANSWERING", flags=re.I
+)
+# Common words are excluded from term matching but keep their configured
+# vocabulary independent of Python source code.
+_COMMON_WORDS: Final[frozenset[str]] = require_default_lowercase_words(
+    _ANSWERING_DEFAULTS, "COMMON_WORDS", "ANSWERING"
 )
 
 
@@ -824,7 +834,9 @@ def refers_back(question: str) -> bool:
     """
 
     words = re.findall(r"\w+", question)
-    return len(words) <= 2 or bool(_REFERS_BACK.search(question))
+    return len(words) <= _SHORT_QUESTION_MAX_WORDS or bool(
+        _REFERS_BACK.search(question)
+    )
 
 
 def search_text(

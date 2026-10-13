@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 from pathlib import Path
+import re
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -187,6 +188,70 @@ class _FakeChat:
         if token_callback is not None:
             token_callback(self.response)
         return self.response
+
+
+class TestPackagedAnsweringDefaults(unittest.TestCase):
+    """Test that routing uses the validated packaged answering settings."""
+
+    def test_configured_limits_match_runtime_constants(self) -> None:
+        """Keep numerical routing limits consistent with the JSON values."""
+
+        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        config = json.loads(path.read_text(encoding="utf-8"))["ANSWERING"]
+        names = {
+            "MAX_RELATED_TURNS": answering.MAX_RELATED_TURNS,
+            "MAX_LISTED_TURNS": answering.MAX_LISTED_TURNS,
+            "ROUTER_MAX_TOKENS": answering._ROUTER_MAX_TOKENS,
+            "REPRESENTATION_MAX_CHARACTERS": (
+                answering._REPRESENTATION_MAX_CHARACTERS
+            ),
+            "REPRESENTATION_MAX_SOURCES": (
+                answering._REPRESENTATION_MAX_SOURCES
+            ),
+            "SHORT_QUESTION_MAX_WORDS": answering._SHORT_QUESTION_MAX_WORDS,
+        }
+        for name, current in names.items():
+            with self.subTest(name=name):
+                self.assertEqual(current, config[name])
+                self.assertGreater(current, 0)
+
+    def test_configured_language_heuristics_match_runtime(self) -> None:
+        """Compile exactly the stored regex and use the stored vocabulary."""
+
+        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        config = json.loads(path.read_text(encoding="utf-8"))["ANSWERING"]
+        self.assertEqual(
+            answering._REFERS_BACK.pattern, config["REFERS_BACK_PATTERN"]
+        )
+        self.assertEqual(
+            answering._COMMON_WORDS, frozenset(config["COMMON_WORDS"])
+        )
+        self.assertEqual(
+            answering._REFERS_BACK.flags & re.I, re.I
+        )
+        self.assertTrue(answering.refers_back("Frob quux?"))
+        self.assertFalse(answering.refers_back("Frob quux baz?"))
+
+    def test_section_has_only_documented_answering_keys(self) -> None:
+        """Prevent unreviewed default keys or accidental format additions."""
+
+        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        config = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            set(config["ANSWERING"]),
+            {
+                "MAX_RELATED_TURNS",
+                "MAX_LISTED_TURNS",
+                "ROUTER_MAX_TOKENS",
+                "REPRESENTATION_MAX_CHARACTERS",
+                "REPRESENTATION_MAX_SOURCES",
+                "SHORT_QUESTION_MAX_WORDS",
+                "REFERS_BACK_PATTERN",
+                "COMMON_WORDS",
+            },
+        )
+        self.assertNotIn("EMBEDDING", config)
+        self.assertNotIn("DEFAULT_QUERY_FORMAT", config)
 
 
 class TestStripThinking(unittest.TestCase):

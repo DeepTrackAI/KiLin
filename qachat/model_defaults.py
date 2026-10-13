@@ -9,6 +9,7 @@ Keeping these defaults outside the GUI prevents project configuration and
 interface presets from drifting while preserving the dependency direction from
 core QAChat functionality to optional interfaces. Default model IDs are read
 from the packaged ``qachat_defaults.json`` when this module is imported.
+The shared reader validates their strings; the backend is not selected here.
 
 Key Features
 ------------
@@ -55,9 +56,12 @@ to provide other compatible Hugging Face model IDs.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import Final, Literal, TypeAlias
+
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_string,
+)
 
 __all__ = [
     "MODEL_ROLE_CHAT",
@@ -79,20 +83,18 @@ MODEL_ROLE_CHOICES: Final[tuple[ModelRole, ...]] = (
     MODEL_ROLE_EMBEDDING,
 )
 
-# Load packaged model identifiers once at import time.
-_MODEL_DEFAULTS: dict[str, str] = json.loads(
-    Path(__file__).with_name("qachat_defaults.json").read_text(
-        encoding="utf-8"
-    )
-)["DEFAULT_MODELS"]
+# The shared reader caches the packaged JSON and validates this section.
+_MODEL_DEFAULTS = load_defaults_section("DEFAULT_MODELS")
 
-DEFAULT_CHAT_MODEL_MLX: Final[str] = _MODEL_DEFAULTS["DEFAULT_CHAT_MODEL_MLX"]
-DEFAULT_CHAT_MODEL_TORCH: Final[str] = _MODEL_DEFAULTS[
-    "DEFAULT_CHAT_MODEL_TORCH"
-]
-DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = _MODEL_DEFAULTS[
-    "DEFAULT_EMBEDDING_MODEL_MLX"
-]
-DEFAULT_EMBEDDING_MODEL_TORCH: Final[str] = _MODEL_DEFAULTS[
-    "DEFAULT_EMBEDDING_MODEL_TORCH"
-]
+DEFAULT_CHAT_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_CHAT_MODEL_MLX", "DEFAULT_MODELS"
+)
+DEFAULT_CHAT_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_CHAT_MODEL_TORCH", "DEFAULT_MODELS"
+)
+DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_MLX", "DEFAULT_MODELS"
+)
+DEFAULT_EMBEDDING_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_TORCH", "DEFAULT_MODELS"
+)

@@ -77,9 +77,11 @@ Module settings
 The packaged ``qachat_defaults.json`` contains the repository-selection
 defaults. ``DEFAULT_EXTENSIONS`` supplies the literal filename suffixes;
 ``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` provide
-name-based exclusions. These settings are loaded at import time and are
-not user-configurable. They are not included in ``__all__`` or re-exported
-from the package root.
+name-based exclusions. These lists are loaded at import time and define
+which extensions are considered, which directory and file names are skipped,
+and which binary or sensitive suffixes are rejected. They can be edited in
+the packaged JSON; changes require restarting QAChat. They are not
+included in ``__all__`` or re-exported from the package root.
 
 Examples
 --------
@@ -98,12 +100,17 @@ Use an absolute repository path to avoid dependence on the package location.
 
 from __future__ import annotations
 
-import json
 import os
 from hashlib import sha256
+import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
+
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_strings,
+)
 
 
 __all__ = [
@@ -118,16 +125,26 @@ __all__ = [
 _MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-# Load packaged repository-selection defaults once at import time.
-_REPOSITORY_DEFAULTS: dict[str, list[str]] = json.loads(
-    Path(__file__).with_name("qachat_defaults.json").read_text(
-        encoding="utf-8"
+# Selection defaults are owned by this module; the JSON is loaded once.
+_REPOSITORY_DEFAULTS = load_defaults_section("REPOSITORY")
+DEFAULT_EXTENSIONS = require_default_strings(
+    _REPOSITORY_DEFAULTS, "DEFAULT_EXTENSIONS", "REPOSITORY"
+)
+SKIP_DIRECTORIES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "SKIP_DIRECTORIES", "REPOSITORY"
     )
-)["REPOSITORY"]
-DEFAULT_EXTENSIONS = tuple(_REPOSITORY_DEFAULTS["DEFAULT_EXTENSIONS"])
-SKIP_DIRECTORIES = set(_REPOSITORY_DEFAULTS["SKIP_DIRECTORIES"])
-SKIP_FILES = set(_REPOSITORY_DEFAULTS["SKIP_FILES"])
-BLOCKED_SUFFIXES = set(_REPOSITORY_DEFAULTS["BLOCKED_SUFFIXES"])
+)
+SKIP_FILES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "SKIP_FILES", "REPOSITORY"
+    )
+)
+BLOCKED_SUFFIXES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "BLOCKED_SUFFIXES", "REPOSITORY"
+    )
+)
 
 
 def _selection_paths(
