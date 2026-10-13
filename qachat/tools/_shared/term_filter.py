@@ -48,7 +48,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.term_filter import term_hits, term_label
+>>> from qachat.tools._shared.term_filter import term_hits, term_label
 >>> terms, hits = term_hits(request.question, context, passages)
 >>> label, note = term_label(terms, hits)
 
@@ -64,8 +64,8 @@ from collections.abc import Sequence
 from typing import Final
 
 from qachat.chunking import Chunk
-from qachat.tools.contract import ToolContext
-from qachat.tools.scan_and_list import (
+from qachat.tools._contract import ToolContext
+from qachat.tools._shared.terms import (
     term_pattern,
     terms_prompt,
     validated_terms,

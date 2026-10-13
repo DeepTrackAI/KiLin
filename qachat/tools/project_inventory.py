@@ -70,7 +70,7 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.tools.contract import (
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,

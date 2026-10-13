@@ -70,9 +70,9 @@ from typing import Final
 
 from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.batch_review import check_citations
-from qachat.tools.choose_document import choose_document
-from qachat.tools.contract import (
+from qachat.tools._shared.document_notes import answer_citations
+from qachat.tools._shared.choose_document import choose_document
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -262,7 +262,7 @@ def run(
         request.guidance,
     )
     answer = context.write(system, prompt, settings.answer_tokens)
-    summary["invalid_citations"] = check_citations(answer, len(chunks))
+    summary["invalid_citations"] = answer_citations(answer, len(chunks))
     if guessed:
         answer += (
             f"\n\n*This is about {path.name}; name the paper if you "

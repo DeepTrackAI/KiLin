@@ -6,12 +6,11 @@ intent may instead name a tool in ``qachat/project_types/<type>.json``:
 selects the intent; the tool then produces the answer. Intents without a
 tool are unchanged.
 
-Each tool is one module with a settings dataclass, ``parse_settings``, and
-``run``; ``registry`` lists the tools that exist, and ``contract`` defines
-what a tool receives and returns. Shared modules settle which document a
-request is about (``choose_document``), plan and confirm expensive runs
-(``planning``), and read and write the project's ``outputs/`` folder
-(``outputs``, ``long_lists``, ``report_template``).
+Registered tools provide a settings dataclass, ``parse_settings``, and
+``run``. The private ``_registry`` lists available tools, and ``_contract``
+defines their requests and results. Other shared operations reside in
+``_shared/``. Tool packages can own their ``defaults.json``, helper
+modules, and templates; ``generate_paper_summary`` is the first example.
 
 This package re-exports the contract, the planning vocabulary, the
 registry, and the names other modules use from ``batch_classify`` and
@@ -79,18 +78,18 @@ Module Structure
 
 - ``EarlierTurn``, ``ToolRequest``, ``ToolContext``, and ``ToolResult``
 
-    What a tool receives and returns (from ``contract``).
+    What a tool receives and returns (from ``_contract``).
 
 - ``CONFIRMATION_ALWAYS``, ``CONFIRMATION_WHEN_LARGE``,
   ``CONFIRMATION_NEVER``, ``CONFIRMATION_CHOICES``, and
   ``ConfirmationPolicy``
 
-    When a tool asks the user before running (from ``planning``).
+    When a tool asks the user before running (from ``_shared.planning``).
 
 - ``PLAN_CHOICE_CONTINUE``, ``PLAN_CHOICE_QUICK``, ``PLAN_CHOICE_CANCEL``,
   ``PLAN_CHOICE_CHOICES``, and ``PlanChoice``
 
-    The user's answer to a plan (from ``planning``).
+    The user's answer to a plan (from ``_shared.planning``).
 
 - ``ToolPlan``
 
@@ -104,8 +103,7 @@ Module Structure
   ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PROJECT_INVENTORY``,
   ``TOOL_SCAN_AND_LIST``, ``TOOL_CHOICES``, and ``ToolName``
 
-    Registered tool names (from ``registry``; the other ``TOOL_*`` names
-    are in ``qachat.tools.registry``).
+    Registered tool names (from ``_registry``).
 
 - ``TOOL_REGISTRY``
 
@@ -163,13 +161,13 @@ from qachat.tools.batch_classify import (
     ClassifySettings,
     Label,
 )
-from qachat.tools.contract import (
+from qachat.tools._contract import (
     EarlierTurn,
     ToolContext,
     ToolRequest,
     ToolResult,
 )
-from qachat.tools.planning import (
+from qachat.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     CONFIRMATION_NEVER,
@@ -183,7 +181,7 @@ from qachat.tools.planning import (
     ToolPlan,
     needs_confirmation,
 )
-from qachat.tools.registry import (
+from qachat.tools._registry import (
     TOOL_BATCH_CLASSIFY,
     TOOL_BATCH_REVIEW,
     TOOL_CHOICES,

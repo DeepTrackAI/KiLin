@@ -108,8 +108,8 @@ from typing import Final
 
 from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import estimate_tokens, named_paths
-from qachat.tools.choose_document import document_scope
-from qachat.tools.contract import (
+from qachat.tools._shared.choose_document import document_scope
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -117,8 +117,12 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.long_lists import CHAT_LIST_LIMIT, file_name, offer_export
-from qachat.tools.planning import (
+from qachat.tools._shared.long_lists import (
+    CHAT_LIST_LIMIT,
+    file_name,
+    offer_export,
+)
+from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,
@@ -128,8 +132,9 @@ from qachat.tools.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools.scan_and_list import short_names, term_pattern
-from qachat.tools.term_filter import term_hits, term_label
+from qachat.tools.scan_and_list import short_names
+from qachat.tools._shared.terms import term_pattern
+from qachat.tools._shared.term_filter import term_hits, term_label
 
 __all__ = [
     "PassageSettings",

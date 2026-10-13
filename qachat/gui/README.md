@@ -150,7 +150,7 @@ An intent may instead name a **tool** (`"tool": {"name": ..., settings}`),
 which replaces retrieval and the answering prompt for that intent; its
 retrieval mode must be "none" and it needs no system prompt. Tools live in
 `qachat/tools/`, one module each, and must be registered in
-`qachat/tools/registry.py`; each validates its own settings when the type
+`qachat/tools/_registry.py`; each validates its own settings when the type
 is loaded, and unknown settings are rejected. The tools are:
 
 - `project_inventory` (intent `project_inventory`): exact counts and lists
@@ -175,7 +175,7 @@ is loaded, and unknown settings are rejected. The tools are:
   own `.md` template and name it in the question ("…with the lab_summary
   template"); the rules (limits in brackets after a heading, `{citation}`
   and `{references}` placeholders) are in tutorial 160 and in
-  `qachat/tools/report_template.py`. The headline and each section are
+  `qachat/tools/generate_paper_summary/_report_template.py`. The headline and each section are
   written separately and checked in Python (word and item limits), with
   targeted fixes; the result is saved as Markdown in the project's
   `outputs/` folder, with a one-page PDF in the desktop app. The answer

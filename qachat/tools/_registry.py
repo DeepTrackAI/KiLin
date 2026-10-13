@@ -8,9 +8,9 @@ project type file can choose among these tools but cannot add code.
 A tool may also declare resources to install in newly created projects;
 the core resolves and copies them, not the GUI.
 
-Adding a tool means writing one module in ``qachat/tools`` with a settings
+Adding a tool means providing a package or module with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
-context)`` (see ``qachat.tools.contract``), then adding it here. A tool
+context)`` (see ``qachat.tools._contract``), then adding it here. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
 question sent to it to an earlier turn even when the router named none.
 
@@ -71,7 +71,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.registry import TOOL_SCAN_AND_LIST, parse_tool
+>>> from qachat.tools._registry import TOOL_SCAN_AND_LIST, parse_tool
 >>> use = parse_tool("code.intents.list", {"name": TOOL_SCAN_AND_LIST})
 >>> use.name
 'scan_and_list'
@@ -96,7 +96,7 @@ from qachat.tools import (
     scan_and_list,
     show_source,
 )
-from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
+from qachat.tools._contract import ToolContext, ToolRequest, ToolResult
 from qachat.workspace_resources import WorkspaceResource
 
 __all__ = [

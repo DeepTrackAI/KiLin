@@ -14,7 +14,7 @@ of re-implementing them.
    ``outputs/`` file when the question says "my paper", or else the
    indexed source ``choose_document`` picks (asking the user when unclear).
 2. Show the plan; a guessed paper is always confirmed before any work.
-3. Read it in parts: ``batch_review.take_notes`` writes notes with passage
+3. Read it in parts: the shared note-taking service writes notes with passage
    numbers, because a whole paper is too long for one small-model prompt.
 4. Write the headline and each section in separate calls; Python
    assembles the headings, so sections cannot go missing or out of order.
@@ -126,7 +126,7 @@ Examples
 ...     choose_template,
 ...     parse_settings,
 ... )
->>> from qachat.tools.report_template import SHIPPED_TEMPLATES_DIR
+>>> from qachat.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
 >>> settings = parse_settings({"repair_attempts": 2}, "paper_summary")
 >>> template = choose_template(
 ...     "make a research briefing of it",
@@ -152,9 +152,13 @@ from qachat.retrievals.document_reading import (
     estimate_tokens,
     named_paths,
 )
-from qachat.tools.batch_review import NOTHING, plan_parts, take_notes
-from qachat.tools.choose_document import choose_document
-from qachat.tools.contract import (
+from qachat.tools._shared.document_notes import (
+    NOTHING,
+    plan_parts,
+    take_notes,
+)
+from qachat.tools._shared.choose_document import choose_document
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -162,7 +166,7 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.outputs import (
+from qachat.tools._shared.outputs import (
     OUTPUTS_FOLDER,
     find_output,
     free_output_path,
@@ -170,7 +174,7 @@ from qachat.tools.outputs import (
     output_files,
     save_output_file,
 )
-from qachat.tools.planning import (
+from qachat.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
@@ -180,8 +184,41 @@ from qachat.tools.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.workspace_resources import WorkspaceResource
-from qachat.tools.report_template import (
+from qachat.workspace_resources import (
+    WorkspaceResource,
+    templates_folder,
+)
+from qachat.tools.generate_paper_summary._configuration import (
+    BEGINNING_CHARACTERS,
+    BEGINNING_PASSAGES,
+    CALL_SECONDS,
+    COMMON_WORDS,
+    DEFAULT_CONFIRMATION,
+    DEFAULT_LARGE_BATCHES,
+    DEFAULT_MAX_MODEL_CALLS,
+    DEFAULT_NOTE_TOKENS,
+    DEFAULT_PART_TOKENS,
+    DEFAULT_REFERENCE_ITEMS,
+    DEFAULT_REPAIR_ATTEMPTS,
+    DEFAULT_SECTION_TOKENS,
+    DEFAULT_TEMPLATE,
+    EARLIER_SECTION_WORDS,
+    ENTRY_MIN_WORDS,
+    HEADLINE_TOKENS,
+    NUMBERED_ENTRIES_MIN,
+    ORGANISATION_WORDS,
+    PART_PROMPT_TOKENS,
+    PROMPT_TOKENS_PER_SECOND,
+    REFERENCES_REPLY_TOKENS,
+    REFERENCES_TOKENS,
+    REFERENCE_CHARACTERS,
+    REPLY_SHARE,
+    REPLY_TOKENS_PER_SECOND,
+    RUNNING_LINE_REPEATS,
+    RUNNING_LINE_WORDS,
+    SECTION_PROMPT_TOKENS,
+)
+from qachat.tools.generate_paper_summary._report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
     SECTION_SOURCE_REFERENCES,
@@ -193,7 +230,6 @@ from qachat.tools.report_template import (
     load_template,
     section_problem,
     template_names,
-    templates_folder,
 )
 
 __all__ = [
@@ -227,15 +263,10 @@ _SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".md", ".txt")
 # Template setting: a plain file name, so it cannot point outside templates/.
 _TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][\w-]*")
 
-# Passages and characters at the start of a paper that hold its title,
-# authors, DOI, and dates.
-_BEGINNING_PASSAGES: Final[int] = 3
-_BEGINNING_CHARACTERS: Final[int] = 1500
-# Words that make an author an organisation rather than a person.
-_ORGANISATION_WORDS: Final[frozenset[str]] = frozenset(
-    "team group consortium developers lab laboratory committee "
-    "collaboration project society".split()
-)
+# Numeric and vocabulary heuristics come from this tool's defaults.json.
+_BEGINNING_PASSAGES: Final[int] = BEGINNING_PASSAGES
+_BEGINNING_CHARACTERS: Final[int] = BEGINNING_CHARACTERS
+_ORGANISATION_WORDS: Final[frozenset[str]] = ORGANISATION_WORDS
 
 # The heading that starts a reference list; the last one in the paper wins.
 _REFERENCES_HEADING = re.compile(
@@ -244,11 +275,11 @@ _REFERENCES_HEADING = re.compile(
     flags=re.I | re.M,
 )
 # Most characters read after the heading; longer lists are cut.
-_REFERENCE_CHARACTERS: Final[int] = 40000
+_REFERENCE_CHARACTERS: Final[int] = REFERENCE_CHARACTERS
 # A numbered reference entry: "12. Smith, J. ...", "[12] Smith ...".
 _ENTRY_START = re.compile(r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+(\S.*)$")
 # Fewest numbered lines for entries to be split at their numbers.
-_NUMBERED_ENTRIES_MIN: Final[int] = 5
+_NUMBERED_ENTRIES_MIN: Final[int] = NUMBERED_ENTRIES_MIN
 # The end of an entry: "(2019).", "2019.", "2023;24(9):557–74.", a PMID, or
 # a DOI. Two-column PDFs print the numbers apart from the entries, so ends
 # separate entries more reliably than numbers.
@@ -278,21 +309,14 @@ _CONTINUATION = re.compile(r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I)
 _PAGE_LINE = re.compile(r"^\s*(?:page\s*)?\d{1,4}\s*$", flags=re.I)
 # A short line repeated this often in a paper is a running head or footer
 # ("J. Smith et al.", "Journal Name 35 (2026) 102791").
-_RUNNING_LINE_REPEATS: Final[int] = 3
-_RUNNING_LINE_WORDS: Final[int] = 12
+_RUNNING_LINE_REPEATS: Final[int] = RUNNING_LINE_REPEATS
+_RUNNING_LINE_WORDS: Final[int] = RUNNING_LINE_WORDS
 # Entries shorter than this are page furniture, not references.
-_ENTRY_MIN_WORDS: Final[int] = 5
+_ENTRY_MIN_WORDS: Final[int] = ENTRY_MIN_WORDS
 # Item range of a references section that has no item limit of its own.
-_DEFAULT_REFERENCE_ITEMS: Final[tuple[int, int]] = (1, 3)
-# Words too common to tell reference entries apart.
-_COMMON_WORDS: Final[tuple[str, ...]] = (
-    "this",
-    "that",
-    "with",
-    "from",
-    "paper",
-    "their",
-)
+_DEFAULT_REFERENCE_ITEMS: Final[tuple[int, int]] = DEFAULT_REFERENCE_ITEMS
+# Vocabulary used to identify distinctive reference terms.
+_COMMON_WORDS: Final[tuple[str, ...]] = COMMON_WORDS
 
 # Prompt rule shared by the writing and the fixing prompts.
 _NO_PLACEHOLDERS: Final[str] = (
@@ -302,23 +326,23 @@ _NO_PLACEHOLDERS: Final[str] = (
 )
 # Words of each earlier section shown to the model, so it does not repeat
 # them.
-_EARLIER_SECTION_WORDS: Final[int] = 30
+_EARLIER_SECTION_WORDS: Final[int] = EARLIER_SECTION_WORDS
 # Longest replies: a one-line headline, and a few reference numbers.
-_HEADLINE_TOKENS: Final[int] = 60
-_REFERENCES_TOKENS: Final[int] = 40
+_HEADLINE_TOKENS: Final[int] = HEADLINE_TOKENS
+_REFERENCES_TOKENS: Final[int] = REFERENCES_TOKENS
 
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
-_PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
-_REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
+_PROMPT_TOKENS_PER_SECOND: Final[float] = PROMPT_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_SECOND: Final[float] = REPLY_TOKENS_PER_SECOND
 # Fixed time of one model call, in seconds, for estimates only.
-_CALL_SECONDS: Final[float] = 1.0
+_CALL_SECONDS: Final[float] = CALL_SECONDS
 # Instruction tokens around one reading part, and around one section.
-_PART_PROMPT_TOKENS: Final[int] = 300
-_SECTION_PROMPT_TOKENS: Final[int] = 400
+_PART_PROMPT_TOKENS: Final[int] = PART_PROMPT_TOKENS
+_SECTION_PROMPT_TOKENS: Final[int] = SECTION_PROMPT_TOKENS
 # Share of its reply room a reply uses on average, for estimates only.
-_REPLY_SHARE: Final[float] = 0.6
+_REPLY_SHARE: Final[float] = REPLY_SHARE
 # Estimated reply of a reference choice ("4, 17").
-_REFERENCES_REPLY_TOKENS: Final[int] = 20
+_REFERENCES_REPLY_TOKENS: Final[int] = REFERENCES_REPLY_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,14 +372,14 @@ class SummarySettings:
 
     """
 
-    template: str = "research_briefing"
-    part_tokens: int = 6000
-    note_tokens: int = 500
-    section_tokens: int = 600
-    repair_attempts: int = 1
-    max_model_calls: int = 20
-    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
-    large_batches: int = 3
+    template: str = DEFAULT_TEMPLATE
+    part_tokens: int = DEFAULT_PART_TOKENS
+    note_tokens: int = DEFAULT_NOTE_TOKENS
+    section_tokens: int = DEFAULT_SECTION_TOKENS
+    repair_attempts: int = DEFAULT_REPAIR_ATTEMPTS
+    max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
+    confirmation: ConfirmationPolicy = DEFAULT_CONFIRMATION
+    large_batches: int = DEFAULT_LARGE_BATCHES
 
 
 def parse_settings(data: dict, where: str) -> SummarySettings:

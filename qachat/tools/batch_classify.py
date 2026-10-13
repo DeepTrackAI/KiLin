@@ -65,7 +65,7 @@ from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
 from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.contract import (
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -73,7 +73,7 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.planning import (
+from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,

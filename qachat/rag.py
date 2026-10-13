@@ -229,7 +229,7 @@ from qachat.tools import (
     ToolUse,
     run_tool,
 )
-from qachat.tools.choose_document import document_scope
+from qachat.tools._shared.choose_document import document_scope
 from qachat.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
     NullTraceLogger,

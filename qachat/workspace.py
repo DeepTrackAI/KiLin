@@ -85,7 +85,7 @@ from qachat.trace_logging import NullTraceLogger, TraceSink
 __all__ = ["prepare_sources_workspace"]
 
 # Workspace folders whose files may be copied into the sources: what QAChat
-# wrote (qachat.tools.outputs) and the report templates.
+# wrote (qachat.tools._shared.outputs) and the report templates.
 _COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
 
 

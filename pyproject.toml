@@ -46,7 +46,11 @@ include = ["qachat*"]
 "qachat" = [
     "qachat_defaults.json",
     "project_types/*.json",
-    "tools/templates/*.md",
+]
+"qachat.tools.generate_paper_summary" = [
+    "README.md",
+    "defaults.json",
+    "templates/*.md",
 ]
 "qachat.gui" = [
     "defaults.json",

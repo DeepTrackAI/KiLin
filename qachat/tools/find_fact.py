@@ -32,8 +32,8 @@ Key Features
 
 - **Notes per file**
 
-    Each file is read in parts with ``batch_review.take_notes``; the answer
-    is written from the notes, one document at a time.
+    Each file is read in parts with the shared document-notes service;
+    the answer is written from the notes, one document at a time.
 
 - **Checked citations**
 
@@ -85,9 +85,13 @@ from typing import Final
 
 from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.batch_review import check_citations, plan_parts, take_notes
-from qachat.tools.choose_document import document_scope
-from qachat.tools.contract import (
+from qachat.tools._shared.document_notes import (
+    answer_citations,
+    plan_parts,
+    take_notes,
+)
+from qachat.tools._shared.choose_document import document_scope
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -95,7 +99,7 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.planning import (
+from qachat.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
@@ -104,7 +108,7 @@ from qachat.tools.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools.term_filter import term_hits, term_label
+from qachat.tools._shared.term_filter import term_hits, term_label
 
 __all__ = [
     "FactSettings",
@@ -456,7 +460,7 @@ def run(
         quick=choice == PLAN_CHOICE_QUICK and not terms,
     )
     answer = context.write(system, prompt, settings.answer_tokens)
-    invalid = check_citations(answer, len(passages))
+    invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK:
         which = (
             "passages that mention " + " or ".join(terms)

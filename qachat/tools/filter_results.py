@@ -68,7 +68,7 @@ import re
 from typing import Final
 
 from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.contract import (
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,

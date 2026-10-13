@@ -100,8 +100,7 @@ from qachat.gui.preferences import (
     write_defaults,
 )
 from qachat.gui.report_pdf import write_report_pdf
-from qachat.tools.outputs import OUTPUTS_FOLDER, output_folder
-from qachat.tools.report_template import TEMPLATES_FOLDER, templates_folder
+from qachat.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
 from qachat.gui.model_settings import (
     DEFAULT_LEVEL,
     LEVEL_COUNT,
@@ -2031,11 +2030,7 @@ class ChatEngine:
                     f"Only {' and '.join(_EDITABLE_FOLDERS)} can be edited."
                 )
             root = self.session.project.root.resolve(strict=True)
-            directory = (
-                output_folder(root)
-                if folder == OUTPUTS_FOLDER
-                else templates_folder(root)
-            ).resolve(strict=True)
+            directory = (root / folder).resolve(strict=True)
             changed: list[str] = []
             if operation == "add":
                 replace = arguments.get("replace") is True

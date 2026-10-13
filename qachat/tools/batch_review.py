@@ -20,17 +20,17 @@ Key Features
 
 - **Parts in order**
 
-    ``plan_parts`` packs consecutive passages into parts by estimated
+    Shared ``plan_parts`` packs consecutive passages by estimated
     tokens.
 
 - **Notes with passage numbers**
 
-    ``notes_prompt`` and ``clean_notes`` keep only lines citing passages in
+    Shared ``notes_prompt`` and ``clean_notes`` keep lines citing passages in
     the part, so notes cannot point elsewhere.
 
 - **Checked answer**
 
-    ``answer_prompt`` writes the final answer; ``check_citations`` reports
+    ``answer_prompt`` writes the final answer; ``answer_citations`` reports
     citations to passages that do not exist.
 
 Module Structure
@@ -44,7 +44,7 @@ Module Structure
 - ``notes_prompt``
 - ``clean_notes``
 - ``answer_prompt``
-- ``check_citations``
+- ``qachat.tools._shared.document_notes.answer_citations``
 
 Examples
 --------
@@ -56,9 +56,15 @@ Examples
 
 from __future__ import annotations
 
+from qachat.tools._shared.document_notes import (
+    NOTHING,
+    answer_citations,
+    plan_parts,
+    take_notes,
+)
+
 from collections.abc import Sequence
 from dataclasses import dataclass
-import re
 from time import perf_counter
 from typing import Final
 
@@ -68,9 +74,9 @@ from qachat.retrievals.document_reading import (
     estimate_tokens,
     read_document,
 )
-from qachat.tools.choose_document import choose_document
-from qachat.tools.term_filter import term_hits, term_label
-from qachat.tools.contract import (
+from qachat.tools._shared.choose_document import choose_document
+from qachat.tools._shared.term_filter import term_hits, term_label
+from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -78,7 +84,7 @@ from qachat.tools.contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.planning import (
+from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,
@@ -89,25 +95,17 @@ from qachat.tools.planning import (
 )
 
 __all__ = [
-    "NOTHING",
     "ReviewSettings",
     "answer_prompt",
-    "check_citations",
-    "clean_notes",
-    "notes_prompt",
     "parse_settings",
-    "plan_parts",
     "run",
-    "take_notes",
 ]
 
 # What a part's notes say when it has nothing relevant.
-NOTHING: Final[str] = "NOTHING"
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
 _PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
 _REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
 _PROMPT_OVERHEAD_TOKENS: Final[int] = 300
-_CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,119 +200,6 @@ def parse_settings(data: dict, where: str) -> ReviewSettings:
     )
 
 
-def plan_parts(chunks: Sequence[Chunk], part_tokens: int) -> list[list[int]]:
-    """Pack consecutive passages into parts by estimated tokens.
-
-    Parameters
-    ----------
-    chunks: Sequence[Chunk]
-        The document's passages, in order.
-    part_tokens: int
-        Estimated tokens per part; a larger passage gets its own part.
-
-    Returns
-    -------
-    list[list[int]]
-        Passage indices per part, in order.
-
-    """
-
-    parts: list[list[int]] = []
-    used = 0
-    for index, chunk in enumerate(chunks):
-        size = estimate_tokens(chunk.text)
-        if parts and used + size <= part_tokens:
-            parts[-1].append(index)
-            used += size
-        else:
-            parts.append([index])
-            used = size
-    return parts
-
-
-def notes_prompt(
-    question: str,
-    name: str,
-    part: int,
-    parts: int,
-    passages: Sequence[tuple[int, str]],
-) -> tuple[str, str]:
-    """Return the prompts that take notes on one part.
-
-    Parameters
-    ----------
-    question: str
-        The user's question.
-    name: str
-        The document's name.
-    part: int
-        This part's number, from one.
-    parts: int
-        Number of parts.
-    passages: Sequence[tuple[int, str]]
-        Passage numbers and texts of this part.
-
-    Returns
-    -------
-    tuple[str, str]
-        System prompt and user prompt.
-
-    """
-
-    system = (
-        "You read one part of a document for QAChat and take notes. You do "
-        "not answer the question yet. You reply with short bullet notes "
-        "only."
-    )
-    text = "\n\n".join(
-        f"[{number}] {body.strip()}" for number, body in passages
-    )
-    user = f"""Question: {question}
-
-Below is part {part} of {parts} of {name}. Its passages are numbered.
-
-{text}
-
-Write bullet notes with every fact in this part that helps answer the
-question, each ending with its passage number, for example
-"- The software was written in Python 3.11 [12]". Copy names, numbers, and
-versions exactly. If this part has nothing relevant, reply exactly:
-{NOTHING}"""
-    return system, user
-
-
-def clean_notes(reply: str, numbers: Sequence[int]) -> list[str]:
-    """Keep note lines that cite passages of their part.
-
-    Parameters
-    ----------
-    reply: str
-        The model's notes.
-    numbers: Sequence[int]
-        Passage numbers in the part.
-
-    Returns
-    -------
-    list[str]
-        Note lines, each citing at least one passage of the part; empty for
-        ``NOTHING`` or notes without valid citations.
-
-    """
-
-    allowed = set(numbers)
-    kept: list[str] = []
-    for line in reply.splitlines():
-        line = line.strip().lstrip("-*• ").strip()
-        cited = {
-            int(number)
-            for group in _CITATION.findall(line)
-            for number in re.split(r"\s*,\s*", group)
-        }
-        if line and cited and cited <= allowed:
-            kept.append(f"- {line}")
-    return kept
-
-
 def answer_prompt(
     question: str,
     name: str,
@@ -364,31 +249,6 @@ the document does say."""
     if guidance:
         user += f"\n\n{guidance}"
     return system, user
-
-
-def check_citations(answer: str, passages: int) -> list[int]:
-    """Return citation numbers in an answer that match no passage.
-
-    Parameters
-    ----------
-    answer: str
-        The final answer.
-    passages: int
-        Number of passages in the document.
-
-    Returns
-    -------
-    list[int]
-        Sorted invalid citation numbers; empty when all are valid.
-
-    """
-
-    cited = {
-        int(number)
-        for group in _CITATION.findall(answer)
-        for number in re.split(r"\s*,\s*", group)
-    }
-    return sorted(number for number in cited if not 1 <= number <= passages)
 
 
 def run(
@@ -577,7 +437,7 @@ def run(
         request.question, name, notes, len(runs), request.guidance
     )
     answer = context.write(system, prompt, settings.answer_tokens)
-    invalid = check_citations(answer, len(passages))
+    invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK or len(read) < len(passages):
         answer += (
             f"\n\n*Read {len(read)} of {len(passages)} passages of {name}"
@@ -628,92 +488,6 @@ def run(
         for index, chunk in enumerate(passages)
     )
     return ToolResult(answer, evidence, summary, streamed=True)
-
-
-def take_notes(
-    task: str,
-    name: str,
-    texts: Sequence[str],
-    parts: Sequence[Sequence[int]],
-    note_tokens: int,
-    context: ToolContext,
-    *,
-    what: str = "document",
-    whole: bool = True,
-) -> list[tuple[int, list[str]]]:
-    """Take checked notes on each part of a document with the model.
-
-    Parameters
-    ----------
-    task: str
-        What the notes are for: the user's question, or an instruction
-        such as the sections of a summary.
-    name: str
-        The document's name.
-    texts: Sequence[str]
-        Every passage's text; passage ``n`` is ``texts[n - 1]``.
-    parts: Sequence[Sequence[int]]
-        Passage indices per part, in reading order.
-    note_tokens: int
-        Longest notes for one part, in tokens.
-    context: ToolContext
-        QAChat's services (``ask_model``, ``progress``, ``trace``).
-    what: str, optional
-        What is read, for progress messages: "paper", "file",
-        "function", ... Defaults to ``"document"``.
-    whole: bool, optional
-        True when the parts cover the whole document; False for a quick
-        reading of its most relevant passages. Defaults to ``True``.
-
-    Returns
-    -------
-    list[tuple[int, list[str]]]
-        Part numbers with their note lines (see ``clean_notes``). A failed
-        call gives an empty part.
-
-    """
-
-    notes: list[tuple[int, list[str]]] = []
-    for number, part in enumerate(parts, start=1):
-        if not whole:
-            message = f"Reading the most relevant passages: {name}"
-        elif len(parts) == 1:
-            message = f"Reading the whole {what}: {name}"
-        else:
-            message = (
-                f"Reading the whole {what} (part {number} of "
-                f"{len(parts)}): {name}"
-            )
-        context.progress(message, current=number, total=len(parts))
-        started = perf_counter()
-        system, prompt = notes_prompt(
-            task,
-            name,
-            number,
-            len(parts),
-            [(index + 1, texts[index]) for index in part],
-        )
-        try:
-            reply = context.ask_model(system, prompt, note_tokens)
-        except Exception as error:  # A failed part is reported, not fatal.
-            reply = f"failed: {error}"
-        lines = clean_notes(reply, [index + 1 for index in part])
-        notes.append((number, lines))
-        data: dict[str, object] = {
-            "part": number,
-            "passages": [index + 1 for index in (part[0], part[-1])],
-            "notes": len(lines),
-            "seconds": round(perf_counter() - started, 2),
-        }
-        if context.trace.include_content:
-            data["raw"] = reply
-        context.trace.emit(
-            "tool.part.notes",
-            component="tool",
-            data=data,
-            turn_id=context.trace_turn_id,
-        )
-    return notes
 
 
 def _fit(

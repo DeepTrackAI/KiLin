@@ -151,7 +151,7 @@ from qachat.project_type import (
     HistoryPolicy,
     ProjectType,
 )
-from qachat.tools.registry import TOOL_REGISTRY
+from qachat.tools._registry import TOOL_REGISTRY
 
 __all__ = [
     "HISTORY_CITATION_MARKER",

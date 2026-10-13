@@ -81,7 +81,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.planning import (
+>>> from qachat.tools._shared.planning import (
 ...     CONFIRMATION_WHEN_LARGE, ToolPlan, needs_confirmation
 ... )
 >>> plan = ToolPlan(
@@ -106,7 +106,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 if TYPE_CHECKING:
-    from qachat.tools.contract import ToolContext
+    from qachat.tools._contract import ToolContext
 
 __all__ = [
     "CONFIRMATION_ALWAYS",

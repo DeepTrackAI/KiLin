@@ -13,7 +13,7 @@ chunks, ranking, the router and answering models, progress, confirmation,
 tracing) arrives through the context, so a tool can be tested with plain
 functions in place of models. The context does not check what a tool does
 with these services; a tool is trusted code registered in
-``qachat.tools.registry``.
+``qachat.tools._registry``.
 
 The settings checks raise ``ValueError`` with the intent location and the
 field name, so a mistake in a project type file points at its line of
@@ -78,7 +78,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.contract import ToolRequest, check_int
+>>> from qachat.tools._contract import ToolRequest, check_int
 >>> question = "list every mention of MRI"
 >>> request = ToolRequest(question, question)
 >>> check_int("code.intents.x.tool", {"max_calls": 5}, "max_calls", 10, 1, 50)
@@ -96,7 +96,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from qachat.chunking import Chunk
     from qachat.retrievals import CodeGraph, HybridResult
-    from qachat.tools.planning import ToolPlan
+    from qachat.tools._shared.planning import ToolPlan
     from qachat.trace_logging import TraceSink
 
 __all__ = [
@@ -185,7 +185,7 @@ class ToolContext:
     ----------
     project_root: pathlib.Path
         The project folder (``outputs/`` and ``templates/`` live here; see
-        ``qachat.tools.outputs`` and ``qachat.tools.report_template``).
+        ``qachat.tools._shared.outputs`` and the report-summary tool).
     chunks: Sequence[Chunk]
         Every indexed chunk, in index order.
     graph: CodeGraph

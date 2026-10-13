@@ -81,7 +81,7 @@ import re
 from typing import Final
 
 from qachat.chunking import Chunk
-from qachat.tools.contract import (
+from qachat.tools._contract import (
     EarlierTurn,
     ToolContext,
     ToolRequest,

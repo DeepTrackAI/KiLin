@@ -10,7 +10,7 @@ The saved file drops passage citations such as ``[3]``, which point at
 evidence shown in the chat and mean nothing outside QAChat. Where nobody
 can be asked (notebooks), nothing is saved and the tool shows the first
 items as usual. A file never replaces an existing one; see
-``qachat.tools.outputs``.
+``qachat.tools._shared.outputs``.
 
 Key Features
 ------------
@@ -44,7 +44,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.long_lists import file_name, offer_export
+>>> from qachat.tools._shared.long_lists import file_name, offer_export
 >>> file_name("mentions", "Gradient descent")
 'mentions_gradient_descent.md'
 >>> saved = offer_export(
@@ -66,9 +66,9 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.tools.contract import ToolContext
-from qachat.tools.outputs import save_output_file
-from qachat.tools.planning import ask_choice
+from qachat.tools._contract import ToolContext
+from qachat.tools._shared.outputs import save_output_file
+from qachat.tools._shared.planning import ask_choice
 
 __all__ = ["CHAT_LIST_LIMIT", "file_name", "offer_export"]
 

@@ -24,7 +24,7 @@ Key Features
 
 - **Tools by name**
 
-    An intent may name a registered tool (``qachat.tools.registry``) with
+    An intent may name a registered tool (``qachat.tools._registry``) with
     its settings; the tool validates them.
 
 - **Validated on load**
@@ -138,8 +138,8 @@ from qachat.defaults import (
     require_default_nonnegative_int,
 )
 from qachat.repository import normalize_extensions
-from qachat.tools.contract import reject_unknown
-from qachat.tools.registry import ToolUse, parse_tool
+from qachat.tools._contract import reject_unknown
+from qachat.tools._registry import ToolUse, parse_tool
 
 __all__ = [
     "CODE_GRAPH_AUTO",

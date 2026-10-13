@@ -7,7 +7,8 @@ such as ``generate_paper_summary`` write the content; this module reads the
 template and checks the finished report in Python, so a report is not
 trusted merely because the model was asked to follow the format.
 
-Templates shipped with QAChat live in ``qachat/tools/templates/``, for
+Templates shipped with QAChat live inside this tool package, in its
+``templates/`` directory. For
 example ``research_briefing.md`` (the one-page Research Briefing format of
 Nature-family journals). Each project has its own ``templates/`` folder,
 next to ``sources/`` and ``outputs/`` and never indexed. The core installs
@@ -137,7 +138,7 @@ sections; they are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.report_template import check_report, load_template
+>>> from qachat.tools.generate_paper_summary import check_report, load_template
 >>> template = load_template("research_briefing")
 >>> template.headline_characters
 90
@@ -154,6 +155,11 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
+from qachat.tools.generate_paper_summary._configuration import (
+    LIMIT_TOLERANCE as _CONFIG_LIMIT_TOLERANCE,
+    MIN_TOTAL_WORDS,
+)
+
 __all__ = [
     "LIMIT_TOLERANCE",
     "SECTION_SOURCE_CHOICES",
@@ -161,7 +167,6 @@ __all__ = [
     "SECTION_SOURCE_NOTES",
     "SECTION_SOURCE_REFERENCES",
     "SHIPPED_TEMPLATES_DIR",
-    "TEMPLATES_FOLDER",
     "ReportCheck",
     "ReportTemplate",
     "SectionSource",
@@ -173,16 +178,14 @@ __all__ = [
     "parse_template",
     "section_problem",
     "template_names",
-    "templates_folder",
 ]
 
 # Templates shipped with QAChat; the core selects relevant files.
 SHIPPED_TEMPLATES_DIR: Final[Path] = Path(__file__).parent / "templates"
 # A project's own templates, next to sources/ and outputs/; never indexed.
-TEMPLATES_FOLDER: Final[str] = "templates"
 # Word limits (of each section and of the whole report) allow this fraction
 # either way, as editors do. Item limits are exact.
-LIMIT_TOLERANCE: Final[float] = 0.1
+LIMIT_TOLERANCE: Final[float] = _CONFIG_LIMIT_TOLERANCE
 
 # What a section is written from: the reading notes; the paper's citation,
 # copied by code; or the paper's reference list, copied by code.
@@ -208,7 +211,7 @@ _PLACEHOLDER_NAMES: Final[frozenset[str]] = frozenset(
     ("citation", "references")
 )
 # Smallest ``max_words``: a lower total cannot hold a useful report.
-_MIN_TOTAL_WORDS: Final[int] = 50
+_MIN_TOTAL_WORDS: Final[int] = MIN_TOTAL_WORDS
 
 # A heading's name and its bracketed limits: "The Bio (60–150 words)".
 _LIMITS = re.compile(r"^(.*?)\s*\(([^()]*)\)\s*$")
@@ -380,25 +383,6 @@ class ReportCheck:
         found.extend(self.lengths)
 
         return found
-
-
-def templates_folder(project_root: Path) -> Path:
-    """Return the project's existing templates folder without writing files.
-
-    Parameters
-    ----------
-    project_root: pathlib.Path
-        The project folder, initialized by ``qachat.project``.
-
-    Returns
-    -------
-    pathlib.Path
-        Path to the project's templates directory. This accessor does not
-        create folders, copy shipped templates, or restore deleted files.
-
-    """
-
-    return Path(project_root) / TEMPLATES_FOLDER
 
 
 def template_names(directory: Path = SHIPPED_TEMPLATES_DIR) -> list[str]:

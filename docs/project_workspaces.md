@@ -107,12 +107,12 @@ manual files are preserved. This migration no longer depends on GUI startup.
 ## Tool resource contract
 
 An independently implemented tool may declare resources by adding an
-optional callback to its `Tool` entry in `qachat.tools.registry`. The
+optional callback to its `Tool` entry in `qachat.tools._registry`. The
 callback accepts validated tool settings and returns a tuple of
 `qachat.workspace_resources.WorkspaceResource` objects.
 
 For example, the existing report tool declares a packaged file under
-`qachat/tools/templates/` and a destination under the project's
+`qachat/tools/generate_paper_summary/templates/` and a destination under the project's
 `templates/` folder. A custom template name that has no bundled file is
 not declared as a packaged resource; its `templates/` folder is still
 created, and the user can add the file manually before running the tool.
@@ -125,10 +125,9 @@ paths, and destinations inside source, index, log, or output areas are
 rejected. The destination and its parents may not be symbolic links.
 Existing files are preserved even during explicit resource restoration.
 
-The declaration interface does **not** require any tool to own a separate
-`defaults.json` today. Tools can later move into self-contained packages
-with private defaults, templates, and code without changing the core
-project-creation workflow.
+The declaration interface does **not** require every tool to own a
+`defaults.json`. The migrated `generate_paper_summary` package owns its
+validated defaults and templates. Other tools will migrate incrementally.
 
 ## Failure behavior and limitations
 

@@ -71,8 +71,12 @@ import shutil
 from typing import Final
 
 from qachat.project_type import project_type
-from qachat.tools.registry import TOOL_REGISTRY
-from qachat.workspace_resources import WorkspaceResource
+from qachat.tools._registry import TOOL_REGISTRY
+from qachat.workspace_resources import (
+    OUTPUTS_FOLDER,
+    TEMPLATES_FOLDER,
+    WorkspaceResource,
+)
 
 __all__ = [
     "ProjectLayout",
@@ -83,7 +87,7 @@ __all__ = [
 ]
 
 _CORE_FOLDERS: Final[tuple[str, ...]] = (
-    "indexes", "logs", "outputs", "templates"
+    "indexes", "logs", OUTPUTS_FOLDER, TEMPLATES_FOLDER
 )
 _RESERVED_RESOURCE_ROOTS: Final[frozenset[str]] = frozenset(
     ("sources", "indexes", "logs", "outputs", "target")

@@ -35,15 +35,15 @@ from qachat.tools.generate_paper_summary import (
     SummarySettings,
     choose_template,
     workspace_resources,
-)
-from qachat.tools.registry import TOOL_REGISTRY, ToolUse
-from qachat.tools.report_template import (
     SHIPPED_TEMPLATES_DIR,
-    templates_folder,
 )
+from qachat.tools._registry import TOOL_REGISTRY, ToolUse
 from qachat.workspace import prepare_sources_workspace
 from qachat.repository import scan_repository
-from qachat.workspace_resources import WorkspaceResource
+from qachat.workspace_resources import (
+    WorkspaceResource,
+    templates_folder,
+)
 
 
 class TestProjectLayout(unittest.TestCase):

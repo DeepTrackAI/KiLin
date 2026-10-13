@@ -79,7 +79,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from qachat.tools.outputs import load_output, save_output_file
+>>> from qachat.tools._shared.outputs import load_output, save_output_file
 >>> root = Path("/path/to/project")
 >>> saved = save_output_file(root, "notes.md", "# Notes\n\nMRI results.\n")
 >>> document = load_output(root, saved.name)
@@ -91,6 +91,8 @@ The path is illustrative; saving creates ``outputs/`` in that project.
 """
 
 from __future__ import annotations
+
+from qachat.workspace_resources import OUTPUTS_FOLDER
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -113,7 +115,7 @@ __all__ = [
 ]
 
 # Folder name inside a project; never indexed.
-OUTPUTS_FOLDER: Final[str] = "outputs"
+
 # Name of the same folder in earlier versions, moved on first use.
 _LEGACY_FOLDER: Final[str] = "target"
 # File types load_output can read, as for indexed sources.

@@ -69,7 +69,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.choose_document import choose_document
+>>> from qachat.tools._shared.choose_document import choose_document
 >>> chosen = choose_document(
 ...     request,
 ...     context,
@@ -95,8 +95,8 @@ from pathlib import Path
 from typing import Final
 
 from qachat.retrievals.document_reading import dominant_path, named_paths
-from qachat.tools.contract import ToolContext, ToolRequest
-from qachat.tools.planning import ask_choice
+from qachat.tools._contract import ToolContext, ToolRequest
+from qachat.tools._shared.planning import ask_choice
 
 __all__ = [
     "choose_document",
