@@ -5,6 +5,12 @@ Before a GUI launch it checks for the requested dependency modules and may
 run ``uv sync`` in a development checkout to install missing extras. This
 preparation may modify the environment and require network access.
 
+``uv run`` synchronizes its environment by default; ``uv run --no-sync``
+skips only that initial uv-managed synchronization. The QAChat launcher may
+still synchronize missing GUI dependencies itself. To launch a preinstalled
+GUI without either synchronization step, use
+``uv run --no-sync python -m qachat.gui``.
+
 The backend argument selects which dependency extra is checked or installed.
 It is not forwarded to the GUI as a project or model backend setting.
 
@@ -37,6 +43,10 @@ Examples
 
 A normal GUI launch is ``qachat.cli.main(["--gui"])`` and starts an
 interactive application.
+
+From a QAChat checkout, ``uv run qachat --gui`` launches with environment
+preparation. ``uv run --no-sync python -m qachat.gui`` requires the GUI
+dependencies to have been installed previously.
 
 """
 
@@ -78,14 +88,15 @@ def _selected_backend(backend: Backend) -> SelectedBackend:
     Returns
     -------
     str
-        Requested explicit name, or mlx on Darwin/arm64 and torch otherwise.
-        This helper does not validate package availability.
+        Requested explicit name, or mlx on Darwin/arm64 (ignoring machine-name
+        capitalization) and torch otherwise. This helper does not validate
+        package availability.
 
     """
 
     if backend != BACKEND_AUTO:
         return backend
-    if sys.platform == "darwin" and platform.machine() == "arm64":
+    if sys.platform == "darwin" and platform.machine().lower() == "arm64":
         return BACKEND_MLX
     return BACKEND_TORCH
 

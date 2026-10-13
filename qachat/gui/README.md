@@ -7,21 +7,30 @@ storage. Closing or stopping that process is not the same as pausing a model.
 
 ## Launch and dependencies
 
-With the optional GUI dependencies installed, the module entry point is:
-
-```sh
-python -m qachat.gui
-```
-
-The existing development instructions also use the console entry point:
+With synchronization and automatic preparation of missing GUI/backend
+dependencies, launch from the repository with:
 
 ```sh
 uv run qachat --gui
 ```
 
-The attached source snapshot does not contain the packaging configuration
-that declares that console command or its dependency extras. Those commands
-therefore assume the surrounding checkout and environment provide them.
+`uv run` synchronizes the project environment. The `qachat` command checks
+the required modules and may invoke `uv sync --extra gui --extra mlx` on an
+Apple Silicon Mac, or `uv sync --extra gui --extra torch` on other supported
+platforms, when GUI/backend modules are missing. This can modify the local
+environment and contact package repositories. Models are managed separately.
+
+To use an already-installed environment **without synchronization**, run:
+
+```sh
+uv run --no-sync python -m qachat.gui
+```
+
+This bypasses both uv's initial synchronization and the QAChat CLI's optional
+dependency repair. Missing GUI modules will instead cause startup to fail.
+The `--no-sync` option is an **uv** option, not a `qachat` option. Running
+`uv run --no-sync qachat --gui` skips only uv's initial synchronization:
+QAChat's launcher can still call `uv sync` if dependencies are missing.
 
 `qachat.cli.main` checks dependency module discoverability and may invoke
 `uv sync` in a development checkout before launching the GUI. This can modify
@@ -366,14 +375,11 @@ index write, download, or conversation update that was in progress.
 
 ## Trace privacy and current limits
 
-The engine enables complete diagnostic tracing for each conversation. Traces
-and conversation checkpoints can contain complete questions, answers, source
-excerpts, paths, settings, token identifiers, and backend diagnostic output.
-There is no trace-detail mode or automatic redaction. The setting to disable
-diagnostic events does not disable conversation checkpoints. Treat the entire
-workspace, especially `logs/`, as sensitive data. Deleting a conversation JSON
-also deletes its resumable history; archived copies and backups may remain.
-See [trace recording](../../docs/trace_recording.md) for the contract.
+The engine entry point enables forensic tracing. Traces and conversation
+checkpoints can contain complete questions, answers, source excerpts, paths,
+settings, token identifiers, and diagnostic output. Standard trace mode is
+not a content-redaction policy: resumable conversation state may still contain
+full text. Treat the entire workspace, especially `logs/`, as sensitive data.
 
 Model changes emit gui.models.change.requested/confirmed/applied events;
 downloads emit start/completion events. Source imports record the request

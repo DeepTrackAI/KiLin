@@ -215,14 +215,18 @@ class TestSelectedBackend(unittest.TestCase):
                 machine.assert_not_called()
 
     def test_auto_prefers_mlx_on_apple_silicon(self) -> None:
-        """Choose MLX for the CLI's native Darwin/arm64 check."""
+        """Recognize Apple Silicon with any machine-name capitalization."""
 
-        with (
-            patch.object(cli.sys, "platform", "darwin"),
-            patch.object(cli.platform, "machine", return_value="arm64"),
-        ):
-            selected = cli._selected_backend(BACKEND_AUTO)
-        self.assertEqual(selected, BACKEND_MLX)
+        for machine_name in ("arm64", "ARM64", "Arm64"):
+            with self.subTest(machine=machine_name):
+                with (
+                    patch.object(cli.sys, "platform", "darwin"),
+                    patch.object(
+                        cli.platform, "machine", return_value=machine_name
+                    ),
+                ):
+                    selected = cli._selected_backend(BACKEND_AUTO)
+                self.assertEqual(selected, BACKEND_MLX)
 
     def test_auto_uses_torch_on_other_platforms(self) -> None:
         """Choose PyTorch for Intel macOS, Linux, and Windows."""
@@ -247,6 +251,25 @@ class TestSelectedBackend(unittest.TestCase):
 
 class TestGUIEnvironment(unittest.TestCase):
     """Verify optional dependency preparation without executing ``uv``."""
+
+    def test_auto_preparation_uses_mlx_for_uppercase_arm64(self) -> None:
+        """Choose MLX dependencies rather than PyTorch on native macOS."""
+
+        with (
+            patch.object(cli.sys, "platform", "darwin"),
+            patch.object(cli.platform, "machine", return_value="ARM64"),
+            patch.object(cli, "find_spec", return_value=object()) as found,
+            patch.object(cli.shutil, "which") as which,
+            patch.object(cli.subprocess, "run") as sync,
+        ):
+            cli._ensure_gui_environment(BACKEND_AUTO)
+
+        self.assertEqual(
+            found.call_args_list,
+            [call("PySide6"), call("mlx_embeddings"), call("mlx_lm")],
+        )
+        which.assert_not_called()
+        sync.assert_not_called()
 
     def test_installed_dependencies_require_no_environment_changes(
         self,
