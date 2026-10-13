@@ -31,7 +31,8 @@ Key Features
 
     ``route_question`` drops related turns the question gives no sign of
     referring to, and ``search_text`` builds the search from the user's
-    own words.
+    own words. Malformed router fields fall back safely instead of
+    interrupting answering.
 
 - **History selection**
 
@@ -41,6 +42,7 @@ Key Features
 - **Turn representations**
 
     ``turn_representation`` builds a compact, model-free summary of a turn.
+    Invalid saved representations are rebuilt from the original turn.
 
 Module Structure
 ----------------
@@ -517,7 +519,7 @@ def _router_prompt(
     tuple[str, str]
         System prompt and user prompt. When the type has an intent that
         reuses evidence and earlier turns are listed, the user prompt ends
-        with a second example pointing at the last listed turn.
+        with a structural example for the reuse intent and last listed turn.
 
     """
 
@@ -558,8 +560,7 @@ turn.
 Only when standalone is false, also add:
 "related_turns": numbers of the earlier turns it refers to.
 
-Example: {{"intent": "{next(iter(project.intents))}", "standalone": false, \
-"related_turns": [2]}}"""
+Example: {{"intent": "{project.default_intent}", "standalone": true}}"""
     reuse = next(
         (
             intent_id
@@ -571,7 +572,7 @@ Example: {{"intent": "{next(iter(project.intents))}", "standalone": false, \
     if reuse and listed:
         last = listed[-1].get("turn_id", len(listed))
         user += f"""
-Example: "just in two sentences" after turn {last} -> {{"intent": \
+Example for intent "{reuse}" referring to turn {last}: {{"intent": \
 "{reuse}", "standalone": false, "related_turns": [{last}]}}"""
     return system, user
 
@@ -596,8 +597,8 @@ def _parse_route(
         The decision. An unknown intent becomes the default intent, a
         missing ``standalone`` is true only for a first question, related
         turn numbers outside the conversation are dropped, and at most the
-        newest ``MAX_RELATED_TURNS`` are kept. ``fallback`` says what was
-        replaced.
+        newest ``MAX_RELATED_TURNS`` are kept. Malformed field types do not
+        raise exceptions. ``fallback`` says what was replaced.
 
     """
 
@@ -618,15 +619,31 @@ def _parse_route(
 
     fallback = None
     intent = value.get("intent")
-    if intent not in project.intents:
+    if not isinstance(intent, str):
+        fallback = "intent was not a string"
+        intent = project.default_intent
+    elif intent not in project.intents:
         fallback = f"unknown intent {intent!r}"
         intent = project.default_intent
     standalone = value.get("standalone")
     if not isinstance(standalone, bool):
+        if "standalone" in value and fallback is None:
+            fallback = "standalone was not a boolean"
         standalone = turn_count == 0
 
+    related_values = value.get("related_turns", [])
+    if related_values is None:
+        related_values = []
+    if not isinstance(related_values, list):
+        return RouteDecision(
+            **{
+                **_fields(default),
+                "fallback": "related_turns was not a list",
+            }
+        )
+
     related: list[int] = []
-    for item in value.get("related_turns") or []:
+    for item in related_values:
         if type(item) is int and 1 <= item <= turn_count:
             if item not in related:
                 related.append(item)
@@ -922,8 +939,15 @@ def _ignores_conversation(turn: object, project: ProjectType) -> bool:
 
     """
 
-    parameters = getattr(turn, "parameters", None) or {}
-    intent = project.intents.get(parameters.get("intent"))
+    parameters = getattr(turn, "parameters", None)
+    if not isinstance(parameters, dict):
+        return False
+    intent_id = parameters.get("intent")
+    intent = (
+        project.intents.get(intent_id)
+        if isinstance(intent_id, str)
+        else None
+    )
     return (
         intent is not None
         and intent.tool is None
@@ -935,8 +959,10 @@ def _ignores_conversation(turn: object, project: ProjectType) -> bool:
 def _stored_representation(turn: object, number: int) -> dict[str, object]:
     """Return the representation saved with a turn, or build one.
 
-    The saved representation keeps its content but takes the turn's
-    current number.
+    A saved representation is reused only if its question, summary, and
+    sources have the expected types and size bounds. Otherwise it is
+    reconstructed from the original turn. A valid saved representation
+    keeps its content but takes the turn's current number.
 
     Parameters
     ----------
@@ -952,10 +978,27 @@ def _stored_representation(turn: object, number: int) -> dict[str, object]:
 
     """
 
-    parameters = getattr(turn, "parameters", None) or {}
-    stored = parameters.get("representation")
-    if isinstance(stored, dict) and stored.get("question"):
-        return {**stored, "turn_id": number}
+    parameters = getattr(turn, "parameters", None)
+    stored = (
+        parameters.get("representation")
+        if isinstance(parameters, dict)
+        else None
+    )
+    if isinstance(stored, dict):
+        question = stored.get("question")
+        summary = stored.get("summary")
+        sources = stored.get("sources")
+        if (
+            isinstance(question, str)
+            and bool(question.strip())
+            and len(question) <= _REPRESENTATION_MAX_CHARACTERS
+            and isinstance(summary, str)
+            and len(summary) <= _REPRESENTATION_MAX_CHARACTERS
+            and isinstance(sources, list)
+            and len(sources) <= _REPRESENTATION_MAX_SOURCES
+            and all(isinstance(source, str) for source in sources)
+        ):
+            return {**stored, "turn_id": number}
     return turn_representation(turn, number)
 
 

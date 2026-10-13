@@ -1,9 +1,8 @@
 """Unit tests for routing, side replies, and conversation history.
 
 Tests use packaged project types and deterministic fake model sessions. They
-exercise observable routing contracts without loading models or accessing the
-network. Known implementation defects are reported separately rather than
-changing production behavior in this test-only revision.
+exercise observable routing contracts and malformed-input recovery without
+loading models or accessing the network.
 
 """
 
@@ -14,6 +13,7 @@ changing production behavior in this test-only revision.
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -413,6 +413,64 @@ class TestRouting(unittest.TestCase):
         self.assertIn("poetry", decision.fallback)
         self.assertTrue(decision.standalone)
 
+    def test_non_string_intents_fall_back_without_raising(self) -> None:
+        """Reject non-string model intent IDs without failing routing."""
+
+        for value in ([], {}, ["code_explanation"], 3, False, None):
+            with self.subTest(value=value):
+                reply = json.dumps(
+                    {"intent": value, "standalone": True}
+                )
+                decision = self._route(reply)
+                self.assertEqual(decision.intent, self.kind.default_intent)
+                self.assertEqual(decision.related_turn_ids, ())
+                self.assertEqual(
+                    decision.fallback, "intent was not a string"
+                )
+
+    def test_non_list_related_turns_fall_back_without_raising(self) -> None:
+        """Reject scalar and mapping related-turn fields as invalid JSON."""
+
+        for value in (3, "2", {"turn": 2}, True, 1.5):
+            with self.subTest(value=value):
+                reply = json.dumps(
+                    {
+                        "intent": "code_generation",
+                        "standalone": False,
+                        "related_turns": value,
+                    }
+                )
+                decision = self._route(reply)
+                self.assertEqual(decision.intent, self.kind.default_intent)
+                self.assertEqual(decision.related_turn_ids, ())
+                self.assertEqual(
+                    decision.fallback, "related_turns was not a list"
+                )
+
+    def test_null_related_turns_is_treated_as_absent(self) -> None:
+        """Allow null in the optional related-turn field for compatibility."""
+
+        reply = (
+            '{"intent": "code_generation", "standalone": false, '
+            '"related_turns": null}'
+        )
+        decision = self._route(reply)
+        self.assertEqual(decision.intent, "code_generation")
+        self.assertEqual(decision.related_turn_ids, ())
+        self.assertIsNone(decision.fallback)
+
+    def test_non_boolean_standalone_uses_safe_default(self) -> None:
+        """Use position-based standalone defaults for malformed flags."""
+
+        reply = (
+            '{"intent": "code_generation", "standalone": "false"}'
+        )
+        decision = self._route(reply)
+        self.assertFalse(decision.standalone)
+        self.assertEqual(
+            decision.fallback, "standalone was not a boolean"
+        )
+
     def test_invalid_json_falls_back_without_related_turns(self) -> None:
         """Use the default intent for non-JSON or non-object replies."""
 
@@ -545,6 +603,12 @@ class TestRouterPrompt(unittest.TestCase):
         self.assertIn("New question: What does MRI measure?", prompt)
         self.assertIn('"related_turns"', prompt)
         self.assertIn("Earlier turns:\nnone", prompt)
+        self.assertIn(
+            'Example: {"intent": "question_answering", '
+            '"standalone": true}',
+            prompt,
+        )
+        self.assertNotIn('"related_turns": [2]}', prompt)
         self.assertEqual(router.call_args.kwargs, {"max_new_tokens": 64})
 
     def test_limits_listed_turns_to_latest_thirty(self) -> None:
@@ -610,8 +674,79 @@ class TestRouterPrompt(unittest.TestCase):
         self.assertIn("A: Saved summary.", prompt)
         self.assertNotIn("Newer question", prompt)
 
+    def test_rebuilds_malformed_saved_turn_representations(self) -> None:
+        """Rebuild a turn when saved summary fields are incorrectly typed."""
+
+        valid = {
+            "question": "Saved question",
+            "sources": ["saved.py:fit"],
+            "summary": "Saved summary.",
+        }
+        malformed = (
+            {**valid, "question": ["wrong type"]},
+            {**valid, "question": "  "},
+            {**valid, "sources": 42},
+            {**valid, "sources": ["saved.py:fit", 17]},
+            {**valid, "summary": {"text": "wrong type"}},
+            {**valid, "question": "Q" * 201},
+            {**valid, "summary": "S" * 201},
+            {**valid, "sources": ["f.py"] * 6},
+        )
+        kind = project_type("code")
+        for stored in malformed:
+            with self.subTest(stored=stored):
+                turn = _turn("Original question", "Original answer.")
+                turn.parameters["representation"] = stored
+                with patch.object(
+                    answering, "side_reply", return_value="not JSON"
+                ) as router:
+                    answering.route_question(
+                        object(), kind, [turn], "What happens next?"
+                    )
+                prompt = router.call_args.args[2]
+                self.assertIn("Turn 1: Q: Original question", prompt)
+                self.assertIn("A: Original answer.", prompt)
+                self.assertNotIn("Saved summary.", prompt)
+                self.assertIs(turn.parameters["representation"], stored)
+
+    def test_missing_saved_fields_rebuild_representation(self) -> None:
+        """Missing sources and summary must not crash prompt formatting."""
+
+        kind = project_type("code")
+        turn = _turn("Original question", "Original answer")
+        turn.parameters["representation"] = {"question": "Saved"}
+        with patch.object(
+            answering, "side_reply", return_value="not JSON"
+        ) as router:
+            answering.route_question(
+                object(), kind, [turn], "What happens next?"
+            )
+        self.assertIn(
+            "Turn 1: Q: Original question", router.call_args.args[2]
+        )
+
+    def test_invalid_turn_parameters_do_not_break_routing(self) -> None:
+        """Treat malformed persisted turn metadata as nonrestrictive."""
+
+        kind = project_type("code")
+        turn = _turn("Original question", "Original answer")
+        for parameters in (["invalid metadata"], {"intent": []}):
+            with self.subTest(parameters=parameters):
+                turn.parameters = parameters
+                with patch.object(
+                    answering, "side_reply", return_value="not JSON"
+                ) as router:
+                    decision = answering.route_question(
+                        object(), kind, [turn], "What happens next?"
+                    )
+                self.assertEqual(decision.intent, kind.default_intent)
+                self.assertIn(
+                    "Turn 1: Q: Original question",
+                    router.call_args.args[2],
+                )
+
     def test_includes_example_for_reuse_intent(self) -> None:
-        """Offer a concrete earlier-turn reference when reuse is supported."""
+        """Use a structural example without mislabeling user wording."""
 
         kind = project_type("code")
         turns = [_turn("How is it loaded?", "With a loader.")]
@@ -624,8 +759,13 @@ class TestRouterPrompt(unittest.TestCase):
 
         prompt = router.call_args.args[2]
         self.assertIn("- conversation_followup:", prompt)
-        self.assertIn('Example: "just in two sentences"', prompt)
-        self.assertIn('"related_turns": [1]', prompt)
+        self.assertIn(
+            'Example for intent "conversation_followup" referring to turn 1: '
+            '{"intent": "conversation_followup", "standalone": false, '
+            '"related_turns": [1]}',
+            prompt,
+        )
+        self.assertNotIn('Example: "just in two sentences"', prompt)
         self.assertIn("- rephrase_previous:", prompt)
 
 
