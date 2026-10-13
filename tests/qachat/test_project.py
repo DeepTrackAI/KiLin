@@ -23,6 +23,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from qachat import project
+from qachat.defaults import load_defaults_section
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
@@ -448,13 +449,14 @@ class TestProjectProfileValidation(ProjectFixture):
     def test_invalid_chunk_sizing_rules(self) -> None:
         """Require positive chunks and bounded overlap."""
 
+        target = load_defaults_section("PROJECT_PROFILE")["TARGET_TOKENS"]
         cases = (
             ("target_tokens", "0", "positive"),
             ("max_tokens", "0", "positive"),
             ("overlap_tokens", "-1", "cannot be negative"),
             ("target_tokens", "invalid", "whole number"),
-            ("max_tokens", "10", "reach target_tokens"),
-            ("overlap_tokens", "300", "below target_tokens"),
+            ("max_tokens", "1", "reach target_tokens"),
+            ("overlap_tokens", str(target), "below target_tokens"),
         )
         for index, (option, value, error) in enumerate(cases):
             with self.subTest(option=option, value=value):

@@ -146,6 +146,11 @@ from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
 from qachat.atomic_writes import atomic_write_text
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_int,
+    require_default_number,
+)
 from qachat.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
@@ -282,9 +287,19 @@ ANSWER_PHASE_CHOICES: Final[tuple[AnswerPhase, ...]] = (
     ANSWER_PHASE_PROCESSING,
 )
 
-_EMBEDDING_PROGRESS_BATCH_SIZE = 64
-_PROGRESS_MIN_INTERVAL_SECONDS = 0.15
-_PROGRESS_TRACE_PERCENT_STEP = 5.0
+# Limits for evidence reuse and progress reporting are package defaults.
+_RAG_DEFAULTS = load_defaults_section("RAG")
+_EMBEDDING_PROGRESS_BATCH_SIZE: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "EMBEDDING_PROGRESS_BATCH_SIZE", "RAG"
+)
+_PROGRESS_MIN_INTERVAL_SECONDS: Final[float] = require_default_number(
+    _RAG_DEFAULTS, "PROGRESS_MIN_INTERVAL_SECONDS", "RAG"
+)
+_PROGRESS_TRACE_PERCENT_STEP: Final[float] = require_default_number(
+    _RAG_DEFAULTS, "PROGRESS_TRACE_PERCENT_STEP", "RAG"
+)
+if _PROGRESS_TRACE_PERCENT_STEP > 100:
+    raise ValueError("RAG.PROGRESS_TRACE_PERCENT_STEP cannot exceed 100.")
 _SYSTEM_PROMPT = (
     "Answer only from the supplied project evidence. Put source numbers such "
     "as [1] and [2] directly after supported claims. Do not write a separate "
@@ -295,14 +310,22 @@ _SYSTEM_PROMPT = (
 # SHA-256 of its bytes, so unchanged files (slow PDFs above all) are not read
 # again when sources are re-indexed.
 _TEXT_CACHE: Final[str] = "source_text.json"
-# Most items a reused-evidence answer keeps; the oldest are dropped first.
-_MAX_REUSED_EVIDENCE: Final[int] = 40
-# Most items earlier related answers add to freshly retrieved evidence.
-_MAX_RELATED_EVIDENCE: Final[int] = 10
-# Items taken from a related answer that cited none of its evidence.
-_UNCITED_RELATED_EVIDENCE: Final[int] = 3
-# Earlier turns a tool may look back through for what "this" refers to.
-_MAX_EARLIER_TURNS: Final[int] = 6
+# Most items a reused-evidence answer keeps; oldest evidence is dropped.
+_MAX_REUSED_EVIDENCE: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_REUSED_EVIDENCE", "RAG"
+)
+# Most items earlier related turns add to freshly retrieved evidence.
+_MAX_RELATED_EVIDENCE: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_RELATED_EVIDENCE", "RAG"
+)
+# Items used from a related answer that cited none of its evidence.
+_UNCITED_RELATED_EVIDENCE: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "UNCITED_RELATED_EVIDENCE", "RAG"
+)
+# Earlier turns made available when resolving references in tool requests.
+_MAX_EARLIER_TURNS: Final[int] = require_default_int(
+    _RAG_DEFAULTS, "MAX_EARLIER_TURNS", "RAG"
+)
 # A citation group in an answer, such as "[2]" or "[1, 3]".
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
     r"\[(\d+(?:\s*,\s*\d+)*)\]"

@@ -54,6 +54,10 @@ from dataclasses import dataclass
 import re
 
 from qachat.chunking import Chunk
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_nonnegative_int,
+)
 from qachat.retrievals.code_graph.code_graph import CodeEntity, CodeGraph
 
 __all__ = [
@@ -61,6 +65,12 @@ __all__ = [
     "resolve_code_entities",
     "code_search",
 ]
+
+# Default number of graph edges traversed from explicitly named entities.
+_RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
+_DEFAULT_CODE_MAX_DISTANCE = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "CODE_MAX_DISTANCE", "RETRIEVAL"
+)
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 
@@ -220,7 +230,7 @@ def code_search(
     query_text: str,
     *,
     count: int = 5,
-    max_distance: int = 1,
+    max_distance: int = _DEFAULT_CODE_MAX_DISTANCE,
 ) -> list[CodeResult]:
     """Find chunks for explicitly named and related code entities.
 
@@ -240,7 +250,7 @@ def code_search(
         ``5``.
     max_distance: int, optional
         Nonnegative exact integer bounding undirected graph hops from matched
-        seeds. Defaults to ``1``.
+        seeds. Defaults to ``RETRIEVAL.CODE_MAX_DISTANCE`` (currently 1).
 
     Returns
     -------

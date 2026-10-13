@@ -12,9 +12,11 @@ loading external source files or embedding models.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+import math
 from pathlib import Path
 import unittest
 
+from qachat.defaults import load_defaults_section
 from qachat.retrievals import document_reading as dr
 from qachat.retrievals.code_graph import CodeEntity, CodeGraph
 from tests.qachat.retrievals._support import chunk, ranked
@@ -35,12 +37,17 @@ class TestDocumentPathMatching(unittest.TestCase):
         ]
 
     def test_token_estimation_rounds_up(self) -> None:
-        """Estimate one token per four characters, rounded upward.
+        """Estimate tokens using the configured characters-per-token rule.
 
         """
-        for value, expected in (("", 0), ("a", 1),
-                                ("abcd", 1), ("abcde", 2)):
-            self.assertEqual(dr.estimate_tokens(value), expected)
+
+        width = load_defaults_section("RETRIEVAL")[
+            "DOCUMENT_CHARACTERS_PER_TOKEN"
+        ]
+        for value in ("", "a", "abcd", "abcde", "a" * 25):
+            self.assertEqual(
+                dr.estimate_tokens(value), math.ceil(len(value) / width)
+            )
 
     def test_full_path_preferred_to_basename(self) -> None:
         """An explicit repository path takes precedence over stem matching.

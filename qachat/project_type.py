@@ -43,7 +43,8 @@ Module Structure
 
 - ``DOCUMENT_MAX_TOKENS``
 
-    Default evidence budget for document reading, in estimated tokens.
+    Default evidence budget for document reading, taken from the packaged
+    ``PROJECT_TYPES`` section when the intent JSON omits a budget.
 
 - ``HISTORY_POLICY_NONE``, ``HISTORY_POLICY_RECENT``, and
   ``HISTORY_POLICY_RELEVANT``
@@ -131,6 +132,11 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_int,
+    require_default_nonnegative_int,
+)
 from qachat.repository import normalize_extensions
 from qachat.tools.contract import reject_unknown
 from qachat.tools.registry import ToolUse, parse_tool
@@ -177,10 +183,17 @@ HISTORY_POLICY_CHOICES: Final[tuple[HistoryPolicy, ...]] = (
     HISTORY_POLICY_RECENT,
     HISTORY_POLICY_RELEVANT,
 )
-# Earlier turns kept as history when a type does not set recent_turns, and
-# the most a type may set.
-_DEFAULT_RECENT_TURNS: Final[int] = 2
+# Package-level defaults apply only when the project-type JSON omits a
+# value. The maximum below is a validation bound, not a configurable default.
+_PROJECT_TYPE_DEFAULTS = load_defaults_section("PROJECT_TYPES")
+_DEFAULT_RECENT_TURNS: Final[int] = require_default_nonnegative_int(
+    _PROJECT_TYPE_DEFAULTS, "DEFAULT_RECENT_TURNS", "PROJECT_TYPES"
+)
 _MAX_RECENT_TURNS: Final[int] = 100
+if _DEFAULT_RECENT_TURNS > _MAX_RECENT_TURNS:
+    raise ValueError(
+        "PROJECT_TYPES.DEFAULT_RECENT_TURNS cannot exceed 100."
+    )
 
 # How an intent obtains evidence for its answer.
 # ``document`` reads one whole file or function in source order.
@@ -195,14 +208,19 @@ RETRIEVAL_MODE_CHOICES: Final[tuple[RetrievalMode, ...]] = (
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_NONE,
 )
-# Evidence budget for document reading, in estimated tokens. Qwen3 models
-# accept 40,960 tokens; this leaves room for instructions, history, and a
-# 2,048-token answer.
-DOCUMENT_MAX_TOKENS: Final[int] = 30_000
-# Accepted range for an intent's own budget; values outside it are treated
-# as mistakes in the file.
+# Default evidence budget for document reading, in estimated tokens.
+# This leaves room for instructions, conversation history, and the answer.
+DOCUMENT_MAX_TOKENS: Final[int] = require_default_int(
+    _PROJECT_TYPE_DEFAULTS, "DOCUMENT_MAX_TOKENS", "PROJECT_TYPES"
+)
+# Accepted range for an intent's own budget, kept as validation policy.
 _MIN_DOCUMENT_TOKENS: Final[int] = 1_000
 _MAX_DOCUMENT_TOKENS: Final[int] = 200_000
+if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
+    raise ValueError(
+        "PROJECT_TYPES.DOCUMENT_MAX_TOKENS must be between "
+        "1000 and 200000."
+    )
 
 # Search pipeline used by RETRIEVAL_MODE_SEARCH. Only the existing hybrid
 # pipeline (semantic, lexical, code graph, fused) exists; new strategies

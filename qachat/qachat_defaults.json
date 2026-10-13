@@ -171,5 +171,61 @@
       "you",
       "your"
     ]
+  },
+  "RAG": {
+    "EMBEDDING_PROGRESS_BATCH_SIZE": 64,
+    "PROGRESS_MIN_INTERVAL_SECONDS": 0.15,
+    "PROGRESS_TRACE_PERCENT_STEP": 5.0,
+    "MAX_REUSED_EVIDENCE": 40,
+    "MAX_RELATED_EVIDENCE": 10,
+    "UNCITED_RELATED_EVIDENCE": 3,
+    "MAX_EARLIER_TURNS": 6
+  },
+  "PROJECT_PROFILE": {
+    "ALLOW_DOWNLOAD": true,
+    "TARGET_TOKENS": 300,
+    "MAX_TOKENS": 400,
+    "OVERLAP_TOKENS": 40,
+    "RETRIEVAL_COUNT": 5,
+    "THINKING": false,
+    "TEMPERATURE": 0.0,
+    "MAX_NEW_TOKENS": 256
+  },
+  "CHUNKING": {
+    "TARGET_TOKENS": 500,
+    "MAX_TOKENS": 700,
+    "OVERLAP_TOKENS": 80
+  },
+  "PROJECT_TYPES": {
+    "DEFAULT_RECENT_TURNS": 2,
+    "DOCUMENT_MAX_TOKENS": 30000
+  },
+  "RETRIEVAL": {
+    "RRF_RANK_CONSTANT": 60,
+    "CODE_MAX_DISTANCE": 1,
+    "DOCUMENT_CHARACTERS_PER_TOKEN": 4,
+    "MIN_DOCUMENT_STEM_LENGTH": 4,
+    "RELATION_PHRASES": [
+      "called by",
+      "calls",
+      "caller",
+      "callers",
+      "callee",
+      "callees",
+      "connected to",
+      "connect to",
+      "depends on",
+      "imported by",
+      "imports",
+      "interact with",
+      "related to",
+      "referenced by",
+      "references",
+      "relationship",
+      "used across",
+      "used throughout",
+      "where does",
+      "where is"
+    ]
   }
 }

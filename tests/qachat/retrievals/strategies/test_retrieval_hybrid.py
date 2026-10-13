@@ -12,6 +12,7 @@ from dataclasses import FrozenInstanceError
 import unittest
 from types import SimpleNamespace
 
+from qachat.defaults import load_defaults_section
 from qachat.retrievals.strategies import retrieval_hybrid as rh
 from tests.qachat.retrievals._support import chunk
 
@@ -26,6 +27,9 @@ class TestHybridSearch(unittest.TestCase):
         self.a = chunk("a")
         self.b = chunk("b")
         self.c = chunk("c")
+        self.rank_constant = load_defaults_section("RETRIEVAL")[
+            "RRF_RANK_CONSTANT"
+        ]
 
     def test_empty_rankings(self) -> None:
         """Return no chunks if no retrieval channel contributes evidence.
@@ -44,8 +48,8 @@ class TestHybridSearch(unittest.TestCase):
         result = rh.hybrid_search(semantic=items)
         self.assertEqual([item.chunk.identifier for item in result],
                          ["a", "b"])
-        self.assertAlmostEqual(result[0].score, 1 / 61)
-        self.assertAlmostEqual(result[1].score, 1 / 62)
+        self.assertAlmostEqual(result[0].score, 1 / (self.rank_constant + 1))
+        self.assertAlmostEqual(result[1].score, 1 / (self.rank_constant + 2))
         self.assertEqual(result[0].channels, ("semantic",))
 
     def test_multiple_channels_improve_score(self) -> None:
@@ -57,7 +61,7 @@ class TestHybridSearch(unittest.TestCase):
             semantic=[item], lexical=[item], code=[item]
         )
         self.assertEqual(len(result), 1)
-        self.assertAlmostEqual(result[0].score, 3 / 61)
+        self.assertAlmostEqual(result[0].score, 3 / (self.rank_constant + 1))
         self.assertEqual(result[0].channels,
                          ("code", "lexical", "semantic"))
 
@@ -69,8 +73,8 @@ class TestHybridSearch(unittest.TestCase):
         results = rh.hybrid_search(
             semantic=[rank(self.a), rank(self.a), rank(self.b)]
         )
-        self.assertAlmostEqual(results[0].score, 1 / 61)
-        self.assertAlmostEqual(results[1].score, 1 / 63)
+        self.assertAlmostEqual(results[0].score, 1 / (self.rank_constant + 1))
+        self.assertAlmostEqual(results[1].score, 1 / (self.rank_constant + 3))
 
     def test_equal_score_tie_breaks_on_identifier(self) -> None:
         """Equal scores must be reproducible independent of channel order.

@@ -80,8 +80,10 @@ class TestRepositoryScanSelection(_RepositoryFixture):
 
         path = Path(repository.__file__).with_name("qachat_defaults.json")
         defaults = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(
-            set(defaults), {"DEFAULT_MODELS", "REPOSITORY", "ANSWERING"}
+        # New domain sections must not change repository selection policy.
+        self.assertTrue(
+            {"DEFAULT_MODELS", "REPOSITORY", "ANSWERING"}
+            <= set(defaults)
         )
         defaults = defaults["REPOSITORY"]
         self.assertEqual(

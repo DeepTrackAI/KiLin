@@ -87,12 +87,33 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_int,
+    require_default_nonnegative_int,
+)
 from qachat.sources.sources import SourceUnit
 
 __all__ = [
     "Chunk",
     "chunk_source_units",
 ]
+
+# Generic chunking defaults, separate from new-project profile settings.
+_CHUNKING_DEFAULTS = load_defaults_section("CHUNKING")
+_DEFAULT_TARGET_TOKENS = require_default_int(
+    _CHUNKING_DEFAULTS, "TARGET_TOKENS", "CHUNKING"
+)
+_DEFAULT_MAX_TOKENS = require_default_int(
+    _CHUNKING_DEFAULTS, "MAX_TOKENS", "CHUNKING"
+)
+_DEFAULT_OVERLAP_TOKENS = require_default_nonnegative_int(
+    _CHUNKING_DEFAULTS, "OVERLAP_TOKENS", "CHUNKING"
+)
+if _DEFAULT_MAX_TOKENS < _DEFAULT_TARGET_TOKENS:
+    raise ValueError("CHUNKING.MAX_TOKENS must reach TARGET_TOKENS.")
+if _DEFAULT_OVERLAP_TOKENS >= _DEFAULT_TARGET_TOKENS:
+    raise ValueError("CHUNKING.OVERLAP_TOKENS must be below TARGET_TOKENS.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,9 +186,9 @@ def chunk_source_units(
     units: list[SourceUnit],
     *,
     count_tokens: Callable[[str], int],
-    target_tokens: int = 500,
-    max_tokens: int = 700,
-    overlap_tokens: int = 80,
+    target_tokens: int = _DEFAULT_TARGET_TOKENS,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    overlap_tokens: int = _DEFAULT_OVERLAP_TOKENS,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[Chunk]:
     """Create token-bounded chunks while preserving natural units.
@@ -180,12 +201,12 @@ def chunk_source_units(
         Token counter from the selected embedding model. Boundary selection
         assumes approximately monotonic token counts; see module notes.
     target_tokens: int, optional
-        Preferred size when a unit must be split. Defaults to ``500``.
+        Preferred split size from ``CHUNKING.TARGET_TOKENS`` (currently 500).
     max_tokens: int, optional
-        Largest allowed chunk. Defaults to ``700``.
+        Largest chunk, from ``CHUNKING.MAX_TOKENS`` (currently 700).
     overlap_tokens: int, optional
-        Maximum repeated text between adjacent split chunks. Defaults to
-        ``80``.
+        Maximum repeated tokens between adjacent chunks, from
+        ``CHUNKING.OVERLAP_TOKENS`` (currently 80).
     progress_callback: Callable[[int, int], None] | None, optional
         Called after each top-level source unit with ``current`` and ``total``.
         Defaults to ``None``.

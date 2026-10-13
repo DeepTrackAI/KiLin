@@ -23,6 +23,7 @@ import unittest
 from unittest.mock import patch
 
 from qachat import project
+from qachat.defaults import load_defaults_section
 from qachat.project_type import (
     DOCUMENT_MAX_TOKENS,
     HISTORY_POLICY_CHOICES,
@@ -476,7 +477,10 @@ class TestProjectTypeFields(ProjectTypeFixture):
         self.assertEqual(loaded.welcome_prompts, ())
         self.assertEqual(loaded.suggestions, ())
         self.assertEqual(loaded.code_graph, "auto")
-        self.assertEqual(loaded.recent_turns, 2)
+        self.assertEqual(
+            loaded.recent_turns,
+            load_defaults_section("PROJECT_TYPES")["DEFAULT_RECENT_TURNS"],
+        )
         self.assertEqual(loaded.default_intent, "explain")
         self.assertEqual(intent.history_policy, "relevant")
         self.assertEqual(intent.retrieval_mode, "search")

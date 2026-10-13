@@ -2,8 +2,9 @@
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
-Initialization creates a default profile only when one is missing. Opening a
-project validates its profile and source location and creates index/log
+Initialization creates a default profile only when one is missing, using
+``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
+profile and source location and creates index/log
 directories as needed; it is not a strictly read-only operation.
 
 ``prepare_project_workspace`` mirrors selected files from one original
@@ -106,6 +107,13 @@ import shutil
 from typing import Final, TypeAlias, cast
 
 from qachat.atomic_writes import atomic_write_text
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_bool,
+    require_default_int,
+    require_default_nonnegative_int,
+    require_default_number,
+)
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
@@ -202,6 +210,44 @@ _DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
 }
 # Accepted kinds as listed in error messages.
 _KIND_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_KIND_CHOICES)
+
+# These defaults are used only when generating a missing project profile;
+# existing ``profile.ini`` values always take precedence.
+_PROFILE_DEFAULTS = load_defaults_section("PROJECT_PROFILE")
+_PROFILE_ALLOW_DOWNLOAD: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "ALLOW_DOWNLOAD", "PROJECT_PROFILE"
+)
+_PROFILE_TARGET_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "TARGET_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_MAX_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "MAX_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_OVERLAP_TOKENS: Final[int] = require_default_nonnegative_int(
+    _PROFILE_DEFAULTS, "OVERLAP_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_RETRIEVAL_COUNT: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "RETRIEVAL_COUNT", "PROJECT_PROFILE"
+)
+_PROFILE_THINKING: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "THINKING", "PROJECT_PROFILE"
+)
+_PROFILE_TEMPERATURE: Final[float] = require_default_number(
+    _PROFILE_DEFAULTS, "TEMPERATURE", "PROJECT_PROFILE", allow_zero=True
+)
+_PROFILE_MAX_NEW_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "MAX_NEW_TOKENS", "PROJECT_PROFILE"
+)
+if _PROFILE_MAX_TOKENS < _PROFILE_TARGET_TOKENS:
+    raise ValueError(
+        "PROJECT_PROFILE.MAX_TOKENS must reach TARGET_TOKENS."
+    )
+if _PROFILE_OVERLAP_TOKENS >= _PROFILE_TARGET_TOKENS:
+    raise ValueError(
+        "PROJECT_PROFILE.OVERLAP_TOKENS must be below TARGET_TOKENS."
+    )
+
+# Keep INI formatting and ordering unchanged for generated profiles.
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}
@@ -210,7 +256,7 @@ max_file_bytes = {max_file_bytes}
 
 [models]
 backend = {backend}
-allow_download = true
+allow_download = {allow_download}
 chat_mlx = {chat_mlx}
 chat_torch = {chat_torch}
 embedding_mlx = {embedding_mlx}
@@ -218,17 +264,17 @@ embedding_torch = {embedding_torch}
 query_format = {query_format}
 
 [chunking]
-target_tokens = 300
-max_tokens = 400
-overlap_tokens = 40
+target_tokens = {target_tokens}
+max_tokens = {max_tokens}
+overlap_tokens = {overlap_tokens}
 
 [retrieval]
-count = 5
+count = {retrieval_count}
 
 [generation]
-thinking = false
-temperature = 0.0
-max_new_tokens = 256
+thinking = {thinking}
+temperature = {temperature}
+max_new_tokens = {max_new_tokens}
 """
 
 _EDITABLE_SETTINGS = {
@@ -280,6 +326,14 @@ def _default_profile_text(
         source=source,
         extensions=extensions,
         max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
+        allow_download=str(_PROFILE_ALLOW_DOWNLOAD).lower(),
+        target_tokens=_PROFILE_TARGET_TOKENS,
+        max_tokens=_PROFILE_MAX_TOKENS,
+        overlap_tokens=_PROFILE_OVERLAP_TOKENS,
+        retrieval_count=_PROFILE_RETRIEVAL_COUNT,
+        thinking=str(_PROFILE_THINKING).lower(),
+        temperature=_PROFILE_TEMPERATURE,
+        max_new_tokens=_PROFILE_MAX_NEW_TOKENS,
         backend=BACKEND_AUTO,
         chat_mlx=DEFAULT_CHAT_MODEL_MLX,
         chat_torch=DEFAULT_CHAT_MODEL_TORCH,

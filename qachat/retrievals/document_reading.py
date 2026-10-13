@@ -26,9 +26,9 @@ Key Features
 
 - **Token budget**
 
-    Token counts are estimated from text length (about four characters per
-    token for English text with Qwen3 tokenizers), so no tokenizer is
-    loaded.
+    Token counts are estimated using the configured characters-per-token
+    heuristic (initially four for English text with Qwen3 tokenizers), so
+    no tokenizer is loaded.
 
 - **Source order**
 
@@ -92,6 +92,7 @@ import re
 from typing import Final, Literal, TypeAlias
 
 from qachat.chunking import Chunk
+from qachat.defaults import load_defaults_section, require_default_int
 from qachat.retrievals.code_graph import CodeGraph
 from qachat.retrievals.routing import (
     RetrievalPlan,
@@ -127,11 +128,16 @@ DOCUMENT_REASON_CHOICES: Final[tuple[DocumentReason, ...]] = (
     DOCUMENT_REASON_SEARCH,
 )
 
-# Characters per token for the estimate; measured on a 31-page paper with
-# the Qwen3 tokenizer (107,912 characters, 26,986 tokens).
-_CHARACTERS_PER_TOKEN: Final[int] = 4
+# Token estimation and filename heuristics; the estimate was originally
+# calibrated on a paper with Qwen3 (107,912 chars and 26,986 tokens).
+_RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
+_CHARACTERS_PER_TOKEN: Final[int] = require_default_int(
+    _RETRIEVAL_DEFAULTS, "DOCUMENT_CHARACTERS_PER_TOKEN", "RETRIEVAL"
+)
 # File stems shorter than this are too generic to count as a name.
-_MIN_STEM_LENGTH: Final[int] = 4
+_MIN_STEM_LENGTH: Final[int] = require_default_int(
+    _RETRIEVAL_DEFAULTS, "MIN_DOCUMENT_STEM_LENGTH", "RETRIEVAL"
+)
 
 
 @dataclass(frozen=True, slots=True)
