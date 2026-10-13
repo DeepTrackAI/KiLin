@@ -10,9 +10,10 @@ trusted merely because the model was asked to follow the format.
 Templates shipped with QAChat live in ``qachat/tools/templates/``, for
 example ``research_briefing.md`` (the one-page Research Briefing format of
 Nature-family journals). Each project has its own ``templates/`` folder,
-next to ``sources/`` and ``outputs/`` and never indexed, which starts with a
-copy of the shipped templates. Adding a ``.md`` file there adds a format;
-deleting one removes it for that project only.
+next to ``sources/`` and ``outputs/`` and never indexed. The core installs
+only templates used by its project type at initial creation. Adding a
+``.md`` file there adds a format; deleting it removes the format only
+from that project.
 
 Templates are read fresh on every load, so edits apply at once. A template
 that breaks a rule raises ``ValueError`` naming the template and, where
@@ -101,7 +102,7 @@ Module Structure
 
 - ``templates_folder``
 
-    Return a project's templates folder, creating it when missing.
+    Return a project's templates path without creating it.
 
 - ``template_names``
 
@@ -151,7 +152,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-import shutil
 from typing import Final, Literal, TypeAlias
 
 __all__ = [
@@ -176,7 +176,7 @@ __all__ = [
     "templates_folder",
 ]
 
-# Templates shipped with QAChat; new projects get a copy.
+# Templates shipped with QAChat; the core selects relevant files.
 SHIPPED_TEMPLATES_DIR: Final[Path] = Path(__file__).parent / "templates"
 # A project's own templates, next to sources/ and outputs/; never indexed.
 TEMPLATES_FOLDER: Final[str] = "templates"
@@ -383,29 +383,22 @@ class ReportCheck:
 
 
 def templates_folder(project_root: Path) -> Path:
-    """Return ``<project>/templates``, creating it with the shipped ones.
+    """Return the project's existing templates folder without writing files.
 
     Parameters
     ----------
     project_root: pathlib.Path
-        The project folder.
+        The project folder, initialized by ``qachat.project``.
 
     Returns
     -------
     pathlib.Path
-        The project's templates folder. When it does not exist yet, it is
-        created with a copy of every shipped template; an existing folder
-        is left as the user keeps it (deleted templates stay deleted).
+        Path to the project's templates directory. This accessor does not
+        create folders, copy shipped templates, or restore deleted files.
 
     """
 
-    folder = Path(project_root) / TEMPLATES_FOLDER
-    if not folder.exists():
-        folder.mkdir(parents=True)
-        for path in sorted(SHIPPED_TEMPLATES_DIR.glob("*.md")):
-            shutil.copyfile(path, folder / path.name)
-
-    return folder
+    return Path(project_root) / TEMPLATES_FOLDER
 
 
 def template_names(directory: Path = SHIPPED_TEMPLATES_DIR) -> list[str]:

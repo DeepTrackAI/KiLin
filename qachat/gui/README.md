@@ -165,12 +165,13 @@ is loaded, and unknown settings are rejected. The tools are:
 - `batch_review` (intents `document_reading` and `file_reading`): reads one
   whole document in parts, takes notes with passage numbers, and answers
   from the notes; the answer streams and its citations are checked.
-- `generate_paper_summary` (intent `paper_summary`): turns one paper into a
-  one-page document that follows a Markdown template from the project's
-  `templates/` folder, which starts with a copy of
-  `qachat/tools/templates/research_briefing.md` (the Research Briefing
-  format of Nature-family journals: a headline of at most 90 characters and
-  six sections with word limits, at most 750 words). Edit it, or add your
+- `generate_paper_summary` (four literature report intents): turns one
+  paper into a structured document following a Markdown template in the
+  project's `templates/` folder. New literature projects receive only
+  their four configured templates. The included `research_briefing.md`
+  follows the Research Briefing format of Nature-family journals: a
+  headline of at most 90 characters and six sections with word limits,
+  at most 750 words. Edit a supplied template, or add your
   own `.md` template and name it in the question ("…with the lab_summary
   template"); the rules (limits in brackets after a heading, `{citation}`
   and `{references}` placeholders) are in tutorial 160 and in
@@ -191,8 +192,9 @@ time) with **Continue**, **Quick** (a smaller, non-exhaustive version), and
 **Cancel**, when the plan is larger than the tool's `large_batches`
 setting (`confirmation`: always, when_large, or never).
 
-A project folder has `sources/` (copied in, indexed, searched), `outputs/`
-and `templates/` (never indexed). Summaries and reports QAChat writes go to
+A GUI-managed project has `sources/` (copied in, indexed, searched),
+`outputs/` and `templates/` (never indexed). The core creates the latter
+two folders for every project, even when no templates are selected. Summaries and reports QAChat writes go to
 `outputs/`, so they can never come back as sources; you can also put a
 paper you are working on there. Saving never overwrites a file: `-2`,
 `-3`, ... is added instead. Projects from earlier versions have their

@@ -1,8 +1,9 @@
 """Copy selected local sources into a managed multi-source workspace.
 
 ``prepare_sources_workspace`` accepts local files or directories, prepares a
-project profile, copies selected content into ``sources``, and records source
-origins in ``sources.json``. Imported snapshots are project-owned: later
+project profile, creates its shared core directories and selected tool
+resources, copies content into ``sources``, and records source origins in
+``sources.json``. Imported snapshots are project-owned: later
 imports preserve existing files unless replacement is explicitly requested.
 Source names are disambiguated when needed.
 Directory inputs use repository scanning; individual-file inputs have a

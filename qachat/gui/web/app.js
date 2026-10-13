@@ -429,13 +429,16 @@ function allFiles(node) {
 function fileTree(files) {
   const root = { directories: new Map(), files: [] };
   for (const file of files) {
-    const parts = file.split("/");
+    // Trailing slashes represent real empty or nonempty folders, not files.
+    const directory = file.endsWith("/");
+    const parts = file.split("/").filter(Boolean);
     let node = root;
-    for (const folder of parts.slice(0, -1)) {
+    const folders = directory ? parts : parts.slice(0, -1);
+    for (const folder of folders) {
       if (!node.directories.has(folder)) node.directories.set(folder, { directories: new Map(), files: [] });
       node = node.directories.get(folder);
     }
-    node.files.push(file);
+    if (!directory) node.files.push(file);
   }
   return root;
 }
@@ -1126,12 +1129,7 @@ function renderWorkspace(paths) {
   host.replaceChildren();
   const root = fileTree(paths);
   const selected = new Set(paths);
-  // Editable folders are always shown, even empty, so files can be added.
-  for (const folder of EDITABLE_FOLDERS) {
-    if (ready && !root.directories.has(folder)) {
-      root.directories.set(folder, { directories: new Map(), files: [] });
-    }
-  }
+  // Every folder comes from the core's actual workspace inventory.
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
     const item = branch(name, node, files, selected);

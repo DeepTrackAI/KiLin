@@ -1215,7 +1215,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
 
         self._prepare([self._file("code.py")])
         generated = self.destination / "outputs/result.py"
-        generated.parent.mkdir()
+        self.assertTrue(generated.parent.is_dir())
         generated.write_text("result = 2\n", encoding="utf-8")
         project = self._prepare([generated])
         self.assertEqual(
@@ -1228,7 +1228,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
 
         self._prepare([self._file("code.py")])
         template = self.destination / "templates/report.md"
-        template.parent.mkdir()
+        self.assertTrue(template.parent.is_dir())
         template.write_text("# Report\n", encoding="utf-8")
         project = self._prepare([template])
         self.assertTrue((project.source / "report.md").exists())
@@ -1238,7 +1238,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
 
         self._prepare([self._file("code.py")])
         outputs = self.destination / "outputs"
-        outputs.mkdir()
+        self.assertTrue(outputs.is_dir())
         with self.assertRaisesRegex(ValueError, "own source"):
             self._prepare([outputs])
 

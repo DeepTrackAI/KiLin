@@ -1,11 +1,12 @@
-"""Read project profiles and prepare a managed single-source workspace.
+"""Create and open project workspaces independently of the GUI.
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
 Initialization creates a default profile only when one is missing, using
 ``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
-profile and source location and creates index/log
-directories as needed; it is not a strictly read-only operation.
+profile and source location and creates the shared indexes, logs, outputs,
+and templates folders as needed. A new project receives only the packaged
+resources declared by the tools selected by its project type.
 
 ``prepare_project_workspace`` mirrors selected files from one original
 repository into a managed workspace and compares source manifests to update
@@ -25,6 +26,10 @@ Key Features
 
     Read backend, model, query-format, scan, chunk, retrieval, and generation
     settings.
+
+- **GUI-independent workspace layout**
+
+    Create shared folders and install selected tool resources in the core.
 
 - **Managed source copy**
 
@@ -55,11 +60,11 @@ Module Structure
 
 - ``initialize_project``
 
-    Create a missing project profile, then open the project.
+    Create a missing profile and install selected tool resources.
 
 - ``open_project``
 
-    Open a configured project and prepare its output folders.
+    Open a project and ensure its shared workspace folders exist.
 
 - ``prepare_project_workspace``
 
@@ -121,6 +126,11 @@ from qachat.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
 from qachat.project_type import load_project_types
+from qachat.project_layout import (
+    ensure_project_folders,
+    install_project_resources,
+    plan_project_layout,
+)
 from qachat.query_formats import (
     QUERY_FORMAT_CHOICES,
     QUERY_FORMAT_QWEN3,
@@ -666,7 +676,7 @@ def initialize_project(
     directory: str | Path,
     kind: ProjectKind,
 ) -> QAProject:
-    """Create a missing project profile, then open the project.
+    """Create a project profile and its required tool resources.
 
     Parameters
     ----------
@@ -693,8 +703,9 @@ def initialize_project(
     -----
     Requires an existing directory. A missing profile.ini is initialized using
     the selected kind; an existing profile is preserved and checked for kind
-    compatibility. Opening the resulting project creates indexes/logs
-    directories. No model is loaded.
+    compatibility. New projects receive only the template files required
+    by their type; existing user templates are preserved. Opening creates
+    indexes, logs, outputs and templates directories. No model is loaded.
 
     """
 
@@ -704,27 +715,57 @@ def initialize_project(
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
 
-    profile_path = root / "profile.ini"
-    if not profile_path.exists():
-        source_name = (
-            "repository" if kind == PROJECT_KIND_CODE else "documents"
-        )
-        if (root / "sources").is_dir():
-            source = "sources"
-        else:
-            source = source_name if (root / source_name).is_dir() else "."
+    source_name = (
+        "repository" if kind == PROJECT_KIND_CODE else "documents"
+    )
+    if (root / "sources").is_dir():
+        source = "sources"
+    else:
+        source = source_name if (root / source_name).is_dir() else "."
+    return _initialize_profile(root, kind, source)
 
-        extensions = _PROJECT_EXTENSIONS[kind]
+
+def _initialize_profile(
+    root: Path, kind: ProjectKind, source: str
+) -> QAProject:
+    """Initialize a missing profile and its project-selected resources.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Existing project workspace.
+    kind: ProjectKind
+        Expected project type, used to plan tool resources.
+    source: str
+        Relative source folder in a newly generated profile.
+
+    Returns
+    -------
+    QAProject
+        Opened project with its core directories created.
+
+    Notes
+    -----
+    Only the first creation of a profile installs packaged resources.
+    Existing profiles and their edited or deleted templates remain intact.
+
+    """
+
+    profile_path = root / "profile.ini"
+    new_profile = not profile_path.exists()
+    layout = plan_project_layout(kind) if new_profile else None
+    if new_profile:
         profile_path.write_text(
-            _default_profile_text(kind, source, extensions),
+            _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind]),
             encoding="utf-8",
         )
-
     project = open_project(root)
     if project.profile.kind != kind:
         raise ValueError(
             "PROJECT_KIND conflicts with the existing profile.ini."
         )
+    if layout is not None:
+        install_project_resources(root, layout)
     return project
 
 
@@ -735,9 +776,10 @@ def prepare_project_workspace(
 ) -> QAProject:
     """Mirror one source folder into a managed QAChat workspace.
 
-    The original source is never modified.  A normal workspace is named
+    The original source is never modified. A normal workspace is named
     ``project_<source-name>`` and contains the copied source folder beside
-    ``indexes/``, ``logs/``, ``profile.ini``, and ``source_snapshot.json``.
+    ``profile.ini``, the shared workspace folders, and
+    ``source_snapshot.json``.
     Only files selected by the project's repository rules are mirrored.
 
     Reopening the same source verifies the managed copy against its saved
@@ -813,16 +855,7 @@ def prepare_project_workspace(
         raise ValueError("Managed source copy must not be a symbolic link.")
     snapshot.mkdir(parents=True, exist_ok=True)
 
-    profile_path = root / "profile.ini"
-    if not profile_path.exists():
-
-        extensions = _PROJECT_EXTENSIONS[kind]
-        profile_path.write_text(
-            _default_profile_text(kind, source_name, extensions),
-            encoding="utf-8",
-        )
-
-    project = open_project(root)
+    project = _initialize_profile(root, kind, source_name)
     if project.profile.kind != kind:
         raise ValueError(
             "PROJECT_KIND conflicts with the existing workspace profile.ini."
@@ -1001,7 +1034,7 @@ def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
 
 
 def open_project(directory: str | Path) -> QAProject:
-    """Open a configured project and prepare its output folders.
+    """Open a configured project and prepare its shared folders.
 
     Parameters
     ----------
@@ -1026,8 +1059,9 @@ def open_project(directory: str | Path) -> QAProject:
     -----
     The root and configured source must already be directories and profile.ini
     must exist. A profile may name an absolute source outside the project. The
-    function creates indexes and logs directories before returning; it does not
-    load models.
+    function creates indexes, logs, outputs and templates directories before
+    returning, without reinstalling packaged templates; it does not load
+    models.
 
     """
 
@@ -1049,10 +1083,9 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
+    ensure_project_folders(root)
     indexes = root / "indexes"
     logs = root / "logs"
-    indexes.mkdir(exist_ok=True)
-    logs.mkdir(exist_ok=True)
     return QAProject(
         root=root,
         source=source,

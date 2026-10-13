@@ -175,6 +175,7 @@ from qachat.conversation_ownership import (
     conversation_write_ownership,
 )
 from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
+from qachat.project_layout import source_scan_exclusions
 from qachat.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
@@ -2179,6 +2180,9 @@ class RAGSession:
                 self.project.source,
                 extensions=profile.extensions,
                 max_file_bytes=profile.max_file_bytes,
+                exclude_paths=source_scan_exclusions(
+                    self.project.root, self.project.source
+                ),
             )
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
@@ -2445,6 +2449,9 @@ class RAGSession:
             self.project.source,
             extensions=profile.extensions,
             max_file_bytes=profile.max_file_bytes,
+            exclude_paths=source_scan_exclusions(
+                self.project.root, self.project.source
+            ),
         )
         report_data: dict[str, object] = {
             "repository": report.get("repository"),

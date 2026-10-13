@@ -4,8 +4,8 @@ The tool turns one paper into a report that follows a Markdown template
 from ``report_template``, such as ``research_briefing`` (the one-page
 Research Briefing format of Nature-family journals), and saves it in the
 project's ``outputs/`` folder. Templates live in the project's
-``templates/`` folder, which starts with a copy of the shipped ones; the
-question picks one by title or file name ("research briefing"), and the
+``templates/`` folder, which receives only the project type's required
+templates on creation; the question picks one by title or name, and the
 intent's default applies otherwise. It is QAChat's reference example of a
 custom tool (see tutorial 160): it composes existing capabilities instead
 of re-implementing them.
@@ -180,6 +180,7 @@ from qachat.tools.planning import (
     ToolPlan,
     confirm_plan,
 )
+from qachat.workspace_resources import WorkspaceResource
 from qachat.tools.report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
@@ -204,6 +205,7 @@ __all__ = [
     "paper_beginning",
     "paper_citation",
     "parse_settings",
+    "workspace_resources",
     "reference_entries",
     "reference_list",
     "references_prompt",
@@ -327,8 +329,7 @@ class SummarySettings:
     ----------
     template: str
         Template used when the question names none: a file name without
-        ``.md`` in the project's ``templates/`` folder (or, when the
-        project has no such file, among the shipped templates).
+        ``.md`` in the project's ``templates/`` folder.
     part_tokens: int
         Estimated tokens of paper per reading part (1000-16000).
     note_tokens: int
@@ -430,6 +431,37 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
             where, data, "large_batches", defaults.large_batches, 0, 100
         ),
     )
+
+
+def workspace_resources(
+    settings: SummarySettings,
+) -> tuple[WorkspaceResource, ...]:
+    """Declare the report template needed by one configured intent.
+
+    Parameters
+    ----------
+    settings: SummarySettings
+        Validated tool configuration with a default template name.
+
+    Returns
+    -------
+    tuple[WorkspaceResource, ...]
+        One shipped template to install when available, otherwise
+        an empty tuple for a user-provided custom template.
+
+    Notes
+    -----
+    The core deduplicates resources required by multiple intents. Template
+    existence and destination safety are checked during project planning.
+
+    """
+
+    name = f"{settings.template}.md"
+    source = SHIPPED_TEMPLATES_DIR / name
+    if not source.exists():
+        # A custom project-type template may be supplied by the user later.
+        return ()
+    return (WorkspaceResource(source, f"templates/{name}"),)
 
 
 def choose_paper(
@@ -544,8 +576,7 @@ def choose_template(
         The first template in the folder whose title ("Research
         Briefing"), file name ("research_briefing"), or file name with
         spaces occurs in the question; otherwise the default, read from
-        the folder or, when the project has no such file, from the shipped
-        templates.
+        the folder. Missing project-owned templates are not restored.
 
     Raises
     ------
@@ -573,9 +604,6 @@ def choose_template(
 
     if (folder / f"{default}.md").is_file():
         return load_template(default, folder)
-
-    if (SHIPPED_TEMPLATES_DIR / f"{default}.md").is_file():
-        return load_template(default)
 
     return load_template(default, folder)  # Raises, listing the templates.
 

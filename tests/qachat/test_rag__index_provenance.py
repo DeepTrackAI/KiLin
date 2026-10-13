@@ -100,6 +100,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
 
         session = object.__new__(RAGSession)
         session.project = SimpleNamespace(
+            root=self.index_directory.parent,
             source=self.source,
             indexes=self.index_directory,
             profile=SimpleNamespace(

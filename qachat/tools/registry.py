@@ -5,6 +5,8 @@ project type names a tool (``"tool": {"name": "scan_and_list", ...}``); the
 name must be in ``TOOL_REGISTRY``, and the tool's own ``parse_settings``
 checks the rest. Configuration never imports arbitrary Python paths, so a
 project type file can choose among these tools but cannot add code.
+A tool may also declare resources to install in newly created projects;
+the core resolves and copies them, not the GUI.
 
 Adding a tool means writing one module in ``qachat/tools`` with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
@@ -21,7 +23,8 @@ Key Features
 
 - **Registry**
 
-    One entry per tool with its summary, settings parser, and runner.
+    One entry per tool with its summary, parser, runner, and optional
+    packaged workspace resources.
 
 - **Configuration**
 
@@ -94,6 +97,7 @@ from qachat.tools import (
     show_source,
 )
 from qachat.tools.contract import ToolContext, ToolRequest, ToolResult
+from qachat.workspace_resources import WorkspaceResource
 
 __all__ = [
     "TOOL_BATCH_CLASSIFY",
@@ -169,6 +173,8 @@ class Tool:
     follows_up: bool
         True when the tool works on an earlier answer, so a question
         routed to it always relates to an earlier turn.
+    workspace_resources: Callable | None
+        Optional declaration of packaged resources for a new project.
 
     """
 
@@ -177,6 +183,9 @@ class Tool:
     parse_settings: Callable[[dict, str], object]
     run: Callable[[object, ToolRequest, ToolContext], ToolResult]
     follows_up: bool = False
+    workspace_resources: (
+        Callable[[object], tuple[WorkspaceResource, ...]] | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -267,6 +276,7 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "and save the Markdown to outputs/.",
         generate_paper_summary.parse_settings,
         generate_paper_summary.run,
+        workspace_resources=generate_paper_summary.workspace_resources,
     ),
 }
 
