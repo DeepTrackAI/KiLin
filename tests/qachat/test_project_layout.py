@@ -173,7 +173,7 @@ class TestProjectLayout(unittest.TestCase):
         for path in (root / "templates").iterdir():
             path.unlink()
         (root / "templates").rmdir()
-        self.assertTrue(open_project(root).root == root)
+        self.assertEqual(open_project(root).root.resolve(), root.resolve())
         self.assertTrue((root / "templates").is_dir())
         self.assertEqual(list((root / "templates").iterdir()), [])
 
@@ -239,7 +239,7 @@ class TestProjectLayout(unittest.TestCase):
 
         root = self._project("literature")
         opened = open_project(root)
-        self.assertEqual(opened.source, root)
+        self.assertEqual(opened.source.resolve(), root.resolve())
         (root / "study.md").write_text("# Source", encoding="utf-8")
         excluded = source_scan_exclusions(opened.root, opened.source)
         report = scan_repository(
