@@ -8,6 +8,7 @@ to the project layout planner, not this declaration module.
 
 # pylint: disable=C0115:missing-class-docstring
 # pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
 
 from __future__ import annotations
 
