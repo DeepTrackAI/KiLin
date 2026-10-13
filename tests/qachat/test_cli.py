@@ -404,12 +404,14 @@ class TestGUIEnvironment(unittest.TestCase):
                     self.assertTrue(output.getvalue().startswith("Preparing"))
                     self.assertIn(extra.upper(), output.getvalue())
                     which.assert_called_once_with("uv")
+                    # Resolve the /var -> /private/var alias on macOS.
+                    # The CLI canonicalizes __file__ before choosing cwd.
                     run.assert_called_once_with(
                         [
                             "/fake/uv", "sync", "--extra", "gui",
                             "--extra", extra,
                         ],
-                        cwd=root,
+                        cwd=root.resolve(),
                         check=True,
                     )
                     invalidate.assert_called_once_with()
