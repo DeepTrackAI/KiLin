@@ -1,0 +1,11 @@
+{
+  "SETTINGS": {
+    "CASE_SENSITIVE": false,
+    "WHOLE_WORDS": true,
+    "CONTEXT_LINES": 1,
+    "MAX_LISTED": 100
+  },
+  "HEURISTICS": {
+    "UNSEARCHABLE_EXAMPLES": 5
+  }
+}

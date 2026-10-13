@@ -22,8 +22,8 @@ Key Features
 
 - **Folder**
 
-    Create ``<project>/outputs`` on first use, moving a ``target/`` folder
-    of earlier versions there, and list the readable files in it.
+    Create ``<project>/outputs`` on first use without moving unrelated
+    folders, and list the readable files in it.
 
 - **Choosing a file**
 
@@ -114,10 +114,6 @@ __all__ = [
     "save_output_file",
 ]
 
-# Folder name inside a project; never indexed.
-
-# Name of the same folder in earlier versions, moved on first use.
-_LEGACY_FOLDER: Final[str] = "target"
 # File types load_output can read, as for indexed sources.
 READABLE_SUFFIXES: Final[tuple[str, ...]] = (
     ".pdf",
@@ -160,17 +156,13 @@ def output_folder(project_root: Path) -> Path:
     Returns
     -------
     pathlib.Path
-        The outputs folder. A ``target/`` folder written by an earlier
-        version is renamed to ``outputs/`` the first time.
+        Project-owned outputs folder, creating it when absent.
 
     """
 
-    root = Path(project_root)
-    folder = root / OUTPUTS_FOLDER
-    legacy = root / _LEGACY_FOLDER
-    if not folder.exists() and legacy.is_dir():
-        legacy.rename(folder)
-
+    folder = Path(project_root) / OUTPUTS_FOLDER
+    if folder.is_symlink():
+        raise ValueError(f"Workspace output folder cannot be a link: {folder}")
     folder.mkdir(parents=True, exist_ok=True)
     return folder
 

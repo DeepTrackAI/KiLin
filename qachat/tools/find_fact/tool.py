@@ -91,6 +91,7 @@ from qachat.tools._shared.document_notes import (
     take_notes,
 )
 from qachat.tools._shared.choose_document import document_scope
+from qachat.tools.find_fact import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -100,7 +101,6 @@ from qachat.tools._contract import (
     reject_unknown,
 )
 from qachat.tools._shared.planning import (
-    CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -118,13 +118,13 @@ __all__ = [
 ]
 
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
-_PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
-_REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
+_PROMPT_TOKENS_PER_SECOND: Final[float] = _config.PROMPT_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 # For estimates only: a notes prompt without its passages, the fixed cost
 # of one notes call, and the fixed cost of a quick answer.
-_NOTES_PROMPT_TOKENS: Final[int] = 300
-_CALL_SECONDS: Final[float] = 1.0
-_QUICK_ANSWER_SECONDS: Final[float] = 2.0
+_NOTES_PROMPT_TOKENS: Final[int] = _config.NOTES_PROMPT_TOKENS
+_CALL_SECONDS: Final[float] = _config.CALL_SECONDS
+_QUICK_ANSWER_SECONDS: Final[float] = _config.QUICK_ANSWER_SECONDS
 # A citation such as [3], [3, 5], or [3-5] (with a hyphen or an en dash).
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
     r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
@@ -156,12 +156,12 @@ class FactSettings:
 
     """
 
-    part_tokens: int = 6000
-    note_tokens: int = 300
-    answer_tokens: int = 1024
-    max_model_calls: int = 200
-    confirmation: ConfirmationPolicy = CONFIRMATION_ALWAYS
-    large_batches: int = 0
+    part_tokens: int = _config.DEFAULT_PART_TOKENS
+    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
+    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
 
 
 def parse_settings(data: dict, where: str) -> FactSettings:

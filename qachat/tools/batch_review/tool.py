@@ -68,7 +68,6 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Final
 
-from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import (
     DOCUMENT_REASON_SEARCH,
     estimate_tokens,
@@ -76,6 +75,7 @@ from qachat.retrievals.document_reading import (
 )
 from qachat.tools._shared.choose_document import choose_document
 from qachat.tools._shared.term_filter import term_hits, term_label
+from qachat.tools.batch_review import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -86,7 +86,6 @@ from qachat.tools._contract import (
 )
 from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
-    CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
@@ -103,9 +102,9 @@ __all__ = [
 
 # What a part's notes say when it has nothing relevant.
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
-_PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
-_REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
-_PROMPT_OVERHEAD_TOKENS: Final[int] = 300
+_PROMPT_TOKENS_PER_SECOND: Final[float] = _config.PROMPT_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
+_PROMPT_OVERHEAD_TOKENS: Final[int] = _config.PROMPT_OVERHEAD_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +130,12 @@ class ReviewSettings:
 
     """
 
-    part_tokens: int = 6000
-    note_tokens: int = 400
-    answer_tokens: int = 1024
-    max_model_calls: int = 20
-    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
-    large_batches: int = 3
+    part_tokens: int = _config.DEFAULT_PART_TOKENS
+    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
+    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
 
 
 def parse_settings(data: dict, where: str) -> ReviewSettings:

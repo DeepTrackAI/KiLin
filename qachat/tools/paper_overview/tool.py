@@ -72,6 +72,7 @@ from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import estimate_tokens
 from qachat.tools._shared.document_notes import answer_citations
 from qachat.tools._shared.choose_document import choose_document
+from qachat.tools.paper_overview import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -89,7 +90,7 @@ __all__ = [
 
 # Opening passages offered first (title, abstract, introduction); like
 # the ranked ones, they are left out when they do not fit the budget.
-_OPENING_PASSAGES: Final[int] = 2
+_OPENING_PASSAGES: Final[int] = _config.OPENING_PASSAGES
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,8 +106,8 @@ class OverviewSettings:
 
     """
 
-    max_tokens: int = 6000
-    answer_tokens: int = 500
+    max_tokens: int = _config.DEFAULT_MAX_TOKENS
+    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> OverviewSettings:

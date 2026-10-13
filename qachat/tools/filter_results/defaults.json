@@ -1,0 +1,10 @@
+{
+  "SETTINGS": {
+    "BATCH_TOKENS": 2500,
+    "ITEM_CHARACTERS": 400
+  },
+  "ESTIMATES": {
+    "ITEM_NUMBER_TOKENS": 4,
+    "REPLY_TOKENS": 120
+  }
+}

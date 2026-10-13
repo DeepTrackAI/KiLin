@@ -1,0 +1,22 @@
+{
+  "SETTINGS": {
+    "CASE_SENSITIVE": false,
+    "WHOLE_WORDS": true,
+    "CONTEXT_LINES": 2,
+    "MAX_LISTED": 100,
+    "CANDIDATES": "mentions",
+    "CATEGORIES": [],
+    "BATCH_TOKENS": 2500,
+    "MAX_MODEL_CALLS": 30,
+    "CONFIRMATION": "when_large",
+    "LARGE_BATCHES": 2
+  },
+  "ESTIMATES": {
+    "PROMPT_TOKENS_PER_SECOND": 700.0,
+    "REPLY_TOKENS_PER_SECOND": 25.0,
+    "REPLY_TOKENS_PER_ITEM": 25,
+    "PROMPT_OVERHEAD_TOKENS": 350,
+    "REPLY_TOKEN_LIMIT_PER_ITEM": 60,
+    "RETRY_GROUP": 8
+  }
+}

@@ -105,8 +105,10 @@ users can create the Markdown file manually in `templates/`.
 Opening an existing project never replaces, recreates, or deletes its
 project-owned templates. Edited and custom files take precedence over the
 bundled resources; a missing file is reported instead of silently read
-from the package. See `docs/project_workspaces.md` for the workspace
-resource contract.
+from the package. Both `load_template` and `template_names` require an
+explicit directory to avoid accidentally reading global shipped assets.
+Symbolic links are not accepted as project templates. See
+`docs/project_workspaces.md` for the workspace resource contract.
 
 ## Tests
 

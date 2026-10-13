@@ -70,6 +70,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from qachat.tools.project_inventory import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -77,7 +78,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.scan_and_list import short_names
+from qachat.tools._shared.paths import short_names
 
 __all__ = [
     "InventorySettings",
@@ -135,8 +136,8 @@ class InventorySettings:
 
     """
 
-    max_listed: int = 200
-    max_folders: int = 20
+    max_listed: int = _config.DEFAULT_MAX_LISTED
+    max_folders: int = _config.DEFAULT_MAX_FOLDERS
 
 
 def parse_settings(data: dict, where: str) -> InventorySettings:

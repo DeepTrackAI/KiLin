@@ -65,6 +65,7 @@ from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
 from qachat.retrievals.document_reading import estimate_tokens
+from qachat.tools.batch_classify import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -75,22 +76,23 @@ from qachat.tools._contract import (
 )
 from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
-    CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools.scan_and_list import (
-    SCAN_SETTING_NAMES,
+from qachat.tools._shared.mentions import (
     Mention,
     MentionScan,
     collect_mentions,
     mention_location,
     mention_snippet,
+)
+from qachat.tools._shared.paths import short_names
+from qachat.tools._shared.scan_settings import (
+    SCAN_SETTING_NAMES,
     scan_fields,
-    short_names,
 )
 
 __all__ = [
@@ -116,14 +118,14 @@ __all__ = [
 # Always offered, so the model never has to force a passage into a group.
 UNCLEAR: Final[str] = "unclear"
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
-_PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
-_REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
-_REPLY_TOKENS_PER_ITEM: Final[int] = 25
-_PROMPT_OVERHEAD_TOKENS: Final[int] = 350
+_PROMPT_TOKENS_PER_SECOND: Final[float] = _config.PROMPT_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_ITEM: Final[int] = _config.REPLY_TOKENS_PER_ITEM
+_PROMPT_OVERHEAD_TOKENS: Final[int] = _config.PROMPT_OVERHEAD_TOKENS
 # Room for one label object per item; reasons are asked to stay short.
-_REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = 60
+_REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = _config.REPLY_TOKEN_LIMIT_PER_ITEM
 # Missing labels are retried in groups of at most this many items.
-_RETRY_GROUP: Final[int] = 8
+_RETRY_GROUP: Final[int] = _config.RETRY_GROUP
 
 
 # How the tool collects the items it labels. Only exact mentions of the
@@ -166,16 +168,16 @@ class ClassifySettings:
 
     """
 
-    case_sensitive: bool = False
-    whole_words: bool = True
-    context_lines: int = 2
-    max_listed: int = 100
-    candidates: CandidateSource = CANDIDATES_MENTIONS
-    categories: tuple[str, ...] = ()
-    batch_tokens: int = 2500
-    max_model_calls: int = 30
-    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
-    large_batches: int = 2
+    case_sensitive: bool = _config.DEFAULT_CASE_SENSITIVE
+    whole_words: bool = _config.DEFAULT_WHOLE_WORDS
+    context_lines: int = _config.DEFAULT_CONTEXT_LINES
+    max_listed: int = _config.DEFAULT_MAX_LISTED
+    candidates: CandidateSource = _config.DEFAULT_CANDIDATES
+    categories: tuple[str, ...] = _config.DEFAULT_CATEGORIES
+    batch_tokens: int = _config.DEFAULT_BATCH_TOKENS
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
 
 
 def parse_settings(data: dict, where: str) -> ClassifySettings:
@@ -215,10 +217,8 @@ def parse_settings(data: dict, where: str) -> ClassifySettings:
         ),
     )
     defaults = ClassifySettings()
-    fields = scan_fields(
-        {"context_lines": defaults.context_lines, **data}, where
-    )
-    categories = data.get("categories", [])
+    fields = scan_fields(data, where, defaults)
+    categories = data.get("categories", list(defaults.categories))
     if (
         not isinstance(categories, list)
         or len(categories) == 1

@@ -626,9 +626,6 @@ def choose_template(
         ):
             return template
 
-    if (folder / f"{default}.md").is_file():
-        return load_template(default, folder)
-
     return load_template(default, folder)  # Raises, listing the templates.
 
 

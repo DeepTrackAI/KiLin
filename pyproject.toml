@@ -47,6 +47,15 @@ include = ["qachat*"]
     "qachat_defaults.json",
     "project_types/*.json",
 ]
+"qachat.tools.project_inventory" = ["README.md", "defaults.json"]
+"qachat.tools.scan_and_list" = ["README.md", "defaults.json"]
+"qachat.tools.batch_classify" = ["README.md", "defaults.json"]
+"qachat.tools.batch_review" = ["README.md", "defaults.json"]
+"qachat.tools.filter_results" = ["README.md", "defaults.json"]
+"qachat.tools.find_fact" = ["README.md", "defaults.json"]
+"qachat.tools.find_passages" = ["README.md", "defaults.json"]
+"qachat.tools.paper_overview" = ["README.md", "defaults.json"]
+"qachat.tools.show_source" = ["README.md", "defaults.json"]
 "qachat.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",

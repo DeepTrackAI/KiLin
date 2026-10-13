@@ -49,9 +49,9 @@ examines its intents. When an intent uses a registered tool, the tool may
 provide an optional `workspace_resources(settings)` declaration. The settings
 are those already validated by the project's tool registry.
 
-`plan_project_layout` verifies that declared source files exist, validates each
-workspace-relative destination, and deduplicates resources required by
-multiple intents. Conflicting destinations are rejected rather than
+`plan_project_layout` verifies that each declared file belongs to the
+registered tool's package, validates its workspace-relative destination,
+and deduplicates resources required by multiple intents. Conflicting destinations are rejected rather than
 resolved by silent precedence. Planning does not write files.
 
 After the initial profile is written, the core creates the shared directories
@@ -99,10 +99,9 @@ install_project_resources(project.root, plan_project_layout(project.profile.kind
 This installs only missing packaged resources; it never overwrites existing
 files. Tool authors can offer more specific repair or reset commands later.
 
-On opening an old workspace, the core also moves a legacy `target/` directory
-to `outputs/` if `outputs/` does not exist. Only identifiable automatically
-generated template guides inside `outputs/templates/` are cleaned up;
-manual files are preserved. This migration no longer depends on GUI startup.
+The core does not move or delete unrelated folders or generated files.
+An existing `target/` directory is left untouched; `outputs/` is created
+independently. No legacy migration is performed in this prerelease API.
 
 ## Tool resource contract
 
@@ -119,19 +118,21 @@ created, and the user can add the file manually before running the tool.
 Declaring a resource does not copy it. The core
 performs all installation.
 
-A declaration's destination must be a safe, relative POSIX file path.
+A resource source must be a regular file inside the declaring tool's
+package, not a symlink or a file owned by another tool. A declaration's
+destination must be a safe, relative POSIX file path.
 Absolute paths, traversal components, empty components, Windows drive
 paths, and destinations inside source, index, log, or output areas are
 rejected. The destination and its parents may not be symbolic links.
 Existing files are preserved even during explicit resource restoration.
 
-The declaration interface does **not** require every tool to own a
-`defaults.json`. The migrated `generate_paper_summary` package owns its
-validated defaults and templates. Other tools will migrate incrementally.
+Every registered tool currently has its own validated `defaults.json`
+and README. The `generate_paper_summary` package also owns its shipped
+Markdown templates; other tools declare no workspace files at present.
 
 ## Failure behavior and limitations
 
-A missing packaged resource or conflicting declaration prevents a new
+A missing, foreign-owned, or conflicting resource prevents a new
 profile from being created because the resource plan is checked first.
 Creating a profile, importing sources, and copying resources are not one
 atomic filesystem transaction; a disk or permissions error can leave a
@@ -144,4 +145,3 @@ No model is loaded merely by creating project folders.
 
 The GUI reads the actual core folder inventory. Empty directories are
 reported with a trailing `/` rather than being invented in the browser.
-The global README remains unchanged for this internal lifecycle refactor.

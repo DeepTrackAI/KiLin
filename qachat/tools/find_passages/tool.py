@@ -106,9 +106,10 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.chunking import Chunk
 from qachat.retrievals.document_reading import estimate_tokens, named_paths
 from qachat.tools._shared.choose_document import document_scope
+from qachat.tools.find_passages import _configuration as _config
+from qachat.tools._shared.sentences import Sentence, split_sentences
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -124,7 +125,6 @@ from qachat.tools._shared.long_lists import (
 )
 from qachat.tools._shared.planning import (
     CONFIRMATION_CHOICES,
-    CONFIRMATION_WHEN_LARGE,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
     ConfirmationPolicy,
@@ -132,7 +132,7 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools.scan_and_list import short_names
+from qachat.tools._shared.paths import short_names
 from qachat.tools._shared.terms import term_pattern
 from qachat.tools._shared.term_filter import term_hits, term_label
 
@@ -148,13 +148,10 @@ __all__ = [
 
 # A sentence ends at ".", "!", or "?" followed by space and a capital,
 # digit, quote, or bracket, or at a blank line.
-_SENTENCE_END: Final[re.Pattern[str]] = re.compile(
-    r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])|\n\s*\n"
-)
+
 # A passage that starts with a lowercase letter starts inside a sentence.
-_FRAGMENT: Final[re.Pattern[str]] = re.compile(r"^\s*[a-z]")
+
 # Shorter pieces, such as headings and labels, are not sentences.
-_MIN_WORDS: Final[int] = 4
 # Words that ask for passages rather than name the topic; they are removed
 # from the question when the router gives no usable topic.
 _REQUEST_WORDS: Final[re.Pattern[str]] = re.compile(
@@ -165,18 +162,18 @@ _REQUEST_WORDS: Final[re.Pattern[str]] = re.compile(
     flags=re.I,
 )
 # Longest replies: the router's line of JSON and a batch's numbers.
-_TOPIC_REPLY_TOKENS: Final[int] = 80
-_JUDGE_REPLY_TOKENS: Final[int] = 120
+_TOPIC_REPLY_TOKENS: Final[int] = _config.TOPIC_REPLY_TOKENS
+_JUDGE_REPLY_TOKENS: Final[int] = _config.JUDGE_REPLY_TOKENS
 # Estimated tokens that a sentence's number and line break add to a batch.
-_SENTENCE_NUMBER_TOKENS: Final[int] = 2
+_SENTENCE_NUMBER_TOKENS: Final[int] = _config.SENTENCE_NUMBER_TOKENS
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
-_PROMPT_TOKENS_PER_SECOND: Final[float] = 700.0
-_REPLY_TOKENS_PER_SECOND: Final[float] = 25.0
+_PROMPT_TOKENS_PER_SECOND: Final[float] = _config.PROMPT_TOKENS_PER_SECOND
+_REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 # For estimates only: a judge prompt without its sentences, a typical judge
 # reply, and the fixed cost of one model call.
-_JUDGE_PROMPT_TOKENS: Final[int] = 150
-_JUDGE_REPLY_ESTIMATE_TOKENS: Final[int] = 15
-_CALL_SECONDS: Final[float] = 1.0
+_JUDGE_PROMPT_TOKENS: Final[int] = _config.JUDGE_PROMPT_TOKENS
+_JUDGE_REPLY_ESTIMATE_TOKENS: Final[int] = _config.JUDGE_REPLY_ESTIMATE_TOKENS
+_CALL_SECONDS: Final[float] = _config.CALL_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,12 +197,12 @@ class PassageSettings:
 
     """
 
-    batch_tokens: int = 2500
-    max_model_calls: int = 200
-    quick_passages: int = 40
-    max_listed: int = 100
-    confirmation: ConfirmationPolicy = CONFIRMATION_WHEN_LARGE
-    large_batches: int = 3
+    batch_tokens: int = _config.DEFAULT_BATCH_TOKENS
+    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    quick_passages: int = _config.DEFAULT_QUICK_PASSAGES
+    max_listed: int = _config.DEFAULT_MAX_LISTED
+    confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
+    large_batches: int = _config.DEFAULT_LARGE_BATCHES
 
 
 def parse_settings(data: dict, where: str) -> PassageSettings:
@@ -267,75 +264,8 @@ def parse_settings(data: dict, where: str) -> PassageSettings:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class Sentence:
-    """One sentence of a passage.
-
-    Attributes
-    ----------
-    path: pathlib.Path
-        The file.
-    line: int
-        Its first line in the file.
-    text: str
-        The sentence, with whitespace joined.
-    chunk: Chunk
-        The passage it comes from, for citations.
-
-    """
-
-    path: Path
-    line: int
-    text: str
-    chunk: Chunk
 
 
-def split_sentences(chunks: Sequence[Chunk]) -> list[Sentence]:
-    """Split passages into sentences, without repeats.
-
-    Parameters
-    ----------
-    chunks: Sequence[Chunk]
-        Passages in file and line order.
-
-    Returns
-    -------
-    list[Sentence]
-        Sentences of at least four words. A sentence that overlapping
-        passages share is kept once, from its first passage; the broken
-        start of a passage that begins inside a sentence is left out.
-
-    """
-
-    seen: set[tuple[Path, str]] = set()
-    sentences: list[Sentence] = []
-    previous: Path | None = None
-    for chunk in chunks:
-        start = 0
-        pieces = _SENTENCE_END.split(chunk.text)
-        if chunk.path == previous and pieces and _FRAGMENT.match(pieces[0]):
-            # A passage that starts inside a sentence ("tion for deep
-            # learning ..."): the sentence is in the passage before.
-            start = len(pieces[0])
-            pieces = pieces[1:]
-        previous = chunk.path
-
-        for piece in pieces:
-            offset = chunk.text.find(piece, start)
-            start = max(start, offset + len(piece))
-            text = " ".join(piece.split())
-            if len(text.split()) < _MIN_WORDS:
-                continue
-
-            key = (chunk.path, text.casefold())
-            if key in seen:
-                continue
-
-            seen.add(key)
-            line = chunk.start_line + chunk.text[: max(0, offset)].count("\n")
-            sentences.append(Sentence(chunk.path, line, text, chunk))
-
-    return sentences
 
 
 def topic_prompt(question: str) -> tuple[str, str]:
@@ -472,7 +402,7 @@ def run(
         ),
         key=lambda chunk: (str(chunk.path), chunk.start_line),
     )
-    sentences = split_sentences(chunks)
+    sentences = split_sentences(chunks, min_words=_config.MIN_WORDS)
     batches = _batches(sentences, settings.batch_tokens)
     to_run = batches[: settings.max_model_calls]
 
@@ -489,7 +419,9 @@ def run(
             for result in ranked[: settings.quick_passages]
             if not scope or result.chunk.path in scope
         ]
-    quick_sentences = split_sentences(quick_chunks)
+    quick_sentences = split_sentences(
+        quick_chunks, min_words=_config.MIN_WORDS
+    )
     quick = _batches(quick_sentences, settings.batch_tokens)
     patterns = [term_pattern(term, False, True) for term in terms]
     exact = [

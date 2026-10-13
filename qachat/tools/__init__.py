@@ -10,7 +10,7 @@ Registered tools provide a settings dataclass, ``parse_settings``, and
 ``run``. The private ``_registry`` lists available tools, and ``_contract``
 defines their requests and results. Other shared operations reside in
 ``_shared/``. Tool packages can own their ``defaults.json``, helper
-modules, and templates; ``generate_paper_summary`` is the first example.
+modules, and templates. Every registered executable tool is a package.
 
 This package re-exports the contract, the planning vocabulary, the
 registry, and the names other modules use from ``batch_classify`` and

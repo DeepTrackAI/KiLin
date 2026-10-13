@@ -185,7 +185,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
 
         """
 
-        bundled = set(template_names())
+        bundled = set(template_names(SHIPPED_TEMPLATES_DIR))
         self.assertEqual(
             bundled,
             {
@@ -262,6 +262,51 @@ class TestGeneratePaperSummary(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             load_template("../secret", SHIPPED_TEMPLATES_DIR)
+
+    def test_templates_need_an_explicit_directory(self) -> None:
+        """Avoid accidental fallback to packaged templates at runtime.
+
+        """
+
+        with self.assertRaises(TypeError):
+            load_template("research_briefing")
+        with self.assertRaises(TypeError):
+            template_names()
+        self.assertEqual(template_names(self.folder), [])
+        with self.assertRaisesRegex(ValueError, "Unknown report template"):
+            load_template("research_briefing", self.folder)
+
+    def test_linked_template_is_not_read_or_listed(self) -> None:
+        """Reject links from project templates to files outside the folder.
+
+        """
+
+        source = SHIPPED_TEMPLATES_DIR / "research_briefing.md"
+        link = self.folder / "foreign.md"
+        try:
+            link.symlink_to(source)
+        except (NotImplementedError, OSError):
+            self.skipTest("Symbolic links are unavailable")
+        self.assertEqual(template_names(self.folder), [])
+        with self.assertRaisesRegex(ValueError, "Unknown report template"):
+            load_template("foreign", self.folder)
+
+    def test_linked_template_directory_is_rejected(self) -> None:
+        """Do not follow symbolic links in the project template folder.
+
+        """
+
+        linked = self.root / "linked"
+        try:
+            linked.symlink_to(
+                SHIPPED_TEMPLATES_DIR, target_is_directory=True
+            )
+        except (NotImplementedError, OSError):
+            self.skipTest("Symbolic links are unavailable")
+        with self.assertRaisesRegex(ValueError, "folder cannot be a link"):
+            template_names(linked)
+        with self.assertRaisesRegex(ValueError, "folder cannot be a link"):
+            load_template("research_briefing", linked)
 
     def test_run_missing_template_stops_before_models(self) -> None:
         """Return a helpful error without selecting papers or models.

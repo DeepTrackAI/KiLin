@@ -1,0 +1,10 @@
+{
+  "SETTINGS": {
+    "CONTEXT_SENTENCES": 2,
+    "MAX_PASSAGES": 3,
+    "ANSWER_TOKENS": 400
+  },
+  "HEURISTICS": {
+    "MIN_WORDS": 4
+  }
+}

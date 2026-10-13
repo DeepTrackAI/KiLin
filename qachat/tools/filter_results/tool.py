@@ -68,6 +68,7 @@ import re
 from typing import Final
 
 from qachat.retrievals.document_reading import estimate_tokens
+from qachat.tools.filter_results import _configuration as _config
 from qachat.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -75,7 +76,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.show_source import newest_listed
+from qachat.tools._shared.earlier_turns import newest_listed
 
 __all__ = [
     "FilterSettings",
@@ -85,9 +86,9 @@ __all__ = [
 ]
 
 # Estimated tokens that an item's number and blank line add to a batch.
-_ITEM_NUMBER_TOKENS: Final[int] = 4
+_ITEM_NUMBER_TOKENS: Final[int] = _config.ITEM_NUMBER_TOKENS
 # Longest reply of one batch: its matching item numbers.
-_REPLY_TOKENS: Final[int] = 120
+_REPLY_TOKENS: Final[int] = _config.REPLY_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +104,8 @@ class FilterSettings:
 
     """
 
-    batch_tokens: int = 2500
-    item_characters: int = 400
+    batch_tokens: int = _config.DEFAULT_BATCH_TOKENS
+    item_characters: int = _config.DEFAULT_ITEM_CHARACTERS
 
 
 def parse_settings(data: dict, where: str) -> FilterSettings:

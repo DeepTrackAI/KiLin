@@ -138,8 +138,10 @@ sections; they are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary import check_report, load_template
->>> template = load_template("research_briefing")
+>>> from qachat.tools.generate_paper_summary import (
+...     SHIPPED_TEMPLATES_DIR, check_report, load_template,
+... )
+>>> template = load_template("research_briefing", SHIPPED_TEMPLATES_DIR)
 >>> template.headline_characters
 90
 >>> check = check_report("# Headline\\n\\n## The Bio\\nText.", template)
@@ -385,13 +387,13 @@ class ReportCheck:
         return found
 
 
-def template_names(directory: Path = SHIPPED_TEMPLATES_DIR) -> list[str]:
+def template_names(directory: Path) -> list[str]:
     """List the templates in a folder.
 
     Parameters
     ----------
-    directory: pathlib.Path, optional
-        Template folder. Defaults to the shipped templates.
+    directory: pathlib.Path
+        Explicit template folder, usually the project-owned directory.
 
     Returns
     -------
@@ -400,21 +402,26 @@ def template_names(directory: Path = SHIPPED_TEMPLATES_DIR) -> list[str]:
 
     """
 
-    return sorted(path.stem for path in Path(directory).glob("*.md"))
+    folder = Path(directory)
+    if folder.is_symlink():
+        raise ValueError(f"Template folder cannot be a link: {folder}")
+    return sorted(
+        path.stem
+        for path in folder.glob("*.md")
+        if path.is_file() and not path.is_symlink() and path.stem
+    )
 
 
-def load_template(
-    name: str, directory: Path = SHIPPED_TEMPLATES_DIR
-) -> ReportTemplate:
+def load_template(name: str, directory: Path) -> ReportTemplate:
     """Read and validate one template file.
 
     Parameters
     ----------
     name: str
         Template ID, such as ``"research_briefing"``.
-    directory: pathlib.Path, optional
-        Template folder, such as a project's ``templates/``. Defaults to
-        the shipped templates.
+    directory: pathlib.Path
+        Explicit project-owned template folder; never defaults to the
+        packaged templates.
 
     Returns
     -------
@@ -429,8 +436,17 @@ def load_template(
 
     """
 
-    path = Path(directory) / f"{name}.md"
-    if "/" in name or "\\" in name or not path.is_file():
+    folder = Path(directory)
+    if folder.is_symlink():
+        raise ValueError(f"Template folder cannot be a link: {folder}")
+    valid_name = (
+        isinstance(name, str)
+        and bool(name)
+        and name not in (".", "..")
+        and not any(char in name for char in ("/", "\\", "\x00"))
+    )
+    path = folder / f"{name}.md" if valid_name else None
+    if path is None or path.is_symlink() or not path.is_file():
         raise ValueError(
             f"Unknown report template {name!r}. Templates in {directory}: "
             f"{', '.join(template_names(directory)) or 'none'}."

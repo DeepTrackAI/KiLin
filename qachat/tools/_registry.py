@@ -8,7 +8,7 @@ project type file can choose among these tools but cannot add code.
 A tool may also declare resources to install in newly created projects;
 the core resolves and copies them, not the GUI.
 
-Adding a tool means providing a package or module with a settings
+Adding a tool means providing a package with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
 context)`` (see ``qachat.tools._contract``), then adding it here. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a

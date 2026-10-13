@@ -81,6 +81,8 @@ import re
 from typing import Final
 
 from qachat.chunking import Chunk
+from qachat.tools.show_source import _configuration as _config
+from qachat.tools._shared.earlier_turns import newest_listed
 from qachat.tools._contract import (
     EarlierTurn,
     ToolContext,
@@ -89,7 +91,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools.find_passages import Sentence, split_sentences
+from qachat.tools._shared.sentences import Sentence, split_sentences
 
 __all__ = [
     "SourceSettings",
@@ -119,9 +121,9 @@ class SourceSettings:
 
     """
 
-    context_sentences: int = 2
-    max_passages: int = 3
-    answer_tokens: int = 400
+    context_sentences: int = _config.DEFAULT_CONTEXT_SENTENCES
+    max_passages: int = _config.DEFAULT_MAX_PASSAGES
+    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> SourceSettings:
@@ -298,25 +300,6 @@ def run(
     return ToolResult(answer, tuple(evidence), summary)
 
 
-def newest_listed(earlier: Sequence[EarlierTurn]) -> EarlierTurn | None:
-    """Return the newest related turn with evidence, else the newest one.
-
-    Parameters
-    ----------
-    earlier: Sequence[EarlierTurn]
-        Earlier turns, newest first.
-
-    Returns
-    -------
-    EarlierTurn | None
-        The turn whose evidence a follow-up is about, or None when no
-        earlier turn has evidence.
-
-    """
-
-    listed = [turn for turn in earlier if turn.texts]
-    linked = next((turn for turn in listed if turn.linked), None)
-    return linked or next(iter(listed), None)
 
 
 def _words(text: str) -> set[str]:
@@ -462,14 +445,14 @@ def _window(
             symbol=None,
             section=None,
         )
-        sentences = split_sentences([alone]) or [
+        sentences = split_sentences([alone], min_words=_config.MIN_WORDS) or [
             Sentence(path, line, " ".join(text.split()), alone)
         ]
         return sentences, None
 
     # The passages before and after give the surrounding sentences.
     nearby = paper[max(0, found - 1) : found + 2]
-    sentences = split_sentences(nearby)
+    sentences = split_sentences(nearby, min_words=_config.MIN_WORDS)
     cited = " ".join(paper[found].text.split()).casefold()
     inside = [
         index

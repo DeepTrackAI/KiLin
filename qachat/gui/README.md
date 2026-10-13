@@ -194,11 +194,11 @@ setting (`confirmation`: always, when_large, or never).
 
 A GUI-managed project has `sources/` (copied in, indexed, searched),
 `outputs/` and `templates/` (never indexed). The core creates the latter
-two folders for every project, even when no templates are selected. Summaries and reports QAChat writes go to
+two folders for every project, even when no templates are selected.
+Summaries and reports QAChat writes go to
 `outputs/`, so they can never come back as sources; you can also put a
-paper you are working on there. Saving never overwrites a file: `-2`,
-`-3`, ... is added instead. Projects from earlier versions have their
-`target/` folder renamed to `outputs/` when opened.
+paper you are working on there. Saving never overwrites a file: `-2`, `-3`, ... is added instead.
+Workspace initialization never renames unrelated directories.
 
 Types are validated when QAChat starts; mistakes name the type and field.
 Add a JSON file to create a new type; `code` and `literature` must stay.
