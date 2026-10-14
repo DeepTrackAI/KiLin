@@ -155,8 +155,8 @@ in notebooks), a `history.policy` (none, recent, or relevant), and
 `retrieval.strategy` (only "hybrid" exists). An intent can also list
 `shortcuts`: case-insensitive regular expressions for whole messages that
 obviously have that intent (the default `small_talk` lists greetings,
-thanks, and "how are you"). A match skips the router model, so such
-messages are answered in about a second.
+thanks, and "how are you"). A match selects the intent without a router
+inference call.
 
 An intent may instead name a **tool** (`"tool": {"name": ..., settings}`),
 which replaces retrieval and the answering prompt for that intent; its
@@ -238,7 +238,7 @@ embedding changes; cancelling keeps the panel open.
 Effort levels lists five levels. Each has an editable name and a language
 model chosen from a dropdown of cached language models. Search depth is a
 separate section of five steps, each the number of passages retrieved for
-an answer (1-200; default 5, 5, 10, 10, 15). The composer's effort picker
+an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
 the level whose model answers, and Search depth chooses the step, so a
 small model can be paired with a deep search or the reverse. The middle
@@ -248,27 +248,33 @@ models are classified as language or embedding models by preset, by an
 A selected model that is not downloaded shows a Download button. On PyTorch
 every level uses one chat model; search depth still applies.
 
-Each project keeps all its settings, changed or not, in its own
-effort_levels.json: the levels per backend, the search depth under
-"search_depth", and the intent model under "router". They are written when
-the project is created (from the preferences below) or first opened by
-this version, so a project resumes exactly as it was set up; later changes
-to defaults.json or the preferences apply only to new projects. The model
-names, embedding model, and answer settings stay in profile.ini. To make an
-existing project follow new defaults, change its levels in Settings, or
-delete its effort_levels.json and reopen it. Per-level reference counts saved by earlier
-versions become the search depth (the old defaults become the new ones). An older
-model_choices.json is migrated on first read and removed on the next save.
-Changing a language model does not rebuild the index; changing the embedding
-model (also a dropdown of cached embedding models) or query format requires
-confirmation and rebuilds it. A note above the levels appears only when the
-selected backend's packages are not installed.
+Each project stores its effort levels (separately for MLX and PyTorch),
+search-depth steps, and per-backend intent router in `profile.ini`, alongside
+its chat and embedding models, query format, and generation settings. The GUI
+initializes any missing project settings from the effective application
+preferences when the project is created or first opened. Saved project
+settings remain authoritative: later changes to packaged defaults or user
+preferences affect new projects, not existing ones. To change an existing
+project's choices, use Settings rather than deleting its saved profile.
 
-The Intent model section, after Embedding model, chooses the router model
-that classifies each question's intent and writes chat titles (default: the
-8B chat model). A change applies at once: a separately loaded router model is
-released and the new one loads when first needed. It is saved per backend in
-effort_levels.json under "router".
+Earlier QAChat versions stored effort levels, router models, and search depth
+in `effort_levels.json`, and model substitutions in `model_choices.json`.
+When opening an older project, the GUI imports compatible values into
+`profile.ini` and removes the legacy files after saving the settings.
+Customized per-level retrieval counts in legacy data can supply the new
+search-depth steps; unchanged legacy defaults do not override the current
+search-depth defaults. Changing a language model does not rebuild the index;
+changing the embedding model (also a dropdown of cached embedding models)
+or query format requires confirmation and rebuilds it. A note above the
+levels appears only when the selected backend's packages are not installed.
+
+The Intent model section, after Embedding model, chooses the model
+used to classify question intents and write chat titles. The packaged
+default is Qwen3-4B on both backends, with backend-specific model IDs in
+`defaults.json`. A change applies at once: a separately loaded router
+model is released, and the replacement loads when first needed. Project
+choices are saved per backend in the `[router]` section of `profile.ini`;
+application-wide choices are saved as user-preference overrides.
 
 **GUI defaults** ship in the read-only
 `qachat/gui/defaults.json`: appearance, the five effort levels (names and
@@ -318,12 +324,14 @@ Selecting a cached model is not a completeness check. Offline loading,
 backend compatibility, model architecture, tokenizer behavior, and pooling
 assumptions are enforced or encountered later in the model-loading path.
 
-The GUI allows up to 2,048 generated tokens; the backend profile default
-stays 256, and projects saved with 256 answer with 2,048 in the GUI. The
-token cap is a safety limit, not a requested answer length. Model-reported
-length stops are
-saved with the turn and shown as an incomplete-answer notice. Old answers are
-not regenerated automatically.
+The default maximum for a new project's answer is 8,192 generated
+tokens, supplied by the core `PROJECT_PROFILE` configuration. The GUI does
+not substitute another limit for a saved project's value: for example,
+a project saved with a 256-token cap retains that cap. The answer-token
+limit is a safety ceiling, not a requested response length; Settings can
+change it. The model's finite context limit still applies. Model-reported
+length stops are saved with the turn and shown as an incomplete-answer
+notice; old answers are not regenerated automatically.
 
 Answer-time controls set retrieval count, temperature, thinking, and maximum
 new tokens without rebuilding the index or reloading models. A blank answer
@@ -386,23 +394,25 @@ total (every chat, deleted ones included; turns branched chats share count
 once); its menu splits it into read and written, and shows this chat's
 total.
 
-Routing: each question first goes to the 8B router model (see
-`qachat/answering.py`), which picks one of the project type's intents and
-says whether the question stands alone and which earlier turns it refers to.
-Those turns are kept only when the question points back to them ("it",
-"the second one", "you said", "so far") or shares a distinctive term with
-them; small talk is never a related turn. The search always uses the
-question as typed; when it points back, the related turns' questions are
-added, never model-written text. The intent's configuration then selects history (question and answer text
-only, never earlier evidence) and retrieval (search, reuse an earlier turn's
-references, or none). A shimmering line under the pending answer steps through
-what happens: identifying intent, the identified intent, the included
-conversation history, the retrieval steps (skipped when not needed), and
-reading the references before the answer streams. A finished answer shows only "Took Ns"; expanding it lists every step it
-went through (intent, history, retrieval steps including the search text
-when earlier questions were added, reading, and generating) with how long each took, measured when the
-steps happened. Chat titles are written by
-the router model too, so naming never switches models.
+Routing normally uses the project's selected intent router model
+(see `qachat/answering.py`) to choose an intent and decide whether the
+question stands alone or refers to earlier turns. Configured intent
+shortcuts, such as simple greetings, skip router inference; callers can
+also disable routing and use the project type's default intent. When the
+router is used, earlier turns are retained only if the question points
+back to them ("it", "the second one", "you said", "so far") or shares a
+distinctive term with them; small talk is never a related turn. The search
+uses the question as typed and, when it points back, adds related turns'
+questions rather than model-written text.
+
+The selected intent determines the history (question and answer text only,
+never earlier evidence) and retrieval mode (search, reuse earlier
+references, or none). A shimmering line under the pending answer shows
+the phases that apply: intent identification, included conversation
+history, retrieval, and reading references before generation. A finished
+answer shows "Took Ns"; expanding it lists the actual steps and measured
+durations. The selected router model also writes chat titles without
+switching the answering model.
 
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen
