@@ -268,6 +268,74 @@ class TestRepositoryScanSelection(_RepositoryFixture):
         )
         self.assertEqual(report["selected_files"], [".gitignore"])
 
+    def test_structured_skip_reasons_preserve_selection_policy(
+        self,
+    ) -> None:
+        """Provide stable codes for each existing selection decision."""
+
+        report = repository.scan_repository(self.root)
+        rows = self._by_path(report)
+        expected = {
+            "README.md": ("selected", "matches your selection"),
+            ".git": (
+                "excluded_directory",
+                "environment, cache, or generated folder",
+            ),
+            ".env": (
+                "protected_file", "potentially secret or generated file"
+            ),
+            "cache.safetensors": (
+                "blocked_file_type",
+                "model weights or potentially secret file",
+            ),
+            "image.png": ("file_type_not_selected", "file type not selected"),
+            "empty.py": ("empty_file", "empty file"),
+        }
+        for path, (code, explanation) in expected.items():
+            with self.subTest(path=path):
+                self.assertEqual(rows[path]["reason_code"], code)
+                self.assertEqual(rows[path]["reason"], explanation)
+
+        scoped = repository.scan_repository(
+            self.root,
+            include_paths=["src"],
+            exclude_paths=["src/helpers.py"],
+        )
+        scoped_rows = self._by_path(scoped)
+        self.assertEqual(
+            scoped_rows["src/helpers.py"]["reason_code"],
+            "excluded_path",
+        )
+        self.assertEqual(
+            scoped_rows["README.md"]["reason_code"],
+            "outside_scope",
+        )
+
+    def test_size_reason_code_does_not_depend_on_explanation(self) -> None:
+        """Keep the skip decision independent of displayed wording."""
+
+        self._write("large.txt", "12345")
+        original = repository._skip_reason
+
+        def changed_text(relative: str, *args: object):
+            """Simulate rewording without changing the reason code."""
+
+            result = original(relative, *args)
+            if result is not None and result[0] == "file_too_large":
+                return result[0], "This file exceeds the limit."
+            return result
+
+        with patch.object(
+            repository, "_skip_reason", side_effect=changed_text
+        ):
+            report = repository.scan_repository(
+                self.root, extensions=[".txt"], max_file_bytes=4
+            )
+        row = self._by_path(report)["large.txt"]
+        self.assertEqual(row["reason_code"], "file_too_large")
+        self.assertEqual(row["reason"], "This file exceeds the limit.")
+        self.assertEqual(row["status"], "skipped")
+
     def test_size_boundary_and_empty_files(self) -> None:
         """Select files at the limit and skip empty or larger files."""
 
@@ -456,6 +524,9 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
             with self.subTest(name=name):
                 self.assertEqual(rows[name]["kind"], "link")
                 self.assertEqual(rows[name]["status"], "skipped")
+                self.assertEqual(
+                    rows[name]["reason_code"], "link_not_followed"
+                )
                 self.assertEqual(rows[name]["reason"],
                                  "links are not followed")
         self.assertNotIn("linked-folder/secret.py", report["selected_files"])
@@ -507,6 +578,7 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         report = repository.scan_repository(self.root)
         row = self._by_path(report)["pipe.py"]
         self.assertEqual(row["kind"], "other")
+        self.assertEqual(row["reason_code"], "unsupported_entry")
         self.assertEqual(row["reason"], "not a regular file")
 
     def test_root_listing_failure_propagates(self) -> None:
@@ -547,6 +619,7 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         self.assertNotIn("src/main.py", report["selected_files"])
         row = self._by_path(report)["src"]
         self.assertEqual(row["kind"], "folder")
+        self.assertEqual(row["reason_code"], "inspection_failed")
         self.assertEqual(row["reason"],
                          "cannot list folder (PermissionError)")
 
@@ -568,6 +641,7 @@ class TestRepositoryScanFilesystem(_RepositoryFixture):
         self.assertFalse(report["complete"])
         row = self._by_path(report)["src/main.py"]
         self.assertEqual(row["kind"], "unknown")
+        self.assertEqual(row["reason_code"], "inspection_failed")
         self.assertEqual(row["reason"],
                          "cannot inspect entry (PermissionError)")
         self.assertIn("src/helpers.py", report["selected_files"])

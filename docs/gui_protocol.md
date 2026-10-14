@@ -163,12 +163,38 @@ schema and are not browser events.
 
 `preview.roots` is an ordered array corresponding to selected input roots.
 Each root contains `path`, `files` (selected relative paths), and `skipped`
-(entries containing `path`, `reason`, and `size_bytes`). The page preserves
-checkbox choices by path. It makes an explicitly skipped item selectable
-when `reason` is exactly `"larger than the file-size limit"`. Other skipped
-items remain unavailable. The English reason string is currently coupled
-to behavior and must not be reworded without changing the page; replacing
-this with a machine-readable reason code is outside PR3.
+(entries containing `path`, `reason_code`, `reason`, and `size_bytes`). The page
+preserves checkbox choices by path. It makes an explicitly skipped item
+selectable only when its machine-readable `reason_code` is `file_too_large`;
+selecting it increases the submitted size limit. The human-readable `reason`
+is still displayed but is never used to decide file eligibility. All other
+skipped entries remain unavailable.
+
+The core `qachat.repository.scan_repository()` owns the reason codes. Its
+`entries` contain `reason_code` for both selected and skipped rows. The
+supported values are:
+
+| `reason_code` | Selection meaning |
+| --- | --- |
+| `selected` | File matches the selection |
+| `file_too_large` | Eligible file exceeds the configured size limit |
+| `empty_file` | File has zero bytes |
+| `file_type_not_selected` | File suffix is not selected |
+| `protected_file` | Protected filename or environment file |
+| `blocked_file_type` | Protected suffix, such as a model weight |
+| `excluded_path` | File or directory excluded by the user |
+| `outside_scope` | Entry outside the included paths |
+| `link_not_followed` | Descendant symbolic link or junction |
+| `excluded_directory` | Built-in protected or generated directory |
+| `unsupported_entry` | Nonregular filesystem entry |
+| `inspection_failed` | An entry or directory could not be inspected |
+
+The GUI forwards codes from directory-scan reports unchanged. Explicitly
+selected individual files bypass filename and suffix filtering, as before;
+empty or oversized individual files carry the same `empty_file` or
+`file_too_large` code. The text of `reason`, selected-file ordering, and
+file-copy behavior remain unchanged. This is an additive protocol field,
+without a compatibility fallback to interpreting the English message.
 
 ### Answer phases and event ordering
 

@@ -1468,10 +1468,13 @@ class ChatEngine:
                     size = source.stat().st_size
                     if size == 0:
                         reason = "empty file"
+                        reason_code = "empty_file"
                     elif size > max_file_bytes:
                         reason = "larger than the file-size limit"
+                        reason_code = "file_too_large"
                     else:
                         reason = None
+                        reason_code = None
                     files = [] if reason else [source.name]
                     skipped = (
                         []
@@ -1480,6 +1483,7 @@ class ChatEngine:
                             {
                                 "path": source.name,
                                 "reason": reason,
+                                "reason_code": reason_code,
                                 "size_bytes": size,
                             }
                         ]
@@ -1505,6 +1509,7 @@ class ChatEngine:
                         {
                             "path": row["path"],
                             "reason": row["reason"],
+                            "reason_code": row["reason_code"],
                             "size_bytes": row["size_bytes"],
                         }
                         for row in report["entries"]

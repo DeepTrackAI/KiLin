@@ -393,12 +393,80 @@ class TestGUIProtocolEvents(unittest.TestCase):
                 {"path": str(large), "files": [], "skipped": [{
                     "path": "large.py",
                     "reason": "larger than the file-size limit",
+                    "reason_code": "file_too_large",
                     "size_bytes": len("x = '" + "a" * 200 + "'\n"),
                 }]},
             ],
         })
         self.assertEqual(events[1]["event"], "error")
         self.assertIn("Could not inspect", events[1]["message"])
+
+    def test_directory_preview_forwards_repository_reason_codes(self) -> None:
+        """Forward core selection codes without classifying display text."""
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            sources = root / "sources"
+            sources.mkdir()
+            (sources / "ordinary.py").write_text(
+                "x = 1\n", encoding="utf-8"
+            )
+            (sources / "oversized.py").write_text(
+                "x = " + "a" * 100, encoding="utf-8"
+            )
+            (sources / "empty.py").touch()
+            (sources / ".env").write_text(
+                "FAKE_SECRET=not-real", encoding="utf-8"
+            )
+            (sources / "weight.safetensors").write_text(
+                "not a model", encoding="utf-8"
+            )
+            events: list[dict[str, object]] = []
+            worker = engine.ChatEngine(root, events.append)
+            try:
+                worker.preview([str(sources)], [], 40)
+            finally:
+                worker.close()
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "preview")
+        preview = events[0]["roots"][0]
+        self.assertEqual(preview["files"], ["ordinary.py"])
+        skipped = {row["path"]: row for row in preview["skipped"]}
+        self.assertEqual(
+            {path: row["reason_code"] for path, row in skipped.items()},
+            {
+                ".env": "protected_file",
+                "empty.py": "empty_file",
+                "oversized.py": "file_too_large",
+                "weight.safetensors": "blocked_file_type",
+            },
+        )
+        self.assertEqual(
+            skipped["oversized.py"]["reason"],
+            "larger than the file-size limit",
+        )
+
+    def test_direct_empty_file_reports_structured_reason(self) -> None:
+        """Give directly chosen empty files a stable skip code."""
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            empty = root / "empty.py"
+            empty.touch()
+            events: list[dict[str, object]] = []
+            worker = engine.ChatEngine(root, events.append)
+            try:
+                worker.preview([str(empty)], [], 40)
+            finally:
+                worker.close()
+
+        self.assertEqual(events[0]["roots"][0]["skipped"], [{
+            "path": "empty.py",
+            "reason": "empty file",
+            "reason_code": "empty_file",
+            "size_bytes": 0,
+        }])
 
     def test_pending_tool_plan_rejects_unrelated_commands(self) -> None:
         """Consume unrelated commands during an interactive tool wait."""

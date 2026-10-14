@@ -24,7 +24,7 @@ Key Features
 
 - **Selection reports**
 
-    Return sorted selected/skipped rows with metadata and explanatory reasons.
+    Return sorted selected/skipped rows with stable codes and explanations.
 
 - **Content fingerprints**
 
@@ -238,8 +238,8 @@ def _skip_reason(
     includes: tuple[str, ...],
     excludes: tuple[str, ...],
     max_file_bytes: int,
-) -> str | None:
-    """Explain why one entry should be skipped.
+) -> tuple[str, str] | None:
+    """Identify why one entry should be skipped.
 
     Parameters
     ----------
@@ -260,28 +260,32 @@ def _skip_reason(
 
     Returns
     -------
-    str | None
-        Skip reason, or ``None`` when the entry is selected or entered.
+    tuple[str, str] | None
+        Stable reason code and display text, or ``None`` when the entry
+        is selected or entered.
 
     """
 
     name = PurePosixPath(relative).name.lower()
 
     if kind == "link":
-        return "links are not followed"
+        return "link_not_followed", "links are not followed"
 
     if kind == "folder" and name in SKIP_DIRECTORIES:
-        return "environment, cache, or generated folder"
+        return (
+            "excluded_directory",
+            "environment, cache, or generated folder",
+        )
 
     protected_environment = name.startswith(".env.")
     if name in SKIP_FILES or protected_environment:
-        return "potentially secret or generated file"
+        return "protected_file", "potentially secret or generated file"
 
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
-        return "model weights or potentially secret file"
+        return "blocked_file_type", "model weights or potentially secret file"
 
     if any(_within(relative, excluded) for excluded in excludes):
-        return "excluded by your selection"
+        return "excluded_path", "excluded by your selection"
 
     in_scope = not includes or any(
         _within(relative, included) for included in includes
@@ -291,22 +295,22 @@ def _skip_reason(
     )
 
     if not in_scope and not leads_to_scope:
-        return "outside your included paths"
+        return "outside_scope", "outside your included paths"
 
     if kind == "folder":
         return None
 
     if kind != "file":
-        return "not a regular file"
+        return "unsupported_entry", "not a regular file"
 
     if not any(name.endswith(extension) for extension in extensions):
-        return "file type not selected"
+        return "file_type_not_selected", "file type not selected"
 
     if size == 0:
-        return "empty file"
+        return "empty_file", "empty file"
 
     if size is not None and size > max_file_bytes:
-        return "larger than the file-size limit"
+        return "file_too_large", "larger than the file-size limit"
 
     return None
 
@@ -366,7 +370,7 @@ def _entry_row(
     path: str,
     kind: str,
     size: int | None,
-    reason: str | None,
+    reason: tuple[str, str] | None,
 ) -> dict[str, object]:
     """Build one result row.
 
@@ -378,8 +382,9 @@ def _entry_row(
         Entry kind.
     size: int | None
         File size in bytes.
-    reason: str | None
-        Skip reason, or ``None`` for a selected file.
+    reason: tuple[str, str] | None
+        Stable reason code and display text, or ``None`` for a selected
+        file.
 
     Returns
     -------
@@ -388,12 +393,16 @@ def _entry_row(
 
     """
 
+    code, message = reason if reason else (
+        "selected", "matches your selection"
+    )
     return {
         "path": path,
         "kind": kind,
         "size_bytes": size,
         "status": "skipped" if reason else "selected",
-        "reason": reason or "matches your selection",
+        "reason_code": code,
+        "reason": message,
     }
 
 
@@ -442,9 +451,10 @@ def scan_repository(
         descendant I/O errors. selected_files is a sorted list of relative
         POSIX paths and selected_bytes is their metadata-size sum. entries
         contains sorted rows with path, kind, size_bytes, status
-        (selected/skipped), and reason. Traversed directories do not receive a
-        selected row; skipped directories do. A kind of unknown records an
-        inspection failure.
+        (selected/skipped), reason_code, and reason. Reason codes are
+        stable identifiers independent of explanatory text. Traversed
+        directories do not receive a selected row; skipped directories do.
+        A kind of unknown records an inspection failure.
 
     Raises
     ------
@@ -518,7 +528,7 @@ def scan_repository(
                         relative_folder,
                         "link",
                         None,
-                        "links are not followed",
+                        ("link_not_followed", "links are not followed"),
                     )
                 )
                 continue
@@ -539,7 +549,10 @@ def scan_repository(
                 ) from error
             complete = False
             reason = f"cannot list folder ({type(error).__name__})"
-            rows.append(_entry_row(relative_folder, "folder", None, reason))
+            rows.append(_entry_row(
+                relative_folder, "folder", None,
+                ("inspection_failed", reason),
+            ))
             continue
 
         for entry in sorted(children, key=lambda item: item.name):
@@ -569,7 +582,10 @@ def scan_repository(
                 complete = False
                 kind = "unknown"
                 size = None
-                reason = f"cannot inspect entry ({type(error).__name__})"
+                reason = (
+                    "inspection_failed",
+                    f"cannot inspect entry ({type(error).__name__})",
+                )
 
             if kind == "folder" and reason is None:
                 pending.append(path)

@@ -45,6 +45,8 @@ let ready = false;
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
+// Machine-readable scan code; the displayed reason is not policy.
+const FILE_TOO_LARGE_REASON = "file_too_large";
 const checkedFiles = new Map();
 const expandedFolders = new Set();
 // Workspace folders that start open but the user has folded.
@@ -444,6 +446,16 @@ function fileTree(files) {
 }
 
 /**
+ * Identify files that may be included by explicitly raising the size limit.
+ *
+ * @param item Skipped-file preview row with a reason code.
+ * @returns Whether explicit selection can override the size limit.
+ */
+function isOversizedSkippedFile(item) {
+  return item.reason_code === FILE_TOO_LARGE_REASON;
+}
+
+/**
  * Rebuild source trees, counts, and removal controls from preview state.
  */
 function renderPreview() {
@@ -455,7 +467,7 @@ function renderPreview() {
   for (const rootPath of selectedSources) {
     const files = previewRoots.get(rootPath) || [];
     const skipped = previewSkipped.get(rootPath) || [];
-    const oversized = skipped.filter((item) => item.reason === "larger than the file-size limit" && Number(item.size_bytes) > 0);
+    const oversized = skipped.filter((item) => isOversizedSkippedFile(item) && Number(item.size_bytes) > 0);
     const offered = new Set([...files, ...oversized.map((item) => item.path)]);
     const chosen = checkedFiles.get(rootPath) || new Set();
     total += files.length + skipped.length;
@@ -476,7 +488,7 @@ function renderPreview() {
     });
     const reasons = Object.fromEntries(skipped.map((item) => [
       item.path,
-      item.reason === "larger than the file-size limit"
+      isOversizedSkippedFile(item)
         ? "Above current limit · check to include"
         : item.reason,
     ]));
@@ -1025,7 +1037,7 @@ function selectedFileSizeLimit() {
   for (const rootPath of selectedSources) {
     const chosen = checkedFiles.get(rootPath) || new Set();
     for (const item of previewSkipped.get(rootPath) || []) {
-      if (chosen.has(item.path) && item.reason === "larger than the file-size limit") {
+      if (chosen.has(item.path) && isOversizedSkippedFile(item)) {
         limit = Math.max(limit, Number(item.size_bytes));
       }
     }
@@ -3047,7 +3059,7 @@ function onEvent(raw) {
       previewSkipped.set(root.path, root.skipped || []);
       const offered = [
         ...root.files,
-        ...(root.skipped || []).filter((item) => item.reason === "larger than the file-size limit").map((item) => item.path),
+        ...(root.skipped || []).filter((item) => isOversizedSkippedFile(item)).map((item) => item.path),
       ];
       checkedFiles.set(
         root.path,

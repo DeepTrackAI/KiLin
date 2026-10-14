@@ -77,6 +77,9 @@ native dialog or drag-and-drop. The engine previews directory selections
 using repository scanning. The tree shows selected and skipped entries;
 protected entries remain unavailable. Oversized eligible files can be checked
 explicitly, which increases the submitted size limit to accommodate them.
+The selection protocol uses stable `reason_code` identifiers; displayed
+explanations do not control which files are selectable. See
+[the protocol reference](../../docs/gui_protocol.md#source-preview-contract).
 Additional UTF-8 suffixes can be entered in Settings.
 
 The selected sources are copied into the workspace's `sources/` directory.
