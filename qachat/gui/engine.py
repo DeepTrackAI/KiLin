@@ -140,6 +140,11 @@ from qachat.project import (
     open_project,
 )
 from qachat.repository import DEFAULT_EXTENSIONS, scan_repository
+from qachat.repository_reason_codes import (
+    SELECTION_REASON_CODES,
+    SELECTION_REASON_EMPTY_FILE,
+    SELECTION_REASON_FILE_TOO_LARGE,
+)
 from qachat.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
@@ -1123,6 +1128,7 @@ class ChatEngine:
                 backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
+                selection_reason_codes=dict(SELECTION_REASON_CODES),
                 cached_models=sorted(cached),
                 model_roles=cached_model_roles(entries),
                 model_choices=model_choices(cached),
@@ -1468,10 +1474,10 @@ class ChatEngine:
                     size = source.stat().st_size
                     if size == 0:
                         reason = "empty file"
-                        reason_code = "empty_file"
+                        reason_code = SELECTION_REASON_EMPTY_FILE
                     elif size > max_file_bytes:
                         reason = "larger than the file-size limit"
-                        reason_code = "file_too_large"
+                        reason_code = SELECTION_REASON_FILE_TOO_LARGE
                     else:
                         reason = None
                         reason_code = None

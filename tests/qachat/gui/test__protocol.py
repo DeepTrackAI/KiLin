@@ -366,6 +366,36 @@ class TestGUIProtocolCommands(unittest.TestCase):
 class TestGUIProtocolEvents(unittest.TestCase):
     """Check lightweight real events and shared phase identifiers."""
 
+    def test_settings_include_canonical_selection_reason_codes(self) -> None:
+        """Pass the packaged code vocabulary through the settings event."""
+
+        from qachat.repository_reason_codes import SELECTION_REASON_CODES
+
+        events: list[dict[str, object]] = []
+        worker = engine.ChatEngine.__new__(engine.ChatEngine)
+        worker._send = lambda event, **data: events.append(
+            {"event": event, **data}
+        )
+        worker._report_error = MagicMock()
+        with (
+            patch.object(engine, "available_models", return_value=[]),
+            patch.object(engine, "installed_backends", return_value=[]),
+            patch.object(engine, "choose_backend", return_value="mlx"),
+        ):
+            worker.settings("code", "")
+
+        worker._report_error.assert_not_called()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event"], "settings")
+        self.assertEqual(
+            events[0]["selection_reason_codes"],
+            dict(SELECTION_REASON_CODES),
+        )
+        self.assertEqual(
+            json.loads(json.dumps(events[0]))["selection_reason_codes"],
+            dict(SELECTION_REASON_CODES),
+        )
+
     def test_source_preview_and_error_payloads(self) -> None:
         """Keep preview roots, selectable files, and skipped reasons stable."""
 

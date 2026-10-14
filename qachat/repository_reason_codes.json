@@ -1,0 +1,14 @@
+{
+  "SELECTED": "selected",
+  "FILE_TOO_LARGE": "file_too_large",
+  "EMPTY_FILE": "empty_file",
+  "FILE_TYPE_NOT_SELECTED": "file_type_not_selected",
+  "PROTECTED_FILE": "protected_file",
+  "BLOCKED_FILE_TYPE": "blocked_file_type",
+  "EXCLUDED_PATH": "excluded_path",
+  "OUTSIDE_SCOPE": "outside_scope",
+  "LINK_NOT_FOLLOWED": "link_not_followed",
+  "EXCLUDED_DIRECTORY": "excluded_directory",
+  "UNSUPPORTED_ENTRY": "unsupported_entry",
+  "INSPECTION_FAILED": "inspection_failed"
+}

@@ -75,7 +75,9 @@ Module settings
 ---------------
 ``PROJECT_ROOT`` anchors relative repository paths to the package parent.
 The packaged ``qachat_defaults.json`` contains the repository-selection
-defaults. ``DEFAULT_EXTENSIONS`` supplies the literal filename suffixes;
+defaults. Stable reason identifiers come from the separately packaged
+``repository_reason_codes.json`` via ``qachat.repository_reason_codes``.
+``DEFAULT_EXTENSIONS`` supplies the literal filename suffixes;
 ``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` provide
 name-based exclusions. These lists are loaded at import time and define
 which extensions are considered, which directory and file names are skipped,
@@ -110,6 +112,20 @@ import stat
 from qachat.defaults import (
     load_defaults_section,
     require_default_strings,
+)
+from qachat.repository_reason_codes import (
+    SELECTION_REASON_SELECTED,
+    SELECTION_REASON_FILE_TOO_LARGE,
+    SELECTION_REASON_EMPTY_FILE,
+    SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+    SELECTION_REASON_PROTECTED_FILE,
+    SELECTION_REASON_BLOCKED_FILE_TYPE,
+    SELECTION_REASON_EXCLUDED_PATH,
+    SELECTION_REASON_OUTSIDE_SCOPE,
+    SELECTION_REASON_LINK_NOT_FOLLOWED,
+    SELECTION_REASON_EXCLUDED_DIRECTORY,
+    SELECTION_REASON_UNSUPPORTED_ENTRY,
+    SELECTION_REASON_INSPECTION_FAILED,
 )
 
 
@@ -269,23 +285,29 @@ def _skip_reason(
     name = PurePosixPath(relative).name.lower()
 
     if kind == "link":
-        return "link_not_followed", "links are not followed"
+        return SELECTION_REASON_LINK_NOT_FOLLOWED, "links are not followed"
 
     if kind == "folder" and name in SKIP_DIRECTORIES:
         return (
-            "excluded_directory",
+            SELECTION_REASON_EXCLUDED_DIRECTORY,
             "environment, cache, or generated folder",
         )
 
     protected_environment = name.startswith(".env.")
     if name in SKIP_FILES or protected_environment:
-        return "protected_file", "potentially secret or generated file"
+        return (
+            SELECTION_REASON_PROTECTED_FILE,
+            "potentially secret or generated file",
+        )
 
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
-        return "blocked_file_type", "model weights or potentially secret file"
+        return (
+            SELECTION_REASON_BLOCKED_FILE_TYPE,
+            "model weights or potentially secret file",
+        )
 
     if any(_within(relative, excluded) for excluded in excludes):
-        return "excluded_path", "excluded by your selection"
+        return SELECTION_REASON_EXCLUDED_PATH, "excluded by your selection"
 
     in_scope = not includes or any(
         _within(relative, included) for included in includes
@@ -295,22 +317,28 @@ def _skip_reason(
     )
 
     if not in_scope and not leads_to_scope:
-        return "outside_scope", "outside your included paths"
+        return SELECTION_REASON_OUTSIDE_SCOPE, "outside your included paths"
 
     if kind == "folder":
         return None
 
     if kind != "file":
-        return "unsupported_entry", "not a regular file"
+        return SELECTION_REASON_UNSUPPORTED_ENTRY, "not a regular file"
 
     if not any(name.endswith(extension) for extension in extensions):
-        return "file_type_not_selected", "file type not selected"
+        return (
+            SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+            "file type not selected",
+        )
 
     if size == 0:
-        return "empty_file", "empty file"
+        return SELECTION_REASON_EMPTY_FILE, "empty file"
 
     if size is not None and size > max_file_bytes:
-        return "file_too_large", "larger than the file-size limit"
+        return (
+            SELECTION_REASON_FILE_TOO_LARGE,
+            "larger than the file-size limit",
+        )
 
     return None
 
@@ -394,7 +422,7 @@ def _entry_row(
     """
 
     code, message = reason if reason else (
-        "selected", "matches your selection"
+        SELECTION_REASON_SELECTED, "matches your selection"
     )
     return {
         "path": path,
@@ -528,7 +556,10 @@ def scan_repository(
                         relative_folder,
                         "link",
                         None,
-                        ("link_not_followed", "links are not followed"),
+                        (
+                            SELECTION_REASON_LINK_NOT_FOLLOWED,
+                            "links are not followed",
+                        ),
                     )
                 )
                 continue
@@ -551,7 +582,7 @@ def scan_repository(
             reason = f"cannot list folder ({type(error).__name__})"
             rows.append(_entry_row(
                 relative_folder, "folder", None,
-                ("inspection_failed", reason),
+                (SELECTION_REASON_INSPECTION_FAILED, reason),
             ))
             continue
 
@@ -583,7 +614,7 @@ def scan_repository(
                 kind = "unknown"
                 size = None
                 reason = (
-                    "inspection_failed",
+                    SELECTION_REASON_INSPECTION_FAILED,
                     f"cannot inspect entry ({type(error).__name__})",
                 )
 

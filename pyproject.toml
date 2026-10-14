@@ -45,6 +45,7 @@ include = ["qachat*"]
 # Data-only folders: project types and report templates.
 "qachat" = [
     "qachat_defaults.json",
+    "repository_reason_codes.json",
     "project_types/*.json",
 ]
 "qachat.tools.project_inventory" = ["README.md", "defaults.json"]

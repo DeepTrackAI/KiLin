@@ -35,6 +35,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const source = fs.readFileSync(process.argv[1], "utf8");
+const codes = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 
 function extract(name) {
   const start = source.indexOf(`function ${name}(`);
@@ -53,6 +54,10 @@ assert.equal(
   (source.match(/isOversizedSkippedFile\(item\)/g) || []).length, 5
 );
 assert.ok(!source.includes('item.reason === "larger than'));
+assert.ok(!source.includes('"file_too_large"'));
+assert.ok(source.includes(
+  'selectionReasonCodes = data.selection_reason_codes;'
+));
 
 const tree = { replaceChildren() {}, append() {} };
 const count = { textContent: "" };
@@ -64,16 +69,16 @@ const document = {
 };
 const rows = [
   {
-    path: "big.py", reason_code: "file_too_large",
+    path: "big.py", reason_code: codes.FILE_TOO_LARGE,
     reason: "The file exceeds your limit.", size_bytes: 50
   },
   {
-    path: "secret.py", reason_code: "protected_file",
+    path: "secret.py", reason_code: codes.PROTECTED_FILE,
     reason: "larger than the file-size limit", size_bytes: 100
   }
 ];
 const context = {
-  FILE_TOO_LARGE_REASON: "file_too_large",
+  selectionReasonCodes: codes,
   selectedSources: ["source"],
   previewRoots: new Map([["source", ["ordinary.py"]]]),
   previewSkipped: new Map([["source", rows]]),
@@ -97,7 +102,10 @@ vm.runInNewContext("renderPreview()", context);
 assert.equal(count.textContent, "2 of 3 files selected · 1 unavailable");
 """
         result = subprocess.run(
-            [shutil.which("node"), "-e", script, str(_APP_JS)],
+            [
+                shutil.which("node"), "-e", script, str(_APP_JS),
+                str(_APP_JS.parents[2] / "repository_reason_codes.json"),
+            ],
             capture_output=True,
             text=True,
             timeout=15,

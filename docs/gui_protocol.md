@@ -170,9 +170,12 @@ selecting it increases the submitted size limit. The human-readable `reason`
 is still displayed but is never used to decide file eligibility. All other
 skipped entries remain unavailable.
 
-The core `qachat.repository.scan_repository()` owns the reason codes. Its
-`entries` contain `reason_code` for both selected and skipped rows. The
-supported values are:
+The core `qachat.repository.scan_repository()` owns selection decisions.
+The identifiers themselves are defined in the packaged
+`qachat/repository_reason_codes.json` and loaded and validated once by
+`qachat.repository_reason_codes`. The scanner and Python GUI engine import
+the corresponding named constants. Its `entries` contain `reason_code` for
+both selected and skipped rows. The supported values are:
 
 | `reason_code` | Selection meaning |
 | --- | --- |
@@ -188,6 +191,15 @@ supported values are:
 | `excluded_directory` | Built-in protected or generated directory |
 | `unsupported_entry` | Nonregular filesystem entry |
 | `inspection_failed` | An entry or directory could not be inspected |
+
+The `settings` event includes a `selection_reason_codes` dictionary with
+exactly the symbolic-name/value pairs from the packaged JSON file. The web
+page receives this dictionary before normal preview interaction and uses
+`selection_reason_codes.FILE_TOO_LARGE` to identify the sole explicitly
+selectable skip reason. It does not fetch local files, hard-code reason values,
+or infer eligibility from display messages. Missing or malformed packaged
+identifiers are errors; there is no silent fallback vocabulary. Other GUI
+settings and project profiles do not override this protocol resource.
 
 The GUI forwards codes from directory-scan reports unchanged. Explicitly
 selected individual files bypass filename and suffix filtering, as before;

@@ -45,8 +45,8 @@ let ready = false;
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
-// Machine-readable scan code; the displayed reason is not policy.
-const FILE_TOO_LARGE_REASON = "file_too_large";
+// Codes arrive from the backend's validated, packaged JSON resource.
+let selectionReasonCodes = null;
 const checkedFiles = new Map();
 const expandedFolders = new Set();
 // Workspace folders that start open but the user has folded.
@@ -452,7 +452,8 @@ function fileTree(files) {
  * @returns Whether explicit selection can override the size limit.
  */
 function isOversizedSkippedFile(item) {
-  return item.reason_code === FILE_TOO_LARGE_REASON;
+  return selectionReasonCodes !== null
+    && item.reason_code === selectionReasonCodes.FILE_TOO_LARGE;
 }
 
 /**
@@ -1068,6 +1069,11 @@ function showModelFields() {
  *   metadata.
  */
 function showSettings(data) {
+  if (!data.selection_reason_codes
+      || typeof data.selection_reason_codes.FILE_TOO_LARGE !== "string") {
+    throw new Error("Missing file-selection codes in GUI settings.");
+  }
+  selectionReasonCodes = data.selection_reason_codes;
   profile = data.profile;
   savedLevels = data.effort_levels || {};
   defaultLevels = data.default_effort_levels || defaultLevels;
