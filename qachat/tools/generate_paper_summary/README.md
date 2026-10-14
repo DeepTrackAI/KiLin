@@ -132,8 +132,8 @@ Symbolic links are not accepted as project templates. See
 
 ## Tests
 
-`tests/qachat/tools/test_generate_paper_summary.py` tests the settings,
+`tests/qachat/tools/generate_paper_summary/test_tool.py` tests the settings,
 registry integration, resource selection, parsing, and model-free error
-paths. `tests/qachat/tools/test_tool_defaults.py` tests the shared private
+paths. `tests/qachat/tools/test__defaults.py` tests the shared private
 defaults reader. Further model orchestration tests can exercise the
 `ToolContext` callbacks with fakes instead of requiring an LLM.

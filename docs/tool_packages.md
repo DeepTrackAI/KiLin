@@ -78,14 +78,14 @@ invalid types, and values outside the documented constraints fail early.
 4. Register the package in `_registry.py`, including a resource provider
    if workspace files must be copied during project creation.
 5. Add the tool to a project type intent to make it selectable.
-6. Add `tests/qachat/tools/test_<tool_name>.py` with deterministic unit
+6. Add `tests/qachat/tools/<tool_name>/test_tool.py` with deterministic unit
    tests for settings, rejection of invalid overrides, the registry entry,
    and logic that does not require live language models. Test resource
    declarations if applicable.
 7. Include tool-owned JSON, documentation, and resource files in the
    relevant package-data section of `pyproject.toml`. Verify a wheel build.
 
-Tests for shared services belong in `tests/qachat/tools/`, where they can
-be exercised independently from every registered tool. Full QAChat
+Tests for shared services belong in `tests/qachat/tools/_shared/`. They
+can be exercised independently from every registered tool. Full QAChat
 regression tests must pass after every migration. QAChat's coding and
 DeepTrack-style documentation conventions apply to all Python modules.

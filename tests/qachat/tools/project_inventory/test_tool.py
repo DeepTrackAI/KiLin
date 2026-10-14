@@ -1,4 +1,4 @@
-"""Test the find_passages tool package without live model backends.
+"""Test the project_inventory tool package without live model backends.
 
 Check configuration ownership, public registry entries, settings validation,
 and deterministic execution behavior.
@@ -16,11 +16,11 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import find_passages as tool
+from qachat.tools import project_inventory as tool
 from qachat.tools._registry import TOOL_REGISTRY
 
 
-class TestFindPassages(unittest.TestCase):
+class TestProjectInventory(unittest.TestCase):
     """Verify independent configuration and offline functionality."""
 
     def test_registry_uses_package_entry_points(self) -> None:
@@ -28,7 +28,7 @@ class TestFindPassages(unittest.TestCase):
 
         """
 
-        entry = TOOL_REGISTRY["find_passages"]
+        entry = TOOL_REGISTRY["project_inventory"]
         self.assertIs(entry.parse_settings, tool.parse_settings)
         self.assertIs(entry.run, tool.run)
         self.assertIsNone(entry.workspace_resources)
@@ -47,7 +47,7 @@ class TestFindPassages(unittest.TestCase):
             for key in values:
                 with self.subTest(section=section, key=key):
                     self.assertIn("`" + key + "`", readme)
-        defaults = tool.PassageSettings()
+        defaults = tool.InventorySettings()
         self.assertEqual(defaults, tool.parse_settings({}, "example"))
         self.assertEqual(
             {field.name for field in fields(defaults)},
@@ -65,8 +65,8 @@ class TestFindPassages(unittest.TestCase):
         """
 
         invalid_settings = (
-            {'batch_tokens': 0},
-            {'quick_passages': 4},
+            {'max_folders': 0},
+            {'max_listed': 2001},
             {"unknown": True},
         )
         for values in invalid_settings:
@@ -75,31 +75,33 @@ class TestFindPassages(unittest.TestCase):
                     tool.parse_settings(values, "example")
 
 
-    def test_topic_and_judgement_prompts(self) -> None:
-        """Generate complete, deterministic model prompts.
+    def test_type_recognition_and_inventory_without_a_model(self) -> None:
+        """Count files from core metadata without invoking a model.
 
         """
 
-        _, prompt = tool.topic_prompt("List papers using deep learning")
-        self.assertIn("deep learning", prompt)
-        from tests.qachat.tools._support import chunk
-        sentences = tool.split_sentences([
-            chunk("1", "This sentence has enough words for testing."
-                  " Another sentence has enough useful words.")
-        ])
-        self.assertEqual(len(sentences), 2)
-        _, judge = tool.judge_prompt("testing", sentences)
-        self.assertIn("testing", judge)
+        from pathlib import Path
+        from unittest.mock import Mock
+        from qachat.tools._contract import ToolRequest
+        from tests.qachat.tools._shared._support import chunk
 
-    def test_overlapping_passages_do_not_duplicate_sentences(self) -> None:
-        """Deduplicate source sentences across overlapping chunks.
-
-        """
-
-        from tests.qachat.tools._support import chunk
-        same = "This sentence clearly contains enough words."
-        pieces = [chunk("1", same), chunk("2", same)]
-        self.assertEqual(len(tool.split_sentences(pieces)), 1)
+        self.assertEqual(tool.file_types_in("List PDFs"), (".pdf",))
+        self.assertEqual(tool.file_types_in("text files"), (".txt",))
+        context = Mock()
+        context.source_files.return_value = {
+            Path("a.pdf"): 123,
+            Path("b.md"): 456,
+        }
+        context.chunks = [chunk("one", "A useful paper", path="a.pdf")]
+        result = tool.run(
+            tool.InventorySettings(),
+            ToolRequest("list all PDFs", "list all PDFs"),
+            context,
+        )
+        self.assertIn("a.pdf", result.answer)
+        self.assertIn("PDF", result.answer)
+        context.ask_model.assert_not_called()
+        context.done.assert_called_once()
 
 
 if __name__ == "__main__":
