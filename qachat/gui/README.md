@@ -52,6 +52,9 @@ project, progress, answer, reference, and failure events. `model_catalog.py`
 contains suggested model records and distribution-presence checks. A cache
 entry or an installed distribution is not proof that a model can load or run.
 
+For the existing GUI command/event names, payloads, and recovery rules,
+see [the desktop protocol reference](../../docs/gui_protocol.md).
+
 `web/index.html` defines the setup form, conversation controls, workspace and
 reference panels, activity display, and model dialog. Its identifiers are the
 contract used by `web/app.js`. `web/styles.css` defines layout, interaction
