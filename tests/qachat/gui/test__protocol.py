@@ -477,20 +477,22 @@ class TestGUIProtocolBridge(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        """Import the Qt shell only when PySide6 is installed."""
+        """Import the Qt bridge without creating an application.
+
+        Only direct QObject signals and slots are exercised here. A
+        QCoreApplication would prevent a later PDF test from constructing
+        the QApplication required for Qt font rendering.
+
+        """
 
         try:
-            from PySide6.QtCore import QCoreApplication
+            cls.bridge_type = importlib.import_module(
+                "qachat.gui.window"
+            ).ChatBridge
         except ModuleNotFoundError as error:
             if error.name and error.name.startswith("PySide6"):
                 raise unittest.SkipTest("PySide6 is not installed") from error
             raise
-        cls.bridge_type = importlib.import_module(
-            "qachat.gui.window"
-        ).ChatBridge
-        cls.application = QCoreApplication.instance()
-        if cls.application is None:
-            cls.application = QCoreApplication([])
 
     def setUp(self) -> None:
         """Record Qt signals without opening a native window."""
