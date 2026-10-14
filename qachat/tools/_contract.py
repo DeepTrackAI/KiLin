@@ -223,9 +223,9 @@ class ToolContext:
     trace_turn_id: str | None
         The turn the tool runs for.
     write_pdf: Callable[..., int] | None, optional
-        ``write_pdf(markdown, path, label=...)`` writes a one-page PDF and
-        returns its page count; None where no PDF writer is available
-        (for example notebooks without Qt). Defaults to ``None``.
+        ``write_pdf(markdown, path, label=...)`` attempts a one-page PDF
+        and returns the actual page count. ``None`` when no renderer is
+        available (for example notebooks without Qt). Defaults to ``None``.
     choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
         ``choose(question, options)`` asks the user to pick one option and
         returns its index, or None when they cancel; None where nobody can

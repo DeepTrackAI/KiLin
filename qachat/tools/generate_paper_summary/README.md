@@ -93,6 +93,26 @@ silicon. Model-speed calibration is a separate concern.
 | `LIMIT_TOLERANCE` | 0.1 | Permitted fractional deviation from word-count limits, but not item limits; finite fraction from 0 to 1. |
 | `MIN_TOTAL_WORDS` | 50 | Smallest allowed template `max_words` front-matter value; positive integer. |
 
+## Report formatting and PDF output
+
+This tool always writes the validated Markdown report to the project's
+`outputs/` folder. Its private `_report_format.py` converts the supported
+report Markdown to escaped, styled HTML and extracts the report title. It
+has no GUI or PySide6 dependency. Formatting options are arguments of the
+formatter, not tool defaults.
+
+PDF generation is **optional**: the caller can supply the `ToolContext`
+`write_pdf` callback to render the Markdown. The desktop GUI supplies the
+private `qachat/gui/_report_pdf.py` adapter, which uses Qt's `QPdfWriter`
+and tries to fit the report on an A4 page by reducing its font size.
+When no callback is available (for example, from the CLI or a notebook),
+the Markdown report is still saved and no PDF is attempted. PDF errors
+or multi-page output are reported without discarding the Markdown file.
+
+PDF generation is not yet a project-type output-format setting; configuring
+rendering backends and output formats belongs to a separate future change.
+The current callback and automatic GUI PDF behavior are unchanged.
+
 ## Workspace resources
 
 The core always creates `templates/` and `outputs/` for every project.

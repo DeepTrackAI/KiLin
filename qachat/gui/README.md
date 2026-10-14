@@ -178,9 +178,14 @@ is loaded, and unknown settings are rejected. The tools are:
   `qachat/tools/generate_paper_summary/_report_template.py`. The headline and each section are
   written separately and checked in Python (word and item limits), with
   targeted fixes; the result is saved as Markdown in the project's
-  `outputs/` folder, with a one-page PDF in the desktop app. The answer
-  says where both files are and shows the saved Markdown. Nothing
-  bibliographic is written by the model: the citation comes from the PDF's
+  `outputs/` folder. In the desktop app, an additional PDF is generated
+  when rendering succeeds. The answer lists the generated files and
+  shows the saved Markdown. PDF rendering uses the private Qt adapter
+  `qachat/gui/_report_pdf.py`; formatting belongs to the report tool.
+  The adapter attempts a one-page A4 layout but can produce more pages
+  when the report does not fit. Without a renderer callback, the core
+  saves only Markdown. Bibliographic information is not invented by the
+  model: the citation comes from the source PDF's
   metadata and first page (or the file name), and reference items are
   entries of the paper's own reference list, which the model only chooses
   by number. A paper can be named by file name or first author ("Smith's

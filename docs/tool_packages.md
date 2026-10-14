@@ -42,7 +42,11 @@ qachat/tools/example_tool/
 ```
 
 The reference `generate_paper_summary` tool additionally has a private
-report-template parser. Other tools can add private modules as needed.
+report-template parser and a pure report HTML formatter. Qt-based PDF writing
+remains an optional private GUI adapter (`qachat/gui/_report_pdf.py`), passed
+to the tool as a callback. The tool does not import the GUI, and it always
+saves Markdown even without a PDF backend. Other tools can add private
+modules as needed.
 All ten built-in registered tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
 QAChat is a prerelease package.

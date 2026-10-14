@@ -99,7 +99,7 @@ from qachat.gui.preferences import (
     validate_search_depth,
     write_defaults,
 )
-from qachat.gui.report_pdf import write_report_pdf
+from qachat.gui._report_pdf import write_report_pdf
 from qachat.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
 from qachat.gui.model_settings import (
     DEFAULT_LEVEL,

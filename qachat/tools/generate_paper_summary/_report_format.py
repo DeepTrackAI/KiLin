@@ -1,34 +1,39 @@
-"""Write generated reports as one-page PDFs with Qt.
+"""Format report Markdown into safe HTML for print rendering.
 
-Reports such as research briefings are saved as Markdown by the core tools,
-which work without a GUI. The desktop app also has Qt, which can lay out
-styled text and write PDF without further dependencies, so the engine gives
-tools ``write_report_pdf`` and every report also gets a PDF next to its
-Markdown.
+Report content and structure belong to ``generate_paper_summary`` rather
+than to a particular presentation backend. This module has no Qt dependency;
+the optional desktop PDF adapter imports it when rendering a report.
 
-The Markdown that tools write is simple (a ``#`` headline, ``##`` sections,
-paragraphs, lists, bold and italic), so it is converted to HTML here, styled
-for print, and laid out on A4. When the text does not fit the page limit,
-the font size is reduced in small steps down to a readable minimum; the
-result reports how many pages were needed.
+The supported Markdown is deliberately limited to headings, paragraphs,
+lists, emphasis, inline code and rules, matching generated report templates.
 
 Key Features
 ------------
 
-- **No new dependencies**: Qt's ``QTextDocument`` and ``QPdfWriter``.
-- **Fits one page**: the font shrinks until the report fits, within limits.
-- **Works without a window**: an offscreen Qt application is created when
-  none exists (the engine process has no window).
+- **Safe text**
+
+    Escape source content before inserting the supported inline markup.
+
+- **Report styling**
+
+    Convert report sections into styled HTML with adjustable body size.
 
 Module Structure
 ----------------
 
 - ``markdown_to_html``
-- ``write_report_pdf``
+
+    Convert the supported report Markdown into complete print-ready HTML.
+
+- ``report_title``
+
+    Extract the report title for document metadata.
 
 Examples
 --------
->>> from qachat.gui.report_pdf import markdown_to_html
+>>> from qachat.tools.generate_paper_summary._report_format import (
+...     markdown_to_html,
+... )
 >>> "Example" in markdown_to_html("# Example")
 True
 
@@ -37,21 +42,14 @@ True
 from __future__ import annotations
 
 import html
-from pathlib import Path
 import re
 from typing import Final
 
-__all__ = [
-    "markdown_to_html",
-    "write_report_pdf",
-]
+__all__ = ["markdown_to_html", "report_title"]
 
 _ACCENT: Final[str] = "#334e43"
 _MUTED: Final[str] = "#5f6b66"
 _ITEM = re.compile(r"^\s*(?:[-*•]|(\d+)[.)])\s+(.*)$")
-_APPLICATION: list[object] = []
-
-
 def _inline(text: str) -> str:
     """Escape text and apply bold, italic, and code markup.
 
@@ -131,7 +129,7 @@ def markdown_to_html(
             flush()
         elif stripped.startswith("## "):
             flush()
-            # A styled paragraph: Qt sizes <h2> itself, ignoring CSS.
+            # Qt sizes <h2> itself, ignoring CSS, so style a paragraph.
             text = _inline(stripped[3:].strip())
             blocks.append(f'<p class="section">{text}</p>')
         elif stripped.startswith("# "):
@@ -178,93 +176,7 @@ code {{ font-family: Menlo, monospace; }}
     )
 
 
-def _application() -> None:
-    """Create an offscreen Qt application when none exists.
-
-    A full ``QApplication`` (not only a ``QGuiApplication``) is created, so
-    widgets can still be made later in the same process.
-
-    """
-
-    from PySide6.QtGui import QGuiApplication
-    from PySide6.QtWidgets import QApplication
-
-    if QGuiApplication.instance() is None and not _APPLICATION:
-        _APPLICATION.append(
-            QApplication(["qachat-pdf", "-platform", "offscreen"])
-        )
-
-
-def write_report_pdf(
-    markdown: str,
-    path: Path,
-    *,
-    max_pages: int = 1,
-    font_size: float = 10.5,
-    min_font_size: float = 7.5,
-    label: str = "",
-) -> int:
-    """Write a report as an A4 PDF, shrinking the font to fit.
-
-    Parameters
-    ----------
-    markdown: str
-        The report.
-    path: pathlib.Path
-        PDF file to write (replaced if it exists; callers choose a free
-        name).
-    max_pages: int, optional
-        Pages the report should fit on. Defaults to ``1``.
-    font_size: float, optional
-        Starting body font size in points. Defaults to ``10.5``.
-    min_font_size: float, optional
-        Smallest body font size tried. Defaults to ``7.5``.
-    label: str, optional
-        Small label above the headline. Defaults to ``""``.
-
-    Returns
-    -------
-    int
-        Pages written; more than ``max_pages`` when the report does not fit
-        even at ``min_font_size``.
-
-    """
-
-    _application()
-    from PySide6.QtCore import QMarginsF, QSizeF
-    from PySide6.QtGui import (
-        QPageLayout,
-        QPageSize,
-        QPdfWriter,
-        QTextDocument,
-    )
-
-    writer = QPdfWriter(str(path))
-    writer.setResolution(72)  # One unit is one point, as in the layout.
-    writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
-    writer.setPageMargins(
-        QMarginsF(16, 14, 16, 14), QPageLayout.Unit.Millimeter
-    )
-    writer.setTitle(_title(markdown))
-    writer.setCreator("QAChat")
-    area = writer.pageLayout().paintRectPoints()
-    size = font_size
-    while True:
-        document = QTextDocument()
-        document.setDocumentMargin(0)
-        document.setPageSize(QSizeF(area.width(), area.height()))
-        document.setHtml(
-            markdown_to_html(markdown, font_size=size, label=label)
-        )
-        pages = document.pageCount()
-        if pages <= max_pages or size - 0.5 < min_font_size:
-            break
-        size -= 0.5
-    document.print_(writer)
-    return pages
-
-
-def _title(markdown: str) -> str:
+def report_title(markdown: str) -> str:
     """Extract the first Markdown level-one heading as the report title.
 
     Parameters
