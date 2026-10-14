@@ -93,7 +93,12 @@ _CORE_FOLDERS: Final[tuple[str, ...]] = (
 _RESERVED_RESOURCE_ROOTS: Final[frozenset[str]] = frozenset(
     ("sources", "indexes", "logs", "outputs")
 )
-_PROJECT_SOURCE_EXCLUDES: Final[tuple[str, ...]] = _CORE_FOLDERS
+_PROJECT_SOURCE_EXCLUDES: Final[tuple[str, ...]] = (
+    *_CORE_FOLDERS,
+    "profile.ini",
+    "sources.json",
+    "source_snapshot.json",
+)
 
 
 @dataclass(frozen=True, slots=True)

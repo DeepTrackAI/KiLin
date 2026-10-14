@@ -78,7 +78,6 @@ import json
 from pathlib import Path
 import math
 import re
-import shutil
 import sys
 from threading import Event, Lock, Thread
 from time import perf_counter
@@ -100,7 +99,6 @@ from qachat.gui.preferences import (
     write_defaults,
 )
 from qachat.gui._report_pdf import write_report_pdf
-from qachat.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
 from qachat.gui.model_settings import (
     DEFAULT_LEVEL,
     LEVEL_COUNT,
@@ -120,6 +118,13 @@ from qachat.gui.model_catalog import (
     model_choices,
 )
 from qachat import RAGSession, prepare_sources_workspace
+from qachat.workspace import remove_workspace_sources
+from qachat.project_files import (
+    add_project_files,
+    list_project_files,
+    remove_project_files,
+    replace_project_file,
+)
 from qachat.conversation_format import conversation_state
 from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversations import ConversationInfo, ConversationStore
@@ -134,12 +139,7 @@ from qachat.project import (
     default_project_profile,
     open_project,
 )
-from qachat.repository import (
-    BLOCKED_SUFFIXES,
-    DEFAULT_EXTENSIONS,
-    SKIP_FILES,
-    scan_repository,
-)
+from qachat.repository import DEFAULT_EXTENSIONS, scan_repository
 from qachat.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
@@ -1123,7 +1123,7 @@ class ChatEngine:
                 model_roles=cached_model_roles(entries),
                 model_choices=model_choices(cached),
                 workspace_files=(
-                    _workspace_files(profile_path.parent)
+                    list_project_files(open_project(profile_path.parent))
                     if profile_path.is_file()
                     else []
                 ),
@@ -1443,9 +1443,9 @@ class ChatEngine:
         -----
         Builds selectable and skipped source-entry lists without copying files
         or loading models. Oversized files are reported separately for frontend
-        selection/limit adjustment. Directory selection uses scan_repository;
-        direct files have explicit protected-name checks. Failures become error
-        events.
+        selection/limit adjustment. Directory selection uses the repository
+        scanner. Direct files bypass name and suffix filters while retaining
+        size limits. Errors become frontend events.
 
         """
 
@@ -1462,14 +1462,7 @@ class ChatEngine:
                 source = original.resolve(strict=True)
                 if source.is_file():
                     size = source.stat().st_size
-                    name = source.name.lower()
-                    if name in SKIP_FILES or name.startswith(".env."):
-                        reason = "potentially secret or generated file"
-                    elif source.suffix.lower() in BLOCKED_SUFFIXES:
-                        reason = "model weights or potentially secret file"
-                    elif not name.endswith(allowed_extensions):
-                        reason = "file type not selected"
-                    elif size == 0:
+                    if size == 0:
                         reason = "empty file"
                     elif size > max_file_bytes:
                         reason = "larger than the file-size limit"
@@ -1553,10 +1546,10 @@ class ChatEngine:
 
         Notes
         -----
-        Closes any current session before preparation. Selected file suffixes
-        can extend the saved extension list; copying uses the cumulative
-        multi-source workspace API. With neither sources nor workspace, the
-        implementation uses a development example repository path that is not
+        Closes any current session before preparation. Explicit file
+        selection does not change the saved extension list. Copying uses the
+        cumulative multi-source workspace API. With neither sources nor
+        workspace, the implementation uses a development example path not
         included in this archive. Errors become frontend events.
 
         """
@@ -1619,23 +1612,6 @@ class ChatEngine:
             if selected_files is not None:
                 options["selected_files"] = selected_files
             if settings:
-                settings = dict(settings)
-                configured = settings.get("extensions", ())
-                if selected_files and isinstance(configured, (list, tuple)):
-                    # A checked file may use a type absent from an old profile.
-                    known = tuple(
-                        dict.fromkeys((*DEFAULT_EXTENSIONS, *configured))
-                    )
-                    selected_types = [
-                        extension
-                        for paths in selected_files.values()
-                        for path in paths
-                        for extension in known
-                        if Path(path).name.lower().endswith(extension)
-                    ]
-                    settings["extensions"] = list(
-                        dict.fromkeys((*configured, *selected_types))
-                    )
                 options["settings"] = settings
             if self.project_trace.enabled:
                 options["trace"] = self.project_trace
@@ -1780,7 +1756,7 @@ class ChatEngine:
             usage=self._usage_totals(),
             index_status=session.index_status,
             turns=_turn_payloads(session.turns, project.root),
-            workspace_files=_workspace_files(project.root),
+            workspace_files=list_project_files(project),
             retrieval_count=(
                 session.turns[-1].parameters.get(
                     "retrieval_count", project.profile.retrieval_count
@@ -1920,13 +1896,12 @@ class ChatEngine:
             )
 
     def remove_project_sources(self, paths: list[str]) -> None:
-        """Delete workspace source copies and reindex the open project.
+        """Delete managed source copies through the core and reindex.
 
         Parameters
         ----------
         paths: list[str]
-            Workspace-relative paths strictly inside the project's source
-            folder. Originals outside the workspace are never touched.
+            Workspace-relative source snapshots to remove.
 
         """
 
@@ -1935,27 +1910,7 @@ class ChatEngine:
         try:
             if self.session is None or self.active_conversation is None:
                 raise RuntimeError("Open a project first.")
-            if (
-                not paths
-                or not isinstance(paths, list)
-                or not all(isinstance(path, str) and path for path in paths)
-            ):
-                raise ValueError("Choose source files or folders to delete.")
-            root = self.session.project.root.resolve(strict=True)
-            source = self.session.project.source.resolve(strict=True)
-            targets = []
-            for relative in paths:
-                target = root / relative
-                # Resolve the parent only, so a symlink is removed itself.
-                resolved = target.parent.resolve(strict=True) / target.name
-                if not resolved.is_relative_to(source) or resolved == source:
-                    raise ValueError(
-                        f"Only items inside the sources folder can be "
-                        f"deleted: {relative}"
-                    )
-                if not resolved.exists() and not resolved.is_symlink():
-                    raise ValueError(f"Source not found: {relative}")
-                targets.append(resolved)
+            root = self.session.project.root
             conversation_id = self.active_conversation.conversation_id
             self.active_trace.emit(
                 "gui.sources.remove.requested",
@@ -1965,14 +1920,10 @@ class ChatEngine:
             self._send(
                 "status", message="Removing sources and updating the index…"
             )
-            for target in targets:
-                if target.is_dir() and not target.is_symlink():
-                    shutil.rmtree(target)
-                else:
-                    target.unlink()
+            remove_workspace_sources(self.session.project, paths)
             self._refresh_sources(open_project(root))
         except Exception as error:
-            # Index what is left after a partial delete.
+            # Refresh after a partial deletion to match the files on disk.
             if root is not None and self.session is not None:
                 try:
                     self._refresh_sources(open_project(root))
@@ -2001,70 +1952,47 @@ class ChatEngine:
     def edit_folder(
         self, folder: str, operation: str, **arguments: object
     ) -> None:
-        """Add, replace, or delete files in ``outputs/`` or ``templates/``.
-
-        Neither folder is indexed, so editing them only refreshes the
-        workspace tree and the open session keeps running.
+        """Delegate editing outputs/ and templates/ to the core API.
 
         Parameters
         ----------
         folder: str
-            ``"outputs"`` or ``"templates"``.
+            User-editable project folder.
         operation: str
-            ``"add"`` copies ``paths`` (files or folders outside the
-            project) into the folder; an existing name is replaced when
-            ``replace`` is true and otherwise kept, with the copy renamed.
-            ``"replace"`` overwrites the file ``path`` with the content of
-            ``source``, keeping its name. ``"remove"`` deletes the
-            workspace-relative ``paths`` inside the folder.
+            One of ``add``, ``replace`` or ``remove``.
         **arguments: object
-            The operation's arguments, as listed above.
+            File paths and optional replacement policy from the GUI.
 
         """
 
         try:
             if self.session is None:
                 raise RuntimeError("Open a project first.")
-            if folder not in _EDITABLE_FOLDERS:
-                raise ValueError(
-                    f"Only {' and '.join(_EDITABLE_FOLDERS)} can be edited."
-                )
-            root = self.session.project.root.resolve(strict=True)
-            directory = (root / folder).resolve(strict=True)
-            changed: list[str] = []
+            project = self.session.project
             if operation == "add":
-                replace = arguments.get("replace") is True
-                for value in _path_list(arguments.get("paths")):
-                    origin = Path(value).expanduser().resolve(strict=True)
-                    if origin == directory or origin.is_relative_to(directory):
-                        raise ValueError(
-                            f"{origin.name} is already in {folder}/."
-                        )
-                    destination = directory / origin.name
-                    if destination.exists() or destination.is_symlink():
-                        if replace:
-                            _remove_path(destination)
-                        else:
-                            destination = _free_path(directory, origin.name)
-                    if origin.is_dir():
-                        shutil.copytree(origin, destination)
-                    else:
-                        shutil.copy2(origin, destination)
-                    changed.append(destination.relative_to(root).as_posix())
-            elif operation == "replace":
-                destination = _inside_folder(
-                    root, directory, arguments.get("path")
+                changed = add_project_files(
+                    project,
+                    folder,
+                    _path_list(arguments.get("paths")),
+                    replace=arguments.get("replace") is True,
                 )
-                origin = Path(str(arguments.get("source") or ""))
-                origin = origin.expanduser().resolve(strict=True)
-                if not destination.is_file() or not origin.is_file():
-                    raise ValueError("Choose a file to replace it with.")
-                shutil.copyfile(origin, destination)
-                changed.append(destination.relative_to(root).as_posix())
+            elif operation == "replace":
+                path = arguments.get("path")
+                source = arguments.get("source")
+                if not isinstance(path, str) or not isinstance(source, str):
+                    raise ValueError("Choose a file and its replacement.")
+                if not path.startswith(folder + "/"):
+                    raise ValueError(f"Only files in {folder}/ can be edited.")
+                changed = [replace_project_file(project, path, source)]
             elif operation == "remove":
-                for value in _path_list(arguments.get("paths")):
-                    _remove_path(_inside_folder(root, directory, value))
-                    changed.append(value)
+                values = _path_list(arguments.get("paths"))
+                if any(
+                    not value.startswith(folder + "/") for value in values
+                ):
+                    raise ValueError(
+                        f"Only files in {folder}/ can be deleted."
+                    )
+                changed = remove_project_files(project, values)
             else:
                 raise ValueError(f"Unknown operation: {operation}.")
             self.active_trace.emit(
@@ -2077,7 +2005,7 @@ class ChatEngine:
                 folder=folder,
                 operation=operation,
                 paths=changed,
-                workspace_files=_workspace_files(root),
+                workspace_files=list_project_files(project),
             )
         except Exception as error:
             self._report_error(
@@ -2334,8 +2262,8 @@ class ChatEngine:
             # A tool that saved a file (for example a research briefing in
             # outputs/) refreshes the workspace tree.
             if (turn.parameters.get("tool") or {}).get("saved"):
-                event["workspace_files"] = _workspace_files(
-                    self.session.project.root
+                event["workspace_files"] = list_project_files(
+                    self.session.project
                 )
             self._send("answered", **event)
         except Exception as error:
@@ -3361,8 +3289,6 @@ def _preference_payload() -> dict[str, object]:
     }
 
 
-# Workspace folders the user may edit directly; neither is indexed.
-_EDITABLE_FOLDERS: Final[tuple[str, ...]] = (OUTPUTS_FOLDER, TEMPLATES_FOLDER)
 # How long each answer took, as the page showed it, by turn timestamp; kept
 # per project so resumed and branched chats show it again.
 _ANSWER_TIMELINES: Final[str] = "answer_timelines.json"
@@ -3482,121 +3408,6 @@ def _path_list(value: object) -> list[str]:
     ):
         raise ValueError("Choose files or folders.")
     return value
-
-
-def _inside_folder(root: Path, folder: Path, relative: object) -> Path:
-    """Resolve a workspace path that must lie inside ``folder``.
-
-    Parameters
-    ----------
-    root: Path
-        Root directory of the active project workspace.
-    folder: Path
-        Workspace subdirectory required to contain the path.
-    relative: object
-        Relative path to validate against the folder.
-
-    Returns
-    -------
-    Path
-        Validated path within the requested workspace folder.
-
-    Raises
-    ------
-    ValueError
-        If the relative path escapes the selected folder.
-
-    """
-
-    if not isinstance(relative, str) or not relative:
-        raise ValueError(f"Choose a file in {folder.name}/.")
-    path = root / relative
-    # Resolve the parent only, so a symlink is handled itself.
-    resolved = path.parent.resolve(strict=True) / path.name
-    if not resolved.is_relative_to(folder) or resolved == folder:
-        raise ValueError(
-            f"Only items inside {folder.name}/ can be changed: {relative}"
-        )
-    if not resolved.exists() and not resolved.is_symlink():
-        raise ValueError(f"Not found: {relative}")
-    return resolved
-
-
-def _free_path(directory: Path, name: str) -> Path:
-    """``directory/name``, or with ``-2``, ``-3``, ... when it is taken.
-
-    Parameters
-    ----------
-    directory: Path
-        Directory in which to find or create the file.
-    name: str
-        Desired filename, to be suffixed if it already exists.
-
-    Returns
-    -------
-    Path
-        Available filename path in the requested directory.
-
-    """
-
-    candidate = directory / name
-    stem, suffix = candidate.stem, candidate.suffix
-    number = 2
-    while candidate.exists():
-        candidate = directory / f"{stem}-{number}{suffix}"
-        number += 1
-    return candidate
-
-
-def _remove_path(path: Path) -> None:
-    """Delete a file, symlink, or folder.
-
-    Parameters
-    ----------
-    path: Path
-        Path to the target file or directory.
-
-    """
-
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
-
-
-def _workspace_files(root: Path) -> list[str]:
-    """List saved workspace files for the sidebar.
-
-    Parameters
-    ----------
-    root: pathlib.Path
-        Managed project directory whose sources, outputs, templates,
-        indexes, and logs are listed.
-
-    Returns
-    -------
-    list[str]
-        Workspace-relative file paths and empty-folder entries ending in
-        ``/``, for rendering the core-created directories.
-
-    Notes
-    -----
-    The listing is capped by the implementation entry limit. It is a UI
-    inventory, not a selection-policy or content-integrity check.
-
-    """
-
-    files = [PROFILE_FILE]
-    folders = ("sources", OUTPUTS_FOLDER, TEMPLATES_FOLDER, "indexes", "logs")
-    for folder in (root / name for name in folders):
-        if folder.is_dir():
-            files.append(f"{folder.name}/")
-            files.extend(
-                path.relative_to(root).as_posix()
-                for path in folder.rglob("*")
-                if path.is_file()
-            )
-    return sorted(files)[:10_000]
 
 
 _LEVEL_KEYS = ("light", "instant", "lagom", "thorough", "deep")

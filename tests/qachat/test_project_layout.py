@@ -173,7 +173,7 @@ class TestProjectLayout(unittest.TestCase):
         for path in (root / "templates").iterdir():
             path.unlink()
         (root / "templates").rmdir()
-        self.assertEqual(open_project(root).root.resolve(), root.resolve())
+        self.assertTrue(open_project(root).root == root)
         self.assertTrue((root / "templates").is_dir())
         self.assertEqual(list((root / "templates").iterdir()), [])
 
@@ -224,22 +224,55 @@ class TestProjectLayout(unittest.TestCase):
         self.assertTrue(custom.is_file())
 
     def test_workspace_inventory_reports_empty_folders(self) -> None:
-        """The GUI receives real directory markers from the core tree."""
+        """The core reports empty folders without importing the GUI."""
 
-        from qachat.gui.engine import _workspace_files
+        from qachat.project_files import list_project_files
 
         root = self._project("code")
-        listed = _workspace_files(root)
+        listed = list_project_files(open_project(root))
         for name in ("indexes", "logs", "outputs", "templates"):
             self.assertIn(f"{name}/", listed)
             self.assertNotIn(name, listed)
+
+    def test_root_source_excludes_metadata_not_external_files(self) -> None:
+        """Internal profile and manifests are excluded only at project root."""
+
+        from qachat.project import configure_project
+
+        root = self._project("code")
+        project = configure_project(
+            root, {"extensions": [".py", ".ini", ".json"]}
+        )
+        (root / "analysis.py").write_text("x = 1\n")
+        (root / "sources.json").write_text("{}\n")
+        (root / "source_snapshot.json").write_text("{}\n")
+        report = scan_repository(
+            project.source,
+            extensions=project.profile.extensions,
+            exclude_paths=source_scan_exclusions(
+                project.root, project.source
+            ),
+        )
+        self.assertEqual(report["selected_files"], ["analysis.py"])
+
+        external = self.root / "external"
+        external.mkdir()
+        (external / "profile.ini").write_text("[external]\n")
+        (external / "sources.json").write_text("{}\n")
+        external_report = scan_repository(
+            external, extensions=[".ini", ".json"]
+        )
+        self.assertEqual(
+            external_report["selected_files"],
+            ["profile.ini", "sources.json"],
+        )
 
     def test_root_source_excludes_managed_templates_from_scans(self) -> None:
         """Template Markdown is not indexed when source equals project root."""
 
         root = self._project("literature")
         opened = open_project(root)
-        self.assertEqual(opened.source.resolve(), root.resolve())
+        self.assertEqual(opened.source, root)
         (root / "study.md").write_text("# Source", encoding="utf-8")
         excluded = source_scan_exclusions(opened.root, opened.source)
         report = scan_repository(

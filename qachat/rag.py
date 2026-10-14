@@ -176,6 +176,7 @@ from qachat.conversation_ownership import (
 )
 from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
 from qachat.project_layout import source_scan_exclusions
+from qachat.workspace import include_explicit_imports
 from qachat.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
@@ -2184,6 +2185,7 @@ class RAGSession:
                     self.project.root, self.project.source
                 ),
             )
+            report = include_explicit_imports(self.project, report)
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
         use_code_graph = project_type(profile.kind).code_graph is not False
@@ -2453,6 +2455,7 @@ class RAGSession:
                 self.project.root, self.project.source
             ),
         )
+        report = include_explicit_imports(self.project, report)
         report_data: dict[str, object] = {
             "repository": report.get("repository"),
             "complete": report.get("complete"),

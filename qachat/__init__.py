@@ -212,7 +212,13 @@ from .trace_logging import (
     TraceLogger,
     TraceSink,
 )
-from .workspace import prepare_sources_workspace
+from .project_files import (
+    add_project_files,
+    list_project_files,
+    remove_project_files,
+    replace_project_file,
+)
+from .workspace import prepare_sources_workspace, remove_workspace_sources
 
 __all__ = [
     "ANSWER_PHASE_CHOICES",
@@ -317,6 +323,11 @@ __all__ = [
     "prepare_persistent_indexes",
     "prepare_project_workspace",
     "prepare_sources_workspace",
+    "remove_workspace_sources",
+    "add_project_files",
+    "replace_project_file",
+    "remove_project_files",
+    "list_project_files",
     "read_repository_files",
     "repository_has_changed",
     "resolve_code_entities",

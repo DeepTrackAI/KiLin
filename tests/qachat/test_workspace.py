@@ -348,21 +348,15 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             text.replace("source = sources", "source = ."),
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(ValueError, "managed sources"):
+        with self.assertRaisesRegex(ValueError, "project.source"):
             self._prepare([])
 
-    def test_unexpected_initialized_kind_is_rejected(self) -> None:
-        """Check the defensive kind guard after project initialization."""
+    def test_existing_project_kind_conflict_is_rejected(self) -> None:
+        """A project cannot be reopened with a different project kind."""
 
-        project = self._prepare([self._file("code.py")])
-        mismatched = replace(
-            project, profile=replace(project.profile, kind="literature")
-        )
-        with patch.object(
-            workspace, "initialize_project", return_value=mismatched
-        ):
-            with self.assertRaisesRegex(ValueError, "type does not match"):
-                self._prepare([])
+        self._prepare([self._file("code.py")])
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self._prepare([], kind="literature")
 
     def test_existing_profile_errors_are_not_suppressed(self) -> None:
         """A malformed existing profile is not silently regenerated."""
@@ -519,15 +513,13 @@ class TestWorkspaceSelections(WorkspaceFixture):
             (project.source / "code.py").read_bytes(), source.read_bytes()
         )
 
-    def test_unsupported_file_does_not_enter_workspace(self) -> None:
-        """Reject direct files outside the project's accepted suffixes."""
+    def test_direct_file_can_use_unconfigured_extension(self) -> None:
+        """Explicit imports bypass the automatic extension allowlist."""
 
-        original = self._file("image.png", "not an image")
-        with self.assertRaisesRegex(ValueError, "File type not selected"):
-            self._prepare([original])
-        self.assertFalse(
-            (self.destination / "sources/image.png").exists()
-        )
+        original = self._file("image.png", "selected explicitly")
+        project = self._prepare([original])
+        self.assertTrue((project.source / "image.png").is_file())
+        self.assertNotIn(".png", project.profile.extensions)
 
     def test_empty_and_oversized_direct_files_are_rejected(self) -> None:
         """A direct source must be nonempty and within its profile limit."""
@@ -1363,15 +1355,46 @@ class TestWorkspaceValidation(WorkspaceFixture):
                 self._prepare([original])
         self.assertFalse((self.destination / "sources.json").exists())
 
-    def test_a_failed_later_source_preserves_earlier_copy(self) -> None:
-        """Nontransactional imports retain earlier committed source entries."""
+    def test_a_failed_later_source_rolls_back_new_project(self) -> None:
+        """An unfinished initial copy leaves no committed profile."""
 
         first = self._file("one.py")
-        second = self._file("other.png", "not supported")
-        with self.assertRaisesRegex(ValueError, "File type not selected"):
-            self._prepare([first, second])
-        self.assertTrue((self.destination / "sources/one.py").exists())
-        self.assertEqual(len(self._records()), 1)
+        second = self._file("other.png", "selected explicitly")
+        original_copy = workspace._copy_file
+
+        def interrupted(source, *args, **kwargs):
+            if source.name == "other.png":
+                raise OSError("copy interrupted")
+            return original_copy(source, *args, **kwargs)
+
+        with patch.object(workspace, "_copy_file", side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, "copy interrupted"):
+                self._prepare([first, second])
+        self.assertFalse((self.destination / "profile.ini").exists())
+        self.assertFalse((self.destination / "sources/one.py").exists())
+        self.assertFalse((self.destination / "sources.json").exists())
+
+    def test_failed_cumulative_import_keeps_existing_sources(self) -> None:
+        """Later import failures do not undo an established workspace."""
+
+        first = self._file("one.py")
+        self._prepare([first])
+        second = self._file("two.py")
+        third = self._file("three.py")
+        original_copy = workspace._copy_file
+
+        def interrupted(source, *args, **kwargs):
+            if source.name == "three.py":
+                raise OSError("copy interrupted")
+            return original_copy(source, *args, **kwargs)
+
+        with patch.object(workspace, "_copy_file", side_effect=interrupted):
+            with self.assertRaisesRegex(OSError, "copy interrupted"):
+                self._prepare([second, third])
+        self.assertTrue((self.destination / "profile.ini").is_file())
+        self.assertTrue((self.destination / "sources/one.py").is_file())
+        self.assertTrue((self.destination / "sources/two.py").is_file())
+        self.assertEqual(len(self._records()), 2)
 
     def test_copy_preserves_source_metadata(self) -> None:
         """Copied snapshots retain the source file modification time."""
@@ -1795,8 +1818,10 @@ class TestWorkspaceTracing(WorkspaceFixture):
         original = self._file("code.py")
         self._prepare([original])
         trace = MagicMock()
-        with patch.object(
-            workspace, "configure_project", wraps=workspace.configure_project
+        with patch(
+            "qachat.project.configure_project",
+            wraps=__import__("qachat.project", fromlist=["configure_project"])
+            .configure_project,
         ) as configure:
             self._prepare(
                 [], settings={"retrieval_count": 7}, trace=trace
@@ -1808,8 +1833,8 @@ class TestWorkspaceTracing(WorkspaceFixture):
         """Failed imports should not emit copied or completed events."""
 
         trace = MagicMock()
-        with self.assertRaisesRegex(ValueError, "File type"):
-            self._prepare([self._file("image.png")], trace=trace)
+        with self.assertRaisesRegex(ValueError, "empty or exceeds"):
+            self._prepare([self._file("empty.png", "")], trace=trace)
         self.assertEqual(
             [call.args[0] for call in trace.emit.call_args_list],
             ["workspace.prepare.started"],

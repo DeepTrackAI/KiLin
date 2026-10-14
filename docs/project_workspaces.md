@@ -24,8 +24,9 @@ other resources manually. The `outputs/` directory is a general area for
 project-owned results. Neither `outputs/` nor `templates/` is indexed as a
 source directory by default. When a project's source is its own root
 (`source = .`), QAChat's RAG scans explicitly exclude these managed
-folders; ordinary source directories with the same names elsewhere are
-not globally excluded.
+folders and the project-owned metadata files `profile.ini`, `sources.json`,
+and `source_snapshot.json`; ordinary external source directories and files
+with these names are not globally excluded.
 
 Source layout depends on which core API creates the workspace:
 
@@ -54,9 +55,11 @@ registered tool's package, validates its workspace-relative destination,
 and deduplicates resources required by multiple intents. Conflicting destinations are rejected rather than
 resolved by silent precedence. Planning does not write files.
 
-After the initial profile is written, the core creates the shared directories
-and copies **only the resources in the plan**. No tool-specific resource
-selection occurs in the GUI or in the generic workspace copier.
+For new projects, the core first validates the profile contents and resource
+plan, creates required directories, installs **only the resources in the
+plan**, and prepares the selected source snapshots and provenance. The
+`profile.ini` file is then written atomically as the final initialization
+step. No tool-specific resource selection occurs in the GUI.
 
 With the current bundled project types:
 
@@ -99,9 +102,9 @@ install_project_resources(project.root, plan_project_layout(project.profile.kind
 This installs only missing packaged resources; it never overwrites existing
 files. Tool authors can offer more specific repair or reset commands later.
 
-The core does not move or delete unrelated folders or generated files.
-An existing `target/` directory is left untouched; `outputs/` is created
-independently. No legacy migration is performed in this prerelease API.
+The core does not move or delete unrelated folders or generated files
+implicitly. An existing `target/` directory is left untouched; `outputs/`
+is created independently. No legacy migration is performed.
 
 ## Tool resource contract
 
@@ -130,18 +133,64 @@ Every registered tool currently has its own validated `defaults.json`
 and README. The `generate_paper_summary` package also owns its shipped
 Markdown templates; other tools declare no workspace files at present.
 
+## Explicit imports and source selection
+
+Automatic directory scanning uses the project's configured extension list,
+protected-filename rules, and maximum file size. Directly selected source
+files may have other extensions or normally excluded names. The core copies
+such files without changing `profile.ini`; the managed source manifest
+records their explicit selection. The RAG source scan then includes those
+regular, size-compliant snapshots even if the ordinary directory scan would
+exclude them. Actual extraction may still fail for unsupported or binary
+content, and such errors must be reported to the user.
+
+When a source snapshot is deleted through
+`qachat.remove_workspace_sources(project, paths)`, only files within a
+managed `sources/` folder can be removed. Original source paths are not
+modified, and `sources.json` is updated to reflect removed entries. Projects
+with external or root-as-source locations cannot use that deletion API.
+Index refreshing is a separate core operation.
+
+## Project-owned outputs and templates
+
+The following GUI-independent core functions manage user-owned files:
+
+- `qachat.add_project_files(project, folder, paths, replace=False)` copies
+  selected local files or directories into `outputs/` or `templates/`.
+  Naming collisions are given numerical suffixes unless replacement is
+  explicitly requested.
+- `qachat.replace_project_file(project, path, source)` replaces an existing
+  regular file in one of those folders.
+- `qachat.remove_project_files(project, paths)` removes files or directories
+  inside **either** `outputs/` or `templates/`, but cannot remove the managed
+  folders themselves.
+- `qachat.list_project_files(project)` provides a filesystem inventory,
+  including empty folders, without importing the GUI.
+
+All paths are checked for containment and symlink traversal. These
+operations do not require a model or reindexing, and the GUI only delegates
+the file operations and reports their results.
+
 ## Failure behavior and limitations
 
-A missing, foreign-owned, or conflicting resource prevents a new
-profile from being created because the resource plan is checked first.
-Creating a profile, importing sources, and copying resources are not one
-atomic filesystem transaction; a disk or permissions error can leave a
-partially initialized project. In that case, verify the workspace before
-explicitly repairing missing resources.
+An invalid or conflicting resource plan fails before creating a new profile.
+The first initialization of a project is committed by writing `profile.ini`
+**last**, using a temporary file and atomic replacement. If directory,
+template, source-copy, or final profile writing fails, QAChat attempts to
+remove only entries created by that initialization attempt. Existing user
+files are preserved. A process termination can still leave uncommitted
+files on disk; without `profile.ini` they do not constitute an initialized
+project. Such conflicting paths are not silently removed.
 
-The workspace APIs organize project files. They do not provide a security
-sandbox for untrusted tools, processes, or concurrently modified directories.
-No model is loaded merely by creating project folders.
+After a project is established, cumulative source additions and later source
+synchronization are deliberately **not** all-or-nothing transactions.
+Successful earlier imports remain when a later import fails, and provenance
+is updated after each successful imported source. Removal likewise updates
+provenance to reflect what remains after a partial failure.
 
-The GUI reads the actual core folder inventory. Empty directories are
-reported with a trailing `/` rather than being invented in the browser.
+These operations are not a filesystem security sandbox and do not defend
+against concurrent writers changing paths during an operation. No model is
+loaded by initializing folders or managing project-owned files.
+
+The GUI reads the core file inventory. Empty directories are represented
+with a trailing `/` rather than invented by the frontend.

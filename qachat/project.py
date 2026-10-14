@@ -2,7 +2,8 @@
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
-Initialization creates a default profile only when one is missing, using
+Initialization prepares sources and required resources first, then commits
+a missing profile atomically as its completion marker, using
 ``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
 profile and source location and creates the shared indexes, logs, outputs,
 and templates folders as needed. A new project receives only the packaged
@@ -101,6 +102,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from configparser import ConfigParser
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
 from io import StringIO
@@ -109,7 +111,7 @@ from math import isfinite
 from pathlib import Path
 import re
 import shutil
-from typing import Final, TypeAlias, cast
+from typing import Final, Iterator, TypeAlias, cast
 
 from qachat.atomic_writes import atomic_write_text
 from qachat.defaults import (
@@ -725,48 +727,239 @@ def initialize_project(
     return _initialize_profile(root, kind, source)
 
 
-def _initialize_profile(
-    root: Path, kind: ProjectKind, source: str
-) -> QAProject:
-    """Initialize a missing profile and its project-selected resources.
+class _InitializationJournal:
+    """Track only paths absent before a new project's initialization.
 
     Parameters
     ----------
     root: pathlib.Path
-        Existing project workspace.
-    kind: ProjectKind
-        Expected project type, used to plan tool resources.
-    source: str
-        Relative source folder in a newly generated profile.
-
-    Returns
-    -------
-    QAProject
-        Opened project with its core directories created.
+        Destination workspace. Existing user-owned files are not recorded.
 
     Notes
     -----
-    Only the first creation of a profile installs packaged resources.
-    Existing profiles and their edited or deleted templates remain intact.
+    Rollback removes newly written files and then attempts to remove empty
+    directories. It does not delete existing files or recursively remove
+    arbitrary user content, and cannot defend against concurrent writers.
+
+    """
+
+    def __init__(self, root: Path) -> None:
+        """Initialize an empty collection of paths created by this attempt.
+
+        Parameters
+        ----------
+        root: pathlib.Path
+            Root that bounds tracked paths.
+
+        """
+
+        self.root = root
+        self.created: set[Path] = set()
+
+    def note(self, path: Path) -> None:
+        """Record a prospective path and any absent workspace parents.
+
+        Parameters
+        ----------
+        path: pathlib.Path
+            File or directory that an initialization step may create.
+
+        """
+
+        current = path
+        while current == self.root or current.is_relative_to(self.root):
+            if current.exists() or current.is_symlink():
+                break
+            self.created.add(current)
+            if current == self.root:
+                break
+            current = current.parent
+
+    def rollback(self) -> None:
+        """Remove created files and empty folders, preserving other data.
+
+        Notes
+        -----
+        Failed cleanup is best-effort. User-owned or concurrently created
+        entries in previously empty directories prevent their removal.
+
+        """
+
+        for path in sorted(
+            self.created, key=lambda item: len(item.parts), reverse=True
+        ):
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            except OSError:
+                continue
+
+
+def _prepared_profile(
+    kind: ProjectKind,
+    source: str,
+    settings: dict[str, object] | None,
+) -> tuple[str, ProjectProfile]:
+    """Validate and render the complete profile before filesystem writes.
+
+    Parameters
+    ----------
+    kind: ProjectKind
+        Validated project-type identifier.
+    source: str
+        Initial source folder recorded in the profile.
+    settings: dict[str, object] | None
+        Optional overrides accepted by ``configure_project``.
+
+    Returns
+    -------
+    tuple[str, ProjectProfile]
+        Final profile text and parsed settings.
+
+    """
+
+    text = _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind])
+    parser = ConfigParser()
+    parser.read_string(text)
+    if settings:
+        for key, value in settings.items():
+            section = _EDITABLE_SETTINGS.get(key)
+            if section is None:
+                raise ValueError(f"Unknown project setting: {key}")
+            option = "count" if key == "retrieval_count" else key
+            if key == "extensions" and isinstance(value, (list, tuple)):
+                value = ", ".join(value)
+            parser.set(section, option, str(value))
+        stream = StringIO()
+        parser.write(stream)
+        text = stream.getvalue()
+    return text, _read_profile(parser)
+
+
+@contextmanager
+def _preparing_project(
+    root: Path,
+    kind: ProjectKind,
+    source: str,
+    *,
+    settings: dict[str, object] | None = None,
+    trace: TraceSink | None = None,
+    validate_source: bool = False,
+) -> Iterator[tuple[QAProject, _InitializationJournal | None]]:
+    """Initialize or reopen a project, committing a new profile last.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Destination project directory.
+    kind: ProjectKind
+        Expected project type.
+    source: str
+        Relative source location for a new project.
+    settings: dict[str, object] | None, optional
+        Profile overrides applied before first copying. Defaults to None.
+    trace: TraceSink | None, optional
+        Optional diagnostic sink for existing-profile configuration changes.
+    validate_source: bool, optional
+        Require an existing profile to use the specified managed source
+        folder. Defaults to False for general project opening.
+
+    Yields
+    ------
+    tuple[QAProject, _InitializationJournal | None]
+        A project view and optional journal for source-copy operations.
+
+    Notes
+    -----
+    For new projects, ``profile.ini`` is written atomically only when the
+    caller finishes all workspace and resource operations successfully.
+    Existing projects are opened without reinstalling user-deleted files.
 
     """
 
     profile_path = root / "profile.ini"
-    new_profile = not profile_path.exists()
-    layout = plan_project_layout(kind) if new_profile else None
-    if new_profile:
-        profile_path.write_text(
-            _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind]),
-            encoding="utf-8",
-        )
-    project = open_project(root)
-    if project.profile.kind != kind:
-        raise ValueError(
-            "PROJECT_KIND conflicts with the existing profile.ini."
-        )
-    if layout is not None:
+    if profile_path.exists() or profile_path.is_symlink():
+        project = open_project(root)
+        if project.profile.kind != kind:
+            raise ValueError(
+                "PROJECT_KIND conflicts with the existing profile.ini."
+            )
+        expected = Path(source).expanduser()
+        if not expected.is_absolute():
+            expected = root / expected
+        if (
+            validate_source
+            and project.source != expected.resolve(strict=True)
+        ):
+            raise ValueError("project.source conflicts with profile.ini.")
+        if settings:
+            project = configure_project(root, settings, trace=trace)
+        yield project, None
+        return
+
+    text, profile = _prepared_profile(kind, source, settings)
+    layout = plan_project_layout(kind)
+    journal = _InitializationJournal(root)
+    journal.note(root)
+    for name in ("indexes", "logs", "outputs", "templates"):
+        journal.note(root / name)
+    for resource in layout.resources:
+        journal.note(root / resource.destination)
+    source_path = Path(source).expanduser()
+    if not source_path.is_absolute():
+        source_path = root / source_path
+    if source_path != root:
+        if source_path.is_relative_to(root):
+            journal.note(source_path)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        if source_path.is_relative_to(root) and source_path != root:
+            if source_path.is_symlink():
+                raise ValueError("Managed source directory cannot be a link.")
+            source_path.mkdir(parents=True, exist_ok=True)
+        ensure_project_folders(root)
         install_project_resources(root, layout)
-    return project
+        provisional = QAProject(
+            root=root,
+            source=source_path.resolve(strict=True),
+            indexes=root / "indexes",
+            logs=root / "logs",
+            profile=profile,
+        )
+        yield provisional, journal
+        journal.note(profile_path)
+        atomic_write_text(profile_path, text)
+    except BaseException:
+        journal.rollback()
+        raise
+
+
+def _initialize_profile(
+    root: Path, kind: ProjectKind, source: str
+) -> QAProject:
+    """Create a project profile after successful resource initialization.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Workspace root.
+    kind: ProjectKind
+        Expected project type.
+    source: str
+        Source folder within a new profile.
+
+    Returns
+    -------
+    QAProject
+        Opened and validated project.
+
+    """
+
+    with _preparing_project(root, kind, source):
+        pass
+    return open_project(root)
 
 
 def prepare_project_workspace(
@@ -819,8 +1012,9 @@ def prepare_project_workspace(
     is not the cumulative multi-source API in qachat.workspace. The current
     implementation requires complete source and snapshot scans and verifies
     copied content on each reopen. This adds disk I/O proportional to selected
-    source size. Synchronization is not atomic across snapshot and manifest,
-    and source copying is organization, not execution sandboxing.
+    source size. Reopening and synchronization are not atomic across snapshot
+    and manifest; initial project creation commits its profile last.
+    Source copying is organization, not execution sandboxing.
 
     """
 
@@ -845,84 +1039,90 @@ def prepare_project_workspace(
     root = _select_workspace_root(preferred_root, source)
     if root.is_symlink():
         raise ValueError("Managed workspace root must not be a symbolic link.")
-    root.mkdir(parents=True, exist_ok=True)
-
-    # Keep the source snapshot as a sibling of indexes/ and logs/.  Preserve
-    # the original folder name so the sandbox structure is easy to inspect.
+    # A new profile is committed only after the complete source snapshot and
+    # its provenance manifest have been prepared successfully.
     source_name = source.name
     snapshot = root / source_name
     if snapshot.is_symlink():
         raise ValueError("Managed source copy must not be a symbolic link.")
-    snapshot.mkdir(parents=True, exist_ok=True)
-
-    project = _initialize_profile(root, kind, source_name)
-    if project.profile.kind != kind:
-        raise ValueError(
-            "PROJECT_KIND conflicts with the existing workspace profile.ini."
-        )
-    if project.source != snapshot.resolve():
-        raise ValueError(
-            "Managed workspace profile.ini must keep project.source set to "
-            f"{source_name}."
-        )
-
-    excludes: tuple[str, ...] = ()
-    if sandbox.is_relative_to(source):
-        excludes = (sandbox.relative_to(source).as_posix(),)
-
-    report = scan_repository(
-        source,
-        extensions=project.profile.extensions,
-        exclude_paths=excludes,
-        max_file_bytes=project.profile.max_file_bytes,
-    )
-    current_manifest = build_repository_manifest(report)
-    snapshot_manifest_path = root / "source_snapshot.json"
-    saved_manifest = _read_json_if_possible(snapshot_manifest_path)
-    try:
-        changes = compare_repository_manifests(
-            saved_manifest,
-            current_manifest,
-        )
-    except ValueError:
-        saved_manifest = None
-        changes = compare_repository_manifests(None, current_manifest)
-
-    # The saved source manifest alone cannot detect edits to the managed
-    # copy. Verify selected copied bytes before using the incremental diff.
-    # A divergent snapshot is rebuilt, not synchronized on top of untrusted
-    # content (including unexpected selected files and symbolic links).
-    if saved_manifest is not None and not _snapshot_matches_manifest(
-        snapshot, project.profile, saved_manifest
+    if not (root / "profile.ini").exists() and snapshot.is_dir():
+        if any(snapshot.iterdir()):
+            raise ValueError(
+                "Uninitialized workspace has an existing source snapshot."
+            )
+    with _preparing_project(
+        root, kind, source_name, validate_source=True
+    ) as (
+        project, journal
     ):
-        saved_manifest = None
-        changes = compare_repository_manifests(None, current_manifest)
+        if project.source != snapshot.resolve(strict=True):
+            raise ValueError(
+                "Managed workspace profile.ini must keep project.source "
+                f"set to {source_name}."
+            )
+        excludes: tuple[str, ...] = ()
+        if sandbox.is_relative_to(source):
+            excludes = (sandbox.relative_to(source).as_posix(),)
 
-    if not bool(changes["matches"]):
-        if saved_manifest is None:
-            shutil.rmtree(snapshot)
-            snapshot.mkdir(parents=True, exist_ok=True)
+        report = scan_repository(
+            source,
+            extensions=project.profile.extensions,
+            exclude_paths=excludes,
+            max_file_bytes=project.profile.max_file_bytes,
+        )
+        current_manifest = build_repository_manifest(report)
+        snapshot_manifest_path = root / "source_snapshot.json"
+        saved_manifest = _read_json_if_possible(snapshot_manifest_path)
+        try:
+            changes = compare_repository_manifests(
+                saved_manifest,
+                current_manifest,
+            )
+        except ValueError:
+            saved_manifest = None
+            changes = compare_repository_manifests(None, current_manifest)
 
-        for relative in changes["removed"]:
-            target = snapshot / str(relative)
-            if target.is_file() or target.is_symlink():
-                target.unlink()
+        # The saved source manifest alone cannot detect edits to the managed
+        # copy. Verify selected copied bytes before using the incremental diff.
+        # A divergent snapshot is rebuilt, not synchronized on top of untrusted
+        # content (including unexpected selected files and symbolic links).
+        if saved_manifest is not None and not _snapshot_matches_manifest(
+            snapshot, project.profile, saved_manifest
+        ):
+            saved_manifest = None
+            changes = compare_repository_manifests(None, current_manifest)
 
-        for relative in [*changes["added"], *changes["modified"]]:
-            source_path = source / str(relative)
-            target = snapshot / str(relative)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, target)
+        if not bool(changes["matches"]):
+            if saved_manifest is None:
+                shutil.rmtree(snapshot)
+                snapshot.mkdir(parents=True, exist_ok=True)
 
-        _remove_empty_directories(snapshot)
+            for relative in changes["removed"]:
+                target = snapshot / str(relative)
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
 
-    # Always record ownership, including the zero-file case.  This lets the
-    # next open distinguish two different source folders with the same name.
-    manifest_payload = {
-        **current_manifest,
-        "source_directory": str(source),
-    }
-    _write_json(snapshot_manifest_path, manifest_payload)
+            for relative in [*changes["added"], *changes["modified"]]:
+                source_path = source / str(relative)
+                target = snapshot / str(relative)
+                if journal is not None:
+                    journal.note(target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target)
+
+            _remove_empty_directories(snapshot)
+
+        # Always record ownership, including the zero-file case.  This lets the
+        # next open distinguish different sources with the same basename.
+        manifest_payload = {
+            **current_manifest,
+            "source_directory": str(source),
+        }
+        if journal is not None:
+            journal.note(snapshot_manifest_path)
+        _write_json(snapshot_manifest_path, manifest_payload)
+
+
 
     return open_project(root)
 
