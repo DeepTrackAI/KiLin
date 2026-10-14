@@ -116,3 +116,10 @@ python -m pytest -q \
 
 The project targets Python 3.12; run these tests under that interpreter and
 verify the OS-specific file-lock behavior on supported platforms.
+
+## Performance analysis
+
+For read-only timing analysis of existing conversation traces, and an optional
+standardized-question notebook, see [performance baseline](performance.md).
+The analysis does not require a new trace mode or change the persistence
+behavior described above. Raw traces remain sensitive project data.
