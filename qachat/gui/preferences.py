@@ -3,14 +3,14 @@
 Every default setting of the desktop app is in ``qachat/gui/defaults.json``:
 the appearance, the five effort levels (names and models) per backend, the
 search depth, the intent router and embedding models per backend, the
-embedding query format, and the answer settings. Edit that file to change
+embedding query format. Edit that file to change
 what new projects start with; restart QAChat after. The app writes to it
 only for app-wide choices: the appearance, "Use installed models", and
 settings edited while no project is open.
 
-Each project then keeps all of its own settings in its ``profile.ini``, so
-a project never changes when the defaults change. The core library has its
-own defaults for notebooks (``qachat.model_defaults``).
+Generation defaults for new projects come from
+``qachat/qachat_defaults.json``; the GUI does not override them. Each
+project retains its generation settings in ``profile.ini``.
 
 Key Features
 ------------
@@ -29,8 +29,7 @@ Module Structure
   ``write_defaults``
 - ``default_effort_levels``, ``default_search_depth``,
   ``default_router_model``, ``default_embedding_model``,
-  ``default_query_format``, ``default_appearance``, and
-  ``default_answer_settings``
+  ``default_query_format`` and ``default_appearance``
 - ``required_models``
 
 Examples
@@ -62,7 +61,6 @@ __all__ = [
     "MAX_LEVEL_NAME",
     "MAX_SEARCH_DEPTH",
     "built_in_defaults",
-    "default_answer_settings",
     "default_appearance",
     "default_effort_levels",
     "default_embedding_model",
@@ -194,44 +192,6 @@ def validate_search_depth(value: object) -> list[int]:
     return list(value)
 
 
-def _validate_answers(value: object) -> dict[str, object]:
-    """Validate the temperature, thinking mode, and token limit settings.
-
-    Parameters
-    ----------
-    value: object
-        Dictionary of answer-generation settings to validate.
-
-    Returns
-    -------
-    dict[str, object]
-        Validated answer settings with normalized values.
-
-    Raises
-    ------
-    ValueError
-        If answer settings have invalid types or values.
-
-    """
-
-    if not isinstance(value, dict):
-        raise ValueError("must be an object.")
-    temperature = value.get("temperature")
-    thinking = value.get("thinking")
-    tokens = value.get("max_new_tokens")
-    if type(temperature) not in (int, float) or not 0 <= temperature <= 2:
-        raise ValueError("temperature must be from 0 to 2.")
-    if type(thinking) is not bool:
-        raise ValueError("thinking must be true or false.")
-    if tokens is not None and (type(tokens) is not int or tokens < 1):
-        raise ValueError("max_new_tokens must be a positive number or null.")
-    return {
-        "temperature": float(temperature),
-        "thinking": thinking,
-        "max_new_tokens": tokens,
-    }
-
-
 def _per_backend(check: Callable[[object], object]) -> Callable:
     """Create a validator for per-backend settings dictionaries.
 
@@ -352,7 +312,6 @@ def _checks() -> dict[str, Callable[[object], object]]:
         "router_models": _per_backend(validate_model_id),
         "embedding_models": _per_backend(validate_model_id),
         "query_format": _choice(_QUERY_FORMATS),
-        "answers": _validate_answers,
     }
 
 
@@ -580,19 +539,6 @@ def default_appearance() -> str:
     """
 
     return str(built_in_defaults()["appearance"])
-
-
-def default_answer_settings() -> dict[str, object]:
-    """Return the default temperature, thinking, and longest answer.
-
-    Returns
-    -------
-    dict[str, object]
-        the default temperature, thinking, and longest answer.
-
-    """
-
-    return dict(built_in_defaults()["answers"])
 
 
 def required_models(backend: str) -> list[str]:

@@ -320,8 +320,8 @@ class ProjectType:
     intents: dict[str, Intent]
         Supported intents, in file order.
     answer_guidance: str
-        Extra instruction the desktop app adds to each question; empty for
-        none. Notebooks do not add it.
+        Default answer instruction applied by the core to all callers
+        unless overridden by the caller or selected intent; empty for none.
     welcome_prompts: tuple[str, ...]
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]

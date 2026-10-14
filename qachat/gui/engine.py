@@ -85,7 +85,6 @@ from typing import Callable, Final
 
 from qachat.atomic_writes import atomic_write_text
 from qachat.gui.preferences import (
-    default_answer_settings,
     default_appearance,
     default_effort_levels,
     default_embedding_model,
@@ -1051,11 +1050,8 @@ class ChatEngine:
                 if workspace.strip() and profile_path.is_file()
                 else replace(
                     default_project_profile(kind),
-                    # New projects start from defaults.json and the
-                    # app-wide preferences.
-                    max_new_tokens=default_answer_settings()["max_new_tokens"],
-                    temperature=default_answer_settings()["temperature"],
-                    thinking=default_answer_settings()["thinking"],
+                    # Generation comes from the core project profile;
+                    # the GUI selects only application-specific defaults.
                     chat_mlx=str(
                         default_effort_levels(BACKEND_MLX)[DEFAULT_LEVEL][
                             "model"
@@ -1784,20 +1780,16 @@ class ChatEngine:
 
         Temperature, thinking, and answer length belong to the project, not
         to a chat: switching chats keeps them, and switching projects loads
-        the other project's. Profiles with the legacy 256-token answer
-        limit get the current default instead, so answers can finish.
+        the other project's. Saved values are never substituted.
 
         """
 
         profile = self.session.project.profile
-        max_new_tokens = profile.max_new_tokens
-        if max_new_tokens == 256:
-            max_new_tokens = default_answer_settings()["max_new_tokens"]
         self.session.chat_session.configure_generation(
             {
                 "temperature": profile.temperature,
                 "thinking": profile.thinking,
-                "max_new_tokens": max_new_tokens,
+                "max_new_tokens": profile.max_new_tokens,
             }
         )
 
@@ -2220,12 +2212,7 @@ class ChatEngine:
                 options["retrieval_count"] = retrieval_count
             if generation_settings:
                 options["generation_settings"] = generation_settings
-            # Each project type sets its own guidance; notebooks add none.
-            guidance = project_type(
-                self.session.project.profile.kind
-            ).answer_guidance
-            if guidance:
-                options["answer_guidance"] = guidance
+            # The RAG core resolves project-type and intent guidance.
             stream = _AnswerStream(self._send)
             options["token_callback"] = stream.add
             options["phase_callback"] = lambda phase, details: self._send(

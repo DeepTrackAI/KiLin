@@ -5,7 +5,8 @@ or builds source chunks and retrieval indexes, then loads a chat session.
 For each question it combines semantic, lexical, and code-based rankings,
 expands explicitly requested context, and formats evidence into the model's
 user prompt. Returned ``Evidence`` records identify the supplied excerpts;
-the module does not independently verify the generated answer or citations.
+the module checks citation identifiers against the supplied evidence
+without attempting to judge whether claims are scientifically supported.
 
 Before retrieval, a router chat model (by default the answering model)
 assigns each question one of the project type's configured intents. The
@@ -334,6 +335,49 @@ _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
 )
 # The separator between numbers inside one citation group.
 _CITATION_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
+
+
+def _invalid_citations(
+    answer: str, evidence: Sequence[Evidence]
+) -> tuple[int | str, ...]:
+    """Identify answer citation numbers absent from the supplied evidence.
+
+    Parameters
+    ----------
+    answer: str
+        Generated answer to inspect without changing it.
+    evidence: Sequence[Evidence]
+        Evidence shown for the current answer, including tool results.
+
+    Returns
+    -------
+    tuple[int | str, ...]
+        Invalid identifiers, in first-occurrence order without duplicates.
+        Extremely long identifiers stay strings to avoid conversion limits.
+        An answer without citation groups produces an empty tuple.
+
+    Notes
+    -----
+    This inexpensive syntax check does not verify that cited evidence
+    supports the accompanying claim.
+
+    """
+
+    if "[" not in answer:
+        return ()
+    available = {item.citation for item in evidence}
+    invalid: dict[int | str, None] = {}
+    for group in _CITATION_GROUP.findall(answer):
+        for text in _CITATION_SEPARATOR.split(group):
+            # Python limits integer conversion of enormous digit strings.
+            # Such groups cannot refer to the small evidence identifiers.
+            normalized = text.lstrip("0") or "0"
+            number: int | str = (
+                normalized if len(normalized) > 15 else int(normalized)
+            )
+            if number not in available:
+                invalid[number] = None
+    return tuple(invalid)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1116,10 +1160,11 @@ class RAGSession:
             without invalidating a committed answer, unless strict trace
             logging itself fails. Defaults to ``None``.
         answer_guidance: str | None, optional
-            Extra answer instruction appended to this question's prompt, such
-            as a length target. An intent with its own ``answer_guidance``
-            uses that instead. It is saved with the turn. Defaults to
-            ``None``.
+            Answer instruction for this question. Intent guidance takes
+            precedence, followed by explicit caller guidance and the project
+            type's default. ``None`` inherits the project default; an empty
+            string disables that default unless the intent has guidance.
+            The resolved instruction is saved with the turn.
         token_callback: Callable[[str], None] | None, optional
             Receives answer text pieces as they are generated, for live
             display; see ``ChatSession.reply``. Defaults to ``None``.
@@ -1174,9 +1219,10 @@ class RAGSession:
         runs after the turn span closes; its failure is traced separately and
         does not invalidate the answer. Other callback errors and explicit
         strict diagnostic-write failures can still propagate after commit.
-        Evidence is supplied in the prompt but generated claims/citations
-        are not checked. Full chat history and expanded evidence are used
-        without an aggregate token-budget guard.
+        Citation identifiers are checked once after generation against
+        this turn's evidence. Invalid identifiers are recorded without
+        changing the answer or retrying generation. The content of claims
+        is not checked. History and evidence have no aggregate token guard.
 
         """
 
@@ -1321,6 +1367,16 @@ class RAGSession:
                 question, kind, use_router, turn_id, report_phase
             )
             intent = kind.intents[decision.intent]
+            # Resolve once, including for tool-written answers. An explicit
+            # empty string disables the project default, not intent guidance.
+            if intent.answer_guidance:
+                resolved_guidance = intent.answer_guidance
+            elif answer_guidance is not None:
+                resolved_guidance = answer_guidance
+            else:
+                resolved_guidance = kind.answer_guidance
+            if resolved_guidance or answer_guidance is not None:
+                effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode
             if reuse_evidence:
                 mode = RETRIEVAL_MODE_REUSE
@@ -1543,7 +1599,7 @@ class RAGSession:
                     pdf_writer=pdf_writer,
                     choice_callback=choice_callback,
                     token_callback=token_callback,
-                    answer_guidance=intent.answer_guidance or answer_guidance,
+                    answer_guidance=resolved_guidance,
                 )
                 answer = result.answer
                 evidence = tuple(Evidence(**item) for item in result.evidence)
@@ -1551,12 +1607,6 @@ class RAGSession:
                 if token_callback is not None and not result.streamed:
                     token_callback(answer)
             else:
-                # An intent's own guidance is part of its configuration: it
-                # applies always and replaces the caller's general guidance.
-                if intent.answer_guidance:
-                    answer_guidance = intent.answer_guidance
-                if answer_guidance:
-                    effective["answer_guidance"] = answer_guidance
                 system_prompt = (
                     f"{kind.system_prompt}\n\n{intent.system_prompt}"
                 )
@@ -1569,7 +1619,9 @@ class RAGSession:
                         *history_messages(self.turns, history_ids),
                     ]
                 )
-                prompt = _answer_prompt(question, evidence, answer_guidance)
+                prompt = _answer_prompt(
+                    question, evidence, resolved_guidance
+                )
                 trace.emit(
                     "generation.input.prepared",
                     component="rag",
@@ -1603,6 +1655,14 @@ class RAGSession:
                 )
                 if finish_reason in ("length", "stop"):
                     effective["finish_reason"] = finish_reason
+
+            # One fast, deterministic check; do not modify or retry the
+            # answer even when the model cites unavailable evidence.
+            invalid = _invalid_citations(answer, evidence)
+            if invalid:
+                # The existing checkpoint records the flag in turn metadata;
+                # avoid an additional trace event on the answer path.
+                effective["invalid_citations"] = list(invalid)
 
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)

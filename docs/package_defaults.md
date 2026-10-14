@@ -121,9 +121,9 @@ intentionally different from the new-project profile settings.
 | `MAX_TOKENS` | `400` | Maximum tokens allowed per chunk for a new project. |
 | `OVERLAP_TOKENS` | `40` | Maximum overlap of neighboring chunks in the new profile; can be zero. |
 | `RETRIEVAL_COUNT` | `5` | Number of search results requested by default in newly created project profiles. |
-| `THINKING` | `false` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
+| `THINKING` | `true` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
 | `TEMPERATURE` | `0.0` | Initial model generation temperature; must be a finite, nonnegative number. |
-| `MAX_NEW_TOKENS` | `256` | Initial cap for generated answer tokens, not for router decisions. |
+| `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
 
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be

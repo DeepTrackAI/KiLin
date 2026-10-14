@@ -182,7 +182,9 @@ def _intent(
     )
 
 
-def _kind(intent: Intent) -> SimpleNamespace:
+def _kind(
+    intent: Intent, *, guidance: str = ""
+) -> SimpleNamespace:
     """Provide the minimum project-type contract for an answer turn."""
     return SimpleNamespace(
         kind="code",
@@ -191,8 +193,34 @@ def _kind(intent: Intent) -> SimpleNamespace:
         recent_turns=2,
         system_prompt="Project instruction",
         code_graph=True,
+        answer_guidance=guidance,
     )
 
+
+class TestCitationIdentifierValidation(unittest.TestCase):
+    """Check citation syntax against supplied evidence in one fast pass."""
+
+    def test_groups_and_deduplication(self) -> None:
+        """Recognize the citation groups already supported by QAChat."""
+        self.assertEqual(
+            rag._invalid_citations(
+                "[2] [1, 3] [3] [0]", (_evidence(1), _evidence(2))
+            ),
+            (3, 0),
+        )
+
+    def test_no_citations_is_a_noop(self) -> None:
+        """Return nothing when no citation group is present."""
+        self.assertEqual(rag._invalid_citations("Plain answer", ()), ())
+        self.assertEqual(
+            rag._invalid_citations("Unrelated [ref] [1-3]", ()), ()
+        )
+
+    def test_large_ids_do_not_crash_validation(self) -> None:
+        """Avoid integer conversion errors for untrusted long numbers."""
+        enormous = "9" * 5000
+        result = rag._invalid_citations(f"No source [{enormous}]", ())
+        self.assertEqual(result, (enormous,))
 
 class TestRAGRecords(unittest.TestCase):
     """Keep the public phase vocabulary and evidence records stable."""
@@ -1038,6 +1066,140 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertNotIn("Caller guidance", prompt)
         self.assertEqual(session.turns[-1].parameters["answer_guidance"],
                          "Configured guidance")
+
+    def test_project_guidance_is_applied_without_gui(self) -> None:
+        """Use project guidance automatically in direct API calls."""
+        session = _session()
+        intent = _intent()
+        with _answer_patches(session, intent):
+            with patch.object(
+                rag, "project_type",
+                return_value=_kind(intent, guidance="Core instruction"),
+            ):
+                session.ask("Question", use_router=False)
+        prompt = session.chat_session.reply.call_args.args[0]
+        self.assertIn("Core instruction", prompt)
+        self.assertEqual(
+            session.turns[-1].parameters["answer_guidance"],
+            "Core instruction",
+        )
+
+    def test_caller_guidance_overrides_project_default(self) -> None:
+        """Apply explicit caller guidance instead of the kind's default."""
+        session = _session()
+        intent = _intent()
+        with _answer_patches(session, intent):
+            with patch.object(
+                rag, "project_type",
+                return_value=_kind(intent, guidance="Core instruction"),
+            ):
+                session.ask(
+                    "Question", answer_guidance="Caller instruction",
+                    use_router=False,
+                )
+        prompt = session.chat_session.reply.call_args.args[0]
+        self.assertIn("Caller instruction", prompt)
+        self.assertNotIn("Core instruction", prompt)
+        self.assertEqual(
+            session.turns[-1].parameters["answer_guidance"],
+            "Caller instruction",
+        )
+
+    def test_explicit_empty_guidance_disables_project_default(self) -> None:
+        """Allow callers to suppress project guidance without a GUI."""
+        session = _session()
+        intent = _intent()
+        with _answer_patches(session, intent):
+            with patch.object(
+                rag, "project_type",
+                return_value=_kind(intent, guidance="Core instruction"),
+            ):
+                session.ask(
+                    "Question", answer_guidance="", use_router=False
+                )
+        prompt = session.chat_session.reply.call_args.args[0]
+        self.assertNotIn("Core instruction", prompt)
+        self.assertEqual(
+            session.turns[-1].parameters["answer_guidance"], ""
+        )
+
+    def test_intent_guidance_overrides_empty_caller_guidance(self) -> None:
+        """Keep intent guidance authoritative even for empty overrides."""
+        session = _session()
+        intent = _intent(guidance="Intent instruction")
+        with _answer_patches(session, intent):
+            with patch.object(
+                rag, "project_type",
+                return_value=_kind(intent, guidance="Core instruction"),
+            ):
+                session.ask(
+                    "Question", answer_guidance="", use_router=False
+                )
+        prompt = session.chat_session.reply.call_args.args[0]
+        self.assertIn("Intent instruction", prompt)
+        self.assertNotIn("Core instruction", prompt)
+
+    def test_tool_receives_resolved_project_guidance(self) -> None:
+        """Send the same resolved guidance to tool-written answers."""
+        session = _session()
+        intent = _intent(tool=ToolUse("test_tool", {}))
+        with _answer_patches(session, intent) as mocks:
+            with patch.object(
+                rag, "project_type",
+                return_value=_kind(intent, guidance="Core instruction"),
+            ):
+                session.ask("Question", use_router=False)
+        self.assertEqual(
+            mocks.run.call_args.kwargs["answer_guidance"],
+            "Core instruction",
+        )
+        self.assertEqual(
+            session.turns[-1].parameters["answer_guidance"],
+            "Core instruction",
+        )
+
+    def test_invalid_citations_are_flagged_without_rewriting_answer(
+        self,
+    ) -> None:
+        """Record nonexistent citation IDs without changing model text."""
+        session = _session()
+        answer = "Supported [1], invented [5, 9], repeated [5]."
+        session.chat_session.reply.return_value = answer
+        with _answer_patches(session, _intent()):
+            self.assertEqual(
+                session.ask("Question", use_router=False), answer
+            )
+        self.assertEqual(session.turns[-1].answer, answer)
+        self.assertEqual(
+            session.turns[-1].parameters["invalid_citations"], [5, 9]
+        )
+        session.chat_session.reply.assert_called_once()
+
+    def test_valid_and_missing_citations_need_no_metadata(self) -> None:
+        """Do not add warnings when the answer cites only its evidence."""
+        for answer in ("Supported [1]", "No numbered citations"):
+            with self.subTest(answer=answer):
+                session = _session()
+                session.chat_session.reply.return_value = answer
+                with _answer_patches(session, _intent()):
+                    session.ask("Question", use_router=False)
+                self.assertNotIn(
+                    "invalid_citations", session.turns[-1].parameters
+                )
+
+    def test_tool_citations_are_checked_against_tool_evidence(self) -> None:
+        """Validate tool citations against their returned evidence IDs."""
+        session = _session()
+        intent = _intent(tool=ToolUse("test_tool", {}))
+        with _answer_patches(session, intent) as mocks:
+            mocks.run.return_value = ToolResult(
+                "Tool result [2] [99]", (asdict(_evidence(2)),),
+                {"name": "test_tool"},
+            )
+            session.ask("Question", use_router=False)
+        self.assertEqual(
+            session.turns[-1].parameters["invalid_citations"], [99]
+        )
 
     def test_generation_settings_and_finish_reason_are_recorded(self) -> None:
         """Persist effective generation settings and valid finish reasons."""

@@ -187,9 +187,9 @@
     "MAX_TOKENS": 400,
     "OVERLAP_TOKENS": 40,
     "RETRIEVAL_COUNT": 5,
-    "THINKING": false,
+    "THINKING": true,
     "TEMPERATURE": 0.0,
-    "MAX_NEW_TOKENS": 256
+    "MAX_NEW_TOKENS": 8192
   },
   "CHUNKING": {
     "TARGET_TOKENS": 500,

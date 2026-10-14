@@ -258,13 +258,14 @@ that classifies each question's intent and writes chat titles (default: the
 released and the new one loads when first needed. It is saved per backend in
 effort_levels.json under "router".
 
-**All default settings are in one file, `qachat/gui/defaults.json`:** the
-appearance, the five effort levels (names and models) per backend, the
-search depth, the intent and embedding models per backend, the query
-format, and the answer settings (temperature, thinking, longest answer).
-Edit it to change what everyone starts with, then restart QAChat; a
-mistake is reported with the setting's name. (Notebooks use the core
-library's defaults in `qachat/model_defaults.py`.)
+**GUI defaults** are in `qachat/gui/defaults.json`: appearance, the
+five effort levels (names and models), search depth, intent and embedding
+models, and query format. **Generation defaults** for new projects are
+owned by the core in `qachat/qachat_defaults.json` (`PROJECT_PROFILE`):
+`thinking=true`, `temperature=0.0`, and `max_new_tokens=8192`. All
+interfaces use the same new-project generation defaults. Existing projects
+keep their saved `profile.ini` values, including an explicit 256-token
+limit; the GUI does not replace or reinterpret these settings.
 
 Each user's own changes are kept in `qachat/gui/preferences.json` (ignored
 by git; `QACHAT_PREFERENCES_FILE` points elsewhere, as the tests do): the
