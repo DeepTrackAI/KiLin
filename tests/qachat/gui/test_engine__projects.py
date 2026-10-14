@@ -1,4 +1,14 @@
-"""Regression coverage for source additions, renaming, and complete answers."""
+"""Exercise GUI project rename and source-import recovery.
+
+Use real project and conversation files with a fake RAG session.
+
+"""
+
+# pylint: disable=C0115:missing-class-docstring
+# pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
+
+
 
 from dataclasses import dataclass, field
 import json
@@ -6,14 +16,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from qachat.chat import ChatSession
+
 from qachat.conversation_format import conversation_state
 from qachat.conversations import ConversationStore
 from qachat.gui.engine import ChatEngine
 from qachat.project import open_project
-from qachat.trace_logging import NullTraceLogger
+
 from qachat.workspace import prepare_sources_workspace
 
 
@@ -29,6 +39,7 @@ class FakeSession:
     """Use real workspace/history files without loading model weights."""
 
     def __init__(self, directory, *, conversation_path, **_options):
+        """Initialize a fake RAG session from saved project state."""
         self.project = open_project(directory)
         self.conversation_path = conversation_path
         self.turns = [
@@ -49,6 +60,7 @@ class FakeSession:
         self.router_model = None
 
     def use_router_model(self, model_id):
+        """Record the router selected for the fake session."""
         self.router_model = model_id
 
     def refresh_sources(self, project):
@@ -64,15 +76,19 @@ class FakeSession:
         ]
 
     def configure(self, settings):
+        """Apply generation settings to the fake chat session."""
         for key, value in settings.items():
             setattr(self.chat_session, key, value)
 
     def close(self):
+        """Record that the fake session has closed."""
         self.closed = True
 
 
-class TestProjectPolish(unittest.TestCase):
+class TestEngineProjectRecovery(unittest.TestCase):
+    """Keep active conversations valid across project changes."""
     def setUp(self):
+        """Prepare disposable project files and mocked model sessions."""
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
@@ -107,6 +123,7 @@ class TestProjectPolish(unittest.TestCase):
         self.events.clear()
 
     def assert_chat_preserved(self, expected_root):
+        """Check that current project identity and history survived."""
         self.assertEqual(self.engine.session.project.root, expected_root)
         self.assertEqual(
             self.engine.active_conversation.conversation_id,
@@ -120,6 +137,7 @@ class TestProjectPolish(unittest.TestCase):
         )
 
     def test_rename_discovers_and_restores_selected_chat(self):
+        """Keep the selected conversation after a workspace rename."""
         self.engine.trace_enabled = True
         old_session = self.engine.session
         self.engine.rename_project("renamed")
@@ -130,6 +148,7 @@ class TestProjectPolish(unittest.TestCase):
         self.assertTrue(self.engine.session.conversation_path.is_file())
 
     def test_rename_collision_keeps_current_session(self):
+        """Reject conflicting names without closing the current session."""
         (self.root / "occupied").mkdir()
         old_session = self.engine.session
         self.engine.rename_project("occupied")
@@ -139,10 +158,12 @@ class TestProjectPolish(unittest.TestCase):
         self.assertEqual(self.events[-1]["event"], "error")
 
     def test_failed_reopen_rolls_back_rename(self):
+        """Roll back a rename when reactivation fails."""
         activate = self.engine._activate_project
         calls = 0
 
         def fail_once(*args):
+            """Simulate one failed project reopening."""
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -156,6 +177,7 @@ class TestProjectPolish(unittest.TestCase):
         self.assertEqual(self.events[-1]["event"], "error")
 
     def test_add_file_and_folder_preserves_sources_and_chat(self):
+        """Add new sources without reloading the active chat."""
         file = self.root / "new.txt"
         file.write_text("New source text.")
         folder = self.root / "papers"
@@ -177,140 +199,7 @@ class TestProjectPolish(unittest.TestCase):
         self.assertEqual(self.events[-1]["event"], "opened")
 
     def test_failed_import_restores_usable_chat(self):
+        """Keep the current conversation accessible after import failure."""
         self.engine.add_project_sources([str(self.root / "missing.txt")])
         self.assert_chat_preserved(self.project.root)
         self.assertEqual(self.events[-1]["event"], "error")
-
-    def test_upgrade_legacy_budget_preserves_other_settings(self):
-        from qachat.project import configure_project
-
-        session = self.engine.session
-        for saved, used in ((256, 2048), (512, 512)):
-            session.project = configure_project(
-                session.project.root,
-                {"max_new_tokens": saved, "temperature": 0.3},
-            )
-            self.engine._use_project_answer_settings()
-            self.assertEqual(session.chat_session.max_new_tokens, used)
-            self.assertEqual(session.chat_session.temperature, 0.3)
-
-
-class TestIndexPersistence(unittest.TestCase):
-    def test_import_rebuilds_saves_and_reuses_index(self):
-        embeddings = SimpleNamespace(
-            count_tokens=lambda text: len(text.split()),
-            embed_documents=lambda texts: [[1.0, 0.0] for text in texts],
-            _clear_backend_cache=lambda: None,
-            close=lambda: None,
-        )
-        with (
-            TemporaryDirectory() as temporary,
-            patch("qachat.rag.EmbeddingSession", return_value=embeddings),
-            patch.object(ChatSession, "_load"),
-        ):
-            root = Path(temporary).resolve()
-            first, second = root / "one.txt", root / "two.txt"
-            first.write_text("The original source explains memory capacity.")
-            second.write_text("The added source explains feature elimination.")
-            project = prepare_sources_workspace(
-                [first], "literature", root / "workspace"
-            )
-            events = []
-            engine = ChatEngine(root, events.append)
-            try:
-                engine.resume_project(str(project.root))
-                self.assertIsNotNone(engine.session, events)
-                self.assertEqual(engine.session.index_status, "rebuilt")
-                first_fingerprint = engine.session.indexes.fingerprint
-                engine.add_project_sources([str(second)])
-                self.assertEqual(engine.session.index_status, "rebuilt")
-                self.assertNotEqual(
-                    engine.session.indexes.fingerprint, first_fingerprint
-                )
-                paths = {str(chunk.path) for chunk in engine.session.chunks}
-                self.assertEqual(paths, {"one.txt", "two.txt"})
-                for name in (
-                    "retrieval.json",
-                    "settings.json",
-                    "source_manifest.json",
-                ):
-                    self.assertTrue((project.indexes / name).is_file())
-                engine.close()
-                engine.resume_project(str(project.root))
-                self.assertEqual(engine.session.index_status, "reused")
-                self.assertEqual(
-                    {str(chunk.path) for chunk in engine.session.chunks}, paths
-                )
-            finally:
-                engine.close()
-
-
-class TestGenerationFinish(unittest.TestCase):
-    def test_mlx_preserves_entire_answer_and_finish_reason(self):
-        for reason in ("length", "stop"):
-            with self.subTest(reason=reason):
-                session = ChatSession.__new__(ChatSession)
-                session._model = object()
-                session._tokenizer = object()
-                session.temperature = 0.1
-                model_api = SimpleNamespace(
-                    stream_generate=MagicMock(
-                        return_value=iter(
-                            [
-                                SimpleNamespace(
-                                    text="First ",
-                                    generation_tokens=1,
-                                    finish_reason=None,
-                                ),
-                                SimpleNamespace(
-                                    text="last.",
-                                    generation_tokens=2,
-                                    finish_reason=reason,
-                                ),
-                            ]
-                        )
-                    )
-                )
-                sampler = SimpleNamespace(make_sampler=MagicMock())
-                with patch(
-                    "qachat.chat.import_module",
-                    side_effect=[
-                        model_api,
-                        sampler,
-                    ],
-                ):
-                    pieces = []
-                    answer = session._mlx_reply(
-                        [1, 2], 2048, token_callback=pieces.append
-                    )
-                self.assertEqual(answer, "First last.")
-                self.assertEqual(pieces, ["First ", "last."])
-                self.assertEqual(session.last_finish_reason, reason)
-                # Each streamed response is one generated token.
-                self.assertEqual(session.output_token_total, 2)
-                self.assertEqual(
-                    session._last_generation_output_token_count, 2
-                )
-
-    def test_torch_eos_at_limit_is_complete(self):
-        for token, expected in [(2, "stop"), (99, "length")]:
-            with self.subTest(token=token):
-                session = ChatSession.__new__(ChatSession)
-                session._model = MagicMock()
-                session._model.generation_config.eos_token_id = [2, 3]
-                output = session._model.generate.return_value
-                output.__getitem__.return_value.tolist.return_value = [token]
-                session._tokenizer = MagicMock(eos_token_id=2)
-                session._tokenizer.decode.return_value = "Answer"
-                session.temperature = 0.1
-                session.device = "cpu"
-                session.trace = NullTraceLogger()
-                with patch(
-                    "qachat.chat.import_module", return_value=MagicMock()
-                ):
-                    self.assertEqual(session._torch_reply([1], 1), "Answer")
-                self.assertEqual(session.last_finish_reason, expected)
-
-
-if __name__ == "__main__":
-    unittest.main()

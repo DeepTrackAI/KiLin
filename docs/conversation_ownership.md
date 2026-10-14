@@ -164,7 +164,7 @@ python -m pytest -q \
     tests/qachat/test_trace_logging.py \
     tests/qachat/test_rag.py \
     tests/qachat/test_conversations.py \
-    tests/qachat/test_gui__conversation_ownership.py
+    tests/qachat/gui/test__conversation_ownership.py
 ```
 
 Tests verify competing writers in one process and across separate processes,
