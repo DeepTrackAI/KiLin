@@ -28,7 +28,7 @@ class TestGUIPaths(unittest.TestCase):
 
         temporary = TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.home = self.root / "home"
         self.module = self.root / "site-packages/qachat/gui/_paths.py"
         self.module.parent.mkdir(parents=True)
