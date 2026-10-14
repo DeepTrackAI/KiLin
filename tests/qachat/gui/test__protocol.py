@@ -200,6 +200,22 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ["/a"], "code", "", None, None
         )
 
+    def test_resume_forwards_the_requested_conversation(self) -> None:
+        """Restore an explicit ID without changing ordinary project resume."""
+
+        worker, events = self._run([
+            json.dumps({
+                "action": "resume", "project": "/project",
+                "conversation_id": "conversation_earlier",
+            }),
+            json.dumps({"action": "resume", "project": "/project"}),
+        ])
+        self.assertEqual(events, [])
+        self.assertEqual(worker.resume_project.call_args_list, [
+            unittest.mock.call("/project", "conversation_earlier"),
+            unittest.mock.call("/project", None),
+        ])
+
     def test_invalid_commands_emit_errors_and_processing_continues(
         self,
     ) -> None:

@@ -1005,20 +1005,27 @@ class ChatEngine:
             reverse=True,
         )
 
-    def resume_project(self, directory: str) -> None:
-        """Reopen a saved project without copying source files.
+    def resume_project(
+        self, directory: str, conversation_id: str | None = None
+    ) -> None:
+        """Reopen a saved project and optionally restore its exact chat.
 
         Parameters
         ----------
         directory: str
             Workspace containing an existing profile.ini.
+        conversation_id: str | None, optional
+            Saved conversation to restore. If omitted, select the most
+            recently updated conversation. Defaults to ``None``.
 
         """
 
         try:
             project = open_project(directory)
             self.close()
-            conversation = self._open_conversation_store(project)
+            conversation = self._open_conversation_store(
+                project, conversation_id
+            )
             self._start_project_trace(project.root, conversation)
             self._activate_project(project, conversation)
         except Exception as error:
@@ -1643,25 +1650,35 @@ class ChatEngine:
     def _open_conversation_store(
         self,
         project: QAProject,
+        conversation_id: str | None = None,
     ) -> ConversationInfo:
-        """Scan project conversation files and select the latest one.
+        """Open a conversation store and select the requested conversation.
 
         Parameters
         ----------
         project: QAProject
             Opened project whose profile, source, index, and log paths are
             ready for activation.
+        conversation_id: str | None, optional
+            Existing conversation to activate. If omitted, select the most
+            recently updated conversation. Defaults to ``None``.
 
         Returns
         -------
         ConversationInfo
-            The store's selected initial ConversationInfo, also assigned as the
-            active conversation.
+            Selected conversation, also assigned as the active conversation.
+
+        Raises
+        ------
+        ValueError
+            If the explicitly requested conversation does not exist.
 
         """
 
         store = ConversationStore(project.root)
         conversation = store.ensure()
+        if conversation_id is not None:
+            conversation = store.select(conversation_id)
         self.conversation_store = store
         self.active_conversation = conversation
         return conversation
@@ -3661,7 +3678,9 @@ def main() -> None:
                     elif action == "saved_projects":
                         engine.list_saved_projects(command["workspace"])
                     elif action == "resume":
-                        engine.resume_project(command["project"])
+                        engine.resume_project(
+                            command["project"], command.get("conversation_id")
+                        )
                     elif action == "close":
                         engine.close()
                     elif action == "preview":

@@ -3,7 +3,8 @@
 This document characterizes the **current** desktop protocol. It is a
 reference for maintaining the Python engine, Qt bridge, and JavaScript page,
 not a new schema, version-negotiation mechanism, or API compatibility promise.
-PR3 does not change runtime behavior.
+PR3 characterized the existing behavior; PR3a corrects exact-conversation
+restoration for the `resume` command.
 
 ## Ownership and transport
 
@@ -74,7 +75,7 @@ paths and source paths remain subject to downstream core validation.
 | `download_model` | `model_id` | Download selected catalog model |
 | `saved_project` | `kind`, `workspace` | Find a matching saved project (event currently has no browser handler) |
 | `saved_projects` | `workspace` | List saved projects for Resume |
-| `resume` | `project` | See **known limitations** regarding `conversation_id` |
+| `resume` | `project` | Optional `conversation_id` selects that exact saved conversation; without it, the most recently updated conversation is selected |
 | `close` | None | Release the active project/models; child remains running |
 | `preview` | `sources`, `extensions`, `max_file_bytes` | `workspace` defaults to `""` |
 | `open` | `sources`, `kind`, `workspace` | `selected_files`, `settings` default to `None` |
@@ -92,6 +93,14 @@ paths and source paths remain subject to downstream core validation.
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
+
+For `resume`, a supplied `conversation_id` must identify an existing
+conversation in the given project. An unknown, empty, or invalid explicit
+ID produces an `error` event rather than selecting a different chat; no
+model is activated. Omitting the field selects the most recently updated
+conversation. An `opened` event reports the actual selected ID when
+activation succeeds. This restores the active chat after Stop or engine
+restart; it does not recover unsaved partial model output.
 
 The page invokes the Qt slots rather than writing these dictionaries itself.
 The bridge decodes JSON-encoded arguments for source lists, generation
@@ -209,26 +218,20 @@ partial visible stream.
 
 ## Known limitations and deferred changes
 
-1. **Exact-conversation resume is not honored by the dispatcher.** The
-   bridge's `resumeProjectConversation()` sends `conversation_id` with the
-   `resume` action, but `engine.main()` currently invokes
-   `resume_project(command["project"])` and ignores that field. A recovery
-   reopen may therefore select the project's stored active conversation,
-   not necessarily the ID requested by the page. Fixing this requires a
-   separately agreed behavior change and regression tests.
-2. **Frontend event and phase identifiers are not generated from Python.**
+1. **Frontend event and phase identifiers are not generated from Python.**
    The test suite characterizes current names and checks phase agreement,
    but a shared schema/code generator is not proposed in this PR.
-3. **Error/skip reasons are display strings.** In particular, the oversize
+2. **Error/skip reasons are display strings.** In particular, the oversize
    source rule depends on English text. Structured reason codes belong in a
    separate compatibility-aware PR.
-4. **Malformed payload validation is distributed.** Qt slots, the dispatcher,
+3. **Malformed payload validation is distributed.** Qt slots, the dispatcher,
    the engine methods, and the page have different failure policies. This
    document describes them; it does not introduce global validation.
-5. **Native Qt/WebEngine integration has not been exercised** by the
+4. **Native Qt/WebEngine integration has not been exercised** by the
    Qt-free protocol tests. It still requires a supported GUI installation,
    particularly on macOS/Python 3.12.
 
 Implementation owners: `qachat/gui/window.py`, `qachat/gui/engine.py`,
 `qachat/gui/web/app.js`; core phases in `qachat/rag.py`. Regression tests:
-`tests/qachat/gui/test__protocol.py`.
+`tests/qachat/gui/test__protocol.py` and
+`tests/qachat/gui/test_engine__resume.py`.
