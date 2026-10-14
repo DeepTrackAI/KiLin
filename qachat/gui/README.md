@@ -110,11 +110,23 @@ chunking settings, or an unusable cache, trigger a full rebuild. Older indexes
 without embedding-snapshot metadata require one full rebuild.
 
 A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
-selected explicitly or chosen through the engine's default workspace route.
-A saved workspace can be reopened without adding sources. The default
-example-source route requires an example repository that is not included in
-this attached archive. A workspace is a directory organization convention,
-not an execution sandbox or a protection boundary for hostile inputs.
+selected explicitly or created under the GUI's default workspace parent. In
+a source checkout (containing `pyproject.toml`, `tests/qachat/`, and the GUI
+source), the default is the repository's `sandbox/` folder. In an installed
+package, it is a per-user application-data directory:
+
+- macOS: `~/Library/Application Support/QAChat/workspaces/`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/qachat/workspaces/`
+- Windows: `%LOCALAPPDATA%/QAChat/workspaces/` (with a home fallback)
+
+`QACHAT_WORKSPACES_DIR` overrides this default in both cases and must
+be an absolute path (or a home-expanded `~/...` path). Explicit
+workspace paths entered through the interface take precedence. The engine
+does not create the default directory until a project needs it; existing
+projects are never moved. A saved workspace can be reopened without adding
+sources. The default example-source route requires an example repository
+that is not included in this archive. A workspace is a directory organization
+convention, not an execution sandbox or a boundary for hostile inputs.
 
 Settings configure the profile before indexing and model loading.
 GUI projects never download models while preparing; missing models are
@@ -258,27 +270,43 @@ that classifies each question's intent and writes chat titles (default: the
 released and the new one loads when first needed. It is saved per backend in
 effort_levels.json under "router".
 
-**GUI defaults** are in `qachat/gui/defaults.json`: appearance, the
-five effort levels (names and models), search depth, intent and embedding
-models, and query format. **Generation defaults** for new projects are
-owned by the core in `qachat/qachat_defaults.json` (`PROJECT_PROFILE`):
-`thinking=true`, `temperature=0.0`, and `max_new_tokens=8192`. All
-interfaces use the same new-project generation defaults. Existing projects
-keep their saved `profile.ini` values, including an explicit 256-token
-limit; the GUI does not replace or reinterpret these settings.
+**GUI defaults** ship in the read-only
+`qachat/gui/defaults.json`: appearance, the five effort levels (names and
+models), search depth, router and embedding models, and query format.
+Application-wide changes are stored separately in a user-owned
+`preferences.json`, using only keys (and backend values) that differ from
+the shipped defaults. The file is not created just to read defaults.
 
-Each user's own changes are kept in `qachat/gui/preferences.json` (ignored
-by git; `QACHAT_PREFERENCES_FILE` points elsewhere, as the tests do): the
-appearance, and the effort levels, router model, embedding model, query
-format, and search depth that new projects start from. Settings edited with
-no project open are saved there. With a project open, the switch at the top
-of Settings chooses **This project** (the default) or **New projects**,
-which edits these preferences and leaves the open project unchanged; a note
-under the switch says which one is edited. Settings always reopen on
-**This project**. Precedence: defaults.json < preferences.json < the project's
-own settings. Only values that differ from the built-in defaults are written,
-so restoring defaults removes them. The first-run check asks for the models
-these preferences use. Its **QAChat setup** card stays at the top of
+- macOS: `~/Library/Application Support/QAChat/preferences.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/qachat/preferences.json`
+- Windows: `%APPDATA%/QAChat/preferences.json` (with a home fallback)
+
+`QACHAT_DEFAULTS_FILE` explicitly overrides the **writable preferences
+file**, not the packaged defaults. The override must be an absolute path (or
+a home-expanded `~/...` path). Existing complete settings files at that
+path are accepted and written as sparse overrides on the next update. Invalid
+JSON, unsupported keys, and invalid values produce errors; the file is not
+silently reset. Updates use atomic replacement, and no package files are
+modified. When working from a source checkout, edits made directly to the
+shipped `defaults.json` remain readable as checkout defaults but are not
+copied into the user-preferences file. Before reinstalling an earlier QAChat
+version with edited installed defaults, manually preserve those edits:
+automatic migration from previously mutable package resources is not part
+of this PR.
+
+**Generation defaults** for new projects remain core-owned in
+`qachat/qachat_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
+`temperature=0.0`, and `max_new_tokens=8192`. All interfaces use these
+new-project generation defaults. Existing projects retain the settings in
+their own `profile.ini`, including an explicit 256-token limit. A saved
+project profile takes precedence over global defaults and user preferences.
+
+With no project open, settings edits update the user preferences. With a
+project open, the Settings switch chooses **This project** (the default) or
+**New projects**. The latter edits application preferences while preserving
+the active project. Settings reopen on **This project**. Returning a setting
+to its packaged value removes its override. The first-run check asks for the
+models selected by the effective preferences. Its **QAChat setup** card stays at the top of
 Settings: folded with "Ready" when everything is installed (click to see
 each check), and opened by itself when something is missing or a download
 runs. When some are missing but installed models of the

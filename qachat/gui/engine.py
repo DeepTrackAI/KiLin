@@ -84,6 +84,7 @@ from time import perf_counter
 from typing import Callable, Final
 
 from qachat.atomic_writes import atomic_write_text
+from qachat.gui._paths import default_workspace_directory
 from qachat.gui.preferences import (
     default_appearance,
     default_effort_levels,
@@ -1277,7 +1278,7 @@ class ChatEngine:
                 )
             if root is None:
                 # No project is open: these become the defaults new
-                # projects start from (qachat/gui/defaults.json).
+                # projects start from (user preferences over package defaults).
                 backend = request.get("backend")
                 if backend not in (BACKEND_MLX, BACKEND_TORCH):
                     backend = choose_backend(BACKEND_AUTO)
@@ -3584,7 +3585,7 @@ def main() -> None:
             protocol_output.write(json.dumps(data, default=str) + "\n")
             protocol_output.flush()
 
-    sandbox = ROOT / "sandbox"
+    sandbox = default_workspace_directory()
     # One iterator over stdin, so a tool plan waiting for the user's choice
     # reads the next command from the same stream.
     lines = iter(sys.stdin)

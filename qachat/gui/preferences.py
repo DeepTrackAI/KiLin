@@ -1,36 +1,40 @@
-"""Default settings of the desktop app, in one file.
+"""Validate GUI defaults and persist user-owned preference overrides.
 
-Every default setting of the desktop app is in ``qachat/gui/defaults.json``:
-the appearance, the five effort levels (names and models) per backend, the
-search depth, the intent router and embedding models per backend, the
-embedding query format. Edit that file to change
-what new projects start with; restart QAChat after. The app writes to it
-only for app-wide choices: the appearance, "Use installed models", and
-settings edited while no project is open.
-
-Generation defaults for new projects come from
-``qachat/qachat_defaults.json``; the GUI does not override them. Each
-project retains its generation settings in ``profile.ini``.
+The package ships immutable ``qachat/gui/defaults.json``. Application-wide
+changes are written to a user-owned ``preferences.json`` and merged with the
+shipped defaults when initializing new projects. Project-specific settings
+remain authoritative in each workspace's ``profile.ini``.
 
 Key Features
 ------------
 
-- **One place for defaults**: ``defaults.json``, validated when read; a
-  mistake names the setting.
-- **Shared validation**: ``validate_model_id``, ``validate_effort_levels``,
-  and ``validate_search_depth`` also check project settings.
-- **Required models**: ``required_models`` lists what the defaults use, so
-  the first-run check asks only for those.
+- **Immutable packaged defaults**
+
+    Validate the complete shipped configuration independently of user edits.
+
+- **Sparse user overrides**
+
+    Persist only differences from packaged defaults. Missing user preferences
+    are normal; invalid overrides fail explicitly instead of being discarded.
+
+- **Existing project precedence**
+
+    Default values affect new projects, not saved project profiles.
 
 Module Structure
 ----------------
 
-- ``DEFAULTS_FILE``, ``defaults_file``, ``built_in_defaults``, and
-  ``write_defaults``
-- ``default_effort_levels``, ``default_search_depth``,
-  ``default_router_model``, ``default_embedding_model``,
-  ``default_query_format`` and ``default_appearance``
-- ``required_models``
+- ``built_in_defaults`` and ``app_defaults``
+
+    Load validated packaged defaults and merged application settings.
+
+- ``write_defaults``
+
+    Validate and atomically save application-wide changes to user storage.
+
+- ``default_effort_levels``, ``default_search_depth``, and related helpers
+
+    Supply the effective settings used to create a new project.
 
 Examples
 --------
@@ -43,14 +47,18 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 import json
-import os
 from pathlib import Path
 from typing import Final
 
 from huggingface_hub.utils import validate_repo_id
 
 from qachat.atomic_writes import atomic_write_text
+from qachat.gui._paths import (
+    PREFERENCES_ENVIRONMENT,
+    preferences_path,
+)
 from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
@@ -60,6 +68,7 @@ __all__ = [
     "LEVEL_COUNT",
     "MAX_LEVEL_NAME",
     "MAX_SEARCH_DEPTH",
+    "app_defaults",
     "built_in_defaults",
     "default_appearance",
     "default_effort_levels",
@@ -68,6 +77,7 @@ __all__ = [
     "default_router_model",
     "default_search_depth",
     "defaults_file",
+    "preferences_file",
     "required_models",
     "validate_effort_levels",
     "validate_model_id",
@@ -75,10 +85,10 @@ __all__ = [
     "write_defaults",
 ]
 
-# The defaults: edit this file to change what new projects start with.
+# Shipped configuration is read-only and has no runtime write path.
 DEFAULTS_FILE: Final[Path] = Path(__file__).with_name("defaults.json")
-# Tests point QAChat at a copy, so they never change the real defaults.
-DEFAULTS_ENVIRONMENT: Final[str] = "QACHAT_DEFAULTS_FILE"
+# An explicit override selects a writable user-preferences file.
+DEFAULTS_ENVIRONMENT: Final[str] = PREFERENCES_ENVIRONMENT
 # The page's appearance choices; "system" follows the operating system.
 APPEARANCE_CHOICES: Final[tuple[str, ...]] = ("system", "light", "dark")
 LEVEL_COUNT: Final[int] = 5
@@ -276,23 +286,35 @@ def _choice(options: tuple[str, ...]) -> Callable:
     return checked
 
 
-# Validated contents per file, with the modification time they were read at.
-_CACHE: dict[Path, tuple[float, dict[str, object]]] = {}
+# Validated complete packaged defaults, cached by modification time and size.
+_CACHE: dict[Path, tuple[int, int, dict[str, object]]] = {}
 
 
 def defaults_file() -> Path:
-    """Return the defaults file location.
+    """Return the immutable packaged GUI defaults file.
 
     Returns
     -------
     pathlib.Path
-        ``$QACHAT_DEFAULTS_FILE`` when set (tests use a copy), otherwise
-        ``qachat/gui/defaults.json``.
+        Shipped ``qachat/gui/defaults.json``.
 
     """
 
-    override = os.environ.get(DEFAULTS_ENVIRONMENT)
-    return Path(override) if override else DEFAULTS_FILE
+    return DEFAULTS_FILE
+
+
+def preferences_file() -> Path:
+    """Return the file used for writable application-wide overrides.
+
+    Returns
+    -------
+    pathlib.Path
+        ``QACHAT_DEFAULTS_FILE`` when explicitly supplied, or a
+        platform-specific user configuration path.
+
+    """
+
+    return preferences_path()
 
 
 def _checks() -> dict[str, Callable[[object], object]]:
@@ -316,36 +338,41 @@ def _checks() -> dict[str, Callable[[object], object]]:
 
 
 def built_in_defaults(path: Path | None = None) -> dict[str, object]:
-    """Read and validate the defaults.
+    """Read and validate the complete, immutable packaged defaults.
 
     Parameters
     ----------
     path: pathlib.Path | None, optional
-        Defaults file. Defaults to ``defaults_file()``.
+        Complete defaults file. By default, use the shipped configuration.
+        An explicit path supports controlled validation without writing.
 
     Returns
     -------
     dict[str, object]
-        Every default setting. The file is read again when it changed, so
-        edits apply to the next new project.
+        Fresh copy of all validated built-in settings.
 
     Raises
     ------
     ValueError
-        If the file is not valid JSON or a setting is missing or invalid;
-        the message names the setting.
+        If JSON, a required setting, or a configured value is invalid.
 
     """
 
-    path = Path(path or defaults_file())
-    modified = path.stat().st_mtime
+    path = Path(path) if path is not None else defaults_file()
+    stat = path.stat()
     cached = _CACHE.get(path)
-    if cached is not None and cached[0] == modified:
-        return cached[1]
+    if (
+        cached is not None
+        and cached[0] == stat.st_mtime_ns
+        and cached[1] == stat.st_size
+    ):
+        return deepcopy(cached[2])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ValueError(f"{path} is not valid JSON: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
     defaults: dict[str, object] = {}
     for name, check in _checks().items():
         if name not in data:
@@ -354,60 +381,199 @@ def built_in_defaults(path: Path | None = None) -> dict[str, object]:
             defaults[name] = check(data[name])
         except (ValueError, TypeError) as error:
             raise ValueError(f"{path} setting {name!r}: {error}") from error
-    _CACHE[path] = (modified, defaults)
-    return defaults
+    _CACHE[path] = (stat.st_mtime_ns, stat.st_size, defaults)
+    return deepcopy(defaults)
 
 
-def write_defaults(
-    changes: dict[str, object], path: Path | None = None
-) -> dict[str, object]:
-    """Save app-wide choices into the defaults file.
+def _apply_changes(
+    values: dict[str, object], changes: dict[str, object]
+) -> None:
+    """Validate and merge settings, including individual backend entries.
 
     Parameters
     ----------
+    values: dict[str, object]
+        Complete settings mapping modified after successful validation.
     changes: dict[str, object]
-        Any of ``appearance``, ``query_format``, ``search_depth``, and
-        ``effort_levels``, ``router_models``, or ``embedding_models`` as
-        ``{backend: value}``.
-    path: pathlib.Path | None, optional
-        Defaults file. Defaults to ``defaults_file()``.
-
-    Returns
-    -------
-    dict[str, object]
-        The defaults now saved.
+        Sparse top-level or backend-specific changes to apply.
 
     Raises
     ------
     ValueError
-        If a value is invalid; nothing is written then.
+        If a setting name, backend, type, or value is unsupported.
 
     """
 
-    path = Path(path or defaults_file())
-    saved = json.loads(json.dumps(built_in_defaults(path)))
     checks = _checks()
+    backend_checks = {
+        "effort_levels": validate_effort_levels,
+        "router_models": validate_model_id,
+        "embedding_models": validate_model_id,
+    }
     for key, value in changes.items():
-        if key in ("effort_levels", "router_models", "embedding_models"):
+        if key in backend_checks:
             if not isinstance(value, dict):
                 raise ValueError(f"{key} must map backends to values.")
             for backend, entry in value.items():
                 if backend not in _BACKENDS:
                     raise ValueError(f"Unknown backend {backend!r}.")
-                check = {
-                    "effort_levels": validate_effort_levels,
-                }.get(key, validate_model_id)
-                saved[key][backend] = check(entry)
-        elif key in ("appearance", "query_format", "search_depth"):
+                try:
+                    values[key][backend] = backend_checks[key](entry)
+                except (ValueError, TypeError) as error:
+                    raise ValueError(
+                        f"{key} {backend!r}: {error}"
+                    ) from error
+        elif key in checks:
             try:
-                saved[key] = checks[key](value)
+                values[key] = checks[key](value)
             except (ValueError, TypeError) as error:
                 raise ValueError(f"{key}: {error}") from error
         else:
             raise ValueError(f"Unknown default setting {key!r}.")
-    atomic_write_text(path, _format(saved) + "\n")
-    _CACHE.pop(path, None)
-    return built_in_defaults(path)
+
+
+def _read_preferences(path: Path) -> dict[str, object]:
+    """Read user overrides without creating or repairing their file.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Location of the optional user-preferences JSON file.
+
+    Returns
+    -------
+    dict[str, object]
+        Sparse override mapping or an empty dictionary if no file exists.
+
+    Raises
+    ------
+    ValueError
+        If the file is malformed or contains invalid settings.
+
+    """
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{path} is not valid JSON: {error}") from error
+    if not isinstance(data, dict):
+        raise ValueError(f"{path} must contain a JSON object.")
+    return data
+
+
+def app_defaults(path: Path | None = None) -> dict[str, object]:
+    """Combine immutable packaged defaults with validated user overrides.
+
+    Parameters
+    ----------
+    path: pathlib.Path | None, optional
+        Writable preferences file. Defaults to ``preferences_file()``.
+
+    Returns
+    -------
+    dict[str, object]
+        Complete effective settings for new projects and GUI presentation.
+
+    Raises
+    ------
+    ValueError
+        If saved preferences contain invalid names or values.
+
+    """
+
+    path = Path(path) if path is not None else preferences_file()
+    values = built_in_defaults()
+    try:
+        _apply_changes(values, _read_preferences(path))
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"{path}: {error}") from error
+    return values
+
+
+def _overrides(
+    defaults: dict[str, object], values: dict[str, object]
+) -> dict[str, object]:
+    """Compute only settings that differ from the packaged defaults.
+
+    Parameters
+    ----------
+    defaults: dict[str, object]
+        Complete validated packaged configuration.
+    values: dict[str, object]
+        Complete effective user configuration.
+
+    Returns
+    -------
+    dict[str, object]
+        Sparse differences, including only changed backend values.
+
+    """
+
+    result: dict[str, object] = {}
+    for key, value in values.items():
+        original = defaults[key]
+        if key in ("effort_levels", "router_models", "embedding_models"):
+            changed = {
+                backend: deepcopy(value[backend])
+                for backend in _BACKENDS
+                if value[backend] != original[backend]
+            }
+            if changed:
+                result[key] = changed
+        elif value != original:
+            result[key] = deepcopy(value)
+    return result
+
+
+def write_defaults(
+    changes: dict[str, object], path: Path | None = None
+) -> dict[str, object]:
+    """Atomically save sparse app-wide overrides outside the package.
+
+    Parameters
+    ----------
+    changes: dict[str, object]
+        Values or backend-specific values to update. Unchanged settings
+        remain in effect; restoring a built-in value drops its override.
+    path: pathlib.Path | None, optional
+        Writable preference file, defaulting to ``preferences_file()``.
+
+    Returns
+    -------
+    dict[str, object]
+        Validated effective settings after the update.
+
+    Raises
+    ------
+    ValueError
+        If changes or existing preferences are invalid, or the destination
+        refers to the immutable packaged defaults.
+    OSError
+        If the user preferences cannot be written.
+
+    Notes
+    -----
+    The destination directory is created only for a write. No existing
+    file is changed when validation fails. A write does not alter a
+    saved project's ``profile.ini``.
+
+    """
+
+    path = Path(path) if path is not None else preferences_file()
+    if path.resolve() == defaults_file().resolve():
+        raise ValueError("Packaged GUI defaults are read-only.")
+    effective = app_defaults(path)
+    _apply_changes(effective, changes)
+    if not changes:
+        return effective
+    delta = _overrides(built_in_defaults(), effective)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(path, _format(delta) + "\n")
+    return effective
 
 
 def _format(value: object, indent: int = 0) -> str:
@@ -457,12 +623,12 @@ def default_effort_levels(backend: str) -> list[dict[str, object]]:
     Returns
     -------
     list[dict[str, object]]
-        Five levels of ``name`` and ``model`` from ``defaults.json``.
+        Five levels of ``name`` and ``model`` from effective preferences.
 
     """
 
     return [
-        dict(level) for level in built_in_defaults()["effort_levels"][backend]
+        dict(level) for level in app_defaults()["effort_levels"][backend]
     ]
 
 
@@ -476,7 +642,7 @@ def default_search_depth() -> list[int]:
 
     """
 
-    return list(built_in_defaults()["search_depth"])
+    return list(app_defaults()["search_depth"])
 
 
 def default_router_model(backend: str) -> str:
@@ -494,7 +660,7 @@ def default_router_model(backend: str) -> str:
 
     """
 
-    return str(built_in_defaults()["router_models"][backend])
+    return str(app_defaults()["router_models"][backend])
 
 
 def default_embedding_model(backend: str) -> str:
@@ -512,7 +678,7 @@ def default_embedding_model(backend: str) -> str:
 
     """
 
-    return str(built_in_defaults()["embedding_models"][backend])
+    return str(app_defaults()["embedding_models"][backend])
 
 
 def default_query_format() -> str:
@@ -525,7 +691,7 @@ def default_query_format() -> str:
 
     """
 
-    return str(built_in_defaults()["query_format"])
+    return str(app_defaults()["query_format"])
 
 
 def default_appearance() -> str:
@@ -538,7 +704,7 @@ def default_appearance() -> str:
 
     """
 
-    return str(built_in_defaults()["appearance"])
+    return str(app_defaults()["appearance"])
 
 
 def required_models(backend: str) -> list[str]:

@@ -1,0 +1,191 @@
+"""Resolve user-owned GUI data paths without importing Qt.
+
+Packaged GUI resources are read-only. Development checkouts retain their
+``sandbox/`` workspace parent; installed distributions use user data folders.
+No directories are created while resolving a path.
+
+Key Features
+------------
+
+- **Development workspace**
+
+    Use the checkout's ``sandbox/`` when the running code belongs to a
+    recognizable QAChat source tree.
+
+- **Installed workspace and preferences**
+
+    Use platform-specific user data and configuration directories.
+
+Module Structure
+----------------
+
+- ``preferences_path``
+
+    Resolve the writable application-preferences file.
+
+- ``default_workspace_directory``
+
+    Resolve the parent for workspaces created without an explicit path.
+
+Examples
+--------
+>>> from qachat.gui._paths import default_workspace_directory
+>>> default_workspace_directory().name in ("sandbox", "workspaces")
+True
+
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+from typing import Final
+
+__all__ = ["default_workspace_directory", "preferences_path"]
+
+PREFERENCES_ENVIRONMENT: Final[str] = "QACHAT_DEFAULTS_FILE"
+WORKSPACES_ENVIRONMENT: Final[str] = "QACHAT_WORKSPACES_DIR"
+
+
+def _user_config_directory() -> Path:
+    """Return the platform's writable per-user application configuration.
+
+    Returns
+    -------
+    pathlib.Path
+        Directory used for QAChat's user preference overrides.
+
+    Notes
+    -----
+    On Linux, ``XDG_CONFIG_HOME`` takes precedence when it is absolute.
+    On macOS, Application Support holds both settings and workspaces.
+    On Windows, ``APPDATA`` is preferred for roaming preferences.
+
+    """
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "QAChat"
+    if sys.platform == "win32":
+        base = os.environ.get("APPDATA")
+        return Path(base) / "QAChat" if base else (
+            home / "AppData" / "Roaming" / "QAChat"
+        )
+    configured = Path(os.environ.get("XDG_CONFIG_HOME", ""))
+    base = configured if configured.is_absolute() else home / ".config"
+    return base / "qachat"
+
+
+def _user_data_directory() -> Path:
+    """Return the user-owned base directory for installed GUI workspaces.
+
+    Returns
+    -------
+    pathlib.Path
+        Directory containing GUI workspaces on the current platform.
+
+    """
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / "QAChat"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        return Path(base) / "QAChat" if base else (
+            home / "AppData" / "Local" / "QAChat"
+        )
+    configured = Path(os.environ.get("XDG_DATA_HOME", ""))
+    base = (
+        configured if configured.is_absolute()
+        else home / ".local" / "share"
+    )
+    return base / "qachat"
+
+
+def _development_checkout() -> Path | None:
+    """Find the QAChat source root only when running from its source tree.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Validated development root, or None for an installed package.
+
+    Notes
+    -----
+    A site-packages directory does not become a checkout merely because
+    it contains the installed ``qachat`` package. Requiring the project
+    metadata and test tree avoids writing into an ordinary wheel install.
+
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    if (
+        (root / "pyproject.toml").is_file()
+        and (root / "tests" / "qachat").is_dir()
+        and (root / "qachat" / "gui" / "engine.py").is_file()
+    ):
+        return root
+    return None
+
+
+def preferences_path() -> Path:
+    """Return the writable application-preferences path.
+
+    Returns
+    -------
+    pathlib.Path
+        Explicit absolute ``QACHAT_DEFAULTS_FILE`` path, or a user
+        configuration file. The packaged defaults are never the default.
+
+    Raises
+    ------
+    ValueError
+        If an explicit override is relative to the working directory.
+
+    """
+
+    override = os.environ.get(PREFERENCES_ENVIRONMENT)
+    if override:
+        path = Path(override).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"{PREFERENCES_ENVIRONMENT} must be an absolute path."
+            )
+        return path
+    return _user_config_directory() / "preferences.json"
+
+
+def default_workspace_directory() -> Path:
+    """Return the parent directory for GUI-created project workspaces.
+
+    Returns
+    -------
+    pathlib.Path
+        Explicit ``QACHAT_WORKSPACES_DIR`` directory, checkout sandbox,
+        or user-owned installed-application workspace directory.
+
+    Raises
+    ------
+    ValueError
+        If an explicit override is relative to the working directory.
+
+    Notes
+    -----
+    An explicit workspace chosen in the GUI overrides this default. The
+    resolver does not create directories or change existing projects.
+
+    """
+
+    override = os.environ.get(WORKSPACES_ENVIRONMENT)
+    if override:
+        path = Path(override).expanduser()
+        if not path.is_absolute():
+            raise ValueError(
+                f"{WORKSPACES_ENVIRONMENT} must be an absolute path."
+            )
+        return path.resolve()
+    checkout = _development_checkout()
+    if checkout is not None:
+        return checkout / "sandbox"
+    return _user_data_directory() / "workspaces"
