@@ -1,15 +1,29 @@
 """Split source units into token-budgeted retrieval chunks.
 
-The chunker preserves source text and provenance while using a caller-supplied
+The chunker preserves substantive source text and provenance with a supplied
 token-count function. Units already within the maximum size stay whole. An
-oversized unit is split through its children when available, otherwise along
-line boundaries and, if necessary, within an individual long line.
+oversized unit is split through its children only when they cover all of its
+non-whitespace text. Otherwise, it is split along line boundaries and, if
+necessary, within an individual long line.
 
 Target size guides splitting; maximum size is the acceptance bound. Overlap
-is retained as source lines or character suffixes. Binary-search helpers
-assume token counts are sufficiently monotonic across candidate prefixes or
-suffixes. The callback is responsible for matching the intended tokenizer.
-No embedding model is loaded by this module.
+is retained as source lines or character suffixes. No embedding model is
+loaded by this module.
+
+Token-count assumptions
+-----------------------
+
+Chunk boundaries are selected using binary search over candidate fragments.
+This assumes that token counts are approximately monotonic as text grows or
+shrinks. Subword tokenizers do not strictly guarantee this: adding characters
+can sometimes reduce the count because previously separate tokens merge.
+
+Consequently, the chunker may produce smaller fragments than necessary or,
+in unusual cases, fail to identify a fitting fragment. This is an intentional
+performance trade-off: splitting efficiently takes precedence over finding
+globally optimal boundaries. Every emitted chunk is checked using the supplied
+token counter and must fit within ``max_tokens``. The caller should use the
+token counter corresponding to the intended embedding model.
 
 Key Features
 ------------
@@ -21,11 +35,11 @@ Key Features
 
 - **Hierarchical splitting**
 
-    Prefer complete source units and child units before splitting plain text.
+    Prefer complete units and use children only when no content is lost.
 
 - **Stable identifiers**
 
-    Hash chunk text and provenance into identifiers without including an
+    Hash an unambiguous encoding of text and provenance without including an
     absolute repository root.
 
 - **Progress reporting**
@@ -67,18 +81,39 @@ For model use, pass that model's token counter instead of ``len``.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_int,
+    require_default_nonnegative_int,
+)
 from qachat.sources.sources import SourceUnit
-
 
 __all__ = [
     "Chunk",
     "chunk_source_units",
 ]
+
+# Generic chunking defaults, separate from new-project profile settings.
+_CHUNKING_DEFAULTS = load_defaults_section("CHUNKING")
+_DEFAULT_TARGET_TOKENS = require_default_int(
+    _CHUNKING_DEFAULTS, "TARGET_TOKENS", "CHUNKING"
+)
+_DEFAULT_MAX_TOKENS = require_default_int(
+    _CHUNKING_DEFAULTS, "MAX_TOKENS", "CHUNKING"
+)
+_DEFAULT_OVERLAP_TOKENS = require_default_nonnegative_int(
+    _CHUNKING_DEFAULTS, "OVERLAP_TOKENS", "CHUNKING"
+)
+if _DEFAULT_MAX_TOKENS < _DEFAULT_TARGET_TOKENS:
+    raise ValueError("CHUNKING.MAX_TOKENS must reach TARGET_TOKENS.")
+if _DEFAULT_OVERLAP_TOKENS >= _DEFAULT_TARGET_TOKENS:
+    raise ValueError("CHUNKING.OVERLAP_TOKENS must be below TARGET_TOKENS.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,9 +186,9 @@ def chunk_source_units(
     units: list[SourceUnit],
     *,
     count_tokens: Callable[[str], int],
-    target_tokens: int = 500,
-    max_tokens: int = 700,
-    overlap_tokens: int = 80,
+    target_tokens: int = _DEFAULT_TARGET_TOKENS,
+    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    overlap_tokens: int = _DEFAULT_OVERLAP_TOKENS,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> list[Chunk]:
     """Create token-bounded chunks while preserving natural units.
@@ -163,14 +198,15 @@ def chunk_source_units(
     units: list[SourceUnit]
         Natural source units.
     count_tokens: Callable[[str], int]
-        Token counter from the selected embedding model.
+        Token counter from the selected embedding model. Boundary selection
+        assumes approximately monotonic token counts; see module notes.
     target_tokens: int, optional
-        Preferred size when a unit must be split. Defaults to ``500``.
+        Preferred split size from ``CHUNKING.TARGET_TOKENS`` (currently 500).
     max_tokens: int, optional
-        Largest allowed chunk. Defaults to ``700``.
+        Largest chunk, from ``CHUNKING.MAX_TOKENS`` (currently 700).
     overlap_tokens: int, optional
-        Maximum repeated text between adjacent split chunks. Defaults to
-        ``80``.
+        Maximum repeated tokens between adjacent chunks, from
+        ``CHUNKING.OVERLAP_TOKENS`` (currently 80).
     progress_callback: Callable[[int, int], None] | None, optional
         Called after each top-level source unit with ``current`` and ``total``.
         Defaults to ``None``.
@@ -185,13 +221,18 @@ def chunk_source_units(
     ValueError
         If a size is invalid or the token counter returns an invalid value.
 
+    Notes
+    -----
+    Identifiers now use an unambiguous JSON-array encoding instead of the
+    previous colon-separated encoding. Existing indexes must be rebuilt.
+
     """
 
     _check_sizes(target_tokens, max_tokens, overlap_tokens)
     counts: dict[str, int] = {}
 
     def count(text: str) -> int:
-        """Memoize validated token counts during one chunking call.
+        """Memorize validated token counts during one chunking call.
 
         Parameters
         ----------
@@ -325,7 +366,7 @@ def _chunk_source_unit(
             )
         ]
 
-    if unit.children:
+    if unit.children and _children_cover_text(unit):
         chunks: list[Chunk] = []
         for child in unit.children:
             chunks.extend(
@@ -346,6 +387,41 @@ def _chunk_source_unit(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
     )
+
+
+def _children_cover_text(unit: SourceUnit) -> bool:
+    """Check whether ordered children cover all substantive parent text.
+
+    Parameters
+    ----------
+    unit: SourceUnit
+        Parent with candidate natural child units.
+
+    Returns
+    -------
+    bool
+        ``True`` if the children match nonoverlapping substrings in source
+        order, with only whitespace between or around those substrings.
+
+    Notes
+    -----
+    Unmatched non-whitespace content requires splitting the parent instead.
+    Exact substring matching also avoids using child text that was normalized
+    differently from the original source or belongs to another file.
+
+    """
+
+    offset = 0
+    for child in unit.children:
+        if child.path != unit.path or not child.text:
+            return False
+
+        start = unit.text.find(child.text, offset)
+        if start < 0 or unit.text[offset:start].strip():
+            return False
+        offset = start + len(child.text)
+
+    return not unit.text[offset:].strip()
 
 
 def _make_chunk(
@@ -377,20 +453,27 @@ def _make_chunk(
     Chunk
         New chunk with a content-based identifier.
 
+    Notes
+    -----
+    A JSON array preserves field boundaries and distinguishes missing metadata
+    from empty values before hashing. The first 16 hash digits are retained.
+
     """
 
-    identity = ":".join(
-        (
+    identity = json.dumps(
+        [
             unit.path.as_posix(),
-            str(start_line),
-            str(end_line),
+            start_line,
+            end_line,
             unit.kind,
-            unit.symbol or "",
-            unit.section or "",
-            str(unit.cell or ""),
-            str(part),
+            unit.symbol,
+            unit.section,
+            unit.cell,
+            part,
             text,
-        )
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
     )
     identifier = sha256(identity.encode("utf-8")).hexdigest()[:16]
     return Chunk(

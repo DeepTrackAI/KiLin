@@ -1,10 +1,13 @@
-"""Read project profiles and prepare a managed single-source workspace.
+"""Create and open project workspaces independently of the GUI.
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
-Initialization creates a default profile only when one is missing. Opening a
-project validates its profile and source location and creates index/log
-directories as needed; it is not a strictly read-only operation.
+Initialization prepares sources and required resources first, then commits
+a missing profile atomically as its completion marker, using
+``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
+profile and source location and creates the shared indexes, logs, outputs,
+and templates folders as needed. A new project receives only the packaged
+resources declared by the tools selected by its project type.
 
 ``prepare_project_workspace`` mirrors selected files from one original
 repository into a managed workspace and compares source manifests to update
@@ -25,9 +28,13 @@ Key Features
     Read backend, model, query-format, scan, chunk, retrieval, and generation
     settings.
 
+- **GUI-independent workspace layout**
+
+    Create shared folders and install selected tool resources in the core.
+
 - **Managed source copy**
 
-    Track original selected content using size and SHA-256 manifests.
+    Track and verify selected source and snapshot content using SHA-256.
 
 - **Explicit configuration**
 
@@ -54,11 +61,11 @@ Module Structure
 
 - ``initialize_project``
 
-    Create a missing project profile, then open the project.
+    Create a missing profile and install selected tool resources.
 
 - ``open_project``
 
-    Open a configured project and prepare its output folders.
+    Open a project and ensure its shared workspace folders exist.
 
 - ``prepare_project_workspace``
 
@@ -93,20 +100,38 @@ Access submodule-only configuration helpers through their actual namespace:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from configparser import ConfigParser
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from io import StringIO
 import json
+from math import isfinite
 from pathlib import Path
 import re
 import shutil
-from typing import Final, Literal, TypeAlias, cast
+from typing import Final, Iterator, TypeAlias, cast
 
+from qachat.atomic_writes import atomic_write_text
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_bool,
+    require_default_int,
+    require_default_nonnegative_int,
+    require_default_number,
+)
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
+)
+from qachat.project_type import load_project_types
+from qachat.project_layout import (
+    ensure_project_folders,
+    install_project_resources,
+    plan_project_layout,
 )
 from qachat.query_formats import (
     QUERY_FORMAT_CHOICES,
@@ -116,6 +141,7 @@ from qachat.query_formats import (
 from qachat.repository import (
     build_repository_manifest,
     compare_repository_manifests,
+    normalize_extensions,
     scan_repository,
 )
 from qachat.runtime import (
@@ -140,23 +166,100 @@ __all__ = [
     "configure_project",
 ]
 
-ProjectKind: TypeAlias = Literal["code", "literature"]
+# Project types, their default files, and their instructions come from
+# qachat/project_types/; "code" and "literature" are always present.
+ProjectKind: TypeAlias = str
 PROJECT_KIND_CODE: Final[ProjectKind] = "code"
 PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
-PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = (
-    PROJECT_KIND_CODE,
-    PROJECT_KIND_LITERATURE,
+
+
+def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
+    """Return the configured project kinds, requiring the built-in ones.
+
+    Parameters
+    ----------
+    types: Mapping[str, object]
+        Project types loaded from ``qachat/project_types/``, in file order.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Project kind identifiers in file order.
+
+    Raises
+    ------
+    ValueError
+        If ``code`` or ``literature`` is missing.
+
+    """
+
+    missing = [
+        kind
+        for kind in (PROJECT_KIND_CODE, PROJECT_KIND_LITERATURE)
+        if kind not in types
+    ]
+    if missing:
+        raise ValueError(
+            "qachat/project_types/ must keep the built-in types: "
+            f"{', '.join(missing)}."
+        )
+
+    return tuple(types)
+
+
+# Loading fails at import when a project type file is malformed or a
+# built-in type is missing, so no project opens with a partial set.
+PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = _check_built_in_kinds(
+    load_project_types()
 )
 
 _PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
-    PROJECT_KIND_CODE: ".py, .ipynb, .m, .md",
-    PROJECT_KIND_LITERATURE: ".pdf, .md, .txt",
+    kind: ", ".join(item.extensions)
+    for kind, item in load_project_types().items()
 }
-# Literature PDFs need more space than typical code files.
 _DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
-    PROJECT_KIND_CODE: 2**20,
-    PROJECT_KIND_LITERATURE: 20 * 2**20,
+    kind: item.max_file_bytes for kind, item in load_project_types().items()
 }
+# Accepted kinds as listed in error messages.
+_KIND_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_KIND_CHOICES)
+
+# These defaults are used only when generating a missing project profile;
+# existing ``profile.ini`` values always take precedence.
+_PROFILE_DEFAULTS = load_defaults_section("PROJECT_PROFILE")
+_PROFILE_ALLOW_DOWNLOAD: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "ALLOW_DOWNLOAD", "PROJECT_PROFILE"
+)
+_PROFILE_TARGET_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "TARGET_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_MAX_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "MAX_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_OVERLAP_TOKENS: Final[int] = require_default_nonnegative_int(
+    _PROFILE_DEFAULTS, "OVERLAP_TOKENS", "PROJECT_PROFILE"
+)
+_PROFILE_RETRIEVAL_COUNT: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "RETRIEVAL_COUNT", "PROJECT_PROFILE"
+)
+_PROFILE_THINKING: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "THINKING", "PROJECT_PROFILE"
+)
+_PROFILE_TEMPERATURE: Final[float] = require_default_number(
+    _PROFILE_DEFAULTS, "TEMPERATURE", "PROJECT_PROFILE", allow_zero=True
+)
+_PROFILE_MAX_NEW_TOKENS: Final[int] = require_default_int(
+    _PROFILE_DEFAULTS, "MAX_NEW_TOKENS", "PROJECT_PROFILE"
+)
+if _PROFILE_MAX_TOKENS < _PROFILE_TARGET_TOKENS:
+    raise ValueError(
+        "PROJECT_PROFILE.MAX_TOKENS must reach TARGET_TOKENS."
+    )
+if _PROFILE_OVERLAP_TOKENS >= _PROFILE_TARGET_TOKENS:
+    raise ValueError(
+        "PROJECT_PROFILE.OVERLAP_TOKENS must be below TARGET_TOKENS."
+    )
+
+# Keep INI formatting and ordering unchanged for generated profiles.
 _DEFAULT_PROFILE = """[project]
 kind = {kind}
 source = {source}
@@ -165,7 +268,7 @@ max_file_bytes = {max_file_bytes}
 
 [models]
 backend = {backend}
-allow_download = true
+allow_download = {allow_download}
 chat_mlx = {chat_mlx}
 chat_torch = {chat_torch}
 embedding_mlx = {embedding_mlx}
@@ -173,17 +276,17 @@ embedding_torch = {embedding_torch}
 query_format = {query_format}
 
 [chunking]
-target_tokens = 300
-max_tokens = 400
-overlap_tokens = 40
+target_tokens = {target_tokens}
+max_tokens = {max_tokens}
+overlap_tokens = {overlap_tokens}
 
 [retrieval]
-count = 5
+count = {retrieval_count}
 
 [generation]
-thinking = false
-temperature = 0.0
-max_new_tokens = 256
+thinking = {thinking}
+temperature = {temperature}
+max_new_tokens = {max_new_tokens}
 """
 
 _EDITABLE_SETTINGS = {
@@ -235,6 +338,14 @@ def _default_profile_text(
         source=source,
         extensions=extensions,
         max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
+        allow_download=str(_PROFILE_ALLOW_DOWNLOAD).lower(),
+        target_tokens=_PROFILE_TARGET_TOKENS,
+        max_tokens=_PROFILE_MAX_TOKENS,
+        overlap_tokens=_PROFILE_OVERLAP_TOKENS,
+        retrieval_count=_PROFILE_RETRIEVAL_COUNT,
+        thinking=str(_PROFILE_THINKING).lower(),
+        temperature=_PROFILE_TEMPERATURE,
+        max_new_tokens=_PROFILE_MAX_NEW_TOKENS,
         backend=BACKEND_AUTO,
         chat_mlx=DEFAULT_CHAT_MODEL_MLX,
         chat_torch=DEFAULT_CHAT_MODEL_TORCH,
@@ -271,12 +382,10 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
     extensions = _PROJECT_EXTENSIONS[kind]
     parser = ConfigParser()
-    parser.read_string(
-        _default_profile_text(kind, "sources", extensions)
-    )
+    parser.read_string(_default_profile_text(kind, "sources", extensions))
     return _read_profile(parser)
 
 
@@ -344,10 +453,9 @@ def configure_project(
         parser.set(section, option, str(value))
     _read_profile(parser)
     path = project.root / "profile.ini"
-    temporary = path.with_suffix(".ini.tmp")
-    with temporary.open("w", encoding="utf-8") as stream:
-        parser.write(stream)
-    temporary.replace(path)
+    stream = StringIO()
+    parser.write(stream)
+    atomic_write_text(path, stream.getvalue())
     configured = open_project(project.root)
     effective = asdict(configured.profile)
     active_trace.emit(
@@ -570,7 +678,7 @@ def initialize_project(
     directory: str | Path,
     kind: ProjectKind,
 ) -> QAProject:
-    """Create a missing project profile, then open the project.
+    """Create a project profile and its required tool resources.
 
     Parameters
     ----------
@@ -597,39 +705,261 @@ def initialize_project(
     -----
     Requires an existing directory. A missing profile.ini is initialized using
     the selected kind; an existing profile is preserved and checked for kind
-    compatibility. Opening the resulting project creates indexes/logs
-    directories. No model is loaded.
+    compatibility. New projects receive only the template files required
+    by their type; existing user templates are preserved. Opening creates
+    indexes, logs, outputs and templates directories. No model is loaded.
 
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
 
+    source_name = (
+        "repository" if kind == PROJECT_KIND_CODE else "documents"
+    )
+    if (root / "sources").is_dir():
+        source = "sources"
+    else:
+        source = source_name if (root / source_name).is_dir() else "."
+    return _initialize_profile(root, kind, source)
+
+
+class _InitializationJournal:
+    """Track only paths absent before a new project's initialization.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Destination workspace. Existing user-owned files are not recorded.
+
+    Notes
+    -----
+    Rollback removes newly written files and then attempts to remove empty
+    directories. It does not delete existing files or recursively remove
+    arbitrary user content, and cannot defend against concurrent writers.
+
+    """
+
+    def __init__(self, root: Path) -> None:
+        """Initialize an empty collection of paths created by this attempt.
+
+        Parameters
+        ----------
+        root: pathlib.Path
+            Root that bounds tracked paths.
+
+        """
+
+        self.root = root
+        self.created: set[Path] = set()
+
+    def note(self, path: Path) -> None:
+        """Record a prospective path and any absent workspace parents.
+
+        Parameters
+        ----------
+        path: pathlib.Path
+            File or directory that an initialization step may create.
+
+        """
+
+        current = path
+        while current == self.root or current.is_relative_to(self.root):
+            if current.exists() or current.is_symlink():
+                break
+            self.created.add(current)
+            if current == self.root:
+                break
+            current = current.parent
+
+    def rollback(self) -> None:
+        """Remove created files and empty folders, preserving other data.
+
+        Notes
+        -----
+        Failed cleanup is best-effort. User-owned or concurrently created
+        entries in previously empty directories prevent their removal.
+
+        """
+
+        for path in sorted(
+            self.created, key=lambda item: len(item.parts), reverse=True
+        ):
+            try:
+                if path.is_symlink() or path.is_file():
+                    path.unlink()
+                elif path.is_dir():
+                    path.rmdir()
+            except OSError:
+                continue
+
+
+def _prepared_profile(
+    kind: ProjectKind,
+    source: str,
+    settings: dict[str, object] | None,
+) -> tuple[str, ProjectProfile]:
+    """Validate and render the complete profile before filesystem writes.
+
+    Parameters
+    ----------
+    kind: ProjectKind
+        Validated project-type identifier.
+    source: str
+        Initial source folder recorded in the profile.
+    settings: dict[str, object] | None
+        Optional overrides accepted by ``configure_project``.
+
+    Returns
+    -------
+    tuple[str, ProjectProfile]
+        Final profile text and parsed settings.
+
+    """
+
+    text = _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind])
+    parser = ConfigParser()
+    parser.read_string(text)
+    if settings:
+        for key, value in settings.items():
+            section = _EDITABLE_SETTINGS.get(key)
+            if section is None:
+                raise ValueError(f"Unknown project setting: {key}")
+            option = "count" if key == "retrieval_count" else key
+            if key == "extensions" and isinstance(value, (list, tuple)):
+                value = ", ".join(value)
+            parser.set(section, option, str(value))
+        stream = StringIO()
+        parser.write(stream)
+        text = stream.getvalue()
+    return text, _read_profile(parser)
+
+
+@contextmanager
+def _preparing_project(
+    root: Path,
+    kind: ProjectKind,
+    source: str,
+    *,
+    settings: dict[str, object] | None = None,
+    trace: TraceSink | None = None,
+    validate_source: bool = False,
+) -> Iterator[tuple[QAProject, _InitializationJournal | None]]:
+    """Initialize or reopen a project, committing a new profile last.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Destination project directory.
+    kind: ProjectKind
+        Expected project type.
+    source: str
+        Relative source location for a new project.
+    settings: dict[str, object] | None, optional
+        Profile overrides applied before first copying. Defaults to None.
+    trace: TraceSink | None, optional
+        Optional diagnostic sink for existing-profile configuration changes.
+    validate_source: bool, optional
+        Require an existing profile to use the specified managed source
+        folder. Defaults to False for general project opening.
+
+    Yields
+    ------
+    tuple[QAProject, _InitializationJournal | None]
+        A project view and optional journal for source-copy operations.
+
+    Notes
+    -----
+    For new projects, ``profile.ini`` is written atomically only when the
+    caller finishes all workspace and resource operations successfully.
+    Existing projects are opened without reinstalling user-deleted files.
+
+    """
+
     profile_path = root / "profile.ini"
-    if not profile_path.exists():
-        source_name = (
-            "repository" if kind == PROJECT_KIND_CODE else "documents"
-        )
-        if (root / "sources").is_dir():
-            source = "sources"
-        else:
-            source = source_name if (root / source_name).is_dir() else "."
+    if profile_path.exists() or profile_path.is_symlink():
+        project = open_project(root)
+        if project.profile.kind != kind:
+            raise ValueError(
+                "PROJECT_KIND conflicts with the existing profile.ini."
+            )
+        expected = Path(source).expanduser()
+        if not expected.is_absolute():
+            expected = root / expected
+        if (
+            validate_source
+            and project.source != expected.resolve(strict=True)
+        ):
+            raise ValueError("project.source conflicts with profile.ini.")
+        if settings:
+            project = configure_project(root, settings, trace=trace)
+        yield project, None
+        return
 
-        extensions = _PROJECT_EXTENSIONS[kind]
-        profile_path.write_text(
-            _default_profile_text(kind, source, extensions),
-            encoding="utf-8",
+    text, profile = _prepared_profile(kind, source, settings)
+    layout = plan_project_layout(kind)
+    journal = _InitializationJournal(root)
+    journal.note(root)
+    for name in ("indexes", "logs", "outputs", "templates"):
+        journal.note(root / name)
+    for resource in layout.resources:
+        journal.note(root / resource.destination)
+    source_path = Path(source).expanduser()
+    if not source_path.is_absolute():
+        source_path = root / source_path
+    if source_path != root:
+        if source_path.is_relative_to(root):
+            journal.note(source_path)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        if source_path.is_relative_to(root) and source_path != root:
+            if source_path.is_symlink():
+                raise ValueError("Managed source directory cannot be a link.")
+            source_path.mkdir(parents=True, exist_ok=True)
+        ensure_project_folders(root)
+        install_project_resources(root, layout)
+        provisional = QAProject(
+            root=root,
+            source=source_path.resolve(strict=True),
+            indexes=root / "indexes",
+            logs=root / "logs",
+            profile=profile,
         )
+        yield provisional, journal
+        journal.note(profile_path)
+        atomic_write_text(profile_path, text)
+    except BaseException:
+        journal.rollback()
+        raise
 
-    project = open_project(root)
-    if project.profile.kind != kind:
-        raise ValueError(
-            "PROJECT_KIND conflicts with the existing profile.ini."
-        )
-    return project
+
+def _initialize_profile(
+    root: Path, kind: ProjectKind, source: str
+) -> QAProject:
+    """Create a project profile after successful resource initialization.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Workspace root.
+    kind: ProjectKind
+        Expected project type.
+    source: str
+        Source folder within a new profile.
+
+    Returns
+    -------
+    QAProject
+        Opened and validated project.
+
+    """
+
+    with _preparing_project(root, kind, source):
+        pass
+    return open_project(root)
 
 
 def prepare_project_workspace(
@@ -639,13 +969,15 @@ def prepare_project_workspace(
 ) -> QAProject:
     """Mirror one source folder into a managed QAChat workspace.
 
-    The original source is never modified.  A normal workspace is named
+    The original source is never modified. A normal workspace is named
     ``project_<source-name>`` and contains the copied source folder beside
-    ``indexes/``, ``logs/``, ``profile.ini``, and ``source_snapshot.json``.
+    ``profile.ini``, the shared workspace folders, and
+    ``source_snapshot.json``.
     Only files selected by the project's repository rules are mirrored.
 
-    Reopening the same source compares a saved SHA-256 manifest and copies only
-    files that were added or modified while deleting files that were removed.
+    Reopening the same source verifies the managed copy against its saved
+    SHA-256 manifest. If the copy differs, it is rebuilt from the original;
+    otherwise only added, modified, and removed source files are synchronized.
     If another source folder with the same basename already owns the preferred
     workspace name, a short path hash is appended to avoid a collision.
 
@@ -678,14 +1010,16 @@ def prepare_project_workspace(
     -----
     This mirrors one original repository using its selected-source manifest. It
     is not the cumulative multi-source API in qachat.workspace. The current
-    implementation does not reject incomplete scans, revalidate unchanged
-    copied files, or provide an atomic transaction across the snapshot and
-    manifest. Source copying is organization, not execution sandboxing.
+    implementation requires complete source and snapshot scans and verifies
+    copied content on each reopen. This adds disk I/O proportional to selected
+    source size. Reopening and synchronization are not atomic across snapshot
+    and manifest; initial project creation commits its profile last.
+    Source copying is organization, not execution sandboxing.
 
     """
 
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
 
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
@@ -703,83 +1037,141 @@ def prepare_project_workspace(
 
     preferred_root = sandbox / f"project_{safe_name}"
     root = _select_workspace_root(preferred_root, source)
-    root.mkdir(parents=True, exist_ok=True)
-
-    # Keep the source snapshot as a sibling of indexes/ and logs/.  Preserve
-    # the original folder name so the sandbox structure is easy to inspect.
+    if root.is_symlink():
+        raise ValueError("Managed workspace root must not be a symbolic link.")
+    # A new profile is committed only after the complete source snapshot and
+    # its provenance manifest have been prepared successfully.
     source_name = source.name
     snapshot = root / source_name
-    snapshot.mkdir(parents=True, exist_ok=True)
+    if snapshot.is_symlink():
+        raise ValueError("Managed source copy must not be a symbolic link.")
+    if not (root / "profile.ini").exists() and snapshot.is_dir():
+        if any(snapshot.iterdir()):
+            raise ValueError(
+                "Uninitialized workspace has an existing source snapshot."
+            )
+    with _preparing_project(
+        root, kind, source_name, validate_source=True
+    ) as (
+        project, journal
+    ):
+        if project.source != snapshot.resolve(strict=True):
+            raise ValueError(
+                "Managed workspace profile.ini must keep project.source "
+                f"set to {source_name}."
+            )
+        excludes: tuple[str, ...] = ()
+        if sandbox.is_relative_to(source):
+            excludes = (sandbox.relative_to(source).as_posix(),)
 
-    profile_path = root / "profile.ini"
-    if not profile_path.exists():
-
-        extensions = _PROJECT_EXTENSIONS[kind]
-        profile_path.write_text(
-            _default_profile_text(kind, source_name, extensions),
-            encoding="utf-8",
+        report = scan_repository(
+            source,
+            extensions=project.profile.extensions,
+            exclude_paths=excludes,
+            max_file_bytes=project.profile.max_file_bytes,
         )
+        current_manifest = build_repository_manifest(report)
+        snapshot_manifest_path = root / "source_snapshot.json"
+        saved_manifest = _read_json_if_possible(snapshot_manifest_path)
+        try:
+            changes = compare_repository_manifests(
+                saved_manifest,
+                current_manifest,
+            )
+        except ValueError:
+            saved_manifest = None
+            changes = compare_repository_manifests(None, current_manifest)
 
-    project = open_project(root)
-    if project.profile.kind != kind:
-        raise ValueError(
-            "PROJECT_KIND conflicts with the existing workspace profile.ini."
-        )
-    if project.source != snapshot.resolve():
-        raise ValueError(
-            "Managed workspace profile.ini must keep project.source set to "
-            f"{source_name}."
-        )
+        # The saved source manifest alone cannot detect edits to the managed
+        # copy. Verify selected copied bytes before using the incremental diff.
+        # A divergent snapshot is rebuilt, not synchronized on top of untrusted
+        # content (including unexpected selected files and symbolic links).
+        if saved_manifest is not None and not _snapshot_matches_manifest(
+            snapshot, project.profile, saved_manifest
+        ):
+            saved_manifest = None
+            changes = compare_repository_manifests(None, current_manifest)
 
-    excludes: tuple[str, ...] = ()
-    if sandbox.is_relative_to(source):
-        excludes = (sandbox.relative_to(source).as_posix(),)
+        if not bool(changes["matches"]):
+            if saved_manifest is None:
+                shutil.rmtree(snapshot)
+                snapshot.mkdir(parents=True, exist_ok=True)
 
-    report = scan_repository(
-        source,
-        extensions=project.profile.extensions,
-        exclude_paths=excludes,
-        max_file_bytes=project.profile.max_file_bytes,
-    )
-    current_manifest = build_repository_manifest(report)
-    snapshot_manifest_path = root / "source_snapshot.json"
-    saved_manifest = _read_json_if_possible(snapshot_manifest_path)
-    try:
-        changes = compare_repository_manifests(
-            saved_manifest,
-            current_manifest,
-        )
-    except ValueError:
-        saved_manifest = None
-        changes = compare_repository_manifests(None, current_manifest)
+            for relative in changes["removed"]:
+                target = snapshot / str(relative)
+                if target.is_file() or target.is_symlink():
+                    target.unlink()
 
-    if not bool(changes["matches"]):
-        if saved_manifest is None:
-            shutil.rmtree(snapshot)
-            snapshot.mkdir(parents=True, exist_ok=True)
+            for relative in [*changes["added"], *changes["modified"]]:
+                source_path = source / str(relative)
+                target = snapshot / str(relative)
+                if journal is not None:
+                    journal.note(target)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target)
 
-        for relative in changes["removed"]:
-            target = snapshot / str(relative)
-            if target.is_file() or target.is_symlink():
-                target.unlink()
+            _remove_empty_directories(snapshot)
 
-        for relative in [*changes["added"], *changes["modified"]]:
-            source_path = source / str(relative)
-            target = snapshot / str(relative)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source_path, target)
+        # Always record ownership, including the zero-file case.  This lets the
+        # next open distinguish different sources with the same basename.
+        manifest_payload = {
+            **current_manifest,
+            "source_directory": str(source),
+        }
+        if journal is not None:
+            journal.note(snapshot_manifest_path)
+        _write_json(snapshot_manifest_path, manifest_payload)
 
-        _remove_empty_directories(snapshot)
 
-    # Always record ownership, including the zero-file case.  This lets the
-    # next open distinguish two different source folders with the same name.
-    manifest_payload = {
-        **current_manifest,
-        "source_directory": str(source),
-    }
-    _write_json(snapshot_manifest_path, manifest_payload)
 
     return open_project(root)
+
+
+def _snapshot_matches_manifest(
+    snapshot: Path,
+    profile: ProjectProfile,
+    manifest: dict[str, object],
+) -> bool:
+    """Verify that selected copied files still match their saved hashes.
+
+    Parameters
+    ----------
+    snapshot: pathlib.Path
+        Managed copy of the original source directory.
+    profile: ProjectProfile
+        Profile defining the literal extensions and file-size limit.
+    manifest: dict[str, object]
+        Previously validated source manifest used to construct the copy.
+
+    Returns
+    -------
+    bool
+        True when the selected copied content exactly matches the manifest.
+
+    Raises
+    ------
+    ValueError
+        If the snapshot cannot be scanned completely.
+    OSError
+        If files cannot be read or change while their hashes are computed.
+
+    Notes
+    -----
+    Selected files are rehashed on each workspace preparation, including
+    when the source manifest is unchanged. Unselected files are not part of
+    this integrity contract. A mismatched copy is rebuilt by the caller.
+
+    """
+
+    report = scan_repository(
+        snapshot,
+        extensions=profile.extensions,
+        max_file_bytes=profile.max_file_bytes,
+    )
+    copied_manifest = build_repository_manifest(report)
+    return bool(compare_repository_manifests(manifest, copied_manifest)[
+        "matches"
+    ])
 
 
 def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
@@ -842,7 +1234,7 @@ def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
 
 
 def open_project(directory: str | Path) -> QAProject:
-    """Open a configured project and prepare its output folders.
+    """Open a configured project and prepare its shared folders.
 
     Parameters
     ----------
@@ -867,8 +1259,9 @@ def open_project(directory: str | Path) -> QAProject:
     -----
     The root and configured source must already be directories and profile.ini
     must exist. A profile may name an absolute source outside the project. The
-    function creates indexes and logs directories before returning; it does not
-    load models.
+    function creates indexes, logs, outputs and templates directories before
+    returning, without reinstalling packaged templates; it does not load
+    models.
 
     """
 
@@ -890,10 +1283,9 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
+    ensure_project_folders(root)
     indexes = root / "indexes"
     logs = root / "logs"
-    indexes.mkdir(exist_ok=True)
-    logs.mkdir(exist_ok=True)
     return QAProject(
         root=root,
         source=source,
@@ -951,12 +1343,9 @@ def _write_json(path: Path, value: dict[str, object]) -> None:
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(
-        json.dumps(value, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        path, json.dumps(value, indent=2, sort_keys=True) + "\n"
     )
-    temporary.replace(path)
 
 
 def _remove_empty_directories(root: Path) -> None:
@@ -1008,19 +1397,18 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
     Notes
     -----
-    The temperature check rejects negative values but not NaN or positive
-    infinity. Extension validation here is less restrictive than the repository
-    scanner; scan-time validation can still reject a profile extension.
+    Temperatures must be finite and nonnegative. Literal extension grammar
+    is shared with the repository scanner to reject invalid settings early.
 
     """
 
     kind_value = _required(parser, "project", "kind")
     if kind_value not in PROJECT_KIND_CHOICES:
-        raise ValueError("project.kind must be code or literature.")
+        raise ValueError(f"project.kind must be one of: {_KIND_CHOICE_TEXT}.")
     kind = cast("ProjectKind", kind_value)
 
     extensions = tuple(
-        part.strip().lower()
+        part.strip()
         for part in _required(
             parser,
             "project",
@@ -1032,6 +1420,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         not extension.startswith(".") for extension in extensions
     ):
         raise ValueError("project.extensions must contain values like .py.")
+    try:
+        extensions = normalize_extensions(extensions)
+    except ValueError as error:
+        raise ValueError(
+            f"project.extensions must contain literal suffixes: {error}"
+        ) from error
 
     backend_value = _required(parser, "models", "backend")
     if backend_value not in BACKEND_CHOICES:
@@ -1062,6 +1456,8 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         )
 
     temperature = _float(parser, "generation", "temperature")
+    if not isfinite(temperature):
+        raise ValueError("generation.temperature must be finite.")
     if temperature < 0:
         raise ValueError("generation.temperature cannot be negative.")
 
@@ -1337,7 +1733,8 @@ def _float(parser: ConfigParser, section: str, option: str) -> float:
 
     Notes
     -----
-    This conversion does not reject non-finite floating-point values.
+    Conversion alone permits non-finite values; ``_read_profile`` rejects
+    them after parsing.
 
     """
 

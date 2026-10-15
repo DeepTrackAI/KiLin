@@ -7,7 +7,9 @@ cache inventory, or a runtime compatibility check.
 
 Keeping these defaults outside the GUI prevents project configuration and
 interface presets from drifting while preserving the dependency direction from
-core QAChat functionality to optional interfaces.
+core QAChat functionality to optional interfaces. Default model IDs are read
+from the packaged ``qachat_defaults.json`` when this module is imported.
+The shared reader validates their strings; the backend is not selected here.
 
 Key Features
 ------------
@@ -56,6 +58,10 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypeAlias
 
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_string,
+)
 
 __all__ = [
     "MODEL_ROLE_CHAT",
@@ -77,10 +83,18 @@ MODEL_ROLE_CHOICES: Final[tuple[ModelRole, ...]] = (
     MODEL_ROLE_EMBEDDING,
 )
 
-DEFAULT_CHAT_MODEL_MLX: Final[str] = "Qwen/Qwen3-8B-MLX-4bit"
-DEFAULT_CHAT_MODEL_TORCH: Final[str] = "Qwen/Qwen3-8B"
+# The shared reader caches the packaged JSON and validates this section.
+_MODEL_DEFAULTS = load_defaults_section("DEFAULT_MODELS")
 
-DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = (
-    "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+DEFAULT_CHAT_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_CHAT_MODEL_MLX", "DEFAULT_MODELS"
 )
-DEFAULT_EMBEDDING_MODEL_TORCH: Final[str] = "Qwen/Qwen3-Embedding-0.6B"
+DEFAULT_CHAT_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_CHAT_MODEL_TORCH", "DEFAULT_MODELS"
+)
+DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_MLX", "DEFAULT_MODELS"
+)
+DEFAULT_EMBEDDING_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_TORCH", "DEFAULT_MODELS"
+)

@@ -53,7 +53,9 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
-from typing import TypeAlias
+import json
+from pathlib import Path
+from typing import Final, TypeAlias
 
 from qachat.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
@@ -69,6 +71,10 @@ from qachat.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
 
 
 __all__ = [
+    "DEEP_CHAT_MODEL_MLX",
+    "LIGHT_CHAT_MODEL_MLX",
+    "cached_model_roles",
+    "GUI_REQUIRED_MODEL_IDS",
     "MODEL_CHOICES",
     "ModelChoice",
     "installed_backends",
@@ -76,6 +82,14 @@ __all__ = [
 ]
 
 ModelBackend: TypeAlias = SelectedBackend
+
+# Cached models that are neither chat nor embedding models. Only the GUI's
+# cache classification uses it; qachat.model_defaults owns the model roles.
+MODEL_ROLE_OTHER: Final[str] = "other"
+
+# The GUI's smallest and largest effort models on MLX.
+LIGHT_CHAT_MODEL_MLX = "Qwen/Qwen3-0.6B-MLX-4bit"
+DEEP_CHAT_MODEL_MLX = "mlx-community/Qwen3-14B-4bit"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +134,12 @@ class ModelChoice:
 
 
 MODEL_CHOICES = (
+    ModelChoice(LIGHT_CHAT_MODEL_MLX, MODEL_ROLE_CHAT, BACKEND_MLX),
+    ModelChoice(
+        DEEP_CHAT_MODEL_MLX,
+        MODEL_ROLE_CHAT,
+        BACKEND_MLX,
+    ),
     ModelChoice(DEFAULT_CHAT_MODEL_MLX, MODEL_ROLE_CHAT, BACKEND_MLX),
     ModelChoice(
         DEFAULT_EMBEDDING_MODEL_MLX,
@@ -135,6 +155,19 @@ MODEL_CHOICES = (
         QUERY_FORMAT_QWEN3,
     ),
 )
+
+GUI_REQUIRED_MODEL_IDS = {
+    BACKEND_MLX: (
+        LIGHT_CHAT_MODEL_MLX,
+        DEFAULT_CHAT_MODEL_MLX,
+        DEEP_CHAT_MODEL_MLX,
+        DEFAULT_EMBEDDING_MODEL_MLX,
+    ),
+    BACKEND_TORCH: (
+        DEFAULT_CHAT_MODEL_TORCH,
+        DEFAULT_EMBEDDING_MODEL_TORCH,
+    ),
+}
 
 
 def installed_backends() -> dict[str, bool]:
@@ -193,3 +226,58 @@ def model_choices(cached_models: set[str]) -> list[dict[str, object]]:
         {**asdict(choice), "cached": choice.model_id in cached_models}
         for choice in MODEL_CHOICES
     ]
+
+
+def cached_model_roles(
+    cached_models: list[dict[str, object]],
+) -> dict[str, str]:
+    """Classify cached models as chat, embedding, or other.
+
+    Presets keep their catalog role. Otherwise a name containing "embed" or
+    a sentence-transformers configuration marks an embedding model, and a
+    causal or conditional-generation architecture marks a chat model.
+    Embedding models converted from chat architectures report a chat
+    architecture, so names are checked first.
+
+    Parameters
+    ----------
+    cached_models: list[dict[str, object]]
+        Entries from ``qachat.huggingface.available_models``.
+
+    Returns
+    -------
+    dict[str, str]
+        Role for each cached model ID.
+
+    """
+
+    presets = {choice.model_id: choice.role for choice in MODEL_CHOICES}
+    roles: dict[str, str] = {}
+    for entry in cached_models:
+        model_id = str(entry["model_id"])
+        snapshots = Path(str(entry.get("path", ""))) / "snapshots"
+        if model_id in presets:
+            roles[model_id] = presets[model_id]
+            continue
+        if "embed" in model_id.lower() or any(
+            snapshots.glob("*/config_sentence_transformers.json")
+        ):
+            roles[model_id] = MODEL_ROLE_EMBEDDING
+            continue
+        role = MODEL_ROLE_OTHER
+        for config in snapshots.glob("*/config.json"):
+            try:
+                value = json.loads(config.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            architectures = value.get("architectures") or []
+            if any(
+                str(name).endswith(
+                    ("ForCausalLM", "ForConditionalGeneration")
+                )
+                for name in architectures
+            ):
+                role = MODEL_ROLE_CHAT
+            break
+        roles[model_id] = role
+    return roles

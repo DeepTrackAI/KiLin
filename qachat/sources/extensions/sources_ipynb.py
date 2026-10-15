@@ -40,20 +40,17 @@ Examples
 from __future__ import annotations
 
 import json
-import re
 
+from qachat.sources.extensions.sources_md import _markdown_headings
 from qachat.sources.sources import (
     SourceFile,
     SourceUnit,
     _source_unit,
 )
 
-
 __all__ = [
     "extract_source_units",
 ]
-
-MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 
 
 def _notebook_units(source_file: SourceFile) -> list[SourceUnit]:
@@ -97,6 +94,10 @@ def _notebook_units(source_file: SourceFile) -> list[SourceUnit]:
             )
 
         cell_type = cell.get("cell_type")
+        if not isinstance(cell_type, str):
+            raise ValueError(
+                f"Invalid Jupyter notebook: {source_file.path.as_posix()}"
+            )
         if cell_type not in {"code", "markdown"}:
             continue
 
@@ -124,11 +125,9 @@ def _notebook_units(source_file: SourceFile) -> list[SourceUnit]:
 
         section: str | None = None
         if cell_type == "markdown":
-            for line in lines:
-                heading = MARKDOWN_HEADING.match(line.rstrip("\r\n"))
-                if heading is not None:
-                    section = heading.group(2).strip().rstrip("#").rstrip()
-                    break
+            headings = _markdown_headings(lines)
+            if headings:
+                section = headings[0][1]
 
         unit = _source_unit(
             source_file.path,

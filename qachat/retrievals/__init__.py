@@ -22,8 +22,21 @@ Key Features
 
     Expose deterministic explicit-path and function-neighbor expansion helpers.
 
+- **Whole-document reading**
+
+    Choose one named or dominant document and fit it to a token budget.
+
 Module Structure
 ----------------
+
+- ``DOCUMENT_REASON_NAMED_FUNCTION``, ``DOCUMENT_REASON_NAMED_FILE``, and
+  ``DOCUMENT_REASON_SEARCH``
+
+    Canonical string values for why a document was chosen for reading.
+
+- ``DOCUMENT_REASON_CHOICES``
+
+    Ordered collection of the document reasons.
 
 - ``CodeEntity``
 
@@ -40,6 +53,14 @@ Module Structure
 - ``CodeResult``
 
     One chunk found through code-aware retrieval.
+
+- ``DocumentReason``
+
+    Type alias for why a document was chosen for reading.
+
+- ``DocumentSelection``
+
+    The document chosen for reading and the chunks supplied from it.
 
 - ``HybridResult``
 
@@ -85,6 +106,14 @@ Module Structure
 
     Find chunks for explicitly named and related code entities.
 
+- ``dominant_path``
+
+    Return the file that dominates a ranking.
+
+- ``estimate_tokens``
+
+    Estimate the token count of text without a tokenizer.
+
 - ``expand_retrieval_context``
 
     Add complete requested context after normal RRF retrieval.
@@ -109,6 +138,10 @@ Module Structure
 
     Load semantic, lexical, and code-graph data from JSON.
 
+- ``named_paths``
+
+    Return the files a question names.
+
 - ``prepare_persistent_indexes``
 
     Validate and combine retrieval data from one repository state.
@@ -116,6 +149,10 @@ Module Structure
 - ``plan_retrieval``
 
     Detect exact repository context requested by one question.
+
+- ``read_document``
+
+    Choose one whole document or function and fit it to a token budget.
 
 - ``resolve_code_entities``
 
@@ -181,12 +218,30 @@ from qachat.retrievals.routing import (
     expand_retrieval_context,
     plan_retrieval,
 )
+from qachat.retrievals.document_reading import (
+    DOCUMENT_REASON_CHOICES,
+    DOCUMENT_REASON_NAMED_FILE,
+    DOCUMENT_REASON_NAMED_FUNCTION,
+    DOCUMENT_REASON_SEARCH,
+    DocumentReason,
+    DocumentSelection,
+    dominant_path,
+    estimate_tokens,
+    named_paths,
+    read_document,
+)
 
 __all__ = [
+    "DOCUMENT_REASON_CHOICES",
+    "DOCUMENT_REASON_NAMED_FILE",
+    "DOCUMENT_REASON_NAMED_FUNCTION",
+    "DOCUMENT_REASON_SEARCH",
     "CodeEntity",
     "CodeGraph",
     "CodeRelation",
     "CodeResult",
+    "DocumentReason",
+    "DocumentSelection",
     "HybridResult",
     "LexicalIndex",
     "LexicalResult",
@@ -198,14 +253,18 @@ __all__ = [
     "build_lexical_index",
     "build_semantic_index",
     "code_search",
+    "dominant_path",
+    "estimate_tokens",
     "expand_retrieval_context",
     "hybrid_search",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
     "load_indexes",
+    "named_paths",
     "prepare_persistent_indexes",
     "plan_retrieval",
+    "read_document",
     "resolve_code_entities",
     "save_indexes",
     "semantic_matrix",

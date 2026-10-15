@@ -6,10 +6,11 @@ creates empty conversations, and branches by copying a saved resumable state.
 A branch records its parent's identifier and checkpoint reference; it does
 not duplicate the parent's complete trace-event history.
 
-Files support both legacy top-level conversation records and grouped trace
-sessions through the shared internal conversation-format contract. Writes
-replace a temporary JSON file, but this module provides no multi-process lock
-or transaction across registry and filesystem updates.
+Files use only the canonical grouped conversation-session record through
+the shared internal conversation-format contract. Writes use unique
+atomically replaced temporary files. A stable companion-file lock excludes
+concurrent QAChat writers across processes. The in-memory registry and
+filesystem are not updated as one transaction.
 Conversation files can contain full questions, answers, and source excerpts.
 
 Key Features
@@ -25,10 +26,9 @@ Key Features
     Record parent identity and the saved checkpoint from which a branch was
     created.
 
-- **Compatible storage**
+- **Canonical storage**
 
-    Read supported legacy and grouped conversation records without starting
-    model inference.
+    Read validated grouped conversation records without starting inference.
 
 Module Structure
 ----------------
@@ -57,12 +57,19 @@ Examples
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 from uuid import uuid4
 
+from qachat.atomic_writes import atomic_write_text
+from qachat.conversation_ownership import (
+    ConversationFileLock,
+    conversation_write_ownership,
+)
 from qachat.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
@@ -70,6 +77,18 @@ from qachat.conversation_format import (
 )
 
 __all__ = ["ConversationInfo", "ConversationStore"]
+
+# Accept existing opaque IDs as well as generated ``conversation_<hex>`` IDs.
+# Do not constrain loaded IDs to the generated UUID format: older records and
+# imported conversations may use other alphanumeric identifiers.
+_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+
+# Saved metadata uses UTC ISO 8601 timestamps, with optional fractions.
+# Both the current ``Z`` spelling and historical ``+00:00`` are accepted.
+_UTC_TIMESTAMP_PATTERN = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+    r"(?:\.\d{1,6})?(?:Z|\+00:00)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,14 +183,19 @@ class ConversationStore:
         Normalize and persist a conversation display name.
     touch(conversation_id)
         Update and persist the last-modified timestamp of a conversation.
+    is_empty(conversation_id)
+        Return whether a conversation has no saved turns.
+    archive(conversation_id)
+        Move a conversation's file aside and select another conversation.
     state_path(conversation)
         Resolve the registered file path of a conversation.
 
     Notes
     -----
-    Metadata and saved state are local JSON, not an encrypted store. Registry
-    operations and file writes do not provide inter-process locking. The store
-    does not load language models.
+    Metadata and saved state are local JSON, not an encrypted store.
+    File mutations borrow a caller-held ownership token or acquire a
+    short-lived cross-process lock. Registry updates are not transactional.
+    The store does not load language models.
 
     """
 
@@ -224,7 +248,9 @@ class ConversationStore:
             return self.create()
         newest = max(
             self._items.values(),
-            key=lambda item: (item.updated_at_utc, item.conversation_id),
+            key=lambda item: (
+                _utc_datetime(item.updated_at_utc), item.conversation_id
+            ),
         )
         self._active_id = newest.conversation_id
         return newest
@@ -261,7 +287,9 @@ class ConversationStore:
 
         return sorted(
             self._items.values(),
-            key=lambda item: (item.created_at_utc, item.conversation_id),
+            key=lambda item: (
+                _utc_datetime(item.created_at_utc), item.conversation_id
+            ),
         )
 
     def select(self, conversation_id: str) -> ConversationInfo:
@@ -289,7 +317,12 @@ class ConversationStore:
         self._active_id = item.conversation_id
         return item
 
-    def create(self, *, branch_from: str | None = None) -> ConversationInfo:
+    def create(
+        self,
+        *,
+        branch_from: str | None = None,
+        ownership: ConversationFileLock | None = None,
+    ) -> ConversationInfo:
         """Create an empty conversation or a resumable copy of a parent.
 
         Parameters
@@ -298,6 +331,9 @@ class ConversationStore:
             Identifier of a registered parent to copy resumable state from, or
             None to create an empty independent conversation. Defaults to
             ``None``.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock for the parent conversation when branching. The
+            new destination always acquires its own short-lived lock.
 
         Returns
         -------
@@ -317,7 +353,8 @@ class ConversationStore:
         A branch copies non-metadata fields from the parent resume state and
         records parent/checkpoint identity. Old trace operations are not
         copied. The new filename avoids existing paths at the moment it is
-        chosen; no concurrent-writer lock is used.
+        chosen; each candidate path is locked and checked before creation.
+        A collision detected after selection raises rather than overwriting.
 
         """
 
@@ -329,11 +366,7 @@ class ConversationStore:
             if parent is not None
             else f"Conversation {len(self._items) + 1}"
         )
-        checkpoint = (
-            self._checkpoint_id(self.state_path(parent))
-            if parent is not None
-            else None
-        )
+        checkpoint = None
         now = _utc_timestamp()
         item = ConversationInfo(
             conversation_id=f"conversation_{uuid4().hex[:12]}",
@@ -348,29 +381,52 @@ class ConversationStore:
         path = self._new_path()
         copied_state: dict[str, object] = {}
         if parent is not None:
-            saved = conversation_state(_read_json(self.state_path(parent)))
-            metadata = ConversationInfo.__dataclass_fields__
-            copied_state = {
-                key: value
-                for key, value in saved.items()
-                if key not in metadata
-            }
-        _write_json(
-            path,
-            {
-                "sessions": {
-                    CONVERSATION_SESSION_KEY: new_conversation_session(
-                        {**asdict(item), **copied_state}
-                    )
+            parent_path = self.state_path(parent)
+            with conversation_write_ownership(
+                parent_path, ownership=ownership
+            ):
+                saved = conversation_state(_read_json(parent_path))
+                checkpoint = saved.get("checkpoint_id")
+                checkpoint = (
+                    checkpoint
+                    if isinstance(checkpoint, str) and checkpoint
+                    else None
+                )
+                metadata = ConversationInfo.__dataclass_fields__
+                copied_state = {
+                    key: value
+                    for key, value in saved.items()
+                    if key not in metadata
                 }
-            },
-        )
+            item = replace(item, origin_checkpoint_id=checkpoint)
+        with conversation_write_ownership(path):
+            if path.exists():
+                raise FileExistsError(
+                    f"Conversation path already exists: {path}"
+                )
+            _write_json(
+                path,
+                {
+                    "sessions": {
+                        CONVERSATION_SESSION_KEY: new_conversation_session(
+                            {**asdict(item), **copied_state}
+                        )
+                    }
+                },
+            )
         self._items[item.conversation_id] = item
         self._paths[item.conversation_id] = path
         self._active_id = item.conversation_id
         return item
 
-    def rename(self, conversation_id: str, name: str) -> ConversationInfo:
+    def rename(
+        self,
+        conversation_id: str,
+        name: str,
+        *,
+        ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> ConversationInfo:
         """Normalize and persist a conversation display name.
 
         Parameters
@@ -381,6 +437,13 @@ class ConversationStore:
         name: str
             Display name. Renaming collapses whitespace after string conversion
             and requires 1 to 80 characters.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock held by an active session for this file. Without
+            one, the store acquires and releases its own exclusive lock.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Writer for the same JSON file, such as an active trace logger's
+            ``update_conversation``. Requires borrowed ownership and replaces
+            the store's own file write. Defaults to ``None``.
 
         Returns
         -------
@@ -406,10 +469,18 @@ class ConversationStore:
                 "Conversation name must be 80 characters or less."
             )
         renamed = replace(item, name=clean, updated_at_utc=_utc_timestamp())
-        self._update_metadata(renamed)
+        self._update_metadata(
+            renamed, ownership=ownership, state_writer=state_writer
+        )
         return renamed
 
-    def touch(self, conversation_id: str) -> ConversationInfo:
+    def touch(
+        self,
+        conversation_id: str,
+        *,
+        ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> ConversationInfo:
         """Update and persist the last-modified timestamp of a conversation.
 
         Parameters
@@ -417,6 +488,13 @@ class ConversationStore:
         conversation_id: str
             Identifier of a conversation already discovered or created by this
             store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock held by an active session for this file. Without
+            one, the store acquires and releases its own exclusive lock.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Writer for the same JSON file, such as an active trace logger's
+            ``update_conversation``. Requires borrowed ownership and replaces
+            the store's own file write. Defaults to ``None``.
 
         Returns
         -------
@@ -434,8 +512,121 @@ class ConversationStore:
 
         item = self._require(conversation_id)
         updated = replace(item, updated_at_utc=_utc_timestamp())
-        self._update_metadata(updated)
+        self._update_metadata(
+            updated, ownership=ownership, state_writer=state_writer
+        )
         return updated
+
+    def is_empty(self, conversation_id: str) -> bool:
+        """Return whether a conversation has no saved turns.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation already discovered or created by this
+            store.
+
+        Returns
+        -------
+        bool
+            True when the saved resume state has no turns.
+
+        Raises
+        ------
+        ValueError
+            If the identifier, the saved file, or its turn list is invalid.
+
+        """
+
+        item = self._require(conversation_id)
+        record = conversation_state(_read_json(self.state_path(item)))
+        turns = record.get("turns", [])
+        if not isinstance(turns, list):
+            raise ValueError("The saved conversation is invalid.")
+
+        return not turns
+
+    def archive(
+        self,
+        conversation_id: str,
+        *,
+        ownership: ConversationFileLock | None = None,
+    ) -> tuple[ConversationInfo, Path]:
+        """Remove a conversation from the catalog and retain its JSON.
+
+        The record is moved into ``logs/traces/deleted`` so deletion remains
+        recoverable; an existing file of the same name there is kept, and
+        the moved file gets a ``_2``, ``_3``, ... suffix. When the last
+        conversation is archived, a new empty conversation is created
+        automatically. When the active conversation is archived, the most
+        recently updated remaining one becomes active.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of a conversation already discovered or created by this
+            store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed lock for archiving the currently owned conversation.
+            Other files are locked independently before moving.
+
+        Returns
+        -------
+        tuple[ConversationInfo, pathlib.Path]
+            The active conversation afterwards, and the archived file path.
+
+        Raises
+        ------
+        ValueError
+            If the identifier is invalid or the deleted-conversations folder
+            is a symbolic link.
+        OSError
+            If the folder cannot be created or the file cannot be moved.
+
+        Notes
+        -----
+        The source path remains exclusively owned through the rename; the
+        registry update is not part of a filesystem transaction.
+
+        """
+
+        item = self._require(conversation_id)
+        source = self.state_path(item)
+        deleted = self.root / "deleted"
+        deleted.mkdir(parents=True, exist_ok=True)
+        if deleted.is_symlink():
+            raise ValueError(
+                "The deleted-conversations folder must not be a link."
+            )
+
+        with conversation_write_ownership(
+            source, ownership=ownership
+        ):
+            destination = deleted / source.name
+            number = 2
+            while destination.exists():
+                destination = (
+                    deleted / f"{source.stem}_{number}{source.suffix}"
+                )
+                number += 1
+            source.rename(destination)
+        self._items.pop(conversation_id)
+        self._paths.pop(conversation_id)
+
+        if not self._items:
+            return self.create(), destination
+
+        if self._active_id == conversation_id:
+            replacement = max(
+                self._items.values(),
+                key=lambda candidate: (
+                    _utc_datetime(candidate.updated_at_utc),
+                    candidate.conversation_id,
+                ),
+            )
+            self._active_id = replacement.conversation_id
+
+        return self.active(), destination
 
     def state_path(self, conversation: ConversationInfo | str) -> Path:
         """Resolve the registered file path of a conversation.
@@ -470,8 +661,8 @@ class ConversationStore:
         """Rebuild the registry from recognizable conversation files.
 
         Symbolic links, non-files, malformed JSON/state, missing metadata, and
-        duplicate identifiers after the first are skipped. This does not
-        validate every metadata value against its annotation.
+        duplicate identifiers after the first are skipped. Persisted metadata
+        is validated before records enter the registry.
 
         """
 
@@ -484,19 +675,20 @@ class ConversationStore:
                 record = conversation_state(_read_json(path))
                 if not isinstance(record, dict):
                     continue
-                item = ConversationInfo(
-                    **{
-                        field: record[field]
-                        for field in ConversationInfo.__dataclass_fields__
-                    }
-                )
+                item = _validated_metadata(record)
             except (KeyError, TypeError, ValueError):
                 continue
             if item.conversation_id not in self._items:
                 self._items[item.conversation_id] = item
                 self._paths[item.conversation_id] = path
 
-    def _update_metadata(self, item: ConversationInfo) -> None:
+    def _update_metadata(
+        self,
+        item: ConversationInfo,
+        *,
+        ownership: ConversationFileLock | None = None,
+        state_writer: Callable[[Mapping[str, object]], None] | None = None,
+    ) -> None:
         """Replace saved metadata, then update the in-memory record.
 
         Parameters
@@ -504,6 +696,12 @@ class ConversationStore:
         item: ConversationInfo
             Updated metadata record for a conversation already registered in
             the store.
+        ownership: ConversationFileLock | None, optional
+            Borrowed exclusive write lock for this record, when already held.
+        state_writer: Callable[[Mapping[str, object]], None] | None, optional
+            Coordinated writer for the same conversation file. Requires an
+            active borrowed owner; the store updates its registry only after
+            the writer succeeds. Defaults to ``None``.
 
         Raises
         ------
@@ -512,14 +710,31 @@ class ConversationStore:
         OSError
             If the updated record cannot be written.
 
+        Notes
+        -----
+        A successful coordinated write updates the trace and store metadata
+        together, without a second JSON replacement from the store. Callers
+        must supply a writer targeting the borrowed conversation path.
+
         """
 
         path = self._paths[item.conversation_id]
-        payload = _read_json(path)
-        conversation = conversation_state(payload, create=True)
-        conversation.update(asdict(item))
-        _write_json(path, payload)
-        self._items[item.conversation_id] = item
+        if state_writer is not None and ownership is None:
+            raise ValueError(
+                "A coordinated state writer requires held ownership."
+            )
+        with conversation_write_ownership(path, ownership=ownership):
+            payload = _read_json(path)
+            conversation = conversation_state(payload, create=True)
+            changes = asdict(item)
+            if state_writer is None:
+                conversation.update(changes)
+                _write_json(path, payload)
+            else:
+                # The active trace is the sole JSON writer. A second
+                # store replacement would leave its snapshot stale.
+                state_writer(changes)
+            self._items[item.conversation_id] = item
 
     def _new_path(self) -> Path:
         """Choose a timestamped conversation filename not currently present.
@@ -618,6 +833,110 @@ class ConversationStore:
         return value if isinstance(value, str) and value else None
 
 
+def _utc_datetime(value: object) -> datetime:
+    """Parse a valid persisted UTC timestamp for chronological ordering.
+
+    Parameters
+    ----------
+    value: object
+        Candidate ISO 8601 timestamp from saved metadata.
+
+    Returns
+    -------
+    datetime.datetime
+        Timezone-aware UTC datetime for comparing saved records.
+
+    Raises
+    ------
+    ValueError
+        If the timestamp is not a valid UTC date and time.
+
+    """
+
+    if (
+        not isinstance(value, str)
+        or _UTC_TIMESTAMP_PATTERN.fullmatch(value) is None
+    ):
+        raise ValueError("The saved conversation timestamp is invalid.")
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(
+            "The saved conversation timestamp is invalid."
+        ) from error
+
+
+def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
+    """Validate metadata before registering a persisted conversation.
+
+    Parameters
+    ----------
+    record: dict[str, object]
+        Saved resumable conversation state containing metadata fields.
+
+    Returns
+    -------
+    ConversationInfo
+        Metadata with validated identifiers, text, and UTC timestamps.
+
+    Raises
+    ------
+    ValueError
+        If any required field is missing or has an invalid value.
+
+    Notes
+    -----
+    Extra fields belong to saved RAG state and are retained in the JSON.
+    Validation never rewrites, repairs, or deletes an invalid file. Discovery
+    skips invalid records so other conversations remain accessible.
+
+    """
+
+    try:
+        metadata = {
+            field: record[field]
+            for field in ConversationInfo.__dataclass_fields__
+        }
+    except KeyError as error:
+        raise ValueError(
+            "The saved conversation metadata is incomplete."
+        ) from error
+
+    identifier = metadata["conversation_id"]
+    if (
+        not isinstance(identifier, str)
+        or _ID_PATTERN.fullmatch(identifier) is None
+    ):
+        raise ValueError("The saved conversation ID is invalid.")
+
+    name = metadata["name"]
+    if (
+        not isinstance(name, str)
+        or not name.strip()
+        or len(name) > 80
+    ):
+        raise ValueError("The saved conversation name is invalid.")
+
+    parent = metadata["parent_conversation_id"]
+    if (
+        parent is not None
+        and (
+            not isinstance(parent, str)
+            or _ID_PATTERN.fullmatch(parent) is None
+        )
+    ):
+        raise ValueError("The saved conversation parent ID is invalid.")
+
+    origin = metadata["origin_checkpoint_id"]
+    if origin is not None and (not isinstance(origin, str) or not origin):
+        raise ValueError("The saved conversation checkpoint is invalid.")
+
+    _utc_datetime(metadata["created_at_utc"])
+    _utc_datetime(metadata["updated_at_utc"])
+    return ConversationInfo(**metadata)
+
+
 def _read_json(path: Path) -> dict[str, object]:
     """Read a conversation JSON object as UTF-8.
 
@@ -667,18 +986,18 @@ def _write_json(path: Path, payload: object) -> None:
 
     Notes
     -----
-    Parent directories are created. Replacement is a single-file operation, not
-    a transaction with the in-memory registry or other writers.
+    Parent directories are created. An exclusive, unpredictably named temporary
+    file in the destination directory prevents following a pre-existing
+    temporary-file symlink. Temporary files are removed on any write or replace
+    failure. Replacement is atomic for one file, not a transaction with the
+    in-memory registry or other writers.
 
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    atomic_write_text(
+        path, json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
     )
-    temporary.replace(path)
 
 
 def _utc_timestamp() -> str:

@@ -69,7 +69,6 @@ import re
 
 from qachat.chunking import Chunk
 
-
 __all__ = [
     "LexicalIndex",
     "LexicalResult",

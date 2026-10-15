@@ -63,7 +63,6 @@ from pathlib import Path
 
 from qachat.sources.sources import SourceFile, SourceUnit
 
-
 __all__ = [
     "CodeEntity",
     "CodeRelation",
@@ -187,6 +186,8 @@ def build_code_graph(
     structural entities/containment only. Relations may target external or
     unresolved names not represented by graph.entities. Fixed inputs produce
     sorted deduplicated records; this is not a complete runtime call graph.
+    Entities are ordered by name, kind, and path because distinct source
+    entities can share the same qualified name.
 
     """
 
@@ -245,8 +246,19 @@ def build_code_graph(
             raise RuntimeError(f"Invalid code-graph extension: {suffix}.")
         relations.update(extracted)
 
+    # Different source entities can share a name; all identity fields must
+    # participate in sorting to keep graph fingerprints reproducible.
     return CodeGraph(
-        tuple(sorted(entities, key=lambda item: item.name)),
+        tuple(
+            sorted(
+                entities,
+                key=lambda item: (
+                    item.name,
+                    item.kind,
+                    item.path.as_posix(),
+                ),
+            )
+        ),
         tuple(
             sorted(
                 relations,

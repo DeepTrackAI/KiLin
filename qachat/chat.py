@@ -79,14 +79,17 @@ Create a session from a model directory compatible with the selected backend:
 ... finally:
 ...     chat.close()
 
-The path is illustrative and must identify an available compatible model.
+The path is illustrative and must identify an available compatible model. It
+can also be the model id.
 
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import gc
 from importlib import import_module
+from math import isfinite
 from pathlib import Path
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
@@ -161,7 +164,7 @@ class ChatSession:
     temperature: float, optional
         Sampling temperature. Zero selects greedy decoding; positive values
         enable sampling. This is not a cross-device reproducibility guarantee.
-        The current validator does not reject NaN or positive infinity.
+        The temperature must be finite and nonnegative.
         Defaults to ``0.0``.
     max_new_tokens: int | None, optional
         Session-level maximum number of tokens generated for each reply.
@@ -201,6 +204,14 @@ class ChatSession:
         Current session-level generation-length limit.
     messages: list[dict[str, str]]
         Ordered in-memory conversation history using the canonical roles.
+    input_token_total: int
+        Prompt tokens this session has read, over all replies.
+    output_token_total: int
+        Tokens this session has generated, over all replies; it grows while
+        a reply streams, so callers can show usage live.
+    last_finish_reason: str | None
+        Why the latest generation stopped, such as ``"stop"`` or
+        ``"length"``. Set by the first reply; MLX can also report None.
     trace: TraceSink
         Trace sink used by the session.
 
@@ -250,6 +261,10 @@ class ChatSession:
     _model: Model | None
     _tokenizer: Tokenizer | None
 
+    # Token totals start at zero; replies add to them on the instance.
+    input_token_total: int = 0
+    output_token_total: int = 0
+
     def __init__(
         self: ChatSession,
         model_id: str,
@@ -282,8 +297,8 @@ class ChatSession:
         temperature: float, optional
             Sampling temperature. Zero selects greedy decoding; positive values
             enable sampling. This is not a cross-device reproducibility
-            guarantee. The current validator does not reject NaN or positive
-            infinity. Defaults to ``0.0``.
+            guarantee. The value must be finite and nonnegative.
+            Defaults to ``0.0``.
         max_new_tokens: int | None, optional
             Session-level maximum number of tokens generated for each reply.
             ``None`` uses the remaining model context unless a per-reply
@@ -521,6 +536,7 @@ class ChatSession:
         *,
         max_new_tokens: int | None = None,
         trace_turn_id: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -541,6 +557,10 @@ class ChatSession:
         trace_turn_id: str | None, optional
             Optional trace identifier associating emitted events and artifacts
             with the current conversation turn. Defaults to ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives decoded text pieces as they are generated, for live
+            display. MLX streams; PyTorch calls it once with the whole reply.
+            Its exceptions propagate. Defaults to ``None``.
 
         Returns
         -------
@@ -555,6 +575,7 @@ class ChatSession:
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has
             exhausted the model context.
+            Also raised when ``token_callback`` is not callable.
 
         Notes
         -----
@@ -573,6 +594,9 @@ class ChatSession:
 
         if not isinstance(message, str) or not message.strip():
             raise ValueError("Enter a non-empty message.")
+
+        if token_callback is not None and not callable(token_callback):
+            raise ValueError("token_callback must be callable or None.")
 
         reply_started_at = perf_counter()
         token_override = _check_max_new_tokens(max_new_tokens)
@@ -653,6 +677,8 @@ class ChatSession:
 
         self._last_generation_output_token_count = None
         self._last_generation_token_count_source = None
+        self.last_finish_reason = None
+        self.input_token_total += len(tokens)
         generation_started_at = perf_counter()
         with self.trace.span(
             "llm.call",
@@ -673,17 +699,27 @@ class ChatSession:
                         tokens,
                         token_budget,
                         trace_turn_id=trace_turn_id,
+                        token_callback=token_callback,
+                    )
+                elif token_callback is not None:
+                    answer = self._mlx_reply(
+                        tokens, token_budget, token_callback=token_callback
                     )
                 else:
                     answer = self._mlx_reply(tokens, token_budget)
-            elif self.trace.enabled:
-                answer = self._torch_reply(
-                    tokens,
-                    token_budget,
-                    trace_turn_id=trace_turn_id,
-                )
             else:
-                answer = self._torch_reply(tokens, token_budget)
+                if self.trace.enabled:
+                    answer = self._torch_reply(
+                        tokens,
+                        token_budget,
+                        trace_turn_id=trace_turn_id,
+                    )
+                else:
+                    answer = self._torch_reply(tokens, token_budget)
+                if token_callback is not None and isinstance(answer, str):
+                    # PyTorch generation is not streamed, so the callback
+                    # receives the whole reply at once.
+                    token_callback(answer)
         generation_duration_ms = (
             perf_counter() - generation_started_at
         ) * 1000
@@ -718,6 +754,7 @@ class ChatSession:
             "output_token_count_source": (
                 self._last_generation_token_count_source
             ),
+            "finish_reason": self.last_finish_reason,
             "character_count": len(answer),
             "generation_duration_ms": round(generation_duration_ms, 3),
             "reply_duration_ms": round(
@@ -799,6 +836,7 @@ class ChatSession:
         token_budget: int,
         *,
         trace_turn_id: str | None = None,
+        token_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Generate one decoded reply through MLX.
 
@@ -812,25 +850,47 @@ class ChatSession:
             Reserved trace identifier for parity with backend generation
             helpers. The current MLX generation path does not use it directly.
             Defaults to ``None``.
+        token_callback: Callable[[str], None] | None, optional
+            Receives each decoded text piece as it is generated. Defaults to
+            ``None``.
 
         Returns
         -------
         str
             Decoded model output.
 
+        Notes
+        -----
+        Updates ``output_token_total`` after each token and records the
+        generated token count and ``last_finish_reason``.
+
         """
 
         mlx_lm = import_module("mlx_lm")
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
-        return mlx_lm.generate(
+
+        parts: list[str] = []
+        generated = 0
+        for response in mlx_lm.stream_generate(
             self._model,
             self._tokenizer,
             prompt=tokens,
             max_tokens=token_budget,
             sampler=sampler,
-            verbose=False,
-        )
+        ):
+            # Each response is one generated token, even when its text is
+            # empty (part of a character still being decoded).
+            generated += 1
+            self.output_token_total += 1
+            parts.append(response.text)
+            self.last_finish_reason = response.finish_reason
+            if token_callback is not None and response.text:
+                token_callback(response.text)
+
+        self._last_generation_output_token_count = generated
+        self._last_generation_token_count_source = "generated_tokens"
+        return "".join(parts)
 
     def _torch_reply(
         self: ChatSession,
@@ -878,6 +938,21 @@ class ChatSession:
         with torch.inference_mode():
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
+        self.output_token_total += len(generated)
+
+        # A reply cut by the token budget did not end with an end-of-sequence
+        # token; the model's generation config may list several of them.
+        eos = getattr(
+            getattr(model, "generation_config", None), "eos_token_id", None
+        )
+        if eos is None:
+            eos = tokenizer.eos_token_id
+        eos_ids = set(eos if isinstance(eos, (list, tuple)) else [eos])
+        ended_with_eos = bool(generated) and generated[-1] in eos_ids
+        reached_budget = len(generated) >= token_budget
+        self.last_finish_reason = (
+            "length" if reached_budget and not ended_with_eos else "stop"
+        )
         self._last_generation_output_token_count = len(generated)
         self._last_generation_token_count_source = "generated_token_ids"
         data: dict[str, object] = {
@@ -1067,28 +1142,30 @@ def _check_temperature(value: float) -> float:
     Returns
     -------
     float
-        Temperature converted to ``float``.
+        Finite, nonnegative temperature converted to ``float``.
 
     Raises
     ------
     ValueError
-        If ``value`` is Boolean, non-numeric, or negative.
-
-    Notes
-    -----
-    The test rejects booleans, non-int/non-float values, and values below zero.
-    It does not check finiteness, so NaN and positive infinity currently pass
-    unchanged through float conversion.
+        If ``value`` is Boolean, nonnumeric, negative, or nonfinite, or
+        cannot be represented as a finite float.
 
     """
 
+    message = "Temperature must be a finite, nonnegative number."
+
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError("temperature must be zero or a positive number.")
+        raise ValueError(message)
 
-    if value < 0:
-        raise ValueError("temperature must be zero or a positive number.")
+    try:
+        temperature = float(value)
+    except OverflowError:
+        raise ValueError(message) from None
 
-    return float(value)
+    if not isfinite(temperature) or temperature < 0:
+        raise ValueError(message)
+
+    return temperature
 
 
 def _text_token_count(tokenizer: object, text: str) -> int | None:
@@ -1120,6 +1197,7 @@ def _text_token_count(tokenizer: object, text: str) -> int | None:
     encode = getattr(tokenizer, "encode", None)
     if not callable(encode):
         return None
+
     try:
         try:
             tokens = encode(text, add_special_tokens=False)
@@ -1127,6 +1205,7 @@ def _text_token_count(tokenizer: object, text: str) -> int | None:
             tokens = encode(text)
     except (AttributeError, TypeError, ValueError):
         return None
+
     try:
         return len(tokens)
     except TypeError:

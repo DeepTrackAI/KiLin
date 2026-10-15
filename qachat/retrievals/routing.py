@@ -1,8 +1,9 @@
 """Expand retrieval context from explicit source references in a question.
 
-Routing recognizes file paths, known function names, and a fixed vocabulary
-of relationship requests. It produces a ``RetrievalPlan`` and adds matching
-file or function chunks and eligible graph neighbors to an existing ranking.
+Routing recognizes file paths, known function names, and a configurable
+vocabulary of relationship requests. It produces a ``RetrievalPlan``
+and adds matching file or function chunks and eligible graph neighbors to an
+existing ranking.
 This is deterministic text matching over the supplied source metadata, not a
 language-model router or a complete interpretation of the question.
 
@@ -61,6 +62,7 @@ from pathlib import Path
 import re
 
 from qachat.chunking import Chunk
+from qachat.defaults import load_defaults_section, require_default_strings
 from qachat.retrievals.code_graph import CodeEntity, CodeGraph
 from qachat.retrievals.strategies.retrieval_hybrid import HybridResult
 
@@ -77,28 +79,19 @@ _FUNCTION_KINDS = {
     "python_method",
 }
 
-_RELATION_PHRASES = (
-    "called by",
-    "calls",
-    "caller",
-    "callers",
-    "callee",
-    "callees",
-    "connected to",
-    "connect to",
-    "depends on",
-    "imported by",
-    "imports",
-    "interact with",
-    "related to",
-    "referenced by",
-    "references",
-    "relationship",
-    "used across",
-    "used throughout",
-    "where does",
-    "where is",
+# Relationship phrases influence deterministic graph-context expansion.
+_RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
+_RELATION_PHRASES = require_default_strings(
+    _RETRIEVAL_DEFAULTS, "RELATION_PHRASES", "RETRIEVAL"
 )
+if any(
+    phrase != phrase.strip() or phrase != phrase.lower()
+    for phrase in _RELATION_PHRASES
+):
+    raise ValueError(
+        "RETRIEVAL.RELATION_PHRASES must contain lowercase, "
+        "trimmed phrases."
+    )
 
 _WORD = re.compile(r"[A-Za-z0-9]+")
 

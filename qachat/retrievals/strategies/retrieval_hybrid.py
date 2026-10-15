@@ -46,12 +46,19 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from qachat.chunking import Chunk
+from qachat.defaults import load_defaults_section, require_default_int
 
 
 __all__ = [
     "HybridResult",
     "hybrid_search",
 ]
+
+# RRF smoothing is independent of the project's number of returned results.
+_RETRIEVAL_DEFAULTS = load_defaults_section("RETRIEVAL")
+_DEFAULT_RRF_RANK_CONSTANT = require_default_int(
+    _RETRIEVAL_DEFAULTS, "RRF_RANK_CONSTANT", "RETRIEVAL"
+)
 
 
 class RankedResult(Protocol):
@@ -102,7 +109,7 @@ def hybrid_search(
     lexical: Sequence[RankedResult] = (),
     code: Sequence[RankedResult] = (),
     count: int = 5,
-    rank_constant: int = 60,
+    rank_constant: int = _DEFAULT_RRF_RANK_CONSTANT,
 ) -> list[HybridResult]:
     """Fuse ranked retrieval lists without comparing unlike raw scores.
 
@@ -117,7 +124,8 @@ def hybrid_search(
     count: int, optional
         Maximum number of combined results. Defaults to ``5``.
     rank_constant: int, optional
-        Reciprocal Rank Fusion smoothing constant. Defaults to ``60``.
+        Reciprocal Rank Fusion smoothing constant, from
+        ``RETRIEVAL.RRF_RANK_CONSTANT`` (currently 60).
 
     Returns
     -------

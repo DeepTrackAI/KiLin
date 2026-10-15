@@ -160,7 +160,8 @@ def build_semantic_index(
     Raises
     ------
     ValueError
-        If no chunks are supplied or vector dimensions disagree.
+        If chunks are empty or embedding vectors have invalid counts,
+        dimensions, non-finite components, or zero norm.
 
     """
 
@@ -185,12 +186,7 @@ def build_semantic_index(
         if progress_callback is not None:
             progress_callback(min(start + len(batch), total), total)
 
-    if len(vectors) != len(chunks):
-        raise ValueError("Embedding count does not match the chunk count.")
-
-    dimensions = {len(vector) for vector in vectors}
-    if len(dimensions) != 1 or not dimensions or 0 in dimensions:
-        raise ValueError("Indexed vectors must share one non-zero dimension.")
+    _validate_semantic_embeddings(vectors, len(chunks))
 
     return SemanticIndex(
         chunks=tuple(chunks),
@@ -278,11 +274,13 @@ def semantic_search(
     Raises
     ------
     ValueError
-        If the index is empty, count is invalid, backend is unknown, or
-        dimensions disagree.
+        If the index is empty, count is invalid, backend is unknown, or the
+        query vector is non-finite, zero, or dimensionally incompatible.
 
     Notes
     -----
+    Stored vectors are validated when built or admitted for persistence;
+    rechecking all of them during every query would add linear overhead.
     The query is embedded exactly as supplied; model-specific query formatting
     is a caller responsibility. Loop and NumPy paths can differ for ties and
     floating-point rounding. A supplied matrix is trusted to match the index
@@ -309,6 +307,7 @@ def semantic_search(
             query_text,
             trace_turn_id=trace_turn_id,
         )
+    _validate_semantic_vector(query_vector, label="Query vector")
     expected_dimension = len(index.embeddings[0])
     if len(query_vector) != expected_dimension:
         raise ValueError("Query and index vector dimensions do not match.")
@@ -440,3 +439,89 @@ def _cosine_similarity(
         raise ValueError("Cosine similarity cannot use a zero vector.")
 
     return dot_product / (first_length * second_length)
+
+
+def _validate_semantic_vector(
+    vector: list[float] | tuple[float, ...],
+    *,
+    label: str,
+) -> None:
+    """Reject empty, non-finite, nonnumeric, and zero embedding vectors.
+
+    Parameters
+    ----------
+    vector: list[float] | tuple[float, ...]
+        One model-generated embedding vector.
+    label: str
+        Human-readable source of the vector for validation errors.
+
+    Raises
+    ------
+    ValueError
+        If a vector is unsuitable for cosine similarity.
+
+    """
+    if not isinstance(vector, (list, tuple)) or not vector:
+        raise ValueError(f"{label} must have a non-zero dimension.")
+
+    for value in vector:
+        if (
+            not isinstance(value, (int, float, np.integer, np.floating))
+            or isinstance(value, (bool, np.bool_))
+        ):
+            raise ValueError(f"{label} must contain finite numeric values.")
+        try:
+            finite = math.isfinite(value)
+        except (OverflowError, TypeError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError(f"{label} must contain finite numeric values.")
+
+    if not any(value != 0 for value in vector):
+        raise ValueError(f"{label} cannot be a zero vector.")
+
+
+def _validate_semantic_embeddings(
+    vectors: list[list[float]] | tuple[tuple[float, ...], ...],
+    expected_count: int,
+) -> None:
+    """Check semantic index cardinality, dimensions, and numeric contents.
+
+    Parameters
+    ----------
+    vectors: list[list[float]] | tuple[tuple[float, ...], ...]
+        Embeddings to admit into one retrieval index.
+    expected_count: int
+        Number of chunks represented by the embeddings.
+
+    Raises
+    ------
+    ValueError
+        If the embeddings do not form a finite, nonzero vector matrix with
+        exactly one equal-length row per indexed chunk.
+
+    Notes
+    -----
+    Non-unit vectors remain valid because semantic search computes cosine
+    similarity from the vector norms. This validation runs at index creation
+    and persistence boundaries, not once per query.
+
+    """
+    if not isinstance(vectors, (list, tuple)) or (
+        not vectors or len(vectors) != expected_count
+    ):
+        raise ValueError(
+            "Embedding vector count does not match the chunk count."
+        )
+
+    first = vectors[0]
+    if not isinstance(first, (list, tuple)) or not first:
+        raise ValueError("Indexed vectors must share a non-zero dimension.")
+
+    dimension = len(first)
+    for vector in vectors:
+        if not isinstance(vector, (list, tuple)) or (
+            len(vector) != dimension
+        ):
+            raise ValueError("Indexed vectors must share one dimension.")
+        _validate_semantic_vector(vector, label="Indexed vector")

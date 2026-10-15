@@ -1,9 +1,9 @@
 """Inspect and reuse Hugging Face's model cache.
 
-This module exposes a small cache-facing API rather than a separate model
-store. Listing and availability checks inspect model repositories and cached
-revisions. Snapshot lookup resolves a local path, while download requests are
-delegated to ``huggingface_hub`` and may contact the Hub.
+This module exposes a small cache-facing API. Listing and availability checks
+inspect model repositories and cached revisions. Snapshot lookup resolves a
+local path, while download requests are delegated to ``huggingface_hub`` and
+may contact the Hub.
 
 Repository presence does not prove that a particular revision is complete or
 loadable. Offline lookup accepts a resolved snapshot only when ``config.json``
@@ -67,15 +67,18 @@ The identifier is illustrative. Request downloads explicitly with
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from huggingface_hub import CacheNotFound, scan_cache_dir, snapshot_download
+import huggingface_hub.utils.tqdm as _HubTqdm
 
 try:
     from huggingface_hub.errors import (
         IncompleteSnapshotError as _IncompleteSnapshotError,
     )
 except ImportError:
+
     class _IncompleteSnapshotError(Exception):
         """Compatibility placeholder for newer huggingface_hub versions."""
 
@@ -244,6 +247,7 @@ def cached_model_snapshot(
     """
 
     _check_model_id(model_id)
+
     try:
         path = snapshot_download(
             repo_id=model_id,
@@ -254,10 +258,12 @@ def cached_model_snapshot(
         path = error.snapshot_path
 
     snapshot = Path(path)
+
     if not (snapshot / "config.json").is_file():
         raise FileNotFoundError(
             f"Cached model snapshot has no config.json: {snapshot}"
         )
+
     return snapshot
 
 
@@ -265,6 +271,7 @@ def download_model(
     model_id: str,
     *,
     revision: str | None = None,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> Path:
     """Download or reuse a model snapshot in Hugging Face's shared cache.
 
@@ -279,6 +286,10 @@ def download_model(
     revision: str | None, optional
         Branch, tag, or commit to download. Defaults to ``None``, which uses
         the repository's default revision.
+    progress_callback: Callable[[int, int], None] | None, optional
+        Callback receiving completed and expected snapshot byte counts. The
+        expected total can initially be zero while Hugging Face discovers
+        repository files. Defaults to ``None``.
 
     Returns
     -------
@@ -289,6 +300,7 @@ def download_model(
     ------
     ValueError
         If ``model_id`` is not a non-empty string.
+        Also raised when ``progress_callback`` is not callable.
     RuntimeError
         If Hugging Face does not return the snapshot path as a string.
 
@@ -309,15 +321,108 @@ def download_model(
 
     _check_model_id(model_id)
 
+    if progress_callback is not None and not callable(progress_callback):
+        raise ValueError("progress_callback must be callable or None.")
+
+    # Without a callback, the Hub client keeps its own progress display.
+    options: dict[str, object] = {}
+    if progress_callback is not None:
+        options["tqdm_class"] = _progress_tqdm(progress_callback)
+
     path = snapshot_download(
         repo_id=model_id,
         revision=revision,
+        **options,
     )
 
     if not isinstance(path, str):
         raise RuntimeError("Hugging Face did not return a model path.")
 
     return Path(path)
+
+
+def _progress_tqdm(
+    callback: Callable[[int, int], None],
+) -> type[_HubTqdm]:
+    """Build a silent Hub progress class that reports aggregate bytes.
+
+    The Hub client creates several progress bars during a snapshot
+    download. Only the aggregate byte bar (described as "Reconstructing"
+    with unit ``B``) reports to ``callback``; the others stay silent.
+
+    Parameters
+    ----------
+    callback: collections.abc.Callable[[int, int], None]
+        Receives completed and expected byte counts.
+
+    Returns
+    -------
+    type[huggingface_hub.utils.tqdm]
+        Progress class to pass to ``snapshot_download`` as ``tqdm_class``.
+
+    Notes
+    -----
+    This depends on the Hub client's description of its aggregate bar. If
+    a later version renames it, downloads still work but report no bytes.
+
+    """
+
+    class DownloadProgress(_HubTqdm):
+        """Forward aggregate snapshot completion without terminal output."""
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            """Disable terminal output and report the starting counts.
+
+            Parameters
+            ----------
+            *args: object
+                Additional positional arguments forwarded to the sink.
+            **kwargs: object
+                Additional keyword arguments forwarded to the sink.
+
+            """
+
+            self._qachat_reports_bytes = (
+                str(kwargs.get("desc", "")).startswith("Reconstructing")
+                and kwargs.get("unit") == "B"
+            )
+            kwargs["disable"] = True
+            super().__init__(*args, **kwargs)
+            self._qachat_report()
+
+        def update(self, n: int | float | None = 1) -> bool | None:
+            """Advance the counter by ``n`` and report the new counts.
+
+            Parameters
+            ----------
+            n: int | float | None, optional
+                Number of progress steps completed. Defaults to ``1``.
+
+            Returns
+            -------
+            bool | None
+                The progress-bar update status.
+
+            """
+
+            # tqdm skips its counter entirely while disabled. Keep the counter
+            # ourselves so GUI downloads stay silent but still expose bytes.
+            if self.disable:
+                self.n += n or 0
+                self._qachat_report()
+                return True
+
+            result = super().update(n)
+            self._qachat_report()
+            return result
+
+        def _qachat_report(self) -> None:
+            """Send completed and expected bytes for the aggregate bar."""
+
+            if self._qachat_reports_bytes:
+                callback(int(self.n), int(self.total or 0))
+
+    return DownloadProgress
 
 
 def _check_model_id(model_id: str) -> None:

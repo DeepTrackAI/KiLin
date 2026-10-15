@@ -10,7 +10,8 @@ A workspace is a managed directory containing copied sources, configuration,
 indexes, and conversations. It is not an operating-system execution sandbox.
 The engine can download a catalog model when explicitly requested and can
 load models according to project settings. The process entry point enables
-forensic tracing, which can retain conversation and source content.
+complete diagnostic tracing, which can retain conversation and source
+content.
 
 Commands are processed sequentially. Cancellation in the desktop window
 terminates the engine process rather than interrupting a model call in place.
@@ -69,40 +70,96 @@ interface or the documented engine methods to open a project.
 from __future__ import annotations
 
 from configparser import ConfigParser, Error as ConfigError
-from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import asdict
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
+from dataclasses import asdict, replace
 from hashlib import sha256
 import json
 from pathlib import Path
+import math
+import re
 import sys
-from typing import Callable
+from threading import Event, Lock, Thread
+from time import perf_counter
+from typing import Callable, Final
 
+from qachat.atomic_writes import atomic_write_text
+from qachat.gui._paths import default_workspace_directory
+from qachat.gui.preferences import (
+    default_appearance,
+    default_effort_levels,
+    default_embedding_model,
+    default_query_format,
+    default_router_model,
+    default_search_depth,
+    required_models,
+    validate_effort_levels,
+    validate_model_id,
+    validate_search_depth,
+    write_defaults,
+)
+from qachat.gui._report_pdf import write_report_pdf
+from qachat.gui.model_settings import (
+    DEFAULT_LEVEL,
+    LEVEL_COUNT,
+    PROFILE_FILE,
+    read_effort_levels,
+    read_router_model,
+    read_search_depth,
+    save_project_settings,
+    write_effort_levels,
+    write_router_model,
+    write_search_depth,
+)
 from qachat.gui.model_catalog import (
     MODEL_CHOICES,
+    cached_model_roles,
     installed_backends,
     model_choices,
 )
 from qachat import RAGSession, prepare_sources_workspace
+from qachat.workspace import remove_workspace_sources
+from qachat.project_files import (
+    add_project_files,
+    list_project_files,
+    remove_project_files,
+    replace_project_file,
+)
+from qachat.conversation_format import conversation_state
+from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversations import ConversationInfo, ConversationStore
 from qachat.huggingface import available_models, download_model
+from qachat.project_type import load_project_types, project_type
 from qachat.project import (
     PROJECT_KIND_CODE,
     PROJECT_KIND_CHOICES,
+    PROJECT_KIND_LITERATURE,
     QAProject,
+    configure_project,
     default_project_profile,
     open_project,
 )
-from qachat.repository import (
-    BLOCKED_SUFFIXES,
-    DEFAULT_EXTENSIONS,
-    SKIP_FILES,
-    scan_repository,
+from qachat.repository import DEFAULT_EXTENSIONS, scan_repository
+from qachat.repository_reason_codes import (
+    SELECTION_REASON_CODES,
+    SELECTION_REASON_EMPTY_FILE,
+    SELECTION_REASON_FILE_TOO_LARGE,
 )
-from qachat.runtime import BACKEND_AUTO, choose_backend
+from qachat.runtime import (
+    BACKEND_AUTO,
+    BACKEND_MLX,
+    BACKEND_TORCH,
+    choose_backend,
+)
 from qachat.sources import read_repository_files
+from qachat.tools import (
+    PLAN_CHOICE_CANCEL,
+    PLAN_CHOICE_CHOICES,
+    PlanChoice,
+    ToolPlan,
+)
 from qachat.trace_logging import (
     FAILURE_POLICY_WARN,
-    TRACE_MODE_FORENSIC,
     NullTraceLogger,
     TraceConfig,
     TraceLogger,
@@ -110,8 +167,72 @@ from qachat.trace_logging import (
     TraceTextStream,
 )
 
+__all__ = [
+    "ChatEngine",
+    "main",
+]
+
 ROOT = Path(__file__).resolve().parents[2]
+# The engine adds this phase to RAGSession's answer phases while it switches
+# the chat model before a question; the page shows it as its own step.
+ENGINE_PHASE_LOADING_MODEL: Final[str] = "loading_model"
 EventSink = Callable[[dict[str, object]], None]
+
+
+class _AnswerStream:
+    """Batch generated text into a few frontend events per second.
+
+    Parameters
+    ----------
+    send: Callable[..., None]
+        Callback publishing accumulated text to the frontend.
+    interval: float, optional
+        Minimum interval between progress notifications in seconds.
+        Defaults to ``0.08``.
+
+    """
+
+    def __init__(
+        self, send: Callable[..., None], interval: float = 0.08
+    ) -> None:
+        """Initialize buffered answer text and its notification interval.
+
+        Parameters
+        ----------
+        send: Callable[..., None]
+            Callback used to emit streamed text events.
+        interval: float, optional
+            Minimum time in seconds between streamed updates. Defaults
+            to 0.08.
+
+        """
+
+        self._send = send
+        self._interval = interval
+        self._pieces: list[str] = []
+        self._last = 0.0
+
+    def add(self, text: str) -> None:
+        """Buffer new answer text and emit it after the time threshold.
+
+        Parameters
+        ----------
+        text: str
+            Newly generated assistant text to append to the stream.
+
+        """
+
+        self._pieces.append(text)
+        if perf_counter() - self._last >= self._interval:
+            self.flush()
+
+    def flush(self) -> None:
+        """Emit buffered answer text and update the last-flush time."""
+
+        if self._pieces:
+            self._send("answer_delta", text="".join(self._pieces))
+            self._pieces.clear()
+        self._last = perf_counter()
 
 
 class ChatEngine:
@@ -125,8 +246,11 @@ class ChatEngine:
     emit: EventSink
         Callable receiving one structured event dictionary at a time.
     trace_enabled: bool, optional
-        Whether activated conversations use forensic tracing. The process entry
+        Whether activated conversations use detailed tracing. The process entry
         point passes True even though the constructor default is False.
+    read_command: Callable[[], dict | None] | None, optional
+        Reads the next frontend command while an answer waits for the user
+        to confirm a tool plan; None runs plans without asking.
 
     Attributes
     ----------
@@ -189,6 +313,7 @@ class ChatEngine:
         emit: EventSink,
         *,
         trace_enabled: bool = False,
+        read_command: Callable[[], dict[str, object] | None] | None = None,
     ) -> None:
         """Keep one session and send structured updates to the window.
 
@@ -199,8 +324,12 @@ class ChatEngine:
         emit: EventSink
             Callback that forwards an event to the web page.
         trace_enabled: bool, optional
-            Whether each opened project receives its own forensic trace.
+            Whether each opened project receives its own detailed trace.
             Defaults to ``False``.
+        read_command: Callable[[], dict | None] | None, optional
+            Returns the next frontend command, or None when input ended.
+            Used only while a tool plan waits for the user's choice.
+            Defaults to ``None`` (plans run without asking).
 
         Raises
         ------
@@ -214,6 +343,7 @@ class ChatEngine:
         if type(trace_enabled) is not bool:
             raise ValueError("trace_enabled must be True or False.")
         self.trace_enabled = trace_enabled
+        self.read_command = read_command
         self.project_trace: TraceSink = NullTraceLogger()
         self.session: RAGSession | None = None
         self.conversation_store: ConversationStore | None = None
@@ -258,7 +388,8 @@ class ChatEngine:
         Notes
         -----
         With tracing disabled, this selects a null sink. Otherwise it opens a
-        forensic logger at the conversation state path and emits trace_ready.
+        logger using full diagnostic recording at the conversation state path
+        and emits trace_ready.
         The path comes from the store, keeping GUI trace and resume state
         aligned.
 
@@ -275,7 +406,6 @@ class ChatEngine:
             TraceConfig(
                 enabled=True,
                 output_path=trace_path,
-                mode=TRACE_MODE_FORENSIC,
                 failure_policy=FAILURE_POLICY_WARN,
             ),
             default_directory=trace_path.parent,
@@ -304,14 +434,91 @@ class ChatEngine:
         )
 
     def _close_project_trace(self) -> None:
-        """Finish the current project trace without closing the GUI trace.
-
-
-        """
+        """Finish the current project trace without closing the GUI trace."""
 
         if self.project_trace.enabled:
             self.project_trace.close()
         self.project_trace = NullTraceLogger()
+
+    def _detach_project_trace(self) -> None:
+        """Close an archived trace and release its file lock without writing.
+
+        GUI conversation deletion archives a trace whose accepted events and
+        resume state have already been written. Closing without a final event
+        avoids rewriting the moved JSON and releases the exclusive file lock.
+
+        """
+
+        if isinstance(self.project_trace, TraceLogger):
+            self.project_trace.close(emit_event=False)
+        self.project_trace = NullTraceLogger()
+
+    def _store_ownership(
+        self, conversation_id: str
+    ) -> ConversationFileLock | None:
+        """Borrow the active trace or RAG file lease for store mutations.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Conversation being modified by the store.
+
+        Returns
+        -------
+        ConversationFileLock | None
+            Held ownership of the currently active file, or None when the
+            operation targets another conversation.
+
+        Notes
+        -----
+        The store validates borrowed ownership and never releases it. This
+        permits GUI metadata changes and archival while RAG or a trace logger
+        holds the active conversation's exclusive lock. The trace itself can
+        own the lease before RAG model initialization finishes.
+
+        """
+
+        if (
+            self.active_conversation is None
+            or conversation_id != self.active_conversation.conversation_id
+        ):
+            return None
+        if isinstance(self.project_trace, TraceLogger):
+            return self.project_trace._file_lock
+        if self.session is not None:
+            return self.session._active_conversation_lock()
+        return None
+
+    def _store_state_writer(
+        self, conversation_id: str
+    ) -> Callable[[Mapping[str, object]], None] | None:
+        """Return the current trace writer for active GUI metadata.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Registered conversation whose metadata will be changed.
+
+        Returns
+        -------
+        Callable[[Mapping[str, object]], None] | None
+            The active trace state writer, or None for a nonactive
+            conversation or when tracing is disabled.
+
+        Notes
+        -----
+        The store invokes this writer once, under the borrowed trace
+        ownership token, instead of separately replacing the JSON.
+
+        """
+
+        if (
+            self.active_conversation is not None
+            and conversation_id == self.active_conversation.conversation_id
+            and isinstance(self.active_trace, TraceLogger)
+        ):
+            return self.active_trace.update_conversation
+        return None
 
     def _send(self, event: str, **data: object) -> None:
         """Pass one named event dictionary to the configured frontend sink.
@@ -375,10 +582,7 @@ class ChatEngine:
         )
 
     def startup(self) -> None:
-        """Suggest the most recently used valid sandbox project.
-
-
-        """
+        """Suggest the most recently used valid sandbox project."""
 
         project = self._find_saved_project(None, "")
         if project is not None:
@@ -386,6 +590,291 @@ class ChatEngine:
             self._send("startup", project=str(folder), kind=kind)
         else:
             self._send("startup", project=None)
+
+    def readiness(self) -> None:
+        """Report runtime packages and the preferred models' availability.
+
+        Notes
+        -----
+        The required models are those the app-wide preferences use (see
+        ``qachat.gui.preferences``). For each missing one, the closest
+        installed model of the same role is offered as a replacement;
+        ``can_use_installed`` is true when every missing model has one.
+
+        """
+
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            packages = installed_backends()
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
+            required = required_models(backend)
+            missing = [
+                model_id for model_id in required if model_id not in cached
+            ]
+            replacements = _installed_replacements(
+                missing, cached_model_roles(entries), backend
+            )
+            self._send(
+                "readiness",
+                backend=backend,
+                environment_ready=packages.get(backend, False),
+                required_models=required,
+                cached_models=sorted(cached),
+                missing_models=missing,
+                replacements=replacements,
+                can_use_installed=bool(missing)
+                and len(replacements) == len(missing),
+                ready=packages.get(backend, False) and not missing,
+            )
+        except Exception as error:
+            self._report_error("gui.readiness.failed", error, str(error))
+
+    def use_installed_models(self) -> None:
+        """Use installed models in place of missing preferred ones.
+
+        Notes
+        -----
+        Each missing model is replaced by the installed model of the same
+        role (language or embedding) and backend whose size is closest,
+        in the effort levels, router, and embedding preferences. The
+        change is saved in the app-wide preferences and reported with
+        ``installed_models_used``; readiness is then checked again.
+
+        """
+
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
+            missing = [
+                model_id
+                for model_id in required_models(backend)
+                if model_id not in cached
+            ]
+            chosen = _installed_replacements(
+                missing, cached_model_roles(entries), backend
+            )
+            levels = [
+                {**level, "model": chosen.get(level["model"], level["model"])}
+                for level in default_effort_levels(backend)
+            ]
+            router = default_router_model(backend)
+            embedding = default_embedding_model(backend)
+            saved = write_defaults(
+                {
+                    "effort_levels": {backend: levels},
+                    "router_models": {backend: chosen.get(router, router)},
+                    "embedding_models": {
+                        backend: chosen.get(embedding, embedding)
+                    },
+                }
+            )
+            self.active_trace.emit(
+                "gui.preferences.installed_models_used",
+                component="gui_engine",
+                data={"replacements": chosen},
+            )
+            self._send(
+                "installed_models_used",
+                replacements=chosen,
+                preferences=saved,
+                **_preference_payload(),
+            )
+            self.readiness()
+        except Exception as error:
+            self._report_error(
+                "gui.preferences.failed",
+                error,
+                f"Could not switch to installed models: {error}",
+            )
+
+    def install_required_models(self) -> None:
+        """Download missing GUI models with live byte progress and timing."""
+
+        started = perf_counter()
+        try:
+            backend = choose_backend(BACKEND_AUTO)
+            if not installed_backends().get(backend, False):
+                raise RuntimeError(
+                    f"The {backend.upper()} runtime is not installed. Restart "
+                    "QAChat through "
+                    f"`uv run qachat --gui --backend {backend}`."
+                )
+            cached = {str(item["model_id"]) for item in available_models()}
+            missing = [
+                model_id
+                for model_id in required_models(backend)
+                if model_id not in cached
+            ]
+            total = len(missing)
+            if not missing:
+                self._send("installation_complete", elapsed_seconds=0.0)
+                self.readiness()
+                return
+            self._send("installation_started", total=total, backend=backend)
+            for index, model_id in enumerate(missing, start=1):
+                model_seconds = self._download_with_progress(
+                    model_id,
+                    progress_event="installation_progress",
+                    index=index,
+                    total=total,
+                    overall_started=started,
+                )
+                self._send(
+                    "installation_model_complete",
+                    index=index,
+                    total=total,
+                    model_id=model_id,
+                    model_seconds=model_seconds,
+                    elapsed_seconds=perf_counter() - started,
+                )
+            self._send(
+                "installation_complete",
+                elapsed_seconds=perf_counter() - started,
+            )
+            self.readiness()
+        except Exception as error:
+            self._report_error(
+                "gui.installation.failed",
+                error,
+                f"Setup could not finish: {error}",
+            )
+
+    def _download_with_progress(
+        self,
+        model_id: str,
+        *,
+        progress_event: str,
+        index: int = 1,
+        total: int = 1,
+        overall_started: float | None = None,
+    ) -> float:
+        """Download one model while emitting heartbeat and byte progress.
+
+        Parameters
+        ----------
+        model_id: str
+            Model identifier to download.
+        progress_event: str
+            Frontend event name for progress updates.
+        index: int, optional
+            One-based position of this model in the download sequence. Defaults
+            to ``1``.
+        total: int, optional
+            Total number of models in the download sequence. Defaults to ``1``.
+        overall_started: float | None, optional
+            Monotonic start time for the full download operation. Defaults to
+            ``None``.
+
+        Returns
+        -------
+        float
+            Elapsed time for the completed model download.
+
+        """
+
+        model_started = perf_counter()
+        overall_started = (
+            model_started if overall_started is None else overall_started
+        )
+        stopped = Event()
+        progress_lock = Lock()
+        completed = 0
+        expected = 0
+
+        def record_progress(current: int, byte_total: int) -> None:
+            """Record monotonic download totals under the progress lock.
+
+            Parameters
+            ----------
+            current: int
+                Bytes transferred according to the latest callback.
+            byte_total: int
+                Current reported total download size in bytes.
+
+            """
+
+            nonlocal completed, expected
+            with progress_lock:
+                completed = max(completed, current)
+                expected = max(expected, byte_total)
+
+        def send_progress() -> None:
+            """Send current download speed and progress to the frontend."""
+
+            with progress_lock:
+                current = completed
+                byte_total = expected
+            now = perf_counter()
+            model_elapsed = max(0.0, now - model_started)
+            rate = (
+                current / model_elapsed if current and model_elapsed else 0.0
+            )
+            eta = (
+                max(0.0, byte_total - current) / rate
+                if byte_total > current and rate > 0
+                else (0.0 if byte_total and current >= byte_total else None)
+            )
+            self._send(
+                progress_event,
+                index=index,
+                total=total,
+                model_id=model_id,
+                elapsed_seconds=max(0.0, now - overall_started),
+                model_elapsed_seconds=model_elapsed,
+                completed_bytes=current,
+                total_bytes=byte_total,
+                bytes_per_second=rate,
+                eta_seconds=eta,
+            )
+
+        def heartbeat() -> None:
+            """Publish periodic download progress until the event is set."""
+
+            while not stopped.wait(0.5):
+                send_progress()
+
+        send_progress()
+        ticker = Thread(
+            target=heartbeat,
+            name="qachat-download-progress",
+            daemon=True,
+        )
+        ticker.start()
+        try:
+            download_model(model_id, progress_callback=record_progress)
+        finally:
+            stopped.set()
+            ticker.join(timeout=1.0)
+        with progress_lock:
+            if expected:
+                completed = expected
+        send_progress()
+        return perf_counter() - model_started
+
+    def list_saved_projects(self, workspace: str) -> None:
+        """Report valid code and literature projects, newest first.
+
+        Parameters
+        ----------
+        workspace: str
+            Workspace containing saved projects.
+
+        """
+
+        self._send(
+            "projects",
+            projects=[
+                {
+                    "project": str(folder),
+                    "name": folder.name,
+                    "kind": kind,
+                    "updated_at": updated_at,
+                }
+                for updated_at, folder, kind in self._saved_projects(workspace)
+            ],
+        )
 
     def find_saved_project(self, kind: str, workspace: str) -> None:
         """Refresh Resume for the selected type and workspace folder.
@@ -404,7 +893,7 @@ class ChatEngine:
 
         """
 
-        project = self._find_saved_project(kind, workspace)
+        project = self._find_saved_project(kind or None, workspace)
         self._send(
             "saved_project",
             project=str(project[0]) if project is not None else None,
@@ -440,14 +929,41 @@ class ChatEngine:
 
         """
 
-        if kind is not None and kind not in PROJECT_KIND_CHOICES:
+        projects = self._saved_projects(workspace, kind)
+        if not projects:
             return None
+        _, folder, saved_kind = max(
+            projects, key=lambda item: (item[0], str(item[1]))
+        )
+        return folder, saved_kind
+
+    def _saved_projects(
+        self, workspace: str, kind: str | None = None
+    ) -> list[tuple[float, Path, str]]:
+        """Return valid saved projects ordered from newest to oldest.
+
+        Parameters
+        ----------
+        workspace: str
+            Workspace containing saved projects.
+        kind: str | None, optional
+            Project or configuration kind to validate. Defaults to ``None``.
+
+        Returns
+        -------
+        list[tuple[float, Path, str]]
+            valid saved projects ordered from newest to oldest.
+
+        """
+
+        if kind is not None and kind not in PROJECT_KIND_CHOICES:
+            return []
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
         elif self.sandbox.is_dir():
             folders = list(self.sandbox.iterdir())
         else:
-            return None
+            return []
 
         projects: list[tuple[float, Path, str]] = []
         for folder in folders:
@@ -488,27 +1004,33 @@ class ChatEngine:
                 projects.append((recent, folder, saved_kind))
             except (ConfigError, OSError, ValueError):
                 continue
-        if not projects:
-            return None
-        _, folder, saved_kind = max(
-            projects, key=lambda item: (item[0], str(item[1]))
+        return sorted(
+            projects,
+            key=lambda item: (item[0], str(item[1])),
+            reverse=True,
         )
-        return folder, saved_kind
 
-    def resume_project(self, directory: str) -> None:
-        """Reopen a saved project without copying source files.
+    def resume_project(
+        self, directory: str, conversation_id: str | None = None
+    ) -> None:
+        """Reopen a saved project and optionally restore its exact chat.
 
         Parameters
         ----------
         directory: str
             Workspace containing an existing profile.ini.
+        conversation_id: str | None, optional
+            Saved conversation to restore. If omitted, select the most
+            recently updated conversation. Defaults to ``None``.
 
         """
 
         try:
             project = open_project(directory)
             self.close()
-            conversation = self._open_conversation_store(project)
+            conversation = self._open_conversation_store(
+                project, conversation_id
+            )
             self._start_project_trace(project.root, conversation)
             self._activate_project(project, conversation)
         except Exception as error:
@@ -533,23 +1055,85 @@ class ChatEngine:
         """
 
         try:
+            # Before the page knows the types, use the first one in the file.
+            kind = kind or next(iter(load_project_types()))
             profile_path = Path(workspace).expanduser() / "profile.ini"
             profile = (
                 open_project(profile_path.parent).profile
                 if workspace.strip() and profile_path.is_file()
-                else default_project_profile(kind)
+                else replace(
+                    default_project_profile(kind),
+                    # Generation comes from the core project profile;
+                    # the GUI selects only application-specific defaults.
+                    chat_mlx=str(
+                        default_effort_levels(BACKEND_MLX)[DEFAULT_LEVEL][
+                            "model"
+                        ]
+                    ),
+                    chat_torch=str(
+                        default_effort_levels(BACKEND_TORCH)[DEFAULT_LEVEL][
+                            "model"
+                        ]
+                    ),
+                    embedding_mlx=default_embedding_model(BACKEND_MLX),
+                    embedding_torch=default_embedding_model(BACKEND_TORCH),
+                    query_format=default_query_format(),
+                )
             )
-            cached = {str(item["model_id"]) for item in available_models()}
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
             self._send(
                 "settings",
                 profile=asdict(profile),
+                effort_levels=_effort_levels_by_backend(
+                    profile_path.parent if profile_path.is_file() else None,
+                    profile,
+                ),
+                default_effort_levels={
+                    backend: default_effort_levels(backend)
+                    for backend in (BACKEND_MLX, BACKEND_TORCH)
+                },
+                search_depth=(
+                    read_search_depth(profile_path.parent)
+                    if profile_path.is_file()
+                    else default_search_depth()
+                ),
+                appearance=default_appearance(),
+                preferences=_preference_payload(),
+                default_search_depth=default_search_depth(),
+                router_models=_router_models_by_backend(
+                    profile_path.parent if profile_path.is_file() else None
+                ),
+                default_embedding_models={
+                    backend: default_embedding_model(backend)
+                    for backend in (BACKEND_MLX, BACKEND_TORCH)
+                },
+                default_router_models={
+                    backend: default_router_model(backend)
+                    for backend in (BACKEND_MLX, BACKEND_TORCH)
+                },
+                project_types=[
+                    {
+                        "kind": item.kind,
+                        "label": item.display_name,
+                        "intents": {
+                            intent_id: intent_id.replace("_", " ").capitalize()
+                            for intent_id in item.intents
+                        },
+                        "welcome_prompts": list(item.welcome_prompts),
+                        "suggestions": list(item.suggestions),
+                    }
+                    for item in load_project_types().values()
+                ],
                 backend=choose_backend(BACKEND_AUTO),
                 installed_backends=installed_backends(),
                 supported_extensions=list(DEFAULT_EXTENSIONS),
+                selection_reason_codes=dict(SELECTION_REASON_CODES),
                 cached_models=sorted(cached),
+                model_roles=cached_model_roles(entries),
                 model_choices=model_choices(cached),
                 workspace_files=(
-                    _workspace_files(profile_path.parent)
+                    list_project_files(open_project(profile_path.parent))
                     if profile_path.is_file()
                     else []
                 ),
@@ -579,23 +1163,266 @@ class ChatEngine:
 
         Notes
         -----
-        Only model IDs in MODEL_CHOICES are accepted. This explicit action can
+        Custom Hugging Face IDs and existing local paths are accepted. This can
         contact Hugging Face and write to its cache. Success emits refreshed
         model status; download/validation failures become error events.
 
         """
 
         try:
-            if model_id not in {choice.model_id for choice in MODEL_CHOICES}:
-                raise ValueError("Choose a suggested model to download.")
+            model_id = validate_model_id(model_id)
             self._send("model_download_started", model_id=model_id)
-            download_model(model_id)
-            self._send("model_downloaded", model_id=model_id)
+            elapsed = self._download_with_progress(
+                model_id,
+                progress_event="model_download_progress",
+            )
+            self._send(
+                "model_downloaded",
+                model_id=model_id,
+                elapsed_seconds=elapsed,
+            )
         except Exception as error:
             self._report_error(
                 "gui.model_download.failed",
                 error,
                 f"Could not download {model_id}: {error}",
+            )
+
+    def apply_model_settings(self, request: dict[str, object]) -> None:
+        """Apply confirmed model edits and retain the active chat.
+
+        Parameters
+        ----------
+        request: dict[str, object]
+            Request parameters supplied by the frontend.
+
+        """
+
+        root = None
+        old_profile = None
+        old_levels = None
+        old_router = None
+        old_depth = None
+        old_backend = None
+        conversation_id = None
+        profile_text = None
+        changed_profile = False
+        changed_runtime = False
+        levels = None
+        try:
+            if request.get("effort_levels") is not None:
+                levels = validate_effort_levels(request["effort_levels"])
+                # The middle level's model is the project's chat model.
+                chat_model = str(levels[DEFAULT_LEVEL]["model"])
+            else:
+                chat_model = validate_model_id(request["chat_model"])
+            depth = (
+                validate_search_depth(request["search_depth"])
+                if request.get("search_depth") is not None
+                else None
+            )
+            embedding_model = validate_model_id(request["embedding_model"])
+            router_model = (
+                validate_model_id(request["router_model"])
+                if request.get("router_model")
+                else None
+            )
+            query_format = request.get("query_format", "qwen3")
+            if query_format not in {"qwen3", "plain"}:
+                raise ValueError("Choose a supported embedding query format.")
+            ids = {
+                chat_model,
+                embedding_model,
+                *(str(level["model"]) for level in levels or ()),
+                *((router_model,) if router_model else ()),
+            }
+            entries = available_models()
+            cached = {str(item["model_id"]) for item in entries}
+            missing = sorted(
+                model
+                for model in ids
+                if model not in cached
+                and not Path(model).expanduser().is_dir()
+            )
+            if missing and request.get("download") is not True:
+                raise ValueError(
+                    "Confirm the model downloads before applying."
+                )
+            if self.session is not None:
+                root = self.session.project.root
+                old_profile = self.session.project.profile
+                old_backend = self.session.backend
+                old_levels = read_effort_levels(root, self.session.backend)
+                old_router = read_router_model(root, self.session.backend)
+                profile_text = (root / "profile.ini").read_text()
+                conversation_id = self.active_conversation.conversation_id
+            self.active_trace.emit(
+                "gui.models.change.requested",
+                component="gui_engine",
+                data={
+                    "before": asdict(old_profile) if old_profile else None,
+                    "before_levels": old_levels,
+                    "chat_model": chat_model,
+                    "embedding_model": embedding_model,
+                    "query_format": query_format,
+                    "effort_levels": levels,
+                    "downloads": missing,
+                },
+            )
+            for model_id in missing:
+                self.active_trace.emit(
+                    "gui.model.download.started",
+                    component="gui_engine",
+                    data={"model_id": model_id},
+                )
+                self._send("model_download_started", model_id=model_id)
+                elapsed = self._download_with_progress(
+                    model_id, progress_event="model_download_progress"
+                )
+                self.active_trace.emit(
+                    "gui.model.download.completed",
+                    component="gui_engine",
+                    data={"model_id": model_id},
+                )
+                self._send(
+                    "model_downloaded",
+                    model_id=model_id,
+                    elapsed_seconds=elapsed,
+                )
+            if root is None:
+                # No project is open: these become the defaults new
+                # projects start from (user preferences over package defaults).
+                backend = request.get("backend")
+                if backend not in (BACKEND_MLX, BACKEND_TORCH):
+                    backend = choose_backend(BACKEND_AUTO)
+                changes: dict[str, object] = {
+                    "embedding_models": {backend: embedding_model},
+                    "query_format": query_format,
+                }
+                if levels is not None:
+                    changes["effort_levels"] = {backend: levels}
+                if depth is not None:
+                    changes["search_depth"] = depth
+                if router_model is not None:
+                    changes["router_models"] = {backend: router_model}
+                write_defaults(changes)
+            rebuilt = False
+            if root is not None:
+                backend = self.session.backend
+                rebuilt = (
+                    embedding_model != old_profile.embedding_model(backend)
+                    or query_format != old_profile.query_format
+                )
+                settings = {
+                    f"chat_{backend}": chat_model,
+                    f"embedding_{backend}": embedding_model,
+                    "query_format": query_format,
+                }
+                self._send(
+                    "status",
+                    message=(
+                        "Rebuilding the embedding index…"
+                        if rebuilt
+                        else "Applying model settings…"
+                    ),
+                )
+                # Explicitly confirm the change in the trace before releasing
+                # the models; the replacement uses the same conversation file.
+                self.active_trace.emit(
+                    "gui.models.change.confirmed",
+                    component="gui_engine",
+                    data={**settings, "reindex_required": rebuilt},
+                )
+                # RAGSession switches chat models in place only on MLX;
+                # other backends load the new model by reopening.
+                reopen = rebuilt or (
+                    chat_model != old_profile.chat_model(backend)
+                    and backend != BACKEND_MLX
+                )
+                if not reopen and chat_model != old_profile.chat_model(
+                    backend
+                ):
+                    self.session.use_chat_model(chat_model)
+                    changed_runtime = True
+                project = configure_project(
+                    root, settings, trace=self.active_trace
+                )
+                changed_profile = True
+                if levels is not None:
+                    write_effort_levels(root, backend, levels)
+                if depth is not None:
+                    old_depth = read_search_depth(root)
+                    write_search_depth(root, depth)
+                if router_model is not None:
+                    write_router_model(root, backend, router_model)
+                if reopen:
+                    self.close()
+                    self._reopen_project_conversation(project, conversation_id)
+                else:
+                    self.session.project = project
+                    if router_model is not None:
+                        self.session.use_router_model(router_model)
+                self.active_trace.emit(
+                    "gui.models.change.applied",
+                    component="gui_engine",
+                    data={
+                        **settings,
+                        "effort_levels": levels,
+                        "search_depth": depth,
+                        "reindexed": rebuilt,
+                    },
+                )
+            profile = (
+                self.session.project.profile
+                if self.session is not None
+                else None
+            )
+            self._send(
+                "models_applied",
+                preferences=_preference_payload(),
+                effort_levels=(
+                    _effort_levels_by_backend(
+                        self.session.project.root, profile
+                    )
+                    if profile is not None
+                    else None
+                ),
+                router_models=(
+                    _router_models_by_backend(self.session.project.root)
+                    if profile is not None
+                    else None
+                ),
+                search_depth=(
+                    read_search_depth(self.session.project.root)
+                    if profile is not None
+                    else None
+                ),
+                profile=asdict(profile) if profile is not None else None,
+                cached_models=sorted(cached | set(missing)),
+                model_roles=cached_model_roles(available_models()),
+                reindexed=rebuilt,
+            )
+        except Exception as error:
+            if root is not None and (changed_profile or changed_runtime):
+                try:
+                    (root / "profile.ini").write_text(profile_text)
+                    write_effort_levels(root, old_backend, old_levels)
+                    write_router_model(root, old_backend, old_router)
+                    if old_depth is not None:
+                        write_search_depth(root, old_depth)
+                    self.close()
+                    self._reopen_project_conversation(
+                        open_project(root), conversation_id
+                    )
+                except Exception:
+                    self._send(
+                        "backend_failed",
+                        message="Reload failed. Reopen the project to retry.",
+                    )
+            self._report_error(
+                "gui.models.change.failed",
+                error,
+                f"Could not apply model settings: {error}",
             )
 
     def preview(
@@ -626,9 +1453,9 @@ class ChatEngine:
         -----
         Builds selectable and skipped source-entry lists without copying files
         or loading models. Oversized files are reported separately for frontend
-        selection/limit adjustment. Directory selection uses scan_repository;
-        direct files have explicit protected-name checks. Failures become error
-        events.
+        selection/limit adjustment. Directory selection uses the repository
+        scanner. Direct files bypass name and suffix filters while retaining
+        size limits. Errors become frontend events.
 
         """
 
@@ -645,19 +1472,15 @@ class ChatEngine:
                 source = original.resolve(strict=True)
                 if source.is_file():
                     size = source.stat().st_size
-                    name = source.name.lower()
-                    if name in SKIP_FILES or name.startswith(".env."):
-                        reason = "potentially secret or generated file"
-                    elif source.suffix.lower() in BLOCKED_SUFFIXES:
-                        reason = "model weights or potentially secret file"
-                    elif not name.endswith(allowed_extensions):
-                        reason = "file type not selected"
-                    elif size == 0:
+                    if size == 0:
                         reason = "empty file"
+                        reason_code = SELECTION_REASON_EMPTY_FILE
                     elif size > max_file_bytes:
                         reason = "larger than the file-size limit"
+                        reason_code = SELECTION_REASON_FILE_TOO_LARGE
                     else:
                         reason = None
+                        reason_code = None
                     files = [] if reason else [source.name]
                     skipped = (
                         []
@@ -666,6 +1489,7 @@ class ChatEngine:
                             {
                                 "path": source.name,
                                 "reason": reason,
+                                "reason_code": reason_code,
                                 "size_bytes": size,
                             }
                         ]
@@ -691,6 +1515,7 @@ class ChatEngine:
                         {
                             "path": row["path"],
                             "reason": row["reason"],
+                            "reason_code": row["reason_code"],
                             "size_bytes": row["size_bytes"],
                         }
                         for row in report["entries"]
@@ -736,18 +1561,35 @@ class ChatEngine:
 
         Notes
         -----
-        Closes any current session before preparation. Selected file suffixes
-        can extend the saved extension list; copying uses the cumulative
-        multi-source workspace API. With neither sources nor workspace, the
-        implementation uses a development example repository path that is not
+        Closes any current session before preparation. Explicit file
+        selection does not change the saved extension list. Copying uses the
+        cumulative multi-source workspace API. With neither sources nor
+        workspace, the implementation uses a development example path not
         included in this archive. Errors become frontend events.
 
         """
 
         try:
             if kind not in PROJECT_KIND_CHOICES:
-                raise ValueError("Choose code or literature.")
+                raise ValueError("Choose a project type.")
+            settings = dict(settings or {})
+            created_levels = settings.pop("_gui_effort_levels", None)
+            created_depth = settings.pop("_gui_search_depth", None)
+            if created_depth is not None:
+                created_depth = validate_search_depth(created_depth)
+            if created_levels is not None:
+                if not isinstance(created_levels, dict) or any(
+                    backend not in {BACKEND_MLX, BACKEND_TORCH}
+                    for backend in created_levels
+                ):
+                    raise ValueError("Invalid effort levels.")
+                created_levels = {
+                    backend: validate_effort_levels(levels)
+                    for backend, levels in created_levels.items()
+                }
             if not sources and not workspace.strip():
+                if kind not in (PROJECT_KIND_CODE, PROJECT_KIND_LITERATURE):
+                    raise ValueError("Add sources for this project type.")
                 example = (
                     "code_repo"
                     if kind == PROJECT_KIND_CODE
@@ -785,23 +1627,6 @@ class ChatEngine:
             if selected_files is not None:
                 options["selected_files"] = selected_files
             if settings:
-                settings = dict(settings)
-                configured = settings.get("extensions", ())
-                if selected_files and isinstance(configured, (list, tuple)):
-                    # A checked file may use a type absent from an old profile.
-                    known = tuple(
-                        dict.fromkeys((*DEFAULT_EXTENSIONS, *configured))
-                    )
-                    selected_types = [
-                        extension
-                        for paths in selected_files.values()
-                        for path in paths
-                        for extension in known
-                        if Path(path).name.lower().endswith(extension)
-                    ]
-                    settings["extensions"] = list(
-                        dict.fromkeys((*configured, *selected_types))
-                    )
                 options["settings"] = settings
             if self.project_trace.enabled:
                 options["trace"] = self.project_trace
@@ -811,6 +1636,16 @@ class ChatEngine:
                 workspace,
                 **options,
             )
+            if created_depth is not None:
+                write_search_depth(project.root, created_depth)
+            if created_levels:
+                for backend, levels in created_levels.items():
+                    write_effort_levels(project.root, backend, levels)
+                self.active_trace.emit(
+                    "gui.models.effort_levels.saved",
+                    component="gui_engine",
+                    data=created_levels,
+                )
             if conversation is None:
                 conversation = self._open_conversation_store(project)
             self._activate_project(project, conversation)
@@ -826,25 +1661,35 @@ class ChatEngine:
     def _open_conversation_store(
         self,
         project: QAProject,
+        conversation_id: str | None = None,
     ) -> ConversationInfo:
-        """Scan project conversation files and select the latest one.
+        """Open a conversation store and select the requested conversation.
 
         Parameters
         ----------
         project: QAProject
             Opened project whose profile, source, index, and log paths are
             ready for activation.
+        conversation_id: str | None, optional
+            Existing conversation to activate. If omitted, select the most
+            recently updated conversation. Defaults to ``None``.
 
         Returns
         -------
         ConversationInfo
-            The store's selected initial ConversationInfo, also assigned as the
-            active conversation.
+            Selected conversation, also assigned as the active conversation.
+
+        Raises
+        ------
+        ValueError
+            If the explicitly requested conversation does not exist.
 
         """
 
         store = ConversationStore(project.root)
         conversation = store.ensure()
+        if conversation_id is not None:
+            conversation = store.select(conversation_id)
         self.conversation_store = store
         self.active_conversation = conversation
         return conversation
@@ -887,19 +1732,56 @@ class ChatEngine:
         options["trace"] = self.project_trace
         if self.conversation_store is None:
             raise RuntimeError("Conversation store is not open.")
+        # The project keeps every setting from now on, so it resumes as it
+        # was set up even when the defaults or preferences change.
+        if save_project_settings(project.root):
+            self.active_trace.emit(
+                "gui.project.settings.saved",
+                component="gui_engine",
+                data={"path": str(project.root / PROFILE_FILE)},
+            )
         options["conversation_path"] = self.conversation_store.state_path(
             conversation
         )
         session = RAGSession(project.root, **options)
+        session.use_router_model(
+            read_router_model(project.root, session.backend)
+        )
         self.session = session
+        self._use_project_answer_settings()
+        self._announce_project(project, conversation)
+
+    def _announce_project(
+        self, project: QAProject, conversation: ConversationInfo
+    ) -> None:
+        """Send the ``opened`` event for the prepared core project.
+
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+        conversation: ConversationInfo
+            Conversation metadata included in the frontend event.
+
+        """
+
+        session = self.session
         self._send(
             "opened",
             project=str(project.root),
             source=str(project.source),
             kind=project.profile.kind,
+            profile=asdict(project.profile),
+            effort_levels=_effort_levels_by_backend(
+                project.root, project.profile
+            ),
+            router_models=_router_models_by_backend(project.root),
+            search_depth=read_search_depth(project.root),
+            preferences=_preference_payload(),
+            usage=self._usage_totals(),
             index_status=session.index_status,
-            turns=[asdict(turn) for turn in session.turns],
-            workspace_files=_workspace_files(project.root),
+            turns=_turn_payloads(session.turns, project.root),
+            workspace_files=list_project_files(project),
             retrieval_count=(
                 session.turns[-1].parameters.get(
                     "retrieval_count", project.profile.retrieval_count
@@ -912,16 +1794,379 @@ class ChatEngine:
             max_new_tokens=session.chat_session.max_new_tokens,
             active_conversation_id=conversation.conversation_id,
             conversations=[
-                asdict(item)
+                {
+                    **asdict(item),
+                    "empty": self.conversation_store.is_empty(
+                        item.conversation_id
+                    ),
+                }
                 for item in self.conversation_store.conversations()
             ],
         )
+
+    def _use_project_answer_settings(self) -> None:
+        """Answer every chat with the project's saved answer settings.
+
+        Temperature, thinking, and answer length belong to the project, not
+        to a chat: switching chats keeps them, and switching projects loads
+        the other project's. Saved values are never substituted.
+
+        """
+
+        profile = self.session.project.profile
+        self.session.chat_session.configure_generation(
+            {
+                "temperature": profile.temperature,
+                "thinking": profile.thinking,
+                "max_new_tokens": profile.max_new_tokens,
+            }
+        )
+
+    def _save_answer_settings(self, settings: dict[str, object]) -> None:
+        """Save changed answer settings to the project's profile.ini.
+
+        Parameters
+        ----------
+        settings: dict[str, object]
+            Settings used to configure the operation.
+
+        """
+
+        profile = self.session.project.profile
+        changes = {
+            key: settings[key]
+            for key in ("temperature", "thinking", "max_new_tokens")
+            if key in settings and settings[key] != getattr(profile, key)
+        }
+        if not changes:
+            return
+        self.session.project = configure_project(
+            self.session.project.root,
+            {
+                key: "none" if value is None else value
+                for key, value in changes.items()
+            },
+            trace=self.active_trace,
+        )
+
+    def add_project_sources(self, sources: list[str]) -> None:
+        """Add confirmed sources and restore the active chat.
+
+        Parameters
+        ----------
+        sources: list[str]
+            New source paths approved for addition to the active
+            project.
+
+        """
+
+        root = None
+        conversation_id = None
+        try:
+            if self.session is None or self.active_conversation is None:
+                raise RuntimeError("Open a project first.")
+            if (
+                not sources
+                or not isinstance(sources, list)
+                or not all(
+                    isinstance(path, str) and path.strip() for path in sources
+                )
+            ):
+                raise ValueError("Choose source files or folders.")
+            root = self.session.project.root
+            kind = self.session.project.profile.kind
+            conversation_id = self.active_conversation.conversation_id
+            self.active_trace.emit(
+                "gui.sources.add.requested",
+                component="gui_engine",
+                data={"sources": sources},
+            )
+            self._send(
+                "status", message="Adding sources and updating the index…"
+            )
+            project = prepare_sources_workspace(
+                sources, kind, root, trace=self.active_trace
+            )
+            self._refresh_sources(project)
+        except Exception as error:
+            # A failed copy may have written some files: index what is there,
+            # so an old in-memory index is never used.
+            if root is not None and self.session is not None:
+                try:
+                    self._refresh_sources(open_project(root))
+                except Exception:
+                    pass
+            if root is not None and self.session is None:
+                try:
+                    self._reopen_project_conversation(
+                        open_project(root), conversation_id
+                    )
+                except Exception:
+                    self.close()
+                    self._send(
+                        "backend_failed",
+                        message=(
+                            "Reopen the project to finish indexing. "
+                            "Your saved conversations are preserved."
+                        ),
+                    )
+            self._report_error(
+                "gui.sources.add.failed",
+                error,
+                f"Could not finish adding sources: {error}",
+            )
+
+    def remove_project_sources(self, paths: list[str]) -> None:
+        """Delete managed source copies through the core and reindex.
+
+        Parameters
+        ----------
+        paths: list[str]
+            Workspace-relative source snapshots to remove.
+
+        """
+
+        root = None
+        conversation_id = None
+        try:
+            if self.session is None or self.active_conversation is None:
+                raise RuntimeError("Open a project first.")
+            root = self.session.project.root
+            conversation_id = self.active_conversation.conversation_id
+            self.active_trace.emit(
+                "gui.sources.remove.requested",
+                component="gui_engine",
+                data={"paths": paths},
+            )
+            self._send(
+                "status", message="Removing sources and updating the index…"
+            )
+            remove_workspace_sources(self.session.project, paths)
+            self._refresh_sources(open_project(root))
+        except Exception as error:
+            # Refresh after a partial deletion to match the files on disk.
+            if root is not None and self.session is not None:
+                try:
+                    self._refresh_sources(open_project(root))
+                except Exception:
+                    pass
+            if root is not None and self.session is None:
+                try:
+                    self._reopen_project_conversation(
+                        open_project(root), conversation_id
+                    )
+                except Exception:
+                    self.close()
+                    self._send(
+                        "backend_failed",
+                        message=(
+                            "Reopen the project to finish indexing. "
+                            "Your saved conversations are preserved."
+                        ),
+                    )
+            self._report_error(
+                "gui.sources.remove.failed",
+                error,
+                f"Could not remove sources: {error}",
+            )
+
+    def edit_folder(
+        self, folder: str, operation: str, **arguments: object
+    ) -> None:
+        """Delegate editing outputs/ and templates/ to the core API.
+
+        Parameters
+        ----------
+        folder: str
+            User-editable project folder.
+        operation: str
+            One of ``add``, ``replace`` or ``remove``.
+        **arguments: object
+            File paths and optional replacement policy from the GUI.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            project = self.session.project
+            if operation == "add":
+                changed = add_project_files(
+                    project,
+                    folder,
+                    _path_list(arguments.get("paths")),
+                    replace=arguments.get("replace") is True,
+                )
+            elif operation == "replace":
+                path = arguments.get("path")
+                source = arguments.get("source")
+                if not isinstance(path, str) or not isinstance(source, str):
+                    raise ValueError("Choose a file and its replacement.")
+                if not path.startswith(folder + "/"):
+                    raise ValueError(f"Only files in {folder}/ can be edited.")
+                changed = [replace_project_file(project, path, source)]
+            elif operation == "remove":
+                values = _path_list(arguments.get("paths"))
+                if any(
+                    not value.startswith(folder + "/") for value in values
+                ):
+                    raise ValueError(
+                        f"Only files in {folder}/ can be deleted."
+                    )
+                changed = remove_project_files(project, values)
+            else:
+                raise ValueError(f"Unknown operation: {operation}.")
+            self.active_trace.emit(
+                f"gui.folder.{operation}",
+                component="gui_engine",
+                data={"folder": folder, "paths": changed},
+            )
+            self._send(
+                "folder_changed",
+                folder=folder,
+                operation=operation,
+                paths=changed,
+                workspace_files=list_project_files(project),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.folder.edit.failed",
+                error,
+                f"Could not change {folder}/: {error}",
+            )
+
+    def _refresh_sources(self, project: QAProject) -> None:
+        """Re-index changed sources, keeping the models and the chat.
+
+        Only new or changed files are chunked and embedded; the models
+        stay loaded, so adding or removing a file does not reload them.
+
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+
+        """
+
+        self.session.refresh_sources(project)
+        self.active_trace.emit(
+            "gui.sources.refreshed",
+            component="gui_engine",
+            data={
+                "index_status": self.session.index_status,
+                "changes": self.session.source_changes,
+            },
+        )
+        self._announce_project(project, self.active_conversation)
+
+    def _reopen_project_conversation(
+        self, project: QAProject, conversation_id: str
+    ) -> None:
+        """Discover records before restoring a moved or updated project.
+
+        Parameters
+        ----------
+        project: QAProject
+            Current project and its associated metadata.
+        conversation_id: str
+            Identifier of the saved conversation.
+
+        """
+
+        self._close_project_trace()
+        store = ConversationStore(project.root)
+        store.ensure()
+        conversation = store.select(conversation_id)
+        self.conversation_store = store
+        self.active_conversation = conversation
+        self._start_project_trace(project.root, conversation)
+        self._activate_project(project, conversation)
+
+    def _name_active_conversation(
+        self, question: str, answer: str = ""
+    ) -> None:
+        """Generate and persist a short title from the first exchange.
+
+        The answer, when given, lets the model resolve abbreviations and
+        jargon instead of guessing what they stand for.
+
+        Parameters
+        ----------
+        question: str
+            Question or request to analyze.
+        answer: str, optional
+            Answer text to inspect. Defaults to ``''``.
+
+        """
+
+        if (
+            self.session is None
+            or self.conversation_store is None
+            or self.active_conversation is None
+        ):
+            return
+        excerpt = _answer_excerpt(answer, 1200)
+        prompt = f"Question: {question}\n"
+        if excerpt:
+            prompt += f"Answer: {excerpt}\n"
+        # The router model writes titles; it stays loaded, so no switch.
+        title = self.session.router_reply(
+            "Create a concise conversation title. Use three to six words. "
+            "Describe the topic, not the user's request. Keep abbreviations "
+            "and technical terms as the user wrote them; expand one only as "
+            "the answer defines it, never by guessing. Do not use citations, "
+            "brackets, labels, quotation marks, or punctuation. Return only "
+            "the title.",
+            f"{prompt}Title:",
+            max_new_tokens=24,
+        )
+        title = title.splitlines()[0] if title.splitlines() else ""
+        title = re.sub(r"^(?:title\s*:\s*)", "", title, flags=re.I)
+        title = re.sub(r"^\[[0-9, ]+\]\s*", "", title)
+        title = " ".join(title.strip().strip("\"'").split())
+        title = re.sub(
+            r"^help me understand\s+", "Understanding ", title, flags=re.I
+        )
+        fallback = " ".join(question.strip().rstrip("?.!").split())
+        fallback = re.sub(
+            r"^help me understand\s+",
+            "Understanding ",
+            fallback,
+            flags=re.I,
+        )
+        fallback = re.sub(
+            r"^what (?:is|are)\s+", "Understanding ", fallback, flags=re.I
+        )
+        # A reply longer than a title (a sentence) would be cut mid-phrase;
+        # the question makes a better title then.
+        if (
+            not title
+            or len(title.split()) > 6
+            or re.search(r"\bunderstand(?:ing)? me\b", title, re.I)
+        ):
+            title = fallback
+        title = " ".join(title.split()[:6])[:80]
+        if not title:
+            return
+        renamed = self.conversation_store.rename(
+            self.active_conversation.conversation_id,
+            title,
+            ownership=self._store_ownership(
+                self.active_conversation.conversation_id
+            ),
+            state_writer=self._store_state_writer(
+                self.active_conversation.conversation_id
+            ),
+        )
+        self.active_conversation = renamed
+        self._send_conversations("conversations")
 
     def ask(
         self,
         question: str,
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
+        effort: dict[str, int] | str | None = None,
     ) -> None:
         """Ask the loaded project and return its saved answer and evidence.
 
@@ -938,6 +2183,12 @@ class ChatEngine:
         generation_settings: dict[str, object] | None, optional
             Temperature, thinking, and answer length for this answer. Defaults
             to ``None``.
+        effort: dict | str | None, optional
+            Effort for this answer: ``{"model": i, "search_depth": j}``
+            picks the model of effort level i and search-depth step j
+            (zero-based; the step is the number of passages retrieved). A
+            level name such as ``"lagom"`` uses the same index for both.
+            Defaults to ``None``.
 
         Notes
         -----
@@ -951,34 +2202,309 @@ class ChatEngine:
         try:
             if self.session is None:
                 raise RuntimeError("Open a project before asking a question.")
+            generation_settings = dict(generation_settings or {})
+            title_question = str(
+                generation_settings.pop("_title_question", question)
+            )
+            # Answer settings belong to the project; every chat uses them.
+            self._save_answer_settings(generation_settings)
+            backend = self.session.backend
+            levels = read_effort_levels(self.session.project.root, backend)
+            indexes = _effort_indexes(effort)
+            is_mlx = self.session.chat_session.backend == BACKEND_MLX
+            # Name a new chat after its first answer, from question and answer.
+            name_after_answer = (
+                indexes is not None
+                and not self.session.turns
+                and self.conversation_store is not None
+                and self.active_conversation is not None
+                and self.active_conversation.name.startswith("Conversation ")
+            )
+            if indexes is not None:
+                model_index, depth_index = indexes
+                depth = read_search_depth(self.session.project.root)
+                retrieval_count = depth[depth_index]
+                model_id = str(levels[model_index]["model"])
+                # RAGSession switches chat models in place only on MLX.
+                if is_mlx:
+                    if model_id != self.session.chat_session.model_id:
+                        # Loading can take seconds; show it as its own stage.
+                        self._send(
+                            "answer_phase",
+                            phase=ENGINE_PHASE_LOADING_MODEL,
+                            model_id=model_id,
+                        )
+                    self.session.use_chat_model(model_id)
             self._send("status", message="Finding evidence and answering…")
             options: dict[str, object] = {}
             if retrieval_count is not None:
                 options["retrieval_count"] = retrieval_count
-            if generation_settings is not None:
+            if generation_settings:
                 options["generation_settings"] = generation_settings
+            # The RAG core resolves project-type and intent guidance.
+            stream = _AnswerStream(self._send)
+            options["token_callback"] = stream.add
             options["phase_callback"] = lambda phase, details: self._send(
                 "answer_phase",
                 phase=phase,
                 **details,
             )
-            self.session.ask(question, **options)
+            if self.read_command is not None:
+                options["confirm_callback"] = self._confirm_plan
+                options["choice_callback"] = self._choose_option
+            # Reports such as research briefings also get a one-page PDF.
+            options["pdf_writer"] = write_report_pdf
+            with self._live_usage():
+                self.session.ask(question, **options)
+            stream.flush()
             if (
                 self.conversation_store is not None
                 and self.active_conversation is not None
             ):
                 self.active_conversation = self.conversation_store.touch(
-                    self.active_conversation.conversation_id
+                    self.active_conversation.conversation_id,
+                    ownership=self._store_ownership(
+                        self.active_conversation.conversation_id
+                    ),
+                    state_writer=self._store_state_writer(
+                        self.active_conversation.conversation_id
+                    ),
                 )
-                self.active_trace.update_conversation(
-                    asdict(self.active_conversation)
+            turn = self.session.turns[-1]
+            event: dict[str, object] = {
+                "turn": asdict(turn),
+                "usage": self._usage_totals(),
+            }
+            # A tool that saved a file (for example a research briefing in
+            # outputs/) refreshes the workspace tree.
+            if (turn.parameters.get("tool") or {}).get("saved"):
+                event["workspace_files"] = list_project_files(
+                    self.session.project
                 )
-            self._send("answered", turn=asdict(self.session.turns[-1]))
+            self._send("answered", **event)
         except Exception as error:
             self._report_error(
                 "gui.question.failed",
                 error,
                 str(error),
+            )
+            return
+        if name_after_answer:
+            try:
+                self._name_active_conversation(
+                    title_question, self.session.turns[-1].answer
+                )
+            except Exception as error:
+                # The answer is saved; a failed title keeps the default name.
+                self.active_trace.emit(
+                    "gui.conversation.title.failed",
+                    component="gui_engine",
+                    data={"error": str(error)},
+                )
+
+    @contextmanager
+    def _live_usage(self) -> Iterator[None]:
+        """Send the tokens used by the running answer twice a second.
+
+        Yields
+        ------
+        None
+            Control while periodic progress reporting runs.
+
+        Notes
+        -----
+        A background thread reads the model sessions' token totals, which
+        grow while a reply streams, and sends ``usage_progress`` events
+        with the tokens read and generated so far for this answer.
+
+        """
+
+        session = self.session
+        mark = session.usage_mark()
+        stopped = Event()
+
+        def tick() -> None:
+            """Periodically publish token usage while the answer is active."""
+
+            while not stopped.wait(0.5):
+                self._send("usage_progress", **session.usage_since(mark))
+
+        ticker = Thread(target=tick, name="qachat-usage", daemon=True)
+        ticker.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            ticker.join(timeout=1.0)
+
+    def save_answer_timeline(self, timestamp: str, timeline: object) -> None:
+        """Keep how long an answer took, as the page showed it.
+
+        Parameters
+        ----------
+        timestamp: str
+            The answered turn's timestamp, which identifies it.
+        timeline: object
+            ``elapsed_ms`` and ``steps`` (each a ``label`` and ``ms``) from
+            the page; anything else is ignored.
+
+        Notes
+        -----
+        The timing is presentation only: it is not part of the
+        conversation record, and a missing or unreadable file only means
+        resumed answers show their tokens without the time.
+
+        """
+
+        if self.session is None or not timestamp:
+            return
+
+        if not _valid_timeline(timeline):
+            return
+
+        root = self.session.project.root
+        timelines = _read_answer_timelines(root)
+        timelines[timestamp] = timeline
+        path = root / "logs" / _ANSWER_TIMELINES
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(path, json.dumps(timelines))
+
+    def _usage_totals(self) -> dict[str, dict[str, int]]:
+        """Tokens used by the open chat and by the whole project.
+
+        Returns
+        -------
+        dict[str, dict[str, int]]
+            ``chat`` and ``project``, each with ``input_tokens``,
+            ``output_tokens``, and ``answers``. The project counts every
+            saved chat, deleted chats included; a turn that branched chats
+            share is counted once.
+
+        """
+
+        def add(total: dict[str, int], parameters: object) -> None:
+            """Accumulate token counts and answer count from a usage record.
+
+            Parameters
+            ----------
+            total: dict[str, int]
+                Mutable token counters accumulated across records.
+            parameters: object
+                Model usage record, expected to contain a usage dictionary.
+
+            """
+
+            usage = (
+                parameters.get("usage")
+                if isinstance(parameters, dict)
+                else None
+            )
+            if isinstance(usage, dict):
+                total["input_tokens"] += int(usage.get("input_tokens", 0))
+                total["output_tokens"] += int(usage.get("output_tokens", 0))
+                total["answers"] += 1
+
+        empty = {"input_tokens": 0, "output_tokens": 0, "answers": 0}
+        chat = dict(empty)
+        project = dict(empty)
+        if self.session is None:
+            return {"chat": chat, "project": project}
+        for turn in self.session.turns:
+            add(chat, getattr(turn, "parameters", None))
+        seen: set[tuple[str, str]] = set()
+        traces = self.session.project.root / "logs" / "traces"
+        for path in sorted(traces.rglob("conversation_*.json")):
+            try:
+                state = conversation_state(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError):
+                continue  # An unreadable file is left out of the total.
+            for turn in state.get("turns", []) or []:
+                if not isinstance(turn, dict):
+                    continue
+                key = (str(turn.get("timestamp")), str(turn.get("question")))
+                if key not in seen:
+                    seen.add(key)
+                    add(project, turn.get("parameters"))
+        return {"chat": chat, "project": project}
+
+    def _confirm_plan(self, plan: ToolPlan) -> PlanChoice:
+        """Wait for the user's choice on a tool plan.
+
+        The page shows the plan from the ``processing`` answer phase that
+        precedes this call and answers with a ``plan_choice`` command.
+
+        Parameters
+        ----------
+        plan: ToolPlan
+            The plan the page is showing.
+
+        Returns
+        -------
+        PlanChoice
+            ``continue``, ``quick``, or ``cancel``. Ended input cancels.
+
+        Notes
+        -----
+        Commands are sequential, so other commands cannot run meanwhile;
+        each is answered with an error event and the wait continues.
+
+        """
+
+        while True:
+            command = self.read_command()
+            if command is None:
+                return PLAN_CHOICE_CANCEL
+            if command.get("action") == "plan_choice":
+                choice = command.get("choice")
+                if choice in PLAN_CHOICE_CHOICES:
+                    return choice
+                return PLAN_CHOICE_CANCEL
+            self._send(
+                "error",
+                message="Choose Continue, Quick, or Cancel for the plan "
+                "first.",
+            )
+
+    def _choose_option(
+        self, question: str, options: tuple[str, ...]
+    ) -> int | None:
+        """Wait for the user to pick one of a tool's options.
+
+        The page shows the options from the ``processing`` answer phase
+        that precedes this call and answers with a ``plan_choice`` command
+        whose choice is ``option:<index>`` or ``cancel``.
+
+        Parameters
+        ----------
+        question: str
+            The question the page is showing.
+        options: tuple[str, ...]
+            The options the page is showing.
+
+        Returns
+        -------
+        int | None
+            The chosen index; None for cancel, an invalid answer, or ended
+            input.
+
+        """
+
+        while True:
+            command = self.read_command()
+            if command is None:
+                return None
+            if command.get("action") == "plan_choice":
+                choice = str(command.get("choice") or "")
+                number = choice.removeprefix("option:")
+                if choice.startswith("option:") and number.isdigit():
+                    index = int(number)
+                    return index if index < len(options) else None
+                return None
+            self._send(
+                "error",
+                message=f"Answer the question first: {question}",
             )
 
     def preview_reference(self, turn_index: int, citation: int) -> None:
@@ -1095,9 +2621,14 @@ class ChatEngine:
                 self.active_conversation.conversation_id if branch else None
             )
             conversation = self.conversation_store.create(
-                branch_from=parent_id
+                branch_from=parent_id,
+                ownership=(
+                    self._store_ownership(parent_id)
+                    if parent_id is not None
+                    else None
+                ),
             )
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_create.failed",
@@ -1116,9 +2647,9 @@ class ChatEngine:
 
         Notes
         -----
-        Operation errors are caught and reported through an error event. The
-        method is synchronous; event-sink or error-reporting failures may still
-        propagate.
+        Operation errors are caught and reported through an error event.
+        A rejected target-file lock restores the previous store selection and
+        keeps the existing live session active.
 
         """
 
@@ -1132,7 +2663,7 @@ class ChatEngine:
                 == self.active_conversation.conversation_id
             ):
                 return
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
         except Exception as error:
             self._report_error(
                 "gui.conversation_select.failed",
@@ -1163,14 +2694,18 @@ class ChatEngine:
         try:
             if self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
-            renamed = self.conversation_store.rename(conversation_id, name)
+            renamed = self.conversation_store.rename(
+                conversation_id,
+                name,
+                ownership=self._store_ownership(conversation_id),
+                state_writer=self._store_state_writer(conversation_id),
+            )
             if (
                 self.active_conversation is not None
                 and renamed.conversation_id
                 == self.active_conversation.conversation_id
             ):
                 self.active_conversation = renamed
-                self.active_trace.update_conversation(asdict(renamed))
             self.active_trace.emit(
                 "conversation.renamed",
                 component="gui_engine",
@@ -1184,7 +2719,163 @@ class ChatEngine:
                 str(error),
             )
 
-    def _switch_conversation(self, conversation: ConversationInfo) -> None:
+    def delete_conversation(self, conversation_id: str) -> None:
+        """Archive one conversation and select a remaining conversation.
+
+        The frontend is notified before trace cleanup so it can remove the
+        row immediately. An active diagnostic trace is already durable after
+        every accepted event, so deletion detaches it instead of appending a
+        closing event that would rewrite a potentially large JSON document.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Identifier of the saved conversation.
+
+        """
+
+        try:
+            if (
+                self.session is None
+                or self.conversation_store is None
+                or self.active_conversation is None
+            ):
+                raise RuntimeError("Open a project first.")
+            deleting_active = (
+                conversation_id == self.active_conversation.conversation_id
+            )
+            self._send(
+                "conversation_delete_started",
+                conversation_id=conversation_id,
+            )
+            replacement, archived_path = self.conversation_store.archive(
+                conversation_id,
+                ownership=self._store_ownership(conversation_id),
+            )
+            if deleting_active:
+                self._detach_project_trace()
+                self._switch_conversation(
+                    replacement, close_current_trace=False
+                )
+            else:
+                self._send_conversations("conversations")
+            self.active_trace.emit(
+                "conversation.deleted",
+                component="gui_engine",
+                data={
+                    "conversation_id": conversation_id,
+                    "archived_path": str(archived_path),
+                },
+            )
+        except Exception as error:
+            if self.conversation_store is not None:
+                try:
+                    self._send_conversations("conversations")
+                except Exception:
+                    pass
+            self._report_error(
+                "gui.conversation_delete.failed", error, str(error)
+            )
+
+    def rename_project(self, name: str) -> None:
+        """Rename the active workspace folder, then reopen the same chat.
+
+        Parameters
+        ----------
+        name: str
+            Filename or project name to use.
+
+        """
+
+        source = destination = None
+        conversation_id = None
+        moved = False
+        try:
+            if self.session is None or self.active_conversation is None:
+                raise RuntimeError("Open a project first.")
+            clean = name.strip()
+            if (
+                not clean
+                or clean in {".", ".."}
+                or Path(clean).name != clean
+                or "/" in clean
+                or "\\" in clean
+            ):
+                raise ValueError("Use a single folder name without / or \\.")
+            source = self.session.project.root
+            destination = source.with_name(clean)
+            if destination == source:
+                return
+            if destination.exists():
+                raise ValueError(f"A folder named {clean!r} already exists.")
+            conversation_id = self.active_conversation.conversation_id
+            self.close()
+            source.rename(destination)
+            moved = True
+            project = open_project(destination)
+            self._reopen_project_conversation(project, conversation_id)
+        except Exception as error:
+            if source is not None and self.session is None:
+                try:
+                    self._close_project_trace()
+                    if moved:
+                        destination.rename(source)
+                    self._reopen_project_conversation(
+                        open_project(source), conversation_id
+                    )
+                except Exception:
+                    self.close()
+                    self._send(
+                        "backend_failed",
+                        message=(
+                            "Could not reopen the project after renaming. "
+                            "Reopen it from the saved projects list."
+                        ),
+                    )
+            self._report_error(
+                "gui.project.rename.failed",
+                error,
+                f"Could not rename the project: {error}",
+            )
+
+    def _switch_with_store_rollback(
+        self,
+        conversation: ConversationInfo,
+    ) -> None:
+        """Switch the active conversation or restore store selection.
+
+        Parameters
+        ----------
+        conversation: ConversationInfo
+            Target already selected or created by ConversationStore.
+
+        Notes
+        -----
+        The store may change its active ID before the engine can acquire the
+        target file. A rejected acquisition leaves the live session unchanged;
+        restore the previous store selection in that case. If the session
+        already switched, retain its new selection instead.
+
+        """
+
+        previous = self.active_conversation
+        try:
+            self._switch_conversation(conversation)
+        except BaseException:
+            if (
+                previous is not None
+                and self.active_conversation is previous
+                and self.conversation_store is not None
+            ):
+                self.conversation_store.select(previous.conversation_id)
+            raise
+
+    def _switch_conversation(
+        self,
+        conversation: ConversationInfo,
+        *,
+        close_current_trace: bool = True,
+    ) -> None:
         """Move the live session and trace to one conversation file.
 
         Parameters
@@ -1192,6 +2883,10 @@ class ChatEngine:
         conversation: ConversationInfo
             Registered conversation metadata for the state to activate or
             trace.
+        close_current_trace: bool, optional
+            Whether to append a closing event to the old trace after a
+            successful switch. Deletion passes False after it already closed
+            and detached its archived trace. Defaults to True.
 
         Raises
         ------
@@ -1200,21 +2895,35 @@ class ChatEngine:
 
         Notes
         -----
-        Closes the previous trace, opens the target trace, and switches RAG
-        history/settings while reusing models and indexes. This sequence is not
-        rolled back as one transaction on failure.
+        Acquires the target trace before releasing the previous one. If the
+        target is already owned or invalid, the old logger is retained. The
+        loaded model/history reconfiguration is not a multi-step transaction.
 
         """
 
         if self.session is None or self.conversation_store is None:
             raise RuntimeError("Open a project first.")
-        self._close_project_trace()
-        self._start_project_trace(self.session.project.root, conversation)
-        turns = self.session.switch_conversation(
-            self.conversation_store.state_path(conversation),
-            trace=self.project_trace,
-        )
+        previous_trace = self.project_trace
+        try:
+            # Acquiring the target first leaves the active writer untouched
+            # if the conversation is locked by another QAChat process.
+            self._start_project_trace(
+                self.session.project.root, conversation
+            )
+            turns = self.session.switch_conversation(
+                self.conversation_store.state_path(conversation),
+                trace=self.project_trace,
+            )
+        except BaseException:
+            if self.project_trace is not previous_trace:
+                if isinstance(self.project_trace, TraceLogger):
+                    self.project_trace.close(emit_event=False)
+                self.project_trace = previous_trace
+            raise
+        if close_current_trace and previous_trace is not self.project_trace:
+            previous_trace.close()
         self.active_conversation = conversation
+        self._use_project_answer_settings()
         self.active_trace.emit(
             "conversation.selected",
             component="gui_engine",
@@ -1222,7 +2931,7 @@ class ChatEngine:
         )
         self._send_conversations(
             "conversation_opened",
-            turns=[asdict(turn) for turn in turns],
+            turns=_turn_payloads(turns, self.session.project.root),
             retrieval_count=(
                 turns[-1].parameters.get(
                     "retrieval_count",
@@ -1234,6 +2943,7 @@ class ChatEngine:
             temperature=self.session.chat_session.temperature,
             thinking=self.session.chat_session.thinking,
             max_new_tokens=self.session.chat_session.max_new_tokens,
+            usage=self._usage_totals(),
         )
 
     def _send_conversations(self, event: str, **data: object) -> None:
@@ -1259,7 +2969,12 @@ class ChatEngine:
             event,
             active_conversation_id=(self.active_conversation.conversation_id),
             conversations=[
-                asdict(item)
+                {
+                    **asdict(item),
+                    "empty": self.conversation_store.is_empty(
+                        item.conversation_id
+                    ),
+                }
                 for item in self.conversation_store.conversations()
             ],
             **data,
@@ -1280,7 +2995,7 @@ class ChatEngine:
             if self.session is None or self.conversation_store is None:
                 raise RuntimeError("Open a project first.")
             conversation = self.conversation_store.create()
-            self._switch_conversation(conversation)
+            self._switch_with_store_rollback(conversation)
             self._send("reset", archived=None)
         except Exception as error:
             self._report_error(
@@ -1501,35 +3216,331 @@ def _saved_reference_context(
     }
 
 
-def _workspace_files(root: Path) -> list[str]:
-    """List saved workspace files for the sidebar.
+def _model_size(model_id: str) -> float:
+    """Parameter count in billions from a name such as "Qwen3-8B" (or 8).
+
+    Parameters
+    ----------
+    model_id: str
+        Model identifier from which to infer size.
+
+    Returns
+    -------
+    float
+        Parameter count in billions, defaulting to 8 for unknown names.
+
+    """
+
+    match = re.search(r"(\d+(?:\.\d+)?)B\b", model_id)
+    return float(match.group(1)) if match else 8.0
+
+
+def _installed_replacements(
+    missing: list[str], roles: dict[str, str], backend: str
+) -> dict[str, str]:
+    """Pick, for each missing model, the closest installed model.
+
+    The replacement has the same role (language or embedding), suits the
+    backend (MLX models have "mlx" in their name), and is closest in size.
+    Missing models without such a replacement are left out.
+
+    Parameters
+    ----------
+    missing: list[str]
+        Identifiers of models that are not available locally.
+    roles: dict[str, str]
+        Model purposes associated with the missing identifiers.
+    backend: str
+        Model backend for which settings are requested.
+
+    Returns
+    -------
+    dict[str, str]
+        Mapping from missing model IDs to installed alternatives.
+
+    """
+
+    presets = {choice.model_id: choice.role for choice in MODEL_CHOICES}
+    chosen: dict[str, str] = {}
+    for model_id in missing:
+        role = presets.get(model_id) or (
+            "embedding" if "embed" in model_id.lower() else "chat"
+        )
+        candidates = [
+            candidate
+            for candidate, candidate_role in roles.items()
+            if candidate_role == role
+            and ("mlx" in candidate.lower()) == (backend == BACKEND_MLX)
+        ]
+        if candidates:
+            size = _model_size(model_id)
+            chosen[model_id] = min(
+                candidates,
+                key=lambda candidate: (
+                    abs(math.log(_model_size(candidate) / size)),
+                    candidate,
+                ),
+            )
+    return chosen
+
+
+def _preference_payload() -> dict[str, object]:
+    """App-wide preferences for the page, by backend.
+
+    Returns
+    -------
+    dict[str, object]
+        Default GUI preferences organized by backend.
+
+    """
+
+    backends = (BACKEND_MLX, BACKEND_TORCH)
+    return {
+        "effort_levels": {b: default_effort_levels(b) for b in backends},
+        "router_models": {b: default_router_model(b) for b in backends},
+        "embedding_models": {b: default_embedding_model(b) for b in backends},
+        "search_depth": default_search_depth(),
+        "query_format": default_query_format(),
+        "appearance": default_appearance(),
+    }
+
+
+# How long each answer took, as the page showed it, by turn timestamp; kept
+# per project so resumed and branched chats show it again.
+_ANSWER_TIMELINES: Final[str] = "answer_timelines.json"
+
+
+def _read_answer_timelines(root: Path) -> dict[str, dict]:
+    """Return the saved answer timings of a project, by turn timestamp.
 
     Parameters
     ----------
     root: pathlib.Path
-        Managed project directory whose sources, indexes, and logs are listed.
+        Project folder.
+
+    Returns
+    -------
+    dict[str, dict]
+        Timings saved by ``ChatEngine.save_answer_timeline``; empty when
+        none are saved or the file cannot be read.
+
+    """
+
+    try:
+        data = json.loads(
+            (root / "logs" / _ANSWER_TIMELINES).read_text(encoding="utf-8")
+        )
+    except (OSError, ValueError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def _turn_payloads(turns: list, root: Path) -> list[dict]:
+    """Return turns for the page, each with its saved timing if any.
+
+    Parameters
+    ----------
+    turns: list[ConversationTurn]
+        Turns of the open conversation.
+    root: pathlib.Path
+        Project folder holding the saved timings.
+
+    Returns
+    -------
+    list[dict]
+        The turns as dictionaries; a turn whose timing was saved has it
+        under ``timeline``.
+
+    """
+
+    timelines = _read_answer_timelines(root)
+    payloads = []
+    for turn in turns:
+        payload = asdict(turn)
+        timeline = timelines.get(getattr(turn, "timestamp", ""))
+        if _valid_timeline(timeline):
+            payload["timeline"] = timeline
+        payloads.append(payload)
+
+    return payloads
+
+
+def _valid_timeline(timeline: object) -> bool:
+    """Whether a timeline from the page has the expected shape.
+
+    Parameters
+    ----------
+    timeline: object
+        Timeline data received from the frontend.
+
+    Returns
+    -------
+    bool
+        True if the timeline has the expected structure.
+
+    """
+
+    if not isinstance(timeline, dict):
+        return False
+
+    steps = timeline.get("steps")
+    return (
+        isinstance(timeline.get("elapsed_ms"), int)
+        and isinstance(steps, list)
+        and all(
+            isinstance(step, dict)
+            and isinstance(step.get("label"), str)
+            and isinstance(step.get("ms"), int)
+            for step in steps
+        )
+    )
+
+
+def _path_list(value: object) -> list[str]:
+    """Return a non-empty list of path strings, or raise ValueError.
+
+    Parameters
+    ----------
+    value: object
+        Value to validate or convert.
 
     Returns
     -------
     list[str]
-        Mapping of managed workspace areas to their relative file listings.
+        Nonempty list of file path strings.
 
-    Notes
-    -----
-    The listing is capped by the implementation entry limit. It is a UI
-    inventory, not a selection-policy or content-integrity check.
+    Raises
+    ------
+    ValueError
+        If the input is not a nonempty list of path strings.
 
     """
 
-    files = ["profile.ini"]
-    for folder in (root / "sources", root / "indexes", root / "logs"):
-        if folder.is_dir():
-            files.extend(
-                path.relative_to(root).as_posix()
-                for path in folder.rglob("*")
-                if path.is_file()
-            )
-    return sorted(files)[:10_000]
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValueError("Choose files or folders.")
+    return value
+
+
+_LEVEL_KEYS = ("light", "instant", "lagom", "thorough", "deep")
+
+
+def _answer_excerpt(answer: str, limit: int) -> str:
+    """Return answer text without thinking or citation markers.
+
+    Parameters
+    ----------
+    answer: str
+        Answer text to inspect.
+    limit: int
+        Maximum number of items or characters to include.
+
+    Returns
+    -------
+    str
+        answer text without thinking or citation markers.
+
+    """
+
+    text = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.S)
+    text = re.sub(r"\s*\[[0-9, ]+\]", "", text)
+    return text.strip()[:limit]
+
+
+def _router_models_by_backend(root: Path | None) -> dict[str, str]:
+    """Return a project's router model (or the preferences) by backend.
+
+    Parameters
+    ----------
+    root: Path | None
+        Project or workspace root directory.
+
+    Returns
+    -------
+    dict[str, str]
+        a project's router model (or the preferences) by backend.
+
+    """
+
+    if root is None:
+        return _preference_payload()["router_models"]
+    return {
+        backend: read_router_model(root, backend)
+        for backend in (BACKEND_MLX, BACKEND_TORCH)
+    }
+
+
+def _effort_levels_by_backend(
+    root: Path | None, profile: object
+) -> dict[str, list[dict[str, object]]]:
+    """Return a project's effort levels (or the preferences) by backend.
+
+    Parameters
+    ----------
+    root: Path | None
+        Project or workspace root directory.
+    profile: object
+        Current project profile, when available.
+
+    Returns
+    -------
+    dict[str, list[dict[str, object]]]
+        a project's effort levels (or the preferences) by backend.
+
+    """
+
+    if root is None:
+        return _preference_payload()["effort_levels"]
+    return {
+        backend: read_effort_levels(root, backend)
+        for backend in (BACKEND_MLX, BACKEND_TORCH)
+    }
+
+
+def _effort_indexes(effort: object) -> tuple[int, int] | None:
+    """Read the effort level and search-depth step chosen for one answer.
+
+    Parameters
+    ----------
+    effort: object
+        Requested answer effort selection.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        Zero-based effort and search-depth positions, or None.
+
+    Raises
+    ------
+    ValueError
+        If the supplied effort selection is invalid or out of range.
+
+    """
+
+    if effort is None:
+        return None
+    if isinstance(effort, str):
+        if effort in _LEVEL_KEYS:
+            index = _LEVEL_KEYS.index(effort)
+            return index, index
+        try:
+            effort = json.loads(effort)
+        except ValueError:
+            effort = None
+    if isinstance(effort, dict):
+        # "retrieval" is the name earlier pages used for search depth.
+        depth = effort.get("search_depth", effort.get("retrieval"))
+        indexes = (effort.get("model"), depth)
+        if all(
+            type(index) is int and 0 <= index < LEVEL_COUNT
+            for index in indexes
+        ):
+            return indexes
+    raise ValueError("Choose an effort level and a search depth.")
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
@@ -1580,6 +3591,7 @@ def main() -> None:
     """
 
     protocol_output = sys.stdout
+    protocol_lock = Lock()
 
     def emit(data: dict[str, object]) -> None:
         """Write one frontend event as a flushed JSON line.
@@ -1597,11 +3609,38 @@ def main() -> None:
 
         """
 
-        protocol_output.write(json.dumps(data, default=str) + "\n")
-        protocol_output.flush()
+        with protocol_lock:
+            protocol_output.write(json.dumps(data, default=str) + "\n")
+            protocol_output.flush()
 
-    sandbox = ROOT / "sandbox"
-    engine = ChatEngine(sandbox, emit, trace_enabled=True)
+    sandbox = default_workspace_directory()
+    # One iterator over stdin, so a tool plan waiting for the user's choice
+    # reads the next command from the same stream.
+    lines = iter(sys.stdin)
+
+    def read_command() -> dict[str, object] | None:
+        """Return the next JSON command, or None when input ended.
+
+        Returns
+        -------
+        dict[str, object] | None
+            the next JSON command, or None when input ended.
+
+        """
+
+        for line in lines:
+            try:
+                command = json.loads(line)
+            except ValueError:
+                emit({"event": "error", "message": "Unreadable command."})
+                continue
+            if isinstance(command, dict):
+                return command
+        return None
+
+    engine = ChatEngine(
+        sandbox, emit, trace_enabled=True, read_command=read_command
+    )
     standard_output = TraceTextStream(
         lambda: engine.active_trace,
         stream_name="backend.stdout",
@@ -1611,7 +3650,7 @@ def main() -> None:
         stream_name="backend.stderr",
     )
     try:
-        for line in sys.stdin:
+        for line in lines:
             try:
                 command = json.loads(line)
                 if not isinstance(command, dict):
@@ -1631,16 +3670,28 @@ def main() -> None:
                         )
                     elif action == "settings":
                         engine.settings(command["kind"], command["workspace"])
+                    elif action == "apply_models":
+                        engine.apply_model_settings(command["settings"])
                     elif action == "download_model":
                         engine.download(command["model_id"])
                     elif action == "startup":
                         engine.startup()
+                    elif action == "readiness":
+                        engine.readiness()
+                    elif action == "install_required_models":
+                        engine.install_required_models()
+                    elif action == "use_installed_models":
+                        engine.use_installed_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
                             command["kind"], command["workspace"]
                         )
+                    elif action == "saved_projects":
+                        engine.list_saved_projects(command["workspace"])
                     elif action == "resume":
-                        engine.resume_project(command["project"])
+                        engine.resume_project(
+                            command["project"], command.get("conversation_id")
+                        )
                     elif action == "close":
                         engine.close()
                     elif action == "preview":
@@ -1660,6 +3711,7 @@ def main() -> None:
                             command["question"],
                             command.get("retrieval_count"),
                             command.get("generation_settings"),
+                            command.get("effort"),
                         )
                     elif action == "new_conversation":
                         engine.create_conversation()
@@ -1672,19 +3724,49 @@ def main() -> None:
                             command["conversation_id"],
                             command["name"],
                         )
+                    elif action == "delete_conversation":
+                        engine.delete_conversation(command["conversation_id"])
+                    elif action == "add_project_sources":
+                        engine.add_project_sources(command["sources"])
+                    elif action == "remove_project_sources":
+                        engine.remove_project_sources(command["paths"])
+                    elif action == "edit_folder":
+                        arguments = dict(command)
+                        del arguments["action"]
+                        engine.edit_folder(
+                            str(arguments.pop("folder", "")),
+                            str(arguments.pop("operation", "")),
+                            **arguments,
+                        )
+                    elif action == "rename_project":
+                        engine.rename_project(command["name"])
+                    elif action == "save_answer_timeline":
+                        engine.save_answer_timeline(
+                            str(command.get("timestamp", "")),
+                            command.get("timeline"),
+                        )
                     elif action == "reset":
                         engine.reset()
+                    elif action == "plan_choice":
+                        # Only meaningful while a plan waits; ignore late
+                        # clicks after the answer finished.
+                        pass
                     else:
                         emit({"event": "error", "message": "Unknown command."})
                 standard_output.flush()
                 standard_error.flush()
-            except (KeyError, TypeError, ValueError) as error:
+            except Exception as error:
                 engine.active_trace.exception(
-                    "gui.command.invalid",
+                    "gui.command.failed",
                     error,
                     component="gui_engine",
                 )
-                emit({"event": "error", "message": str(error)})
+                emit(
+                    {
+                        "event": "error",
+                        "message": f"The background task failed: {error}",
+                    }
+                )
     finally:
         standard_output.flush()
         standard_error.flush()

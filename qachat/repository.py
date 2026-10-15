@@ -6,15 +6,16 @@ entry limits, and built-in skip rules. Exclusions and protected-name rules
 cannot be overridden by an inclusion. Descendant symbolic links and
 junctions are skipped rather than traversed.
 
-``build_repository_manifest`` then reads selected files to compute SHA-256
-hashes. Manifests contain relative paths, sizes, and hashes, not the absolute
-source location or modification times. Comparing manifests detects changes
-in selected content, not changes in every file in the repository.
+``build_repository_manifest`` requires a complete scan and then reads
+selected files to compute SHA-256 hashes. Manifests contain relative paths,
+sizes, and hashes, not the absolute source location or modification times.
+Comparing manifests detects changes in selected content, not changes in every
+file in the repository.
 
 These routines are not a security sandbox or an atomic filesystem snapshot.
 Manifest construction expects a trusted scan report and does not repeat all
 scan-time path checks. A scan's ``complete`` flag reports recoverable I/O
-failures; callers requiring a full snapshot must check that flag themselves.
+failures; manifest construction rejects incomplete reports.
 Relative repository paths use ``PROJECT_ROOT`` (the package's parent), while
 relative saved-manifest paths use the process working directory.
 
@@ -23,7 +24,7 @@ Key Features
 
 - **Selection reports**
 
-    Return sorted selected/skipped rows with metadata and explanatory reasons.
+    Return sorted selected/skipped rows with stable codes and explanations.
 
 - **Content fingerprints**
 
@@ -58,6 +59,11 @@ Module Structure
 
     Return whether selected repository content has changed.
 
+- ``normalize_extensions``
+
+    Validate and normalize literal file suffixes across the configuration
+    loader, profile reader, and repository scanner.
+
 - ``scan_repository``
 
     Preview files selected from a local repository without reading them.
@@ -68,10 +74,16 @@ used by these operations; they are not added to the package-level API.
 Module settings
 ---------------
 ``PROJECT_ROOT`` anchors relative repository paths to the package parent.
-``DEFAULT_EXTENSIONS`` supplies the default literal filename suffixes.
-``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` implement
-the name-based exclusions. These module settings are not included in
-``__all__`` or re-exported from the package root.
+The packaged ``qachat_defaults.json`` contains the repository-selection
+defaults. Stable reason identifiers come from the separately packaged
+``repository_reason_codes.json`` via ``qachat.repository_reason_codes``.
+``DEFAULT_EXTENSIONS`` supplies the literal filename suffixes;
+``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` provide
+name-based exclusions. These lists are loaded at import time and define
+which extensions are considered, which directory and file names are skipped,
+and which binary or sensitive suffixes are rejected. They can be edited in
+the packaged JSON; changes require restarting QAChat. They are not
+included in ``__all__`` or re-exported from the package root.
 
 Examples
 --------
@@ -90,18 +102,38 @@ Use an absolute repository path to avoid dependence on the package location.
 
 from __future__ import annotations
 
-import json
 import os
 from hashlib import sha256
+import json
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
+
+from qachat.defaults import (
+    load_defaults_section,
+    require_default_strings,
+)
+from qachat.repository_reason_codes import (
+    SELECTION_REASON_SELECTED,
+    SELECTION_REASON_FILE_TOO_LARGE,
+    SELECTION_REASON_EMPTY_FILE,
+    SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+    SELECTION_REASON_PROTECTED_FILE,
+    SELECTION_REASON_BLOCKED_FILE_TYPE,
+    SELECTION_REASON_EXCLUDED_PATH,
+    SELECTION_REASON_OUTSIDE_SCOPE,
+    SELECTION_REASON_LINK_NOT_FOLLOWED,
+    SELECTION_REASON_EXCLUDED_DIRECTORY,
+    SELECTION_REASON_UNSUPPORTED_ENTRY,
+    SELECTION_REASON_INSPECTION_FAILED,
+)
 
 
 __all__ = [
     "build_repository_manifest",
     "compare_repository_manifests",
     "detect_repository_changes",
+    "normalize_extensions",
     "repository_has_changed",
     "scan_repository",
 ]
@@ -109,67 +141,26 @@ __all__ = [
 _MANIFEST_VERSION = 1
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_EXTENSIONS = (
-    ".py",
-    ".md",
-    ".txt",
-    ".rst",
-    ".m",
-    ".toml",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".ini",
-    ".cfg",
-    ".sh",
-    ".ps1",
-    ".ipynb",
-    ".pdf",
-    ".gitattributes",
-    ".gitignore",
-    ".python-version",
+# Selection defaults are owned by this module; the JSON is loaded once.
+_REPOSITORY_DEFAULTS = load_defaults_section("REPOSITORY")
+DEFAULT_EXTENSIONS = require_default_strings(
+    _REPOSITORY_DEFAULTS, "DEFAULT_EXTENSIONS", "REPOSITORY"
 )
-SKIP_DIRECTORIES = {
-    ".genrag",
-    ".git",
-    ".ipynb_checkpoints",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    ".venv",
-    "weights",
-    "venv",
-    "env",
-    "node_modules",
-    "build",
-    "dist",
-    "__pycache__",
-    "logs",
-    "htmlcov",
-}
-SKIP_FILES = {
-    ".ds_store",
-    ".env",
-    "credentials.json",
-    "secrets.json",
-    "id_rsa",
-    "id_ed25519",
-}
-BLOCKED_SUFFIXES = {
-    ".safetensors",
-    ".gguf",
-    ".bin",
-    ".onnx",
-    ".pt",
-    ".pth",
-    ".ckpt",
-    ".incomplete",
-    ".pem",
-    ".key",
-    ".p12",
-    ".pfx",
-    ".keystore",
-}
+SKIP_DIRECTORIES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "SKIP_DIRECTORIES", "REPOSITORY"
+    )
+)
+SKIP_FILES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "SKIP_FILES", "REPOSITORY"
+    )
+)
+BLOCKED_SUFFIXES = set(
+    require_default_strings(
+        _REPOSITORY_DEFAULTS, "BLOCKED_SUFFIXES", "REPOSITORY"
+    )
+)
 
 
 def _selection_paths(
@@ -263,8 +254,8 @@ def _skip_reason(
     includes: tuple[str, ...],
     excludes: tuple[str, ...],
     max_file_bytes: int,
-) -> str | None:
-    """Explain why one entry should be skipped.
+) -> tuple[str, str] | None:
+    """Identify why one entry should be skipped.
 
     Parameters
     ----------
@@ -285,28 +276,38 @@ def _skip_reason(
 
     Returns
     -------
-    str | None
-        Skip reason, or ``None`` when the entry is selected or entered.
+    tuple[str, str] | None
+        Stable reason code and display text, or ``None`` when the entry
+        is selected or entered.
 
     """
 
     name = PurePosixPath(relative).name.lower()
 
     if kind == "link":
-        return "links are not followed"
+        return SELECTION_REASON_LINK_NOT_FOLLOWED, "links are not followed"
 
     if kind == "folder" and name in SKIP_DIRECTORIES:
-        return "environment, cache, or generated folder"
+        return (
+            SELECTION_REASON_EXCLUDED_DIRECTORY,
+            "environment, cache, or generated folder",
+        )
 
     protected_environment = name.startswith(".env.")
     if name in SKIP_FILES or protected_environment:
-        return "potentially secret or generated file"
+        return (
+            SELECTION_REASON_PROTECTED_FILE,
+            "potentially secret or generated file",
+        )
 
     if PurePosixPath(name).suffix in BLOCKED_SUFFIXES:
-        return "model weights or potentially secret file"
+        return (
+            SELECTION_REASON_BLOCKED_FILE_TYPE,
+            "model weights or potentially secret file",
+        )
 
     if any(_within(relative, excluded) for excluded in excludes):
-        return "excluded by your selection"
+        return SELECTION_REASON_EXCLUDED_PATH, "excluded by your selection"
 
     in_scope = not includes or any(
         _within(relative, included) for included in includes
@@ -316,27 +317,33 @@ def _skip_reason(
     )
 
     if not in_scope and not leads_to_scope:
-        return "outside your included paths"
+        return SELECTION_REASON_OUTSIDE_SCOPE, "outside your included paths"
 
     if kind == "folder":
         return None
 
     if kind != "file":
-        return "not a regular file"
+        return SELECTION_REASON_UNSUPPORTED_ENTRY, "not a regular file"
 
     if not any(name.endswith(extension) for extension in extensions):
-        return "file type not selected"
+        return (
+            SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+            "file type not selected",
+        )
 
     if size == 0:
-        return "empty file"
+        return SELECTION_REASON_EMPTY_FILE, "empty file"
 
     if size is not None and size > max_file_bytes:
-        return "larger than the file-size limit"
+        return (
+            SELECTION_REASON_FILE_TOO_LARGE,
+            "larger than the file-size limit",
+        )
 
     return None
 
 
-def _normalize_extensions(
+def normalize_extensions(
     extensions: list[str] | tuple[str, ...],
 ) -> tuple[str, ...]:
     """Check and normalize selected file extensions.
@@ -391,7 +398,7 @@ def _entry_row(
     path: str,
     kind: str,
     size: int | None,
-    reason: str | None,
+    reason: tuple[str, str] | None,
 ) -> dict[str, object]:
     """Build one result row.
 
@@ -403,8 +410,9 @@ def _entry_row(
         Entry kind.
     size: int | None
         File size in bytes.
-    reason: str | None
-        Skip reason, or ``None`` for a selected file.
+    reason: tuple[str, str] | None
+        Stable reason code and display text, or ``None`` for a selected
+        file.
 
     Returns
     -------
@@ -413,12 +421,16 @@ def _entry_row(
 
     """
 
+    code, message = reason if reason else (
+        SELECTION_REASON_SELECTED, "matches your selection"
+    )
     return {
         "path": path,
         "kind": kind,
         "size_bytes": size,
         "status": "skipped" if reason else "selected",
-        "reason": reason or "matches your selection",
+        "reason_code": code,
+        "reason": message,
     }
 
 
@@ -467,9 +479,10 @@ def scan_repository(
         descendant I/O errors. selected_files is a sorted list of relative
         POSIX paths and selected_bytes is their metadata-size sum. entries
         contains sorted rows with path, kind, size_bytes, status
-        (selected/skipped), and reason. Traversed directories do not receive a
-        selected row; skipped directories do. A kind of unknown records an
-        inspection failure.
+        (selected/skipped), reason_code, and reason. Reason codes are
+        stable identifiers independent of explanatory text. Traversed
+        directories do not receive a selected row; skipped directories do.
+        A kind of unknown records an inspection failure.
 
     Raises
     ------
@@ -510,7 +523,7 @@ def scan_repository(
         if type(value) is not int or value < 1:
             raise ValueError(f"{label} must be a positive whole number.")
 
-    selected_extensions = _normalize_extensions(extensions)
+    selected_extensions = normalize_extensions(extensions)
     includes = _selection_paths(include_paths, "include_paths")
     excludes = _selection_paths(exclude_paths, "exclude_paths")
     chosen = Path(repository).expanduser()
@@ -543,7 +556,10 @@ def scan_repository(
                         relative_folder,
                         "link",
                         None,
-                        "links are not followed",
+                        (
+                            SELECTION_REASON_LINK_NOT_FOLLOWED,
+                            "links are not followed",
+                        ),
                     )
                 )
                 continue
@@ -564,7 +580,10 @@ def scan_repository(
                 ) from error
             complete = False
             reason = f"cannot list folder ({type(error).__name__})"
-            rows.append(_entry_row(relative_folder, "folder", None, reason))
+            rows.append(_entry_row(
+                relative_folder, "folder", None,
+                (SELECTION_REASON_INSPECTION_FAILED, reason),
+            ))
             continue
 
         for entry in sorted(children, key=lambda item: item.name):
@@ -594,7 +613,10 @@ def scan_repository(
                 complete = False
                 kind = "unknown"
                 size = None
-                reason = f"cannot inspect entry ({type(error).__name__})"
+                reason = (
+                    SELECTION_REASON_INSPECTION_FAILED,
+                    f"cannot inspect entry ({type(error).__name__})",
+                )
 
             if kind == "folder" and reason is None:
                 pending.append(path)
@@ -641,8 +663,8 @@ def build_repository_manifest(
     Raises
     ------
     ValueError
-        If report fields have the wrong expected types; individual selected
-        path strings are not fully validated.
+        If the scan is incomplete or report fields have invalid types;
+        individual selected path strings are not fully validated.
     FileNotFoundError
         If the source root or selected regular file is missing.
     OSError
@@ -650,13 +672,17 @@ def build_repository_manifest(
 
     Notes
     -----
-    This function reads every selected file in binary blocks and takes its size
-    after hashing. It does not check report["complete"], reject parent/absolute
-    path strings, or repeat scan-time link containment checks. Supply a trusted
-    complete scan report and keep the source stable when a consistent snapshot
-    is needed. Duplicate normalized path keys overwrite earlier records.
+    This function requires a complete scan and reads selected files in binary
+    blocks. It checks file metadata before and after hashing and rejects
+    detectable concurrent modifications. It does not reject parent/absolute
+    path strings or repeat scan-time link containment checks. Supply a
+    trusted scan report. Duplicate normalized path keys overwrite earlier
+    records.
 
     """
+
+    if report.get("complete") is not True:
+        raise ValueError("Cannot build a manifest from an incomplete scan.")
 
     repository_value = report.get("repository")
     selected_value = report.get("selected_files")
@@ -678,10 +704,20 @@ def build_repository_manifest(
             )
         digest = sha256()
         with path.open("rb") as stream:
+            before = os.fstat(stream.fileno())
             for block in iter(lambda: stream.read(1024 * 1024), b""):
                 digest.update(block)
+            after = os.fstat(stream.fileno())
+        identity = (
+            "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns"
+        )
+        if any(getattr(before, name) != getattr(after, name)
+               for name in identity):
+            raise OSError(
+                f"Selected source file changed while hashing: {path}"
+            )
         files[relative] = {
-            "size_bytes": path.stat().st_size,
+            "size_bytes": after.st_size,
             "sha256": digest.hexdigest(),
         }
 
@@ -720,9 +756,9 @@ def compare_repository_manifests(
     Notes
     -----
     Modified records differ in size_bytes or sha256 after extra record fields
-    are discarded. Paths, nonnegative sizes, and hash syntax are not fully
-    validated. All change lists are sorted lexically; no files are read during
-    comparison.
+    are discarded. Paths must be normalized relative POSIX paths, sizes must
+    be nonnegative, and hashes must be valid SHA-256 hex digests. All change
+    lists are sorted lexically; no files are read during comparison.
 
     """
 
@@ -871,10 +907,10 @@ def detect_repository_changes(
 
     Notes
     -----
-    The wrapper scans and hashes all currently selected files. It does not
-    reject a report with complete=False, so inaccessible entries can look
-    removed. Use the same selection settings as the saved baseline to compare
-    the same scope. None or a missing manifest always means matches=False.
+    The wrapper scans and hashes all currently selected files. An incomplete
+    scan raises ValueError rather than reporting inaccessible files as removed.
+    Use the same selection settings as the saved baseline to compare the same
+    scope. None or a missing manifest always means matches=False.
 
     Examples
     --------
@@ -977,6 +1013,7 @@ def repository_has_changed(
     )
     return not bool(changes["matches"])
 
+
 def _manifest_files(
     manifest: dict[str, object],
 ) -> dict[str, dict[str, object]]:
@@ -1000,14 +1037,16 @@ def _manifest_files(
 
     Notes
     -----
-    Validation is structural only: file keys must be strings, sizes exact
-    integers, and digests strings. It does not require relative paths,
-    nonnegative sizes, or 64-character hexadecimal digests. Extra record keys
-    are ignored in the returned copy.
+    File keys must be normalized relative POSIX paths; sizes must be exact
+    nonnegative integers; hashes must be 64 hexadecimal characters. Hashes
+    are normalized to lowercase. Extra record keys are ignored.
 
     """
 
-    if manifest.get("format_version") != _MANIFEST_VERSION:
+    if type(manifest) is not dict or (
+        type(manifest.get("format_version")) is not int
+        or manifest["format_version"] != _MANIFEST_VERSION
+    ):
         raise ValueError("Unsupported repository manifest version.")
     files = manifest.get("files")
     if not isinstance(files, dict):
@@ -1017,12 +1056,18 @@ def _manifest_files(
     for path, record in files.items():
         if not isinstance(path, str) or not isinstance(record, dict):
             raise ValueError("Repository manifest contains invalid records.")
+        if (not path or "\\" in path or path.startswith("/")
+                or any(part in ("", ".", "..") for part in path.split("/"))
+                or PureWindowsPath(path).drive):
+            raise ValueError("Repository manifest contains invalid paths.")
         size = record.get("size_bytes")
         digest = record.get("sha256")
-        if type(size) is not int or not isinstance(digest, str):
+        if (type(size) is not int or size < 0
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-fA-F]{64}", digest) is None):
             raise ValueError("Repository manifest contains invalid hashes.")
         checked[path] = {
             "size_bytes": size,
-            "sha256": digest,
+            "sha256": digest.lower(),
         }
     return checked

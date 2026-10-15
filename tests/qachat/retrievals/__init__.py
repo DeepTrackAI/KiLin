@@ -1,1 +1,3 @@
-"""Tests for retrieval modules."""
+"""Tests for the corresponding qachat.retrievals package.
+
+"""

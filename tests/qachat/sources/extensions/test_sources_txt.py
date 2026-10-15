@@ -1,103 +1,128 @@
-"""Tests for plain-text natural-unit extraction."""
+"""Unit tests for blank-line-delimited plain-text extraction.
+
+Tests cover paragraph boundaries, whitespace, Unicode, line endings, and
+exact source coordinates without filesystem or external dependencies.
+
+"""
 
 # pylint: disable=C0115:missing-class-docstring
 # pylint: disable=C0116:missing-function-docstring
+# pylint: disable=C0103:invalid-name
 
 from __future__ import annotations
 
 from pathlib import Path
-from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.repository import scan_repository
-from qachat.sources.sources import (
-    extract_source_units,
-    read_repository_files,
-)
+from qachat.sources.extensions import sources_txt
+from qachat.sources.sources import SourceFile
+from tests.qachat.sources._support import fixture_text
 
 
-class TestSourcesTxt(unittest.TestCase):
+class TestTextExtraction(unittest.TestCase):
+    """Verify plain-text paragraph extraction and provenance."""
 
-    def test_text_file_becomes_paragraph_units(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "notes.txt").write_text(
-                "First paragraph.\nStill first.\n\nSecond paragraph.\n",
-                encoding="utf-8",
-            )
-            report = scan_repository(root, extensions=[".txt"])
-            files = read_repository_files(report)
-            units = extract_source_units(files)
+    def test_fixture_paragraphs_and_unicode(self) -> None:
+        """Split on blank lines and preserve non-ASCII source text."""
 
-        self.assertEqual(
-            [unit.kind for unit in units],
-            ["text_paragraph", "text_paragraph"],
+        text = fixture_text("sample.txt")
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("sample.txt"), text)
         )
-        self.assertEqual(units[0].text, "First paragraph.\nStill first.\n")
-        self.assertEqual(units[0].start_line, 1)
-        self.assertEqual(units[0].end_line, 2)
-        self.assertEqual(units[1].text, "Second paragraph.\n")
-        self.assertEqual(units[1].start_line, 4)
-        self.assertEqual(units[1].end_line, 4)
-
-    def test_text_file_without_blank_lines_is_one_unit(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "short.txt").write_text(
-                "One line.\nAnother line, no blank separator.\n",
-                encoding="utf-8",
-            )
-            report = scan_repository(root, extensions=[".txt"])
-            files = read_repository_files(report)
-            units = extract_source_units(files)
-
-        self.assertEqual([unit.kind for unit in units], ["text_paragraph"])
+        self.assertEqual(len(units), 3)
         self.assertEqual(
-            units[0].text,
-            "One line.\nAnother line, no blank separator.\n",
+            [(unit.start_line, unit.end_line) for unit in units],
+            [(1, 2), (4, 4), (7, 7)],
         )
+        self.assertIn("café", units[1].text)
+        self.assertTrue(all(unit.kind == "text_paragraph" for unit in units))
 
-    def test_multiple_blank_lines_between_paragraphs(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "spaced.txt").write_text(
-                "Para one.\n\n\n\nPara two.\n",
-                encoding="utf-8",
-            )
-            report = scan_repository(root, extensions=[".txt"])
-            files = read_repository_files(report)
-            units = extract_source_units(files)
+    def test_without_blank_lines_is_one_paragraph(self) -> None:
+        """Retain contiguous nonblank lines as one unit."""
 
-        self.assertEqual(
-            [unit.kind for unit in units],
-            ["text_paragraph", "text_paragraph"],
+        text = "One\nTwo\n"
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("short.txt"), text)
         )
-        self.assertEqual(units[0].text, "Para one.\n")
-        self.assertEqual(units[1].text, "Para two.\n")
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].text, text)
 
-    def test_leading_and_trailing_blank_lines_are_dropped(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "padded.txt").write_text(
-                "\n\nActual content.\n\n\n",
-                encoding="utf-8",
+    def test_multiple_blank_lines_are_not_included(self) -> None:
+        """Drop delimiters rather than merging them into paragraphs."""
+
+        text = "First\n\n\n\nSecond\n"
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("notes.txt"), text)
+        )
+        self.assertEqual([unit.text for unit in units],
+                         ["First\n", "Second\n"])
+        self.assertEqual([unit.start_line for unit in units], [1, 5])
+
+    def test_leading_and_trailing_blank_lines_are_omitted(self) -> None:
+        """Preserve coordinates after discarding surrounding whitespace."""
+
+        units = sources_txt.extract_source_units(SourceFile(
+            Path("notes.txt"), "\n\nContent\n\n\n"
+        ))
+        self.assertEqual(len(units), 1)
+        self.assertEqual((units[0].start_line, units[0].end_line), (3, 3))
+        self.assertEqual(units[0].text, "Content\n")
+
+    def test_crlf_boundaries_are_preserved(self) -> None:
+        """Keep original CRLF line endings in source units."""
+
+        text = "First\r\n\r\nSecond\r\n"
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("notes.txt"), text)
+        )
+        self.assertEqual([unit.text for unit in units],
+                         ["First\r\n", "Second\r\n"])
+        self.assertEqual([unit.start_line for unit in units], [1, 3])
+
+    def test_tabs_and_spaces_separate_paragraphs(self) -> None:
+        """Treat lines containing only whitespace as separators."""
+
+        units = sources_txt.extract_source_units(SourceFile(
+            Path("notes.txt"), "First\n\t \nSecond\n"
+        ))
+        self.assertEqual([unit.text for unit in units],
+                         ["First\n", "Second\n"])
+
+    def test_single_line_without_newline(self) -> None:
+        """Accept a final paragraph without a trailing newline."""
+
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("notes.txt"), "One line")
+        )
+        self.assertEqual(len(units), 1)
+        self.assertEqual(units[0].text, "One line")
+        self.assertEqual((units[0].start_line, units[0].end_line), (1, 1))
+
+    def test_empty_and_blank_text_produces_no_units(self) -> None:
+        """Avoid empty paragraph units."""
+
+        for text in ("", "\n\n", "  \n\t\n"):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    sources_txt.extract_source_units(
+                        SourceFile(Path("blank.txt"), text)
+                    ),
+                    [],
+                )
+
+    def test_unit_text_matches_original_line_ranges(self) -> None:
+        """Verify every paragraph's inclusive one-based provenance."""
+
+        text = fixture_text("sample.txt")
+        lines = text.splitlines(keepends=True)
+        units = sources_txt.extract_source_units(
+            SourceFile(Path("sample.txt"), text)
+        )
+        for unit in units:
+            self.assertEqual(
+                unit.text,
+                "".join(lines[unit.start_line - 1:unit.end_line]),
             )
-            report = scan_repository(root, extensions=[".txt"])
-            files = read_repository_files(report)
-            units = extract_source_units(files)
-
-        self.assertEqual([unit.kind for unit in units], ["text_paragraph"])
-        self.assertEqual(units[0].text, "Actual content.\n")
-
-    def test_blank_file_produces_no_units(self) -> None:
-        with TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "empty.txt").write_text("\n\n\n", encoding="utf-8")
-            report = scan_repository(root, extensions=[".txt"])
-            files = read_repository_files(report)
-            units = extract_source_units(files)
-
-        self.assertEqual(units, [])
 
 
 if __name__ == "__main__":

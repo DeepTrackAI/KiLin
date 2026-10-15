@@ -1,0 +1,47 @@
+"""Expose the registered ``show_source`` tool.
+
+Its implementation and configuration are local to this package.
+Common algorithms are provided by private ``qachat.tools._shared``
+modules, not by other registered tools.
+
+Key Features
+------------
+
+- **Tool execution**
+
+    Parse validated settings and execute the named tool.
+
+- **Independent defaults**
+
+    Read this package's ``defaults.json`` configuration.
+
+Module Structure
+----------------
+
+- ``parse_settings`` and ``run``
+
+    The registry entry points for this tool.
+
+Examples
+--------
+>>> from qachat.tools.show_source import parse_settings
+>>> callable(parse_settings)
+True
+
+"""
+
+from qachat.tools._shared.earlier_turns import newest_listed
+from qachat.tools.show_source.tool import (
+    SourceSettings,
+    explain_prompt,
+    parse_settings,
+    run,
+)
+
+__all__ = [
+    "SourceSettings",
+    "explain_prompt",
+    "newest_listed",
+    "parse_settings",
+    "run",
+]

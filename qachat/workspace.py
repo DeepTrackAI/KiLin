@@ -1,17 +1,23 @@
 """Copy selected local sources into a managed multi-source workspace.
 
 ``prepare_sources_workspace`` accepts local files or directories, prepares a
-project profile, copies selected content into ``sources``, and records source
-origins in ``sources.json``. Source names are disambiguated when needed.
-Directory inputs use repository scanning; individual-file inputs have a
-separate extension-and-size check.
+project profile, creates its shared core directories and selected tool
+resources, copies content into ``sources``, and records source origins in
+``sources.json``. Imported snapshots are project-owned: later
+imports preserve existing files unless replacement is explicitly requested.
+Source names are disambiguated when needed.
+Directory inputs use conservative repository scanning. Individual-file
+inputs bypass scan extension and protected-name filters, while retaining
+size and filesystem checks.
 
 This API is cumulative: adding or reselecting sources copies their current
 selected files but does not remove old copies merely because the originals
 were deleted or deselected. It differs from the single-source mirroring API
 in ``qachat.project``. A workspace organizes local files; it is not an
 execution sandbox or a complete defense against hostile filesystem changes.
-Preparation can leave earlier changes in place if a later copy fails.
+First-time initialization commits profile.ini last and rolls back newly
+created entries on failure. Later cumulative imports can leave earlier
+successful copies in place if a subsequent source fails.
 
 Key Features
 ------------
@@ -24,7 +30,8 @@ Key Features
 - **Selected copying**
 
     Use profile selection rules and optional per-source selections for
-    directory inputs.
+    directory inputs. Preserve existing snapshot files by default; require
+    ``replace_existing=True`` to overwrite them.
 
 - **Profile integration**
 
@@ -41,6 +48,14 @@ Module Structure
 - ``prepare_sources_workspace``
 
     Add sources to one project without changing their original files.
+
+- ``remove_workspace_sources``
+
+    Delete managed source copies and update provenance, never originals.
+
+- ``include_explicit_imports``
+
+    Preserve explicitly imported files during RAG source scanning.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
@@ -61,23 +76,43 @@ from __future__ import annotations
 
 from hashlib import sha256
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
+from tempfile import NamedTemporaryFile
 from time import perf_counter
-from typing import Mapping, Sequence
+from typing import (
+    Callable, Final, Mapping, NotRequired, Sequence, TypedDict, cast,
+)
 
 from qachat.project import (
     PROJECT_KIND_CHOICES,
     ProjectKind,
     QAProject,
-    configure_project,
-    initialize_project,
+    _preparing_project,
     open_project,
 )
 from qachat.repository import scan_repository
 from qachat.trace_logging import NullTraceLogger, TraceSink
 
-__all__ = ["prepare_sources_workspace"]
+__all__ = [
+    "prepare_sources_workspace",
+    "remove_workspace_sources",
+    "include_explicit_imports",
+]
+
+# Workspace folders whose files may be copied into the sources: what QAChat
+# wrote (qachat.tools._shared.outputs) and the report templates.
+_COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
+
+
+class _SourceRecord(TypedDict):
+    """Persisted ownership and imported-file inventory of one source.
+
+    """
+
+    original: str
+    name: str
+    files: NotRequired[list[str]]
 
 
 def prepare_sources_workspace(
@@ -86,15 +121,19 @@ def prepare_sources_workspace(
     workspace_directory: str | Path,
     *,
     selected_files: Mapping[str, Sequence[str]] | None = None,
+    replace_existing: bool = False,
     settings: dict[str, object] | None = None,
     trace: TraceSink | None = None,
 ) -> QAProject:
     """Add sources to one project without changing their original files.
 
-    Adding sources is cumulative. Re-adding a source updates its selected files
-    without deleting older snapshots. Pass an empty list to reopen an existing
-    workspace unchanged. ``selected_files`` limits each folder to checked
-    relative file paths. ``settings`` is validated before copying.
+    Adding sources is cumulative. Re-adding a source imports newly selected
+    files without deleting or overwriting existing snapshots. To replace
+    selected snapshot files explicitly, pass ``replace_existing=True``.
+    Pass an empty list to reopen an existing workspace unchanged. When
+    provided, ``selected_files`` must identify every supplied source, so
+    unmatched or missing keys cannot broaden the import. ``settings`` is
+    validated before copying.
 
     Parameters
     ----------
@@ -103,15 +142,21 @@ def prepare_sources_workspace(
         although the annotation is Sequence. Entries are resolved,
         deduplicated, and checked against the destination workspace.
     kind: ProjectKind
-        Project category, exactly code or literature.
+        Project type ID from ``qachat/project_types/``.
     workspace_directory: str | pathlib.Path
         Destination managed workspace, new/empty or already containing a
         compatible profile.ini. Relative paths use the current working
         directory.
     selected_files: Mapping[str, Sequence[str]] | None, optional
-        Optional mapping from resolved original source-path strings to relative
-        selected files. A directory selection must be a nonempty subset of the
-        scan report; None uses the scan selection. Defaults to ``None``.
+        Optional mapping from source paths to selected relative filenames.
+        Keys are normalized and must match all supplied source paths exactly.
+        Each directory selection must be a nonempty subset of the scan report;
+        None uses the scan selection. Defaults to ``None``.
+    replace_existing: bool, optional
+        Whether to overwrite already imported files selected again. Defaults
+        to ``False``, preserving project-owned snapshots even when their
+        originals or the local copies have changed. Missing files and newly
+        selected files are still copied.
     settings: dict[str, object] | None, optional
         Optional supported profile updates applied through configure_project
         before copying. Defaults to ``None``.
@@ -128,8 +173,8 @@ def prepare_sources_workspace(
     Raises
     ------
     ValueError
-        If kinds, paths, workspace ownership/profile, source selections, or
-        source-origin records fail their implemented checks.
+        If kinds, paths, workspace ownership/profile, source selections,
+        replacement policy, or source-origin records fail their checks.
     NotADirectoryError
         If an existing workspace is not a directory.
     OSError
@@ -139,10 +184,11 @@ def prepare_sources_workspace(
     Notes
     -----
     Copying is cumulative: removed or deselected original files are not deleted
-    from old workspace copies. Directory sources must have complete scans;
-    direct file sources use a narrower extension/size check. Files, profile,
-    and source-origin records are not committed as one transaction. A workspace
-    is not an execution sandbox.
+    from old workspace copies. Existing snapshots are preserved by default;
+    a replacement must be explicitly requested. Directory sources must have
+    complete scans; direct files use a narrower extension/size check.
+    Files, profile, and source-origin records are not committed as one
+    transaction. A workspace is not an execution sandbox.
 
     """
 
@@ -156,14 +202,19 @@ def prepare_sources_workspace(
             "kind": kind,
             "workspace_directory": str(workspace_directory),
             "selected_files": selected_files,
+            "replace_existing": replace_existing,
             "settings": settings,
         },
         status="started",
     )
     if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError("kind must be code or literature.")
+        raise ValueError(
+            f"kind must be one of: {', '.join(PROJECT_KIND_CHOICES)}."
+        )
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
+    if type(replace_existing) is not bool:
+        raise ValueError("replace_existing must be true or false.")
     if not str(workspace_directory).strip():
         raise ValueError("Choose a workspace folder.")
 
@@ -188,70 +239,107 @@ def prepare_sources_workspace(
         source = source.resolve(strict=True)
         if not source.is_file() and not source.is_dir():
             raise ValueError(f"Choose a regular file or folder: {source}")
-        if source == workspace or source.is_relative_to(workspace):
+        # A file QAChat wrote (outputs/) or a template may become a source;
+        # the rest of the workspace (sources, indexes, logs) may not.
+        inside = source == workspace or source.is_relative_to(workspace)
+        if inside and not any(
+            source.is_relative_to(workspace / folder)
+            and source != workspace / folder
+            for folder in _COPYABLE_WORKSPACE_FOLDERS
+        ):
             raise ValueError("Do not add the workspace as its own source.")
         if source not in chosen:
             chosen.append(source)
 
+    selections: dict[str, Sequence[str]] | None = None
+    if selected_files is not None:
+        if not isinstance(selected_files, Mapping):
+            raise ValueError("Source selections must be a path mapping.")
+        selections = {}
+        for key, files in selected_files.items():
+            if not isinstance(key, (str, Path)) or not str(key).strip():
+                raise ValueError("Invalid source selection path.")
+            original = str(Path(key).expanduser().resolve())
+            if original in selections:
+                raise ValueError(f"Duplicate source selection: {original}")
+            if not isinstance(files, (list, tuple)) or not all(
+                isinstance(file, str) for file in files
+            ):
+                raise ValueError(f"Invalid file selection: {original}")
+            selections[original] = files
+        expected = {str(source) for source in chosen}
+        if selections.keys() != expected:
+            missing = sorted(expected - selections.keys())
+            unexpected = sorted(selections.keys() - expected)
+            raise ValueError(
+                "Source selection paths must match requested sources; "
+                f"missing: {missing}; unexpected: {unexpected}."
+            )
+
     if not chosen and not (workspace / "profile.ini").is_file():
         raise ValueError("Add a source before creating a workspace.")
-    workspace.mkdir(parents=True, exist_ok=True)
     source_root = workspace / "sources"
     if source_root.is_symlink():
         raise ValueError("The workspace sources folder must not be a link.")
-    source_root.mkdir(exist_ok=True)
-    project = initialize_project(workspace, kind)
-    if project.profile.kind != kind:
-        raise ValueError(
-            "Workspace project type does not match the selection."
-        )
-    if project.source != source_root.resolve():
-        raise ValueError(
-            "This project does not use a managed sources/ folder."
-        )
-    if settings:
-        project = configure_project(
-            workspace,
-            settings,
-            trace=active_trace,
-        )
-
-    manifest_path = workspace / "sources.json"
-    records = _read_records(manifest_path)
-    used = {item["name"] for item in records}
-    for source in chosen:
-        original = str(source)
-        record = next(
-            (item for item in records if item["original"] == original),
-            None,
-        )
-        if record is None:
-            name = _unique_name(source, used, source_root)
-            record = {"original": original, "name": name}
-        destination = source_root / record["name"]
-        selection = (
-            selected_files.get(original)
-            if selected_files is not None
-            else None
-        )
-        copied = _copy_source(
-            source, destination, project, workspace, selection
-        )
-        active_trace.emit(
-            "workspace.source.copied",
-            component="workspace",
-            data={
-                "source": str(source),
-                "destination": str(destination),
-                "requested_files": selection,
-                "copied_files": copied,
-            },
-        )
-        record["files"] = copied
-        if record not in records:
-            records.append(record)
-            used.add(record["name"])
-        _write_records(manifest_path, records)
+    with _preparing_project(
+        workspace, kind, "sources", settings=settings,
+        trace=active_trace, validate_source=True,
+    ) as (project, journal):
+        if project.source != source_root.resolve(strict=True):
+            raise ValueError(
+                "This project does not use a managed sources/ folder."
+            )
+        manifest_path = workspace / "sources.json"
+        records = _read_records(manifest_path)
+        used = {item["name"] for item in records}
+        for source in chosen:
+            original = str(source)
+            record = next(
+                (item for item in records if item["original"] == original),
+                None,
+            )
+            if record is None:
+                name = _unique_name(source, used, source_root)
+                record = _SourceRecord(original=original, name=name)
+            destination = source_root / record["name"]
+            selection = (
+                selections[original] if selections is not None else None
+            )
+            copied, preserved = _copy_source(
+                source,
+                destination,
+                project,
+                workspace,
+                selection,
+                replace_existing=replace_existing,
+                on_create=journal.note if journal is not None else None,
+            )
+            active_trace.emit(
+                "workspace.source.copied",
+                component="workspace",
+                data={
+                    "source": str(source),
+                    "destination": str(destination),
+                    "requested_files": selection,
+                    "copied_files": copied,
+                    "preserved_files": preserved,
+                },
+            )
+            if source.is_file():
+                record["files"] = copied + preserved
+            else:
+                inventory = set(record.get("files", [])) | set(copied)
+                record["files"] = sorted(
+                    relative
+                    for relative in inventory
+                    if _is_regular_snapshot(destination, relative)
+                )
+            if record not in records:
+                records.append(record)
+                used.add(record["name"])
+            if journal is not None:
+                journal.note(manifest_path)
+            _write_records(manifest_path, records)
     prepared = open_project(workspace)
     active_trace.emit(
         "workspace.prepare.completed",
@@ -344,8 +432,11 @@ def _copy_source(
     project: QAProject,
     workspace: Path,
     selected_files: Sequence[str] | None,
-) -> list[str]:
-    """Copy only files selected by the workspace profile.
+    *,
+    replace_existing: bool = False,
+    on_create: Callable[[Path], None] | None = None,
+) -> tuple[list[str], list[str]]:
+    """Copy eligible files while protecting existing snapshots.
 
     Parameters
     ----------
@@ -360,20 +451,22 @@ def _copy_source(
         Resolved managed-workspace path excluded from source copies when
         applicable.
     selected_files: Sequence[str] | None
-        Optional mapping from resolved original source-path strings to relative
-        selected files. A directory selection must be a nonempty subset of the
-        scan report; None uses the scan selection.
+        Optional selected filenames relative to a directory or the original
+        filename for a direct source file. None uses the scan selection.
+    replace_existing: bool, optional
+        Replace existing regular snapshot files when True. Defaults to False.
+    on_create: Callable[[pathlib.Path], None] | None, optional
+        Record newly created snapshot paths for first-creation rollback.
 
     Returns
     -------
-    list[str]
-        Relative filenames copied from a directory, or the copied source
-        filename for a single-file input.
+    tuple[list[str], list[str]]
+        Original-relative filenames copied and preserved, respectively.
 
     Raises
     ------
     ValueError
-        If a source file violates extension/size rules, a directory scan is
+        If a source file violates size rules, a directory scan is
         incomplete, or an explicit selection is empty or outside the eligible
         scan set.
     OSError
@@ -382,9 +475,10 @@ def _copy_source(
     Notes
     -----
     The directory path applies scan_repository rules and excludes a nested
-    workspace. Direct files are not passed through all protected-name rules.
-    Existing destination files omitted from this copy operation are left in
-    place.
+    workspace. Explicitly selected files bypass extension and protected-name
+    selection filters but retain size and containment safeguards.
+    Files omitted from this copy operation are left in place, as are files
+    selected again without an explicit replacement request.
 
     """
 
@@ -394,18 +488,17 @@ def _copy_source(
             source.name
         ]:
             raise ValueError(f"Invalid file selection: {source}")
-        name = source.name.lower()
         size = source.stat().st_size
-        if not any(name.endswith(ext) for ext in profile.extensions):
-            raise ValueError(
-                f"File type not selected in profile.ini: {source}"
-            )
         if not 0 < size <= profile.max_file_bytes:
             raise ValueError(
                 f"File is empty or exceeds the size limit: {source}"
             )
-        _copy_file(source, destination)
-        return [source.name]
+        if _copy_file(
+            source, destination, replace_existing=replace_existing,
+            on_create=on_create,
+        ):
+            return [source.name], []
+        return [], [source.name]
 
     excludes: tuple[str, ...] = ()
     if workspace.is_relative_to(source):
@@ -426,14 +519,33 @@ def _copy_source(
         selected = [path for path in selected if path in requested]
     if not selected:
         raise ValueError(f"No selected files in source folder: {source}")
+    if on_create is not None:
+        on_create(destination)
     destination.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    preserved: list[str] = []
     for relative in selected:
-        _copy_file(source / str(relative), destination / str(relative))
-    return [str(path) for path in selected]
+        path = str(relative)
+        if _copy_file(
+            source / path,
+            destination / path,
+            replace_existing=replace_existing,
+            on_create=on_create,
+        ):
+            copied.append(path)
+        else:
+            preserved.append(path)
+    return copied, preserved
 
 
-def _copy_file(source: Path, destination: Path) -> None:
-    """Replace one snapshot only after its new bytes are complete.
+def _copy_file(
+    source: Path,
+    destination: Path,
+    *,
+    replace_existing: bool = False,
+    on_create: Callable[[Path], None] | None = None,
+) -> bool:
+    """Create one snapshot, preserving an existing file by default.
 
     Parameters
     ----------
@@ -441,20 +553,33 @@ def _copy_file(source: Path, destination: Path) -> None:
         Original local source file or directory.
     destination: pathlib.Path
         Managed destination path for the selected source or file.
+    replace_existing: bool, optional
+        Explicitly allow replacement of an existing regular file. Defaults
+        to False.
+    on_create: Callable[[pathlib.Path], None] | None, optional
+        Record a prospective new destination before writing its contents.
+
+    Returns
+    -------
+    bool
+        True if copied, False if an existing snapshot was preserved.
 
     Raises
     ------
     ValueError
-        If the destination or one of its parent directories is a symbolic link.
+        If the destination or one of its parents is a symbolic link, or an
+        existing destination is not a regular file.
     OSError
         If creating directories, copying metadata/content, or replacing the
         target fails.
 
     Notes
     -----
-    The file is copied through a predictable temporary sibling and then
-    replaced. These checks are not a race-free security boundary and do not
-    validate every possible temporary-path interference.
+    Existing regular files are not overwritten without explicit permission.
+    New bytes are copied into a randomly named temporary file in the
+    destination directory before atomic replacement. The temporary file is
+    removed if copying or replacement fails. This is not a general defense
+    against concurrent filesystem mutation by another process.
 
     """
 
@@ -463,13 +588,64 @@ def _copy_file(source: Path, destination: Path) -> None:
     for parent in destination.parents:
         if parent.is_symlink():
             raise ValueError(f"Do not copy through a symbolic link: {parent}")
+    if destination.exists():
+        if not destination.is_file():
+            raise ValueError(
+                f"Snapshot destination is not a regular file: {destination}"
+            )
+        if not replace_existing:
+            return False
+    if on_create is not None:
+        on_create(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temporary = destination.with_name(destination.name + ".tmp")
-    shutil.copy2(source, temporary)
-    temporary.replace(destination)
+    stream = NamedTemporaryFile(
+        mode="wb",
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            with source.open("rb") as original:
+                shutil.copyfileobj(original, stream)
+        shutil.copystat(source, temporary)
+        temporary.replace(destination)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def _read_records(path: Path) -> list[dict[str, str]]:
+def _is_regular_snapshot(destination: Path, relative: str) -> bool:
+    """Check whether a tracked imported file still exists without links.
+
+    Parameters
+    ----------
+    destination: pathlib.Path
+        Original source's destination file or directory in the workspace.
+    relative: str
+        Name of a previously imported snapshot relative to the destination.
+
+    Returns
+    -------
+    bool
+        True if the tracked path is a regular file reached without symlinks.
+
+    """
+
+    path = destination / relative
+    if path.is_symlink() or not path.is_file():
+        return False
+    parent = path.parent
+    while parent != destination:
+        if parent.is_symlink():
+            return False
+        parent = parent.parent
+    return True
+
+
+def _read_records(path: Path) -> list[_SourceRecord]:
     """Validate persisted source ownership before using destination names.
 
     Parameters
@@ -479,23 +655,20 @@ def _read_records(path: Path) -> list[dict[str, str]]:
 
     Returns
     -------
-    list[dict[str, str]]
-        List of source-origin record dictionaries, or an empty list when the
-        manifest is missing.
+    list[_SourceRecord]
+        Validated ownership and inventory records, or an empty list if missing.
 
     Raises
     ------
     ValueError
-        If the manifest format, record structure, original path, or stored
-        source name is invalid.
+        If the manifest format, fields, inventory, or ownership is invalid.
     OSError
         If the file cannot be read.
 
     Notes
     -----
-    Stored records may also contain a files list; the existing return
-    annotation is narrower than that actual JSON structure. This helper does
-    not validate every copied-file entry.
+    A missing ``files`` list is accepted for older manifest records. Present
+    inventories must contain unique, normalized relative paths.
 
     """
 
@@ -507,39 +680,264 @@ def _read_records(path: Path) -> list[dict[str, str]]:
     records = payload.get("sources")
     if not isinstance(records, list):
         raise ValueError("Invalid workspace source list.")
+    seen_names: set[str] = set()
+    seen_originals: set[str] = set()
     for item in records:
         if not isinstance(item, dict):
             raise ValueError("Invalid workspace source entry.")
         original, name = item.get("original"), item.get("name")
         if not isinstance(original, str) or not isinstance(name, str):
             raise ValueError("Invalid workspace source entry.")
-        if name in {"", ".", ".."} or Path(name).name != name:
+        if (
+            name in {"", ".", ".."}
+            or Path(name).name != name
+            or "\\" in name
+            or PureWindowsPath(name).drive
+        ):
             raise ValueError("Invalid workspace source name.")
-    return records
+        if not original.strip():
+            raise ValueError("Invalid workspace source entry.")
+        if original in seen_originals or name in seen_names:
+            raise ValueError("Duplicate or conflicting workspace sources.")
+        seen_originals.add(original)
+        seen_names.add(name)
+        files = item.get("files", [])
+        if not isinstance(files, list):
+            raise ValueError("Invalid workspace source files inventory.")
+        seen_files: set[str] = set()
+        for relative in files:
+            if not isinstance(relative, str) or not relative:
+                raise ValueError("Invalid workspace source files inventory.")
+            normalized = PurePosixPath(relative)
+            if (
+                normalized.is_absolute()
+                or not normalized.parts
+                or ".." in normalized.parts
+                or PureWindowsPath(relative).drive
+                or "\\" in relative
+                or normalized.as_posix() != relative
+                or relative in seen_files
+            ):
+                raise ValueError("Invalid workspace source files inventory.")
+            seen_files.add(relative)
+    return cast("list[_SourceRecord]", records)
 
 
-def _write_records(path: Path, records: list[dict[str, str]]) -> None:
+def _write_records(path: Path, records: list[_SourceRecord]) -> None:
     """Save ownership after each successful source copy.
 
     Parameters
     ----------
     path: pathlib.Path
         Source-origin JSON manifest path.
-    records: list[dict[str, str]]
+    records: list[_SourceRecord]
         Source-origin records with original and name strings and, when written
         by preparation, a list of copied files.
 
     Notes
     -----
-    Writes the source-origin format version and supplied records. No
-    multi-writer coordination is provided; records are not checked against
-    destination contents here.
+    Uses a newly created temporary file in the same directory and replaces
+    the manifest after writing it completely. Temporary files are cleaned up
+    on errors. There is no multi-writer coordination.
 
     """
 
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps({"version": 1, "sources": records}, indent=2) + "\n",
+    stream = NamedTemporaryFile(
+        mode="w",
         encoding="utf-8",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
     )
-    temporary.replace(path)
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            stream.write(
+                json.dumps({"version": 1, "sources": records}, indent=2)
+                + "\n"
+            )
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def remove_workspace_sources(
+    project: QAProject, paths: Sequence[str]
+) -> list[str]:
+    """Delete managed source snapshots, never the original source files.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project backed by the managed ``sources/`` directory.
+    paths: Sequence[str]
+        Workspace-relative files or folders strictly beneath ``sources/``.
+
+    Returns
+    -------
+    list[str]
+        Workspace-relative paths removed, in the requested order.
+
+    Raises
+    ------
+    ValueError
+        If the project references external sources, an input path is unsafe,
+        or a requested snapshot does not exist.
+
+    Notes
+    -----
+    All paths are checked before deletion. Source-origin records are updated
+    after deletion, including when an I/O error interrupts a batch. Index
+    refresh is intentionally left to the caller.
+
+    """
+
+    if not isinstance(project, QAProject):
+        raise TypeError("Expected an opened QAProject.")
+    root = project.root.resolve(strict=True)
+    managed = root / "sources"
+    if (
+        managed.is_symlink()
+        or not managed.is_dir()
+        or project.source.resolve(strict=True) != managed
+    ):
+        raise ValueError("Only managed sources/ snapshots can be removed.")
+    if not isinstance(paths, (list, tuple)) or not paths:
+        raise ValueError("Choose source files or folders to delete.")
+
+    targets: list[Path] = []
+    for value in paths:
+        if not isinstance(value, str) or not value:
+            raise ValueError("Choose a workspace-relative source path.")
+        relative = PurePosixPath(value)
+        if (
+            relative.is_absolute()
+            or PureWindowsPath(value).drive
+            or "\\" in value
+            or any(part in ("", ".", "..") for part in value.split("/"))
+            or len(relative.parts) < 2
+            or relative.parts[0] != "sources"
+        ):
+            raise ValueError(
+                f"Only items inside sources/ can be removed: {value}"
+            )
+        target = root.joinpath(*relative.parts)
+        current = root
+        for part in relative.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"Do not remove symbolic links: {value}")
+        if not target.exists():
+            raise ValueError(f"Source not found: {value}")
+        targets.append(target)
+    if len(set(targets)) != len(targets):
+        raise ValueError("Duplicate source paths.")
+    for index, target in enumerate(targets):
+        if any(
+            target.is_relative_to(other)
+            for j, other in enumerate(targets) if index != j
+        ):
+            raise ValueError("Cannot remove a folder and its child together.")
+
+    manifest = root / "sources.json"
+    records = _read_records(manifest)
+    try:
+        for target in targets:
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+    finally:
+        if manifest.exists():
+            retained: list[_SourceRecord] = []
+            for record in records:
+                destination = managed / record["name"]
+                if destination.is_symlink() or not destination.exists():
+                    continue
+                if destination.is_file():
+                    record["files"] = [Path(record["original"]).name]
+                elif destination.is_dir():
+                    record["files"] = [
+                        item for item in record.get("files", [])
+                        if _is_regular_snapshot(destination, item)
+                    ]
+                else:
+                    continue
+                retained.append(record)
+            _write_records(manifest, retained)
+    return [target.relative_to(root).as_posix() for target in targets]
+
+
+def include_explicit_imports(
+    project: QAProject, report: dict[str, object]
+) -> dict[str, object]:
+    """Keep directly imported source files eligible for indexing.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project whose managed source manifest records explicit imports.
+    report: dict[str, object]
+        Ordinary conservative repository scan of the project's source root.
+
+    Returns
+    -------
+    dict[str, object]
+        Scan report that additionally selects safe, explicitly imported files
+        irrespective of their filename suffix or protected-name pattern.
+
+    Notes
+    -----
+    Only direct-file imports recorded in ``sources.json`` are added. A folder
+    imported from a repository retains the repository's ordinary selection
+    policy. The file-size limit and symlink safeguards still apply, and an
+    unsupported source format may fail during subsequent text extraction.
+
+    """
+
+    root = project.root.resolve(strict=True)
+    managed = root / "sources"
+    if (
+        project.source.resolve(strict=True) != managed
+        or not (root / "sources.json").is_file()
+    ):
+        return report
+    records = _read_records(root / "sources.json")
+    rows = report.get("entries")
+    if not isinstance(rows, list):
+        raise ValueError("Invalid project source scan report.")
+    indexed: dict[str, dict[str, object]] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            raise ValueError("Invalid project source scan entry.")
+        relative = item.get("path")
+        if isinstance(relative, str):
+            indexed[relative] = dict(item)
+    selected = set(report.get("selected_files", []))
+    for record in records:
+        name = record["name"]
+        snapshot = managed / name
+        if snapshot.is_symlink() or not snapshot.is_file():
+            continue
+        size = snapshot.stat().st_size
+        if not 0 < size <= project.profile.max_file_bytes:
+            continue
+        indexed[name] = {
+            "path": name,
+            "kind": "file",
+            "size_bytes": size,
+            "status": "selected",
+            "reason": "explicitly imported file",
+        }
+        selected.add(name)
+    rows = [indexed[name] for name in sorted(indexed)]
+    return {
+        **report,
+        "entries": rows,
+        "selected_files": sorted(selected),
+        "selected_bytes": sum(
+            int(row["size_bytes"]) for row in rows
+            if row["status"] == "selected"
+        ),
+    }

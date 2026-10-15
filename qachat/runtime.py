@@ -57,7 +57,6 @@ from __future__ import annotations
 import platform
 from typing import Final, Literal, TypeAlias
 
-
 __all__ = [
     "BACKEND_AUTO",
     "BACKEND_MLX",

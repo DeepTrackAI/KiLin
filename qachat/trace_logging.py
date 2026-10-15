@@ -5,18 +5,21 @@ replacement of a temporary file. Span contexts link start, completion, and
 failure events. ``NullTraceLogger`` accepts the same calling pattern without
 writing, while ``TraceTextStream`` converts diagnostic output into events.
 
-Standard mode reduces detailed token/prompt event output; forensic mode lets
-callers attach complete content and token identifiers. Embedding-vector
-capture has a separate flag. These settings are not a sanitization boundary:
-conversation resume state, exceptions, or diagnostic text can still contain
-questions, answers, source excerpts, paths, and other sensitive information.
+Enabled tracing records diagnostic content and token identifiers whenever
+they are available. Embedding-vector capture has a separate opt-in flag.
+This is not a sanitization boundary: conversation resume state, exceptions,
+and diagnostic text can contain questions, answers, source excerpts, paths,
+and other sensitive information.
 Artifacts returned by this implementation are inline JSON records rather than
 separately stored artifact files.
 
-Event writes are serialized within one logger, but the module does not provide
-multi-process locking or a transaction across separate logger instances.
-I/O failure handling applies to event writes according to the configuration;
-direct conversation-state updates have their own write path.
+Event writes are serialized within one logger. A stable companion-file lock
+excludes simultaneous writers in the current or another process; this is not
+a multi-file transaction or protection against nonparticipating programs.
+I/O failure handling applies to event writes according to the configuration.
+Direct conversation-state updates propagate write failures and restore their
+previous in-memory state, preventing later events from committing an aborted
+checkpoint.
 
 Reopening an exact output path preserves previously saved readable turns and
 conversation-level operations. New records start above the highest saved
@@ -31,8 +34,8 @@ Key Features
 
 - **Canonical trace vocabulary**
 
-    Provide shared identifiers for trace modes, failure policies, and core
-    event types interpreted across QAChat components.
+    Provide canonical identifiers for failure policies and shared event types
+    interpreted across QAChat components.
 
 - **Structured spans**
 
@@ -54,14 +57,11 @@ Key Features
 
 - **Ownership control**
 
-    Distinguish caller-supplied sinks from loggers created by the factory.
+    Distinguish caller-supplied sinks from loggers created by the factory and
+    release the file lease only when the owning logger is closed.
 
 Module Structure
 ----------------
-
-- ``TRACE_MODE_*`` constants and ``TraceMode``
-
-    Canonical identifiers for standard and forensic trace detail.
 
 - ``FAILURE_POLICY_*`` constants and ``FailurePolicy``
 
@@ -106,7 +106,7 @@ Examples
 --------
 >>> import qachat
 >>> logger = qachat.TraceLogger(
-...     qachat.TraceConfig(enabled=True, mode=qachat.TRACE_MODE_STANDARD),
+...     qachat.TraceConfig(enabled=True),
 ...     default_directory="/path/to/local/traces",
 ... )
 >>> try:
@@ -141,12 +141,13 @@ from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
+from qachat.atomic_writes import atomic_write_text
+from qachat.conversation_ownership import ConversationFileLock
 from qachat.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
     CONVERSATION_SESSION_CATEGORY,
     CONVERSATION_SESSION_KEY,
     CONVERSATION_SESSION_TITLE,
-    LEGACY_CONVERSATION_KEY,
     conversation_state,
     new_conversation_session,
 )
@@ -161,28 +162,17 @@ __all__ = [
     "TRACE_EVENT_LLM_CALL_OUTPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS",
     "TRACE_EVENT_PROGRESS_UPDATED",
-    "TRACE_MODE_CHOICES",
-    "TRACE_MODE_FORENSIC",
-    "TRACE_MODE_STANDARD",
     "NullTraceLogger",
     "TraceConfig",
     "TraceLogger",
-    "TraceMode",
     "TraceSink",
     "TraceTextStream",
     "create_trace_logger",
     "trace_text_preview",
 ]
 
-TraceMode: TypeAlias = Literal["standard", "forensic"]
 FailurePolicy: TypeAlias = Literal["warn", "raise"]
 
-TRACE_MODE_STANDARD: Final[TraceMode] = "standard"
-TRACE_MODE_FORENSIC: Final[TraceMode] = "forensic"
-TRACE_MODE_CHOICES: Final[tuple[TraceMode, ...]] = (
-    TRACE_MODE_STANDARD,
-    TRACE_MODE_FORENSIC,
-)
 FAILURE_POLICY_WARN: Final[FailurePolicy] = "warn"
 FAILURE_POLICY_RAISE: Final[FailurePolicy] = "raise"
 FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
@@ -199,13 +189,6 @@ TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS: Final[str] = "llm.call.output.tokens"
 TRACE_EVENT_PROGRESS_UPDATED: Final[str] = "progress.updated"
 
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
-_FORENSIC_ONLY_EVENTS = frozenset(
-    {
-        TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
-        TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
-    }
-)
-
 _EXACT_CONTENT_SECTIONS = {
     "chunks_artifact": (
         "01_retrieved_chunks",
@@ -241,14 +224,9 @@ class TraceConfig:
     output_path: str | pathlib.Path | None, optional
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
-    mode: TraceMode, optional
-        Trace detail mode. Standard suppresses designated forensic events;
-        forensic enables content/token flags used by callers. Resume state and
-        arbitrary diagnostics can still contain full text in either mode.
-        Defaults to ``'standard'``.
     include_embedding_vectors: bool, optional
-        Whether callers are allowed to attach complete embedding vectors. This
-        flag is independent of mode. Defaults to ``False``.
+        Whether callers are allowed to attach complete embedding vectors.
+        Defaults to ``False``.
     failure_policy: FailurePolicy, optional
         Event-write I/O handling: warn disables later event writes and emits a
         warning, while raise converts the failure to RuntimeError. Direct
@@ -262,13 +240,9 @@ class TraceConfig:
     output_path: str | pathlib.Path | None
         Exact conversation ``.json`` file or folder for the trace. ``None``
         uses the caller's project-specific default folder.
-    mode: TraceMode
-        Trace detail mode. Standard suppresses designated forensic events;
-        forensic enables content/token flags used by callers. Resume state and
-        arbitrary diagnostics can still contain full text in either mode.
     include_embedding_vectors: bool
-        Whether callers are allowed to attach complete embedding vectors. This
-        flag is independent of mode.
+        Whether callers are allowed to attach complete embedding vectors.
+        This is the only optional diagnostic payload category.
     failure_policy: FailurePolicy
         Event-write I/O handling: warn disables later event writes and emits a
         warning, while raise converts the failure to RuntimeError. Direct
@@ -277,7 +251,7 @@ class TraceConfig:
     Raises
     ------
     ValueError
-        If Boolean fields, mode, failure policy, or output-path type fail
+        If Boolean fields, failure policy, or output-path type fail
         validation.
 
     Notes
@@ -290,7 +264,6 @@ class TraceConfig:
 
     enabled: bool = False
     output_path: str | Path | None = None
-    mode: TraceMode = TRACE_MODE_STANDARD
     include_embedding_vectors: bool = False
     failure_policy: FailurePolicy = FAILURE_POLICY_WARN
 
@@ -300,15 +273,13 @@ class TraceConfig:
         Raises
         ------
         ValueError
-            If enabled/vector flags are not exact booleans, mode or policy is
+            If enabled/vector flags are not exact booleans, policy is
             unsupported, or output_path has an invalid type.
 
         """
 
         if type(self.enabled) is not bool:
             raise ValueError("trace enabled must be True or False.")
-        if self.mode not in TRACE_MODE_CHOICES:
-            raise ValueError("trace mode must be standard or forensic.")
         if type(self.include_embedding_vectors) is not bool:
             raise ValueError(
                 "include_embedding_vectors must be True or False."
@@ -327,13 +298,13 @@ class TraceLogger:
     Construction resolves the output path, creates its parent directory,
     optionally loads prior grouped state, and emits the initial event. Event
     mutation is guarded by this instance's lock; different instances or
-    processes are not coordinated.
+    processes are excluded by an exclusive conversation-file lock.
 
     Parameters
     ----------
     config: TraceConfig
-        Enabled TraceConfig controlling output location, detail flags, and
-        event-write I/O policy.
+        Enabled TraceConfig controlling output location, optional embedding
+        vectors, and event-write I/O policy.
     default_directory: str | pathlib.Path
         Fallback output directory when the configuration does not name an exact
         JSON file.
@@ -353,13 +324,13 @@ class TraceLogger:
         True for this concrete sink; it does not reflect the private
         closed/failed flags.
     include_content: bool
-        Whether mode is forensic; callers consult this before providing full
-        content.
+        Always True for a concrete logger. NullTraceLogger uses False so
+        callers can avoid preparing artifacts while tracing is disabled.
     include_token_ids: bool
-        Whether mode is forensic; callers consult this before providing token
-        IDs.
+        Always True for a concrete logger. NullTraceLogger uses False so
+        callers can avoid preparing token arrays while tracing is disabled.
     include_embedding_vectors: bool
-        Configured embedding-vector flag, independent of mode.
+        Configured embedding-vector flag, independent of tracing detail.
 
     Methods
     -------
@@ -379,8 +350,8 @@ class TraceLogger:
         Merge resumable conversation state into this same JSON document.
     reset_conversation_state()
         Clear retained conversation state and readable conversation records.
-    close()
-        Emit the closing event and mark subsequent event writes closed.
+    close(*, emit_event=True)
+        Finish the logger and release exclusive file ownership.
 
     Raises
     ------
@@ -393,11 +364,11 @@ class TraceLogger:
 
     Notes
     -----
-    Standard mode is not a privacy guarantee: resume state, tracebacks, or
-    backend text may contain sensitive data. Artifacts are inline dictionaries.
-    There is no append-only log, multi-file transaction, or cross-process
-    locking. Close the current writer before opening another logger for the
-    same file. Saved readable turns and conversation operations are retained;
+    Enabled tracing captures available detailed diagnostics, potentially
+    including sensitive data. Artifacts are inline dictionaries.
+    There is no append-only log or multi-file transaction. Opening a second
+    writer for the same canonical path raises ConversationLockedError.
+    Saved readable turns and conversation operations are retained;
     new records use numbers above the highest saved keys. Turn identifiers and
     span identifiers group events only within one logger run. Event sequence
     numbers and top-level event counts also describe the current run, not the
@@ -421,8 +392,8 @@ class TraceLogger:
         Parameters
         ----------
         config: TraceConfig
-            Enabled TraceConfig controlling output location, detail flags, and
-            event-write I/O policy.
+            Enabled TraceConfig controlling output location, optional vector
+            recording, and event-write I/O policy.
         default_directory: str | pathlib.Path
             Fallback output directory when the configuration does not name an
             exact JSON file.
@@ -440,9 +411,9 @@ class TraceLogger:
         The first event is written during construction. Exact JSON paths can be
         reused; output is not guaranteed to be a new file. Saved sessions
         provide a fixed numbering baseline before that first event is emitted.
-        Later writes do not mutate this baseline or reload changes from another
-        writer. Resumable state is copied separately so its updates cannot
-        modify the saved-session snapshot.
+        Exclusive ownership is acquired before reading saved state or writing
+        the first event and released on construction failure. Resumable state
+        is copied separately so updates cannot modify the saved snapshot.
 
         """
 
@@ -475,93 +446,89 @@ class TraceLogger:
             mode=0o700,
         )
         self.readable_path = self.output_path
-        if self.output_path.is_file():
-            try:
-                existing = json.loads(
-                    self.output_path.read_text(encoding="utf-8")
-                )
-                sessions = existing.get("sessions")
-                if not isinstance(sessions, dict):
-                    previous_trace = existing.get("trace")
-                    sessions = (
-                        previous_trace.get("sessions", {})
-                        if isinstance(previous_trace, dict)
-                        else {}
-                    )
-                if isinstance(sessions, dict):
-                    self._previous_sessions = sessions
+        self._file_lock = ConversationFileLock(self.output_path)
+        self._file_lock.acquire()
+        try:
+            if self.output_path.is_file():
                 try:
+                    existing = json.loads(
+                        self.output_path.read_text(encoding="utf-8")
+                    )
+                    # Validate before the constructor writes its first event.
+                    # Never replace invalid records with empty state.
                     self._conversation = conversation_state(existing)
-                except ValueError:
-                    if isinstance(sessions, dict):
-                        try:
-                            self._conversation = conversation_state(
-                                {"sessions": sessions}
-                            )
-                        except ValueError:
-                            pass
-            except (OSError, json.JSONDecodeError, AttributeError):
-                raise ValueError("The conversation trace is invalid.")
-        # Keep the loaded trace immutable while current events are rewritten.
-        self._conversation = deepcopy(self._conversation)
-        previous_conversation = self._previous_sessions.get(
-            CONVERSATION_SESSION_KEY
-        )
-        if not isinstance(previous_conversation, Mapping):
-            previous_conversation = {}
-        self._turn_offset = _numbered_record_offset(
-            previous_conversation.get("turns"),
-            r"turn_([0-9]+)",
-        )
-        self._conversation_operation_offset = _numbered_record_offset(
-            previous_conversation.get("operations"),
-            r"([0-9]+)_.+",
-        )
-        _restrict_permissions(self.output_path, 0o600)
-        self.emit(
-            "trace.started",
-            component="trace",
-            data={
-                "mode": config.mode,
-                "output_path": str(self.output_path),
-                "include_embedding_vectors": (
-                    config.include_embedding_vectors
-                ),
-                "environment": {
-                    "python": sys.version,
-                    "python_executable": sys.executable,
-                    "platform": platform.platform(),
-                    "process_id": os.getpid(),
-                    "packages": _package_versions(),
+                    self._previous_sessions = existing["sessions"]
+                except (
+                    OSError, json.JSONDecodeError, TypeError, KeyError
+                ) as error:
+                    raise ValueError(
+                        "The conversation trace is invalid."
+                    ) from error
+            # Keep prior trace state immutable during current writes.
+            self._conversation = deepcopy(self._conversation)
+            previous_conversation = self._previous_sessions.get(
+                CONVERSATION_SESSION_KEY
+            )
+            if not isinstance(previous_conversation, Mapping):
+                previous_conversation = {}
+            self._turn_offset = _numbered_record_offset(
+                previous_conversation.get("turns"),
+                r"turn_([0-9]+)",
+            )
+            self._conversation_operation_offset = _numbered_record_offset(
+                previous_conversation.get("operations"),
+                r"([0-9]+)_.+",
+            )
+            _restrict_permissions(self.output_path, 0o600)
+            self.emit(
+                "trace.started",
+                component="trace",
+                data={
+                    # Historical fixed marker, not a configurable setting.
+                    "mode": "forensic",
+                    "output_path": str(self.output_path),
+                    "include_embedding_vectors": (
+                        config.include_embedding_vectors
+                    ),
+                    "environment": {
+                        "python": sys.version,
+                        "python_executable": sys.executable,
+                        "platform": platform.platform(),
+                        "process_id": os.getpid(),
+                        "packages": _package_versions(),
+                    },
                 },
-            },
-        )
+            )
+
+        except BaseException:
+            self._file_lock.release()
+            raise
 
     @property
     def include_content(self) -> bool:
-        """Return whether exact source and prompt text may be stored.
+        """Return True because enabled tracing always retains exact content.
 
         Returns
         -------
         bool
-            Whether exact source and prompt text may be stored.
+            True for a concrete active trace logger.
 
         """
 
-        return self.config.mode == TRACE_MODE_FORENSIC
+        return True
 
     @property
     def include_token_ids(self) -> bool:
-        """Return whether exact tokenizer output may be stored.
+        """Return True because enabled tracing retains available token IDs.
 
         Returns
         -------
         bool
-            Whether exact tokenizer output may be stored.
+            True for a concrete active trace logger.
 
         """
 
-        return self.config.mode == TRACE_MODE_FORENSIC
+        return True
 
     @property
     def include_embedding_vectors(self) -> bool:
@@ -648,11 +615,11 @@ class TraceLogger:
 
         Notes
         -----
-        Closed or failed loggers return before validation. Standard mode drops
-        designated forensic-only events. Event sequencing is serialized within
-        this logger. Progress-only rewrites can be throttled; other accepted
-        events trigger an output refresh. Arbitrary payload content is not
-        automatically redacted.
+        Closed or failed loggers return before validation. Enabled tracing
+        retains all supplied event types, including token diagnostics. Event
+        sequencing is serialized within this logger. Progress-only rewrites
+        can be throttled; other events trigger an output refresh. Arbitrary
+        payload content is not automatically redacted.
 
         """
 
@@ -663,13 +630,10 @@ class TraceLogger:
         if not isinstance(component, str) or not component.strip():
             raise ValueError("component must be non-empty text.")
         normalized_event_type = event_type.strip()
-        if (
-            self.config.mode == TRACE_MODE_STANDARD
-            and normalized_event_type in _FORENSIC_ONLY_EVENTS
-        ):
-            return
-
         with self._lock:
+            # A queued writer must not write after close releases the lease.
+            if self._closed or self._failed:
+                return
             if span_id is None:
                 span_id = self._active_span_id.get()
             self._sequence += 1
@@ -746,7 +710,7 @@ class TraceLogger:
         Notes
         -----
         Formats the complete traceback and merges error data into the event.
-        Tracebacks can reveal paths or user data in either trace mode. The
+        Tracebacks can reveal paths or user data. The
         exception is recorded, not re-raised by this method; span handles
         propagation separately.
 
@@ -965,8 +929,8 @@ class TraceLogger:
         -----
         This method returns a payload; it does not write a separate artifact
         file or emit an event. It does not enforce include_content itself.
-        Callers are responsible for checking detail/privacy flags before
-        attaching sensitive values.
+        Callers should avoid preparing artifacts when tracing is disabled
+        and protect output as potentially sensitive data.
 
         """
 
@@ -998,15 +962,27 @@ class TraceLogger:
 
         Notes
         -----
-        Merges converted fields into the retained state and immediately
-        rewrites the grouped output. It does not clear omitted fields, acquire
-        the event lock, check closed/failed flags, or route OSError through
-        failure_policy.
+        Merges converted fields into a candidate state under the event lock
+        and writes it atomically. If serialization or writing fails, the
+        previous in-memory state is restored so subsequent events cannot
+        accidentally commit the failed checkpoint. Omitted fields are kept.
+        Checkpoint writes bypass the optional event-write failure policy.
 
         """
 
-        self._conversation.update(_json_value(dict(data)))
-        self._write_readable_trace()
+        changes = {
+            str(key): _json_value(value) for key, value in data.items()
+        }
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("This trace logger is closed.")
+            previous = self._conversation
+            self._conversation = {**previous, **changes}
+            try:
+                self._write_readable_trace()
+            except BaseException:
+                self._conversation = previous
+                raise
 
     def reset_conversation_state(self) -> None:
         """Clear retained state for an archived conversation.
@@ -1026,6 +1002,8 @@ class TraceLogger:
         """
 
         with self._lock:
+            if self._closed:
+                raise RuntimeError("This trace logger is closed.")
             self._conversation = {}
             self._previous_sessions.pop(CONVERSATION_SESSION_KEY, None)
             self._events = [
@@ -1036,21 +1014,33 @@ class TraceLogger:
             self._turn_offset = 0
             self._conversation_operation_offset = 0
 
-    def close(self) -> None:
-        """Emit the closing event and mark subsequent event writes closed.
+    def close(self, *, emit_event: bool = True) -> None:
+        """Finish the logger and release exclusive conversation ownership.
+
+        Parameters
+        ----------
+        emit_event: bool, optional
+            Whether to write the final ``trace.closed`` event. Set False
+            when detaching an already persisted conversation for archival.
+            Defaults to True.
 
         Notes
         -----
-        Repeated calls return without another closing event. The implementation
-        opens files only for individual writes, so there is no persistent file
-        handle to close. Retained events and resume state remain in memory.
+        Releases the OS and process-local locks even when strict event-write
+        handling raises. Repeated calls do not write or release again.
+        Caller-owned sinks must be closed by their owner, not by RAGSession.
 
         """
 
         if self._closed:
             return
-        self.emit("trace.closed", component="trace")
-        self._closed = True
+        try:
+            if emit_event:
+                self.emit("trace.closed", component="trace")
+        finally:
+            with self._lock:
+                self._closed = True
+            self._file_lock.release()
 
     def _write_event(self, event: dict[str, object]) -> None:
         """Append an event in memory and conditionally refresh the output file.
@@ -1093,9 +1083,10 @@ class TraceLogger:
         from being changed by a write. Repeated writes replace this run's
         projection without duplicating it or overwriting earlier runs.
 
-        A temporary JSON file replaces the target. This is neither an immutable
-        snapshot history nor a multi-writer transaction. Another writer's
-        changes are not reloaded before replacement.
+        A uniquely created temporary JSON file replaces the target while
+        the exclusive companion-file lock is held. This is not an
+        immutable snapshot history or multi-file transaction. Other QAChat
+        writers cannot open this path until this logger releases ownership.
 
         """
 
@@ -1138,12 +1129,13 @@ class TraceLogger:
             CONVERSATION_SESSION_KEY,
             new_conversation_session(),
         )
-        if isinstance(conversation_session, dict):
-            conversation_session.pop(LEGACY_CONVERSATION_KEY, None)
-            conversation_session.pop(CONVERSATION_RESUME_STATE_KEY, None)
-            conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
-                self._conversation
-            )
+        # A trace may contain only turn events or only conversation-level
+        # operations. Persist both groups so every saved record is canonical.
+        conversation_session.setdefault("turns", {})
+        conversation_session.setdefault("operations", {})
+        conversation_session[CONVERSATION_RESUME_STATE_KEY] = (
+            self._conversation
+        )
         sessions = dict(
             sorted(
                 sessions.items(),
@@ -1169,10 +1161,7 @@ class TraceLogger:
             "sessions": sessions,
         }
         content = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
-        temporary = self.readable_path.with_suffix(".json.tmp")
-        temporary.write_text(content, encoding="utf-8")
-        temporary.replace(self.readable_path)
-        _restrict_permissions(self.readable_path, 0o600)
+        atomic_write_text(self.readable_path, content)
 
     def _readable_event(
         self,
@@ -1328,8 +1317,9 @@ class NullTraceLogger:
 
     Notes
     -----
-    All detail flags and enabled are false. Calls accept trace-shaped arguments
-    without performing validation or file I/O. Correlation IDs and a span
+    Content, token, vector, and enabled flags are false. Calls accept
+    trace-shaped arguments without performing validation or file I/O.
+    Correlation IDs and a span
     context are still available so callers need not branch on tracing state.
 
     """
@@ -1629,8 +1619,8 @@ def create_trace_logger(
     Notes
     -----
     None selects a null sink at this factory layer. RAGSession changes its own
-    None default to an enabled forensic configuration before calling this
-    factory. Logger-construction I/O and validation errors propagate.
+    None default to an enabled configuration with full diagnostic recording
+    before calling this factory. Logger-construction errors propagate.
 
     """
 

@@ -1,24 +1,25 @@
-"""Format instruction-prefixed queries for the Qwen3 retrieval path.
+"""Define the supported embedding-query formats and Qwen3 query formatter.
 
-The module stores separate software-repository and literature-repository
-instruction strings and joins a validated instruction and question into the
-``Instruct: ...`` / ``Query: ...`` text expected by the configured retrieval
-workflow. It does not embed text, load a model, or alter a chat history.
-Applying this format is a caller decision; ``EmbeddingSession`` does not
-apply it automatically.
+This module provides the canonical query-format identifiers and a formatter
+for instruction-prefixed Qwen3 embedding queries. The formatter accepts a
+retrieval instruction and question supplied by its caller; project-specific
+instructions are defined in the project-type configuration rather than here.
+
+The formatter does not embed text, load models, or modify chat history.
+Applying the format is a caller decision: ``EmbeddingSession`` embeds the
+query as provided and does not apply this format automatically.
 
 Key Features
 ------------
 
-- **Reusable instructions**
+- **Shared format identifiers**
 
-    Keep the software and literature query instructions in named string
-    constants.
+    Define the supported embedding-query formats and their ordered choices.
 
-- **Explicit formatting**
+- **Validated Qwen3 formatting**
 
-    Validate and strip the supplied strings before constructing one embedding
-    query.
+    Strip surrounding whitespace, require a single-line instruction, and
+    preserve internal newlines in the question.
 
 Module Structure
 ----------------
@@ -29,31 +30,26 @@ Module Structure
 
 - ``QUERY_FORMAT_CHOICES``
 
-    Ordered collection of the supported query-format identifiers.
+    Ordered collection of supported query-format identifiers.
 
 - ``QueryFormat``
 
     Type alias for the supported embedding-query formats.
 
-- ``SOFTWARE_REPOSITORY_INSTRUCTION``
-
-    Embedding-query instruction for software source retrieval.
-
-- ``LITERATURE_REPOSITORY_INSTRUCTION``
-
-    Embedding-query instruction for scientific literature retrieval.
-
 - ``format_qwen3_query``
 
-    Format one retrieval query for a Qwen3 embedding model.
+    Format a caller-supplied instruction and question as a Qwen3 query.
 
 Examples
 --------
->>> import qachat
->>> query = qachat.format_qwen3_query(
+>>> from qachat.query_formats import format_qwen3_query
+>>> query = format_qwen3_query(
 ...     "How are sources split?",
-...     qachat.SOFTWARE_REPOSITORY_INSTRUCTION,
+...     "Retrieve relevant source code.",
 ... )
+>>> print(query)
+Instruct: Retrieve relevant source code.
+Query: How are sources split?
 
 """
 
@@ -67,8 +63,6 @@ __all__ = [
     "QUERY_FORMAT_QWEN3",
     "QUERY_FORMAT_CHOICES",
     "QueryFormat",
-    "SOFTWARE_REPOSITORY_INSTRUCTION",
-    "LITERATURE_REPOSITORY_INSTRUCTION",
     "format_qwen3_query",
 ]
 
@@ -81,16 +75,6 @@ QUERY_FORMAT_CHOICES: Final[tuple[QueryFormat, ...]] = (
     QUERY_FORMAT_QWEN3,
 )
 
-SOFTWARE_REPOSITORY_INSTRUCTION = (
-    "Given a question about a software repository, retrieve relevant code "
-    "and documentation that help answer the question."
-)
-
-LITERATURE_REPOSITORY_INSTRUCTION = (
-    "Given a question about academic literature, retrieve relevant research "
-    "papers, abstracts, and citations that help answer the question."
-)
-
 
 def format_qwen3_query(
     question: str,
@@ -101,19 +85,22 @@ def format_qwen3_query(
     Parameters
     ----------
     question: str
-        User question.
+        User question. Leading and trailing whitespace is removed; internal
+        line breaks are preserved.
     instruction: str
-        Description of what should be retrieved.
+        Retrieval instruction. After surrounding whitespace is removed, it
+        must contain exactly one nonempty line.
 
     Returns
     -------
     str
-        Qwen3 query containing separate Instruct and Query lines.
+        Query text containing separate ``Instruct:`` and ``Query:`` lines.
 
     Raises
     ------
     ValueError
-        If the question or instruction is not non-empty text.
+        If either argument is not nonempty text, or if the trimmed
+        instruction contains a line break.
 
     """
 
@@ -123,6 +110,10 @@ def format_qwen3_query(
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("Instruction must be non-empty text.")
 
-    instruction_line = f"Instruct: {instruction.strip()}"
+    instruction_text = instruction.strip()
+    if len(instruction_text.splitlines()) != 1:
+        raise ValueError("Instruction must be a single line.")
+
+    instruction_line = f"Instruct: {instruction_text}"
     question_line = f"Query: {question.strip()}"
     return f"{instruction_line}\n{question_line}"

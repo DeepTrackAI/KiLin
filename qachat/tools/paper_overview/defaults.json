@@ -1,0 +1,9 @@
+{
+  "SETTINGS": {
+    "MAX_TOKENS": 6000,
+    "ANSWER_TOKENS": 500
+  },
+  "HEURISTICS": {
+    "OPENING_PASSAGES": 2
+  }
+}

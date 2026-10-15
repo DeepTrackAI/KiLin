@@ -104,7 +104,7 @@ def choose_backend(
     machine: str
         Processor name reported by Python.
     requested: "auto" | "mlx" | "torch", optional
-        ``auto``, ``mlx``, or ``torch``.
+        ``auto``, ``mlx``, or ``torch``. Defaults to ``auto``.
 
     Returns
     -------
@@ -249,11 +249,11 @@ def check_setup(
     Parameters
     ----------
     requested: "auto" | "mlx" | "torch", optional
-        ``auto``, ``mlx``, or ``torch``.
+        ``auto``, ``mlx``, or ``torch``. Defaults to ``auto``.
     a: float, optional
-        First number.
+        First number. Defaults to ``2.0``.
     b: float, optional
-        Second number.
+        Second number. Defaults to ``3.0``.
 
     Returns
     -------
@@ -306,7 +306,8 @@ def main(argv: list[str] | None = None) -> int:
     Parameters
     ----------
     argv: list[str] | None, optional
-        Optional command-line arguments used by tests.
+        Optional command-line arguments used by tests. Defaults
+        to ``None``, which reads the command-line arguments.
 
     Returns
     -------

@@ -9,104 +9,122 @@
     <script src="app.js" defer></script>
   </head>
   <body>
-    <div class="app-shell"><main class="workspace">
+    <div class="app-shell">
+      <aside id="conversations-panel" class="conversations-panel hidden" aria-label="Conversations">
+        <button id="new-chat" type="button" class="new-chat-button">＋ New chat</button>
+        <p class="conversation-list-heading">Conversations</p>
+        <nav id="conversation-list" class="conversation-list" aria-label="Saved conversations"></nav>
+        <div class="conversation-panel-actions">
+          <button id="change-project" type="button" class="sidebar-toggle">New project</button>
+        </div>
+      </aside>
+      <main class="workspace">
       <header class="topbar">
-        <button id="open-models" class="sidebar-toggle" type="button">Models</button>
-        <span id="connection" class="top-status">Connecting…</span>
-        <button id="toggle-workspace" class="sidebar-toggle hidden" type="button">Hide panels</button>
+        <button id="toggle-conversations" class="panel-toggle left-panel-toggle hidden" type="button" aria-label="Hide conversations" title="Hide conversations"><span></span></button>
+        <div id="topbar-project" class="topbar-project hidden" aria-live="polite">
+          <strong id="topbar-project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false"></strong>
+          <span id="topbar-turn-count">0 turns</span>
+        </div>
+        <button id="open-models" class="sidebar-toggle" type="button">Settings</button>
+        <span id="connection" class="top-status">Init</span>
+        <button id="toggle-workspace" class="panel-toggle hidden" type="button" aria-label="Hide side panels" title="Hide side panels"><span></span></button>
       </header>
 
       <section id="setup" class="setup">
         <h1>QAChat</h1>
         <p class="intro">Runs locally. Cites your files.</p>
-        <p id="recent-project" class="recent-project hidden"><button id="resume-recent" type="button">Resume last project</button></p>
+        <section id="saved-projects" class="saved-projects hidden" aria-label="Saved projects"></section>
         <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
           <label for="kind">Project type</label>
-          <select id="kind">
-            <option value="code">Code repository</option>
-            <option value="literature">Literature collection</option>
-          </select>
+          <!-- Filled from qachat/project_types.json, in file order. -->
+          <select id="kind"></select>
           <label>Sources</label>
           <button id="drop-zone" class="drop-zone" type="button">Drop files or folders here, or click here to browse…</button>
-          <p class="hint">Leave sources empty to try the example. Originals stay unchanged.</p>
           <section id="scope" class="scope hidden" aria-label="Choose files">
             <div class="scope-heading"><strong>Choose files</strong><span id="scope-count"></span></div>
             <div id="file-tree" class="file-tree"></div>
           </section>
-          <details id="advanced" class="advanced">
-            <summary>Advanced settings</summary>
-            <div class="advanced-fields">
-              <label for="workspace-path">Workspace folder</label>
-              <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: QAChat sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
-              <label for="backend">Computation backend</label>
-              <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
-              <label for="chat-model">Language model</label>
-              <div class="model-picker">
-                <input id="chat-model" type="text" autocomplete="off">
-                <button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button>
-                <div id="chat-model-menu" class="model-menu hidden" role="listbox"></div>
-              </div>
-              <label for="embedding-model">Embedding model</label>
-              <div class="model-picker">
-                <input id="embedding-model" type="text" autocomplete="off">
-                <button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button>
-                <div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div>
-              </div>
-              <label for="query-format">Embedding query format</label>
-              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
-              <label for="extensions">Additional UTF-8 file types (optional)</label><input id="extensions" type="text" placeholder=".html, .css">
-              <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
-              <div class="settings-grid">
-                <label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label>
-                <label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label>
-                <label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label>
-              </div>
-              <label class="check-row"><input id="allow-download" type="checkbox"> Allow missing models to download during preparation</label>
-            </div>
-          </details>
           <button id="open" class="primary" type="submit">Prepare project</button>
+          <p id="example-status" class="hint hidden" role="status">Loading example repository…</p>
         </form>
       </section>
 
       <section id="chat" class="chat hidden">
-        <div class="chat-heading">
-          <div>
-            <p class="eyebrow">OPEN PROJECT</p>
-            <h1 id="project-name">Project chat</h1>
-            <p id="project-detail" class="hint"></p>
+        <div id="conversation-scroll" class="conversation-scroll">
+          <div class="chat-heading">
+            <div>
+              <p class="eyebrow">OPEN PROJECT</p>
+              <h1 id="project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false">Project chat</h1>
+              <p id="project-detail" class="hint"></p>
+            </div>
           </div>
-          <div class="heading-actions">
-            <label class="conversation-picker" for="conversation-picker">
-              <span>Conversation</span>
-              <select id="conversation-picker" aria-label="Open conversation"></select>
-            </label>
-            <button id="rename-chat" type="button" class="secondary">Rename</button>
-            <button id="branch-chat" type="button" class="secondary">Branch</button>
-            <button id="new-chat" type="button" class="secondary">New chat</button>
-            <button id="change-project" type="button" class="secondary">New project</button>
-          </div>
+          <h2 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h2>
+          <div id="conversation" class="conversation" aria-live="polite"></div>
         </div>
-        <div id="conversation" class="conversation" aria-live="polite"></div>
-        <details class="conversation-settings">
-          <summary>Conversation settings</summary>
-          <div class="conversation-fields">
-            <label class="chat-setting" for="retrieval-count">Evidence results per search <input id="retrieval-count" type="number" min="1" value="5"></label>
-            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
-            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="No limit"></label>
-            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
-          </div>
-        </details>
         <form id="question-form" class="composer">
-          <textarea id="question" rows="2" placeholder="Ask about this project…"></textarea>
-          <button id="send" class="primary" type="submit">Ask</button>
+          <textarea id="question" rows="2" placeholder="Write a message…"></textarea>
+          <div id="attachment-list" class="attachment-list hidden"></div>
+          <div class="composer-actions">
+            <div class="attach-picker">
+              <button id="attach-button" class="composer-icon" type="button" aria-label="Attach" aria-expanded="false">＋</button>
+              <div id="attach-menu" class="attach-menu hidden" role="menu">
+                <button id="attach-files" type="button">Attach file</button>
+                <button id="attach-folder" type="button">Attach folder</button>
+              </div>
+            </div>
+            <div class="composer-right">
+              <div class="effort-picker">
+                <button id="effort-button" class="effort-button" type="button" aria-expanded="false">Lagom · 20</button>
+                <div id="effort-menu" class="effort-menu hidden">
+                  <strong id="effort-name" class="effort-title">Lagom</strong>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>Model</span></div>
+                    <span id="effort-model-detail" class="effort-detail">Qwen3-8B-MLX-4bit</span>
+                    <div class="effort-slider">
+                      <input id="effort-model-range" type="range" min="0" max="4" step="1" value="2" aria-label="Model level">
+                      <div class="effort-points" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                    </div>
+                  </div>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>Search depth</span></div>
+                    <span id="effort-depth-detail" class="effort-detail">10 passages</span>
+                    <div class="effort-slider">
+                      <input id="effort-depth-range" type="range" min="0" max="4" step="1" value="2" aria-label="Search depth">
+                      <div class="effort-points" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div class="usage-picker">
+                <button id="usage-button" class="composer-icon usage-button" type="button" aria-expanded="false" aria-label="Tokens used" title="Tokens used"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4.6 17a8.5 8.5 0 1 1 14.8 0"/><path d="m12 13.5 3.6-3.6"/><circle cx="12" cy="13.5" r="1.2"/></svg></button>
+                <div id="usage-menu" class="effort-menu usage-menu hidden">
+                  <strong class="effort-title">Tokens used</strong>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>This chat</span><span id="usage-chat-answers"></span></div>
+                    <span id="usage-chat-total" class="usage-total">0</span>
+                    <div class="usage-bar" aria-hidden="true"><i id="usage-chat-read" class="usage-read"></i><i id="usage-chat-written" class="usage-written"></i></div>
+                    <div class="usage-legend"><span id="usage-chat-read-text" class="read"></span><span id="usage-chat-written-text" class="written"></span></div>
+                  </div>
+                  <div class="effort-section">
+                    <div class="effort-heading"><span>This project</span><span id="usage-project-answers"></span></div>
+                    <span id="usage-project-total" class="usage-total">0</span>
+                    <div class="usage-bar" aria-hidden="true"><i id="usage-project-read" class="usage-read"></i><i id="usage-project-written" class="usage-written"></i></div>
+                    <div class="usage-legend"><span id="usage-project-read-text" class="read"></span><span id="usage-project-written-text" class="written"></span></div>
+                  </div>
+                </div>
+              </div>
+              <button id="branch-chat" type="button" class="composer-icon branch-button" aria-label="Branch conversation" title="Branch conversation"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M14 20V5M9.5 9.5 14 5l4.5 4.5M14 15h-3a4 4 0 0 1-4-4V7M4 10l3-3 3 3"/></svg></button>
+              <button id="send" class="send-button" type="submit" aria-label="Send message" title="Send message"><span aria-hidden="true">↑</span></button>
+            </div>
+          </div>
         </form>
       </section>
 
       <div id="activity" class="activity hidden" role="status">
         <div class="activity-heading">
           <strong id="activity-percent">Starting…</strong>
-          <button id="stop" type="button" class="secondary">Stop</button>
+          <button id="stop" type="button" class="secondary hidden">Stop</button>
         </div>
         <div id="activity-text"></div>
         <div id="activity-detail" class="activity-detail"></div>
@@ -130,13 +148,58 @@
     </div></div>
     <section id="models-panel" class="models-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="models-title">
       <div class="models-card">
-        <div class="models-heading"><h2 id="models-title">Models</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
-        <p class="hint">Choose a local model for answers and another for search. Downloads start only when you click Download.</p>
-        <p id="models-backend" class="hint"></p>
+        <div class="models-heading"><h2 id="models-title">Settings</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
+        <details id="first-run-setup" class="settings-section readiness-card hidden" aria-live="polite">
+          <summary class="readiness-heading"><h3>QAChat setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
+          <p id="readiness-summary">Checking the local environment…</p>
+          <ol id="readiness-steps" class="readiness-steps"></ol>
+          <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+          <p id="readiness-time" class="hint"></p>
+          <div class="readiness-actions">
+            <button id="install-required" class="primary" type="button">Install required models</button>
+            <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
+          </div>
+        </details>
+        <section class="settings-section">
+          <h3>Appearance</h3>
+          <select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+        </section>
+        <section class="settings-section models-section">
+            <!-- Kept hidden: the rows below edit these values. -->
+            <div class="hidden" aria-hidden="true">
+              <label for="chat-model">Default language model</label>
+              <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
+              <label for="embedding-model">Embedding model</label>
+              <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
+              <label for="query-format">Embedding query format</label>
+              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+            </div>
+
+        <p id="models-backend" class="hint hidden"></p>
         <div id="model-list"></div>
-        <details class="other-models"><summary>Other cached models</summary><div id="other-model-list"></div><p class="hint">These models are not classified by QAChat. You can enter a custom model ID in Advanced settings; compatibility is checked when loading it.</p></details>
         <p id="model-download-status" class="hint" role="status"></p>
         <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
+        </section>
+        <section id="settings-answers" class="settings-section">
+          <h3>Answers</h3>
+          <div class="conversation-fields">
+            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
+            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
+          </div>
+        </section>
+        <section id="settings-project" class="settings-section">
+          <h3>Project</h3>
+          <div class="advanced-fields">
+            <label for="workspace-path">Workspace folder</label>
+            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: QAChat sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
+            <label for="backend">Computation backend</label>
+            <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
+            <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
+            <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
+            <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+          </div>
+        </section>
       </div>
     </section>
   </body>

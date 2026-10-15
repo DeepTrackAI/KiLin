@@ -7,6 +7,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "huggingface-hub==1.29.0",
     "numpy==2.5.2",
+    "pdfminer-six==20260107",
     "pypdf==6.16.2",
 ]
 
@@ -41,7 +42,33 @@ build-backend = "setuptools.build_meta"
 include = ["qachat*"]
 
 [tool.setuptools.package-data]
-"qachat.gui" = ["web/*.html", "web/*.css", "web/*.js"]
+# Data-only folders: project types and report templates.
+"qachat" = [
+    "qachat_defaults.json",
+    "repository_reason_codes.json",
+    "project_types/*.json",
+]
+"qachat.tools.project_inventory" = ["README.md", "defaults.json"]
+"qachat.tools.scan_and_list" = ["README.md", "defaults.json"]
+"qachat.tools.batch_classify" = ["README.md", "defaults.json"]
+"qachat.tools.batch_review" = ["README.md", "defaults.json"]
+"qachat.tools.filter_results" = ["README.md", "defaults.json"]
+"qachat.tools.find_fact" = ["README.md", "defaults.json"]
+"qachat.tools.find_passages" = ["README.md", "defaults.json"]
+"qachat.tools.paper_overview" = ["README.md", "defaults.json"]
+"qachat.tools.show_source" = ["README.md", "defaults.json"]
+"qachat.tools.generate_paper_summary" = [
+    "README.md",
+    "defaults.json",
+    "templates/*.md",
+]
+"qachat.gui" = [
+    "defaults.json",
+    "web/*.html",
+    "web/*.css",
+    "web/*.js",
+    "icons/*.png",
+]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.
 [dependency-groups]

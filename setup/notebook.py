@@ -88,6 +88,7 @@ import sys
 
 _COMMON_MODULES = (
     "huggingface_hub",
+    "pdfminer",
     "pypdf",
     "torch",
     "transformers",

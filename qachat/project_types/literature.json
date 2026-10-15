@@ -1,0 +1,345 @@
+{
+  "display_name": "Literature collection",
+  "description": "A collection of scientific literature and related documents.",
+  "extensions": [
+    ".pdf",
+    ".md",
+    ".txt"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Given a question about academic literature, retrieve relevant research papers, abstracts, and citations that help answer the question.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
+  "capabilities": {
+    "code_graph": "auto"
+  },
+  "history": {
+    "recent_turns": 2
+  },
+  "default_intent": "question_answering",
+  "intents": {
+    "question_answering": {
+      "description": "Answer a question about the documents' content, methods, or findings, or what the papers say about a topic ('how does the method work?', 'summarize what the papers say about sleep quality', 'why did the authors choose this design?'). Not for a specific number, setting, or name, or a complete list of the things a paper includes (fact_finding), not for a summary of one particular paper (paper_overview), and not when the user asks to read through a whole document (document_reading).",
+      "system_prompt": "Answer the question directly and support each claim with the evidence.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "fact_finding": {
+      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations or what the papers say about a topic (question_answering), and not for listing sentences, passages, or files.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_fact",
+        "part_tokens": 6000,
+        "note_tokens": 300,
+        "answer_tokens": 1024,
+        "max_model_calls": 200,
+        "confirmation": "always",
+        "large_batches": 0
+      }
+    },
+    "compare_sources": {
+      "description": "Compare papers, methods, findings, or claims across sources.",
+      "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "document_reading": {
+      "description": "Answer from one whole document read in full, when the user asks to read, search, check, or go through a particular document, including to find a fact in it ('read the whole Smith 2020 paper', 'search through that paper and tell me the sample size they used', 'go through the entire user guide', 'check the paper from start to end to find which software it uses').",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_review",
+        "part_tokens": 6000,
+        "note_tokens": 400,
+        "answer_tokens": 1024,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "paper_overview": {
+      "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Lee paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a named report format (research_briefing, popular_science_summary, technical_summary, or experimental_protocol), whether or not the user asks to save a file, and not for what several papers say about a topic (question_answering).",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "paper_overview",
+        "max_tokens": 6000,
+        "answer_tokens": 500
+      }
+    },
+    "research_briefing": {
+      "description": "Generate a structured research briefing for a single scientific paper, emphasizing the research question, key findings, strength of evidence, limitations, and implications. Examples: \"write a research briefing for patil25\", \"prepare a research briefing of the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "research_briefing",
+        "part_tokens": 6000,
+        "note_tokens": 500,
+        "section_tokens": 600,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "popular_science_summary": {
+      "description": "Generate an accessible popular science summary of a single scientific paper for a general audience, explaining the question, approach, discovery, and significance without unnecessary jargon. Examples: \"write a popular science summary for patil25\", \"explain the Smith paper for a general audience\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "popular_science_summary",
+        "part_tokens": 6000,
+        "note_tokens": 500,
+        "section_tokens": 600,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "technical_summary": {
+      "description": "Generate a detailed technical summary of a single scientific paper for specialists, emphasizing assumptions, methods, formalism, implementation, quantitative results, validation, limitations, and reproducibility. Examples: \"write a technical summary of patil25\", \"prepare a technical report on the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "technical_summary",
+        "part_tokens": 6000,
+        "note_tokens": 500,
+        "section_tokens": 600,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "experimental_protocol": {
+      "description": "Generate a structured experimental protocol based on a single scientific paper, identifying materials, equipment, preparation, procedural steps, parameters, controls, data recording, and missing replication details. Never invent missing procedures. Examples: \"write an experimental protocol based on patil25\", \"extract an experimental protocol from the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "generate_paper_summary",
+        "template": "experimental_protocol",
+        "part_tokens": 6000,
+        "note_tokens": 500,
+        "section_tokens": 600,
+        "repair_attempts": 3,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "project_inventory": {
+      "description": "Questions about the project's files themselves rather than their content: how many papers or files it has, which files or types are included, which could not be read ('how many papers are in this project?', 'list the PDFs in the reviews folder', 'which files have no searchable text?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a word (mention_listing).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "project_inventory",
+        "max_listed": 200,
+        "max_folders": 20
+      }
+    },
+    "mention_listing": {
+      "description": "The sentences or files that mention or contain an exact word, name, or phrase, or whether, where, or how often it appears, in one paper or across the papers, including spelling variants such as 'COVID19' and 'COVID-19' ('give me a list of sentences in that paper mentioning MRI', 'how many sentences in that paper mention MRI?', 'does that paper mention MRI?', 'how many papers mention transfer learning?', 'check whether all the papers contain the phrase \"random forest\"', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the sentences must match a meaning rather than a word (topic_listing), and not for sorting mentions into categories.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "scan_and_list",
+        "case_sensitive": false,
+        "whole_words": true,
+        "context_lines": 1,
+        "max_listed": 100
+      }
+    },
+    "topic_listing": {
+      "description": "Only when the user asks for the sentences, passages, or files that match a description judged by meaning, not by an exact word: 'list the sentences that discuss the study's limitations', 'which files use method X to study Y?', 'how many of the files are related to X?', 'list the papers that apply X to Y'. Reads every passage. Not for whether or where a word, name, or phrase appears, or the sentences that contain or mention it ('does it mention X?', 'how many papers mention X?', 'list the sentences that mention X' are mention_listing), and not for summarizing what the papers say.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_passages",
+        "batch_tokens": 2500,
+        "max_model_calls": 200,
+        "quick_passages": 40,
+        "max_listed": 100,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "mention_classification": {
+      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; judges each mention.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_classify",
+        "candidates": "mentions",
+        "case_sensitive": false,
+        "whole_words": true,
+        "context_lines": 2,
+        "max_listed": 100,
+        "batch_tokens": 2500,
+        "max_model_calls": 30,
+        "confirmation": "when_large",
+        "large_batches": 2
+      }
+    },
+    "report_generation": {
+      "description": "Write a structured report or overview of a topic across the documents ('write an overview of how the papers measure stress'). Not for turning one paper into a briefing (paper_summary).",
+      "system_prompt": "Write a structured report with short headings, based only on the evidence.",
+      "answer_guidance": "Use short headings and up to about 600 words unless the question asks for a different length.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "hybrid",
+        "include_related_evidence": true
+      }
+    },
+    "refine_results": {
+      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?'). Judges each listed item.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "filter_results",
+        "batch_tokens": 2500,
+        "item_characters": 400
+      }
+    },
+    "source_context": {
+      "description": "Show the exact source text behind an earlier answer: the sentence or passage it cited, word for word, with the sentences around it, and what it is talking about ('show me that sentence', 'where exactly does it say that?', 'what is that passage about?', 'show me the context of that quote'). Reads only the cited passages and their neighbours; no new search.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "show_source",
+        "context_sentences": 2,
+        "max_passages": 3,
+        "answer_tokens": 400
+      }
+    },
+    "conversation_followup": {
+      "description": "A follow-up about earlier answers, including ones several turns back: their details, or the terms and names they used (for example 'why is it called X?'), or the conversation itself (an opinion, a recap, 'what do you think so far?'), that the evidence already found for those turns can answer.",
+      "system_prompt": "Answer the follow-up using the earlier answers and their evidence, and connect it to what was already discussed.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "rephrase_previous": {
+      "description": "Rephrase, simplify, shorten, expand, summarize, or translate the previous answer, or change its length or format ('in two sentences', 'as a list', 'in simpler words'), without needing new information.",
+      "system_prompt": "Rework the previous answer as the user asks. Keep its meaning and its source numbers; do not add claims that its evidence does not support.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "reuse"
+      }
+    },
+    "small_talk": {
+      "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
+      "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
+      "answer_guidance": "Reply in one short sentence.",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "shortcuts": [
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| qachat)?",
+        "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
+        "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
+        "how (are|r) (you|u)( doing)?( today)?",
+        "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
+        "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
+      ]
+    }
+  },
+  "welcome_prompts": [
+    "What would you like to understand from your literature?",
+    "Which concept should we explore across these sources?",
+    "What evidence are you looking for?",
+    "What would you like to compare in the literature?",
+    "Which finding should we investigate?"
+  ],
+  "suggestions": [
+    "Turn any paper into a Nature research briefing",
+    "Summarize what the papers say about …",
+    "Give me a short summary of …",
+    "Which datasets does each paper use?",
+    "Compare how the papers approach …",
+    "What are the limitations of …?",
+    "Show every sentence about …",
+    "Show every sentence that mentions …",
+    "Which papers mention …?",
+    "How many papers are in this project?"
+  ]
+}
