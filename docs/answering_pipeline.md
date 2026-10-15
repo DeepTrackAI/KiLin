@@ -31,6 +31,10 @@ filesystem or Python execution.
 
 ## One turn, in execution order
 
+![Sequence of routing, evidence acquisition, a single model or tool answer producer, citation checks and an atomic completed-turn checkpoint.](figures/answer-sequence.svg)
+
+*Figure: An ordinary successful turn passes through an optional evidence stage, one answer producer, citation-ID checks and persistence before completion.*
+
 ```text
 ask(question, options)
    |

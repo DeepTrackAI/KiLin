@@ -8,6 +8,10 @@ individual conversation files consistent across components and processes.
 
 ## The ownership contract
 
+![TraceLogger or a session owns a companion lock before validated state is atomically checkpointed to conversation JSON; conflicting writers fail.](figures/conversation-ownership.svg)
+
+*Figure: Companion-file advisory ownership coordinates QAChat writers while atomic replacement protects one committed conversation file.*
+
 **At most one active QAChat writer can own a canonical conversation JSON path
 at any time.** Before reading an existing conversation for modification, a
 writer must acquire exclusive ownership. A conflicting acquisition raises

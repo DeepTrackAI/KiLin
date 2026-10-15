@@ -68,7 +68,7 @@ The ten registered tools each have their own README under
 that tool's settings, supported requests and outputs. Do not infer tool
 behavior from its identifier alone.
 
-## Coverage, accuracy and future diagrams
+## Coverage, accuracy and architecture diagrams
 
 [Module map](module_map.md) assigns **every production Python module** to a
 primary technical document and records its responsibility. This is an index,
@@ -77,10 +77,13 @@ owner document includes a flow, key invariants, failure modes, configuration
 and tests. Any implementation behavior not supported by source or tests
 must be called out as unknown, rather than filled in by architectural intent.
 
-[Diagram plan](diagram_plan.md) identifies proposed editable SVG architecture
-schematics and their source-of-truth modules. **The diagrams are planned, not
-implemented, in PR9a**. They belong in a separate PR9b under `docs/figures/`
-when the textual architecture has been reviewed.
+Eleven [editable SVG architecture diagrams](diagram_plan.md) are embedded
+in their primary technical documents. The diagrams show component and
+ownership boundaries, the source-to-answer flow, conversation checkpoints
+and security limitations. They are schematics, **not exhaustive API or
+state-machine specifications**. The surrounding text remains authoritative
+for exceptions, precedence and error behavior. SVGs use native text and
+vector elements and are maintained under [`figures/`](figures/).
 
 ## Maintaining these documents
 

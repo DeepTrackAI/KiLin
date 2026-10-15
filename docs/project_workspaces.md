@@ -7,6 +7,10 @@ without adding tool-specific conditions to project creation.
 
 ## Workspace structure
 
+![Read-only packaged defaults, writable user preferences and per-project files have separate owners.](figures/workspace-ownership.svg)
+
+*Figure: Defaults, preferences, default workspace locations and persisted project state are intentionally different ownership layers.*
+
 Every initialized project has the following core entries:
 
 ```text

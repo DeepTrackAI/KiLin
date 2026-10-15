@@ -73,6 +73,10 @@ require source-unit conventions, graph entity typing and retrieval tests.
 
 ## Implementing a built-in tool
 
+![Validated project intents resolve registered built-in tools, which consume ToolRequest and ToolContext and return ToolResult for checkpointing.](figures/tool-contract.svg)
+
+*Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
+
 All tools are registered under `qachat/tools/`. Existing packages demonstrate
 the expected structure:
 

@@ -8,21 +8,9 @@ combines them and expands evidence for explicit code or document references.
 The main orchestration belongs to `qachat.rag.RAGSession` and the algorithms
 live under `qachat/retrievals/`.
 
-```text
-Selected sources -> SourceUnit -> Chunk
-                      |
-                      +--> embedding model -> SemanticIndex
-                      +--> lexical_terms() -> LexicalIndex
-                      `--> code entity extraction -> CodeGraph
-                              |
-Question -> embedding + lexical + code lookup -> ranked channel lists
-                              |
-                      reciprocal-rank fusion
-                              |
-                      named-source context / document scope
-                              |
-                      Evidence(path, line/cell/page, exact text)
-```
+![Semantic, lexical and code-aware channels rank aligned chunks before reciprocal-rank fusion and evidence selection.](figures/retrieval-indexes.svg)
+
+*Figure: The three channels preserve different ranking signals; reciprocal-rank fusion combines their ranks, and persisted indexes must pass integrity and model-identity validation.*
 
 `qachat.retrievals.__init__` exposes the supported records and functions;
 private helpers and individual extension internals should not be treated as

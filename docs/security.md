@@ -2,6 +2,10 @@
 
 ## Threat model and explicit non-goals
 
+![User-owned local data, local QAChat execution and optional remote services occupy separate trust zones.](figures/trust-boundaries.svg)
+
+*Figure: A local-first application still processes untrusted evidence and may contact external services through explicitly allowed operations.*
+
 QAChat is designed for **locally controlled knowledge work**. Projects,
 indexes, source snapshots, generated outputs and conversations can be kept
 under the user's filesystem control and inference can use local models.

@@ -6,14 +6,9 @@ Source ingestion converts **local files chosen by the user** into text units
 with traceable origin, then token-bounded chunks for retrieval. The four
 operations should not be mistaken for one transaction:
 
-```text
-Original local files (not modified by import)
-    -> directory scan / explicit file selection
-    -> optional managed source snapshot and provenance
-    -> per-suffix file reader / structural text-unit extractor
-    -> embedding-tokenizer chunk boundaries
-    -> retrieval indexes (see retrieval_pipeline.md)
-```
+![Directory scanning and explicit file selection feed two possible managed-source workflows, followed by file readers, source units and chunks.](figures/source-ingestion.svg)
+
+*Figure: Source selection, the two managed-import APIs, format-specific extraction and chunk identity are distinct; original source files remain unchanged.*
 
 | Step | Owner / main API | Output |
 | --- | --- | --- |

@@ -25,6 +25,10 @@ current model presets see [GUI README](../qachat/gui/README.md),
 `gui/defaults.json` and `gui/preferences.py`. For each tool's parameters
 use its README and `_configuration.py`.
 
+![Packaged defaults and validated project types initialize a new saved profile, while GUI preferences are separate and an existing profile remains authoritative.](figures/configuration-precedence.svg)
+
+*Figure: Packaged creation defaults do not overwrite saved project profiles; application-wide GUI preferences and tool-owned defaults have separate roles.*
+
 ## Initialization versus reopening
 
 A new project's kind selects a validated `ProjectType`; the core then

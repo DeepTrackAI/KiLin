@@ -28,6 +28,10 @@ PDF/Hugging Face dependencies, platform-conditional `mlx` and general
 working native packages and compatible model weights, not merely a matching
 platform string.
 
+![RAGSession owns embedding and chat sessions, optionally a router, and reuses loaded models across conversation switches until close or Stop.](figures/model-lifetimes.svg)
+
+*Figure: Live model sessions are distinct from persisted project state; backend policies and subprocess lifetime determine what can be reused.*
+
 ## Backend resolution
 
 With `auto`, QAChat chooses MLX on native Darwin/arm64 and PyTorch otherwise.

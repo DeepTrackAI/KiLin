@@ -15,17 +15,9 @@ payloads are owned by [GUI protocol](gui_protocol.md).
 
 ## Processes and message boundaries
 
-```text
-QApplication (gui/app.py)
-  `-- ChatWindow (gui/window.py)
-      |-- QWebEngineView: web/index.html + web/styles.css + web/app.js
-      |     `-- QWebChannel <-> ChatBridge Qt slots/signals
-      `-- QProcess: python -m qachat.gui.engine
-            |-- stdin:  one JSON command object per line
-            |-- stdout: one JSON event object per line
-            `-- ChatEngine -> qachat core APIs, indexes, model sessions,
-                               project files, trace/conversation ownership
-```
+![Qt hosts the JavaScript page and QWebChannel bridge; JSON-line commands and events connect Qt to a separate engine child process.](figures/gui-processes.svg)
+
+*Figure: QWebChannel traffic stays inside the Qt process; newline-delimited JSON messages cross the engine subprocess boundary.*
 
 `gui/__main__.py` launches `gui.app.main()`. The `qachat --gui` CLI can
 first check/prepare optional dependencies using `uv` in a development

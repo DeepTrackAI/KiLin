@@ -20,25 +20,9 @@ names from private implementation functions.
 
 ## Executable boundaries
 
-```text
-Python caller / notebooks / tutorials
-        |
-        v
-qachat.project, qachat.workspace, qachat.rag.RAGSession
-        |-- project types + profiles + defaults
-        |-- repository scan -> source extraction -> chunks -> indexes
-        |-- intent routing -> history/retrieval -> answer or tool
-        |-- model sessions (MLX or PyTorch) + local cache
-        `-- conversation JSON, traces, locks, outputs
+![Python clients and an optional Qt desktop both use the same GUI-independent QAChat core.](figures/architecture.svg)
 
-Optional desktop:
-Qt application (app.py / window.py)
-        <-> QWebChannel <-> local HTML/JS page
-        |
-        <-> newline-delimited JSON <-> engine.py child process
-                                      |
-                                      `-> same qachat core
-```
+*Figure: The optional desktop has its own Qt-to-engine transport; the Python core owns projects, retrieval, answering and local persistence.*
 
 The diagram is conceptual, not a claim that all calls form one synchronous
 stack. The Qt window manages a child process; the engine dispatches commands
