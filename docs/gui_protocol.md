@@ -144,7 +144,7 @@ can accompany an event.
 | --- | --- |
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `kind`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
@@ -259,15 +259,17 @@ partial visible stream.
 1. **Frontend event and phase identifiers are not generated from Python.**
    The test suite characterizes current names and checks phase agreement,
    but a shared schema/code generator is not proposed in this PR.
-2. **Error/skip reasons are display strings.** In particular, the oversize
-   source rule depends on English text. Structured reason codes belong in a
-   separate compatibility-aware PR.
+2. **Structured scan codes do not cover all diagnostics.** Source preview
+   eligibility now uses the validated JSON `reason_code` vocabulary, but
+   general `error` event messages and some other diagnostic text remain
+   human-readable strings without a universal structured error schema.
 3. **Malformed payload validation is distributed.** Qt slots, the dispatcher,
    the engine methods, and the page have different failure policies. This
    document describes them; it does not introduce global validation.
-4. **Native Qt/WebEngine integration has not been exercised** by the
-   Qt-free protocol tests. It still requires a supported GUI installation,
-   particularly on macOS/Python 3.12.
+4. **Native Qt/WebEngine coverage is opt-in.** The ordinary protocol tests
+   cannot validate native page rendering, dialogs or PDF interactions. The
+   isolated `test__webengine_smoke.py` can be enabled on a supported GUI
+   installation; it is not a default full native acceptance suite.
 
 Implementation owners: `qachat/gui/window.py`, `qachat/gui/engine.py`,
 `qachat/gui/web/app.js`; core phases in `qachat/rag.py`. Regression tests:
