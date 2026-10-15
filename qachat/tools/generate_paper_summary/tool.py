@@ -169,10 +169,11 @@ from qachat.tools._contract import (
 from qachat.tools._shared.outputs import (
     OUTPUTS_FOLDER,
     find_output,
-    free_output_path,
     load_output,
     output_files,
+    publish_output_file,
     save_output_file,
+    staged_output_file,
 )
 from qachat.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
@@ -1806,15 +1807,21 @@ def _write_pdf(
     if context.write_pdf is None:
         return None, None
 
-    destination = free_output_path(
-        context.project_root, f"{saved.stem}.pdf"
-    )
     try:
-        pages = context.write_pdf(text, destination, label=template.title)
+        with staged_output_file(
+            context.project_root, suffix=".pdf"
+        ) as staged:
+            pages = context.write_pdf(
+                text, staged, label=template.title
+            )
+            if staged.stat().st_size == 0:
+                raise ValueError("The PDF renderer produced an empty file.")
+            pdf = publish_output_file(
+                context.project_root, f"{saved.stem}.pdf", staged
+            )
     except Exception as error:  # The Markdown is saved either way.
         return None, f"The PDF could not be written: {error}"
 
-    pdf = Path(OUTPUTS_FOLDER) / destination.name
     context.trace.emit(
         "tool.generate_paper_summary.pdf",
         component="tool",

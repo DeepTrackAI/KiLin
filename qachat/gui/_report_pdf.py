@@ -79,8 +79,8 @@ def write_report_pdf(
     markdown: str
         The report.
     path: pathlib.Path
-        PDF file to write (replaced if it exists; callers choose a free
-        name).
+        Caller-owned PDF staging file. The renderer may replace its contents;
+        the calling tool publishes it separately without overwriting files.
     max_pages: int, optional
         Pages the report should fit on. Defaults to ``1``.
     font_size: float, optional

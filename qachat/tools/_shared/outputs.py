@@ -11,11 +11,12 @@ come back as a "source", and it is read only when a tool asks for it.
 code) and splits it into numbered passages with the same chunker, so tools
 can cite passages exactly as they cite indexed evidence.
 
-Saving never replaces an existing file: a taken name gets a numbered
-suffix. The check and the write are separate steps, so two writers saving
-the same name at the same moment are not protected against each other.
-Reading rejects absolute paths and ``..``; the shared source reader also
-rejects symbolic links and files outside the folder.
+Saving validates a single filename, writes to an exclusive staging file,
+and publishes the completed content without replacing existing paths. A
+taken name (including a symbolic link) gets a numbered suffix even when
+two writers save concurrently. Reading rejects absolute paths and ``..``;
+the shared source reader also rejects symbolic links and files outside
+the folder.
 
 Key Features
 ------------
@@ -72,9 +73,9 @@ Module Structure
 
     Write a generated file into the outputs folder without overwriting.
 
-- ``free_output_path``
+- ``staged_output_file`` and ``publish_output_file``
 
-    Return a path in the outputs folder that no file uses yet.
+    Stage generated content and publish it without replacing a file.
 
 Examples
 --------
@@ -94,9 +95,15 @@ from __future__ import annotations
 
 from qachat.workspace_resources import OUTPUTS_FOLDER
 
+from contextlib import contextmanager
 from dataclasses import dataclass
+from itertools import count
+import os
 from pathlib import Path
-from typing import Final
+import shutil
+import stat
+import tempfile
+from typing import Final, Iterator
 
 from qachat.chunking import Chunk, chunk_source_units
 from qachat.retrievals.document_reading import estimate_tokens, named_paths
@@ -107,11 +114,12 @@ __all__ = [
     "READABLE_SUFFIXES",
     "OutputDocument",
     "find_output",
-    "free_output_path",
     "load_output",
     "output_files",
     "output_folder",
+    "publish_output_file",
     "save_output_file",
+    "staged_output_file",
 ]
 
 # File types load_output can read, as for indexed sources.
@@ -164,6 +172,8 @@ def output_folder(project_root: Path) -> Path:
     if folder.is_symlink():
         raise ValueError(f"Workspace output folder cannot be a link: {folder}")
     folder.mkdir(parents=True, exist_ok=True)
+    if folder.resolve() != Path(project_root).resolve() / OUTPUTS_FOLDER:
+        raise ValueError(f"Workspace output folder cannot be a link: {folder}")
     return folder
 
 
@@ -313,55 +323,227 @@ def load_output(project_root: Path, name: Path | str) -> OutputDocument:
     )
 
 
-def save_output_file(project_root: Path, name: str, text: str) -> Path:
-    """Write a generated file into the outputs folder without overwriting.
+def _output_name(name: str) -> Path:
+    """Validate an output basename independently of the host platform.
+
+    Reject path separators, Windows drive or stream syntax, reserved device
+    names, and names that Windows normalizes to a different spelling.
 
     Parameters
     ----------
-    project_root: pathlib.Path
-        The project folder.
     name: str
-        File name, such as ``paper_summary.md``.
-    text: str
-        Content.
+        Requested file name, without any directory components.
 
     Returns
     -------
     pathlib.Path
-        Path relative to the project. When the name is taken, ``-2``,
-        ``-3``, ... is added before the suffix, so earlier files (including
-        the user's own) are never replaced.
+        Validated relative basename.
+
+    Raises
+    ------
+    ValueError
+        If the name cannot be used as a single output filename.
 
     """
 
-    candidate = free_output_path(project_root, name)
-    candidate.write_text(text, encoding="utf-8")
-    return Path(OUTPUTS_FOLDER) / candidate.name
+    if not isinstance(name, str) or not name:
+        raise ValueError("Output name must be a single filename.")
+    if (
+        name in (".", "..")
+        or any(char in name for char in '/\\:*?"<>|\x00')
+        or any(ord(char) < 32 for char in name)
+        or name.endswith((" ", "."))
+        or Path(name).name != name
+    ):
+        raise ValueError("Output name must be a single safe filename.")
+
+    reserved = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    reserved.update(f"COM{number}" for number in "123456789¹²³")
+    reserved.update(f"LPT{number}" for number in "123456789¹²³")
+    if name.split(".")[0].upper() in reserved:
+        raise ValueError("Output name is reserved on Windows.")
+
+    return Path(name)
 
 
-def free_output_path(project_root: Path, name: str) -> Path:
-    """Return a path in the outputs folder that no file uses yet.
+def _output_candidates(folder: Path, name: str) -> Iterator[Path]:
+    """Yield the requested name followed by numbered alternatives.
+
+    Parameters
+    ----------
+    folder: pathlib.Path
+        Project-owned outputs directory.
+    name: str
+        Validated output basename.
+
+    Yields
+    ------
+    pathlib.Path
+        Candidate paths in the outputs directory.
+
+    """
+
+    relative = _output_name(name)
+    yield folder / relative
+    for number in count(2):
+        yield folder / f"{relative.stem}-{number}{relative.suffix}"
+
+
+@contextmanager
+def staged_output_file(
+    project_root: Path, *, suffix: str = ""
+) -> Iterator[Path]:
+    """Create and clean up a private staging file for generated output.
+
+    The file is created exclusively in ``outputs/``. It is never published
+    under its temporary name. Callers may overwrite the staging file, but
+    they must use ``publish_output_file`` for the final destination.
+
+    Parameters
+    ----------
+    project_root: pathlib.Path
+        The project folder.
+    suffix: str, optional
+        Staging suffix required by the writer, such as ``".pdf"``.
+        Defaults to ``""``.
+
+    Yields
+    ------
+    pathlib.Path
+        Caller-owned temporary file inside ``outputs/``.
+
+    """
+
+    _output_name("staging" + suffix)
+    folder = output_folder(project_root)
+    descriptor, name = tempfile.mkstemp(
+        prefix=".qachat-output-", suffix=suffix, dir=folder
+    )
+    os.close(descriptor)
+    staged = Path(name)
+    try:
+        yield staged
+    finally:
+        staged.unlink(missing_ok=True)
+
+
+def _copy_output_exclusively(staged: Path, candidate: Path) -> bool:
+    """Copy staged data without opening an occupied destination.
+
+    This fallback supports filesystems that prohibit hard links. The
+    destination is exclusively created, so no pre-existing content can be
+    replaced, although a reader could observe a partial copy in progress.
+
+    Parameters
+    ----------
+    staged: pathlib.Path
+        Complete staged file.
+    candidate: pathlib.Path
+        Destination to create exclusively.
+
+    Returns
+    -------
+    bool
+        True when the file was created; False when its name is taken.
+
+    """
+
+    try:
+        descriptor = os.open(
+            candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+    except FileExistsError:
+        return False
+
+    try:
+        with os.fdopen(descriptor, "wb") as destination:
+            with staged.open("rb") as source:
+                shutil.copyfileobj(source, destination)
+    except BaseException:
+        candidate.unlink(missing_ok=True)
+        raise
+    return True
+
+
+def publish_output_file(
+    project_root: Path, name: str, staged: Path
+) -> Path:
+    """Publish a completed staged output without replacing another file.
+
+    Prefer a same-directory hard link, which atomically makes a completed
+    file visible without replacing an existing name or dangling symlink.
+    When hard links are unavailable, copy to an exclusively created file:
+    that fallback still cannot overwrite, but is not an atomic publication.
+    On collision, try the next numbered name.
 
     Parameters
     ----------
     project_root: pathlib.Path
         The project folder.
     name: str
-        Wanted file name, such as ``paper_summary.pdf``.
+        Desired output basename.
+    staged: pathlib.Path
+        Regular staging file created in the project's output directory.
 
     Returns
     -------
     pathlib.Path
-        ``outputs/<name>``, or with ``-2``, ``-3``, ... before the suffix
-        when that name is taken.
+        Published file path relative to the project.
+
+    Raises
+    ------
+    ValueError
+        If the name or staging-file location is unsafe.
+    OSError
+        If publication fails for reasons other than a name collision.
 
     """
 
     folder = output_folder(project_root)
-    candidate = folder / name
-    stem, suffix = candidate.stem, candidate.suffix
-    number = 2
-    while candidate.exists():
-        candidate = folder / f"{stem}-{number}{suffix}"
-        number += 1
-    return candidate
+    _output_name(name)
+    temporary = Path(staged)
+    if temporary.parent.resolve() != folder.resolve():
+        raise ValueError("Staging file must belong to outputs/.")
+    if not stat.S_ISREG(temporary.lstat().st_mode):
+        raise ValueError("Staging output must be a regular file.")
+
+    for candidate in _output_candidates(folder, name):
+        try:
+            os.link(temporary, candidate)
+        except FileExistsError:
+            continue
+        except OSError:
+            if not _copy_output_exclusively(temporary, candidate):
+                continue
+        return Path(OUTPUTS_FOLDER) / candidate.name
+
+    raise RuntimeError("Could not select an output filename.")
+
+
+def save_output_file(project_root: Path, name: str, text: str) -> Path:
+    """Write generated text under a unique name without overwriting.
+
+    Content is fully written to an exclusive staging file before its final
+    name becomes visible. Concurrent saves receive different filenames.
+
+    Parameters
+    ----------
+    project_root: pathlib.Path
+        The project folder.
+    name: str
+        Output filename, such as ``paper_summary.md``.
+    text: str
+        UTF-8 content to save.
+
+    Returns
+    -------
+    pathlib.Path
+        Path relative to the project. A taken name receives ``-2``,
+        ``-3``, etc., without replacing previous files or symlinks.
+
+    """
+
+    _output_name(name)
+    with staged_output_file(project_root) as staged:
+        staged.write_text(text, encoding="utf-8")
+        return publish_output_file(project_root, name, staged)

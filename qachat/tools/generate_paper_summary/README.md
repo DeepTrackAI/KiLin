@@ -109,9 +109,14 @@ When no callback is available (for example, from the CLI or a notebook),
 the Markdown report is still saved and no PDF is attempted. PDF errors
 or multi-page output are reported without discarding the Markdown file.
 
-PDF generation is not yet a project-type output-format setting; configuring
-rendering backends and output formats belongs to a separate future change.
-The current callback and automatic GUI PDF behavior are unchanged.
+The tool provides the PDF renderer with a private staging path in `outputs/`.
+Once a nonempty PDF is produced, it publishes the file under a numbered,
+non-overwriting name. The renderer must write to the staging path it is
+given, not select its own destination. Failed renders leave no partial
+public PDF and do not remove the saved Markdown report.
+
+PDF generation is not a project-type output-format setting. The caller
+controls whether a PDF renderer is available through `ToolContext`.
 
 ## Workspace resources
 

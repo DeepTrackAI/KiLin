@@ -38,6 +38,16 @@ class TestReportOutputs(unittest.TestCase):
         self.report.write_text('# Report\n', encoding='utf-8')
         self.template = SimpleNamespace(title='Research briefing')
         self.writer = Mock(return_value=1)
+
+        def render(markdown: str, path: Path, *, label: str) -> int:
+            """Mimic a renderer writing to its assigned staging file.
+
+            """
+
+            path.write_bytes(b'%PDF-1.4\nexample\n')
+            return self.writer.return_value
+
+        self.writer.side_effect = render
         self.context = SimpleNamespace(
             project_root=self.root,
             write_pdf=self.writer,
@@ -70,9 +80,19 @@ class TestReportOutputs(unittest.TestCase):
         )
         self.assertIsNone(note)
         self.assertEqual(pdf, Path('outputs/report.pdf'))
-        self.writer.assert_called_once_with(
-            '# Report\n', self.outputs / 'report.pdf',
-            label='Research briefing',
+        self.writer.assert_called_once()
+        self.assertEqual(self.writer.call_args.args[0], '# Report\n')
+        staging = self.writer.call_args.args[1]
+        self.assertEqual(staging.parent.resolve(), self.outputs.resolve())
+        self.assertEqual(staging.suffix, '.pdf')
+        self.assertNotEqual(staging.name, 'report.pdf')
+        self.assertFalse(staging.exists())
+        self.assertEqual(
+            self.writer.call_args.kwargs, {'label': 'Research briefing'}
+        )
+        self.assertEqual(
+            (self.outputs / 'report.pdf').read_bytes(),
+            b'%PDF-1.4\nexample\n',
         )
         self.context.trace.emit.assert_called_once_with(
             'tool.generate_paper_summary.pdf',
@@ -98,6 +118,46 @@ class TestReportOutputs(unittest.TestCase):
             self.writer.call_args.args[1], old_pdf
         )
         self.assertEqual(old_pdf.read_text(), 'existing pdf')
+        self.assertEqual(
+            (self.root / pdf).read_bytes(), b'%PDF-1.4\nexample\n'
+        )
+
+    def test_dangling_pdf_link_is_skipped(self) -> None:
+        """The final PDF never follows an existing dangling symlink.
+
+        """
+
+        outside = self.root / 'outside.pdf'
+        linked = self.outputs / 'report.pdf'
+        try:
+            linked.symlink_to(outside)
+        except (NotImplementedError, OSError):
+            self.skipTest('Symbolic links are unavailable')
+
+        pdf, note = _write_pdf(
+            '# Report\n', self.report, self.template, self.context
+        )
+        self.assertIsNone(note)
+        self.assertEqual(pdf, Path('outputs/report-2.pdf'))
+        self.assertFalse(outside.exists())
+        self.assertTrue(linked.is_symlink())
+        self.assertEqual(
+            (self.root / pdf).read_bytes(), b'%PDF-1.4\nexample\n'
+        )
+
+    def test_empty_renderer_output_is_not_published(self) -> None:
+        """Treat a successful callback with no PDF bytes as a failure.
+
+        """
+
+        self.writer.side_effect = None
+        pdf, note = _write_pdf(
+            '# Report\n', self.report, self.template, self.context
+        )
+        self.assertIsNone(pdf)
+        self.assertIn('empty file', note)
+        self.assertEqual(list(self.outputs.iterdir()), [self.report])
+        self.context.trace.emit.assert_not_called()
 
     def test_overflow_is_reported_without_discarding_pdf(self) -> None:
         """Keep the PDF artifact when one-page fitting does not succeed.
@@ -125,6 +185,7 @@ class TestReportOutputs(unittest.TestCase):
         self.assertIn('renderer unavailable', note)
         self.assertTrue(self.report.is_file())
         self.context.trace.emit.assert_not_called()
+        self.assertEqual(list(self.outputs.iterdir()), [self.report])
 
 
 if __name__ == '__main__':

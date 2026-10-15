@@ -51,6 +51,27 @@ All ten built-in registered tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
 QAChat is a prerelease package.
 
+## Generated output safety
+
+Tools that create files use the private shared output service in
+`qachat/tools/_shared/outputs.py`. Names must be single, portable basenames;
+absolute paths, parent traversal, path separators, and Windows device names
+are rejected. Existing filenames and symbolic links are not overwritten.
+
+Markdown and optional PDF reports are written to exclusively created,
+hidden staging files inside the project's `outputs/` directory. Complete
+files are preferably published through an atomic, no-replace hard link.
+Where the filesystem cannot create hard links, an exclusive-create copy
+preserves the no-overwrite guarantee, though the copy is not atomic. If a
+name is already occupied, the next numbered name is used. Staging files
+are cleaned up on both success and failure. Tool writers must not choose
+a free name and open that path for ordinary truncating output.
+
+The PDF callback receives a staging filename, **not** the eventual public
+filename. A renderer can replace the temporary file's contents; only the
+tool publishes the finished report. If PDF rendering fails, the saved
+Markdown report remains available.
+
 ## Configuration precedence
 
 For each registered tool, the validated `SETTINGS` values in the packaged
@@ -87,5 +108,5 @@ invalid types, and values outside the documented constraints fail early.
 
 Tests for shared services belong in `tests/qachat/tools/_shared/`. They
 can be exercised independently from every registered tool. Full QAChat
-regression tests must pass after every migration. QAChat's coding and
-DeepTrack-style documentation conventions apply to all Python modules.
+regression tests must pass after changes to shared services. QAChat's coding
+and DeepTrack-style documentation conventions apply to all Python modules.
