@@ -123,6 +123,70 @@ On macOS, a temporary path under `/var/` can canonically resolve to
 is intended, and compare literal spellings only when testing path
 serialization policy.
 
+## GitHub Actions and Python compatibility
+
+QAChat currently supports **Python 3.12** as declared in `pyproject.toml`.
+The `uv.lock` file is scoped to the same interpreter range. CI is divided
+into three independent workflows under `.github/workflows/`:
+
+| Workflow | Validation | Required checks |
+| --- | --- | --- |
+| `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu, macOS and Windows; Qt/PDF on the same systems |
+| `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
+| `docs.yml` | Markdown links, SVG metadata, complete module map | Ubuntu / Python 3.12 |
+
+All workflows run on pull requests and pushes to `main` or `master`; they
+can also be launched manually. The test matrix has `fail-fast: false`, so
+one platform failure does not cancel the other configurations. A Node.js
+runtime is installed for the JavaScript checks in the base test suite.
+
+**Python 3.13, 3.14 and 3.15 are experimental**, each tested on Ubuntu,
+macOS and Windows. These nine jobs use `pip --ignore-requires-python` to
+probe the current pinned core dependencies without changing the supported
+range or `uv.lock`. They require binary distributions rather than building
+native dependencies from source. They do not use the Python 3.12 lock file
+and are non-blocking, but installation failures, skips and test failures
+remain visible in each GitHub Actions job and its summary. Passing such a
+probe does not establish support for optional MLX, PyTorch or Qt backends.
+
+To promote a newer Python version, first verify core and optional backend
+compatibility, update the package metadata and dependency constraints where
+justified, regenerate the lock file for the new range, and make that
+version's matrix jobs required. Do not conceal incompatibilities through
+unconditional skips or unreviewed dependency upgrades.
+
+The Qt job installs the `gui` extra on Python 3.12 and executes the PDF
+adapter and GUI protocol tests in distinct processes. The optional native
+WebEngine smoke test stays opt-in; CI does not create a browser session or
+download language-model weights. `HF_HUB_OFFLINE=1` prevents unintended
+Hub access during core and GUI tests.
+
+The distribution job builds both wheel and source distributions, installs
+the wheel into a separate environment, then runs
+`tests/setup/check_installed_wheel.py` with `python -I` from outside the
+checkout. This checks the installed import path, console entry point and
+packaged resources. The documentation job runs
+`tests.setup.test__documentation_assets`, which is also discovered by the
+two standard test runners. The package workflow uploads build artifacts
+for review but never publishes them to a package index.
+
+On a developer machine with Python 3.12 and the locked core dependencies,
+use these equivalent commands:
+
+```sh
+uv sync --locked --no-dev --python 3.12
+uv pip install --python .venv "pytest>=8,<11"
+uv run --no-sync python -m pytest -q
+uv run --no-sync python -m tests
+python -m unittest tests.setup.test__documentation_assets -v
+uv build
+```
+
+The CI service provides the macOS and Windows environments; a local Linux
+run cannot establish compatibility on those platforms. Failures in
+experimental Python environments should be assessed as dependency or
+runtime incompatibilities before expanding the supported range.
+
 ## Focused test map
 
 | Changed subsystem | Focused tests (representative) |

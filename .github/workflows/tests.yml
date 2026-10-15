@@ -1,0 +1,118 @@
+name: Python tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  supported:
+    name: Python 3.12 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked core dependencies
+        id: install
+        run: uv sync --locked --no-dev --python 3.12
+      - name: Install pytest
+        id: test-deps
+        run: uv pip install --python .venv "pytest>=8,<11"
+      - name: Run pytest
+        run: uv run --no-sync python -m pytest -q
+      - name: Run independent unittest discovery
+        if: ${{ !cancelled() && steps.test-deps.outcome == 'success' }}
+        run: uv run --no-sync python -m tests
+
+  experimental:
+    name: Python ${{ matrix.python-version }} / ${{ matrix.os }} (experimental)
+    runs-on: ${{ matrix.os }}
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.13", "3.14", "3.15"]
+    env:
+      HF_HUB_OFFLINE: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Attempt installation on the newer interpreter
+        id: install
+        run: >-
+          python -m pip install --ignore-requires-python
+          --only-binary=:all: -e . "pytest>=8,<11"
+      - name: Run pytest
+        id: pytest
+        if: ${{ steps.install.outcome == 'success' }}
+        run: python -m pytest -q
+      - name: Run independent unittest discovery
+        id: unittest
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: python -m tests
+      - name: Report compatibility result
+        if: always()
+        shell: bash
+        run: |
+          echo "### Experimental Python ${{ matrix.python-version }} / ${{ matrix.os }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Install: ${{ steps.install.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "pytest: ${{ steps.pytest.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "unittest: ${{ steps.unittest.outcome }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "The Python metadata restriction was overridden for this probe only." >> "$GITHUB_STEP_SUMMARY"
+
+  qt:
+    name: Qt and PDF / Python 3.12 / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Install locked GUI dependencies
+        run: uv sync --locked --no-dev --extra gui --python 3.12
+      - name: Install pytest
+        run: uv pip install --python .venv "pytest>=8,<11"
+      - name: Test Qt PDF adapter in a dedicated process
+        run: >-
+          uv run --no-sync python -m pytest -q
+          tests/qachat/gui/test__report_pdf.py
+      - name: Test GUI protocol separately
+        run: >-
+          uv run --no-sync python -m pytest -q
+          tests/qachat/gui/test__protocol.py
