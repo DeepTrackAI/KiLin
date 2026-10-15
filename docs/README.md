@@ -7,10 +7,9 @@ remains the short installation and entry-point guide; the
 [`tutorials/`](../tutorials/) notebooks demonstrate use, and Python docstrings
 specify individual call signatures and validation rules.
 
-**Baseline:** QAChat after the GUI-test consolidation PR (14 October 2026).
-Documentation describes that snapshot. The package targets Python 3.12;
-backend and desktop behavior also depend on optional dependencies and the
-host operating system.
+These references describe the accompanying source tree. QAChat targets
+Python 3.12; backend and desktop behavior also depend on optional
+dependencies and the host operating system.
 
 ## Reading paths
 
@@ -50,9 +49,9 @@ host operating system.
 - [Development](development.md): development/test/release process and
   validation checklists.
 
-### Existing authoritative contracts
+### Detailed reference contracts
 
-These focused references are retained rather than replicated:
+These documents specify individual contracts in greater detail:
 
 - [Project workspaces and tool resources](project_workspaces.md)
 - [Conversation-file ownership](conversation_ownership.md)
@@ -77,7 +76,7 @@ owner document includes a flow, key invariants, failure modes, configuration
 and tests. Any implementation behavior not supported by source or tests
 must be called out as unknown, rather than filled in by architectural intent.
 
-Eleven [editable SVG architecture diagrams](diagram_plan.md) are embedded
+Eleven [editable SVG architecture diagrams](diagrams.md) are embedded
 in their primary technical documents. The diagrams show component and
 ownership boundaries, the source-to-answer flow, conversation checkpoints
 and security limitations. They are schematics, **not exhaustive API or
@@ -85,16 +84,12 @@ state-machine specifications**. The surrounding text remains authoritative
 for exceptions, precedence and error behavior. SVGs use native text and
 vector elements and are maintained under [`figures/`](figures/).
 
-## Maintaining these documents
+## Maintenance and accuracy
 
-1. Read the current implementation and tests **before** changing a contract.
-2. Update the subsystem's owner document and nearby docstrings as needed.
-3. Prefer links to one authoritative statement over copying mutable defaults
-   or command inventories into several places.
-4. Distinguish configured behavior, runtime-selected behavior and data saved
-   in an existing project; changing a package default does not migrate saved
-   profiles automatically.
-5. Check every referenced module, path, API, JSON key and Markdown link.
-6. Record known limitations; do not describe a proposed feature as implemented.
-
-See [Development](development.md) for the verification procedure.
+The implementation, validated configuration and tests define actual
+behavior. Keep each contract in its owner document and link to it rather
+than repeating mutable defaults, protocol inventories or configuration
+precedence elsewhere. Update the [module map](module_map.md) when the
+package structure changes. For repository verification, see
+[Development](development.md); for SVG conventions, see
+[Architecture diagrams](diagrams.md).

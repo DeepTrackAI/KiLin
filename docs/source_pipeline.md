@@ -36,8 +36,8 @@ a falsely complete inventory.
 
 The report contains the resolved repository root, normalized suffixes,
 include/exclude paths, byte/entry totals, `selected_files`, and entry rows.
-Each row has `path`, `status`, a human-readable `reason`, and the stable
-`reason_code` introduced by PR7. The codes are defined in
+Each row has `path`, `status`, a human-readable `reason`, and a stable
+`reason_code`. The codes are defined in
 [`repository_reason_codes.json`](../qachat/repository_reason_codes.json),
 validated once by `repository_reason_codes.py`, and transmitted to the
 frontend in its settings event. The only special GUI opt-in is a file skipped

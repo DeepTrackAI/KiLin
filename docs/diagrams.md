@@ -1,8 +1,9 @@
-# SVG architecture diagrams — implemented in PR9b
+# Architecture diagrams
 
-**Status:** Eleven native, editable SVG diagrams, integrated into their
-primary subsystem documentation. These figures describe the code state
-reviewed for PR9a/PR9b, not intended future capabilities.
+Eleven editable SVG schematics illustrate implemented QAChat components,
+execution paths and ownership boundaries. Each figure belongs to one
+technical reference. The diagrams complement the documented contracts;
+they do not describe unimplemented capabilities.
 
 ## Visual conventions
 
@@ -45,7 +46,7 @@ does not imply that application-wide appearance settings overwrite saved
 project profiles; and the source pipeline distinguishes policy checks from
 the two managed source-import APIs.
 
-## Maintenance contract
+## Maintaining the figures
 
 1. Review the current implementation and tests before changing an arrow or
    naming a process, trust boundary or API.
@@ -60,5 +61,5 @@ the two managed source-import APIs.
 6. Do not infer a runtime guarantee merely from a diagram; the detailed
    documented contracts and source tests determine actual behavior.
 
-No runtime code or GUI behavior was modified to make these diagrams simpler.
-The root `README.md` remains a compact entry point rather than a gallery.
+Related: [Documentation index](README.md) and
+[Development and verification](development.md).

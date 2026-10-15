@@ -80,8 +80,8 @@ Documentation belongs in layers: root README for setup; `docs/` for
 architecture; module docstrings for API details; tools' own READMEs for
 settings and usage; tutorials for executable examples. Link to the owner of
 a mutable setting or contract rather than duplicating values in every page.
-SVG diagrams are a separately planned PR9b, not a prerequisite for the text
-reference.
+Editable SVGs are indexed in [Architecture diagrams](diagrams.md) and
+maintained alongside the technical documents that explain them.
 
 ## Test runners and expected isolation
 
@@ -186,7 +186,7 @@ because new technical pages exist.
 
 ## Performance and reproducibility
 
-Trace-based PR4 benchmarking lives in `assets/benchmark_traces.ipynb`, with
+Trace-based benchmarking uses `assets/benchmark_traces.ipynb`, with
 supporting analysis in `assets/trace_benchmark.py`. The production trace
 system remains as documented in [Trace recording](trace_recording.md).
 Measurements need model revision, hardware, backend, project state,

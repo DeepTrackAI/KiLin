@@ -1,7 +1,7 @@
-# QAChat performance baseline (PR4)
+# Trace-based performance analysis
 
-This study measures existing QAChat behavior. It does **not** optimize the
-answering pipeline or add production instrumentation. The primary artifact is
+The benchmark examines existing QAChat behavior without changing the
+answering pipeline or adding production instrumentation. The main tool is
 [`assets/benchmark_traces.ipynb`](../assets/benchmark_traces.ipynb), supported
 by a small, read-only parser in
 [`assets/trace_benchmark.py`](../assets/trace_benchmark.py).
@@ -88,8 +88,8 @@ other tools may contain several calls or no LLM generation at all. The
 analysis labels these cases rather than assuming one generation per question.
 
 Time to first generated token, GUI-rendering latency, and actual hardware
-cold-start latency are not available from the current trace. PR4 does not
-add instrumentation to obtain them.
+cold-start latency are not available from the current trace. They must not
+be inferred from the reported durations.
 
 ## Small tracing-overhead check
 
@@ -106,7 +106,8 @@ The notebook has two optional and deliberately lightweight comparisons:
 
 Neither result should be interpreted as a precise measurement of tracing's
 cost without repetitions, matched workloads, and control of run ordering.
-Optimizing trace persistence remains outside PR4.
+These checks do not modify trace persistence or establish that an
+optimization is necessary.
 
 ## Data location and privacy
 

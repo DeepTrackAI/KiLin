@@ -119,11 +119,11 @@ same thing as the diagnostic trace or the core `ConversationTurn`.
 **Stop is forceful.** `window.py` kills the child process to interrupt a
 blocking backend call; this unloads models and discards unsaved partial
 output. Qt starts a new engine, the frontend reloads settings and can
-resume the earlier project. After PR3a, `resume` may supply the active
+resume the earlier project. The `resume` command can include the active
 `conversation_id` so the engine restores **that** conversation; without an
-ID it uses the latest modified. Invalid requested IDs raise an error and do
-not silently open another chat. This is conversation recovery, **not**
-continuation of interrupted generation.
+ID it uses the most recently modified conversation. Invalid requested
+IDs raise an error and do not silently open another chat. This is
+conversation recovery, **not** continuation of interrupted generation.
 
 The UI may show a remembered partial answer after Stop, but such display
 state does not imply a committed `ConversationTurn`. Closing the desktop
@@ -153,7 +153,7 @@ does not authenticate untrusted source content.
   authenticated API. Protocol JSON currently has no version negotiation or
   comprehensive runtime schema validation.
 - Separate event producers exist in the engine and Qt window. Browser and
-  backend phase names are partly mirrored; PR3 includes contract tests.
+  backend phase names are partly mirrored and covered by contract tests.
 - A `settings` event delivers the validated repository reason-code mapping
   to JavaScript. The frontend should not duplicate these strings.
 - Qt/WebEngine, native file dialogs, GPU models and macOS appearance require

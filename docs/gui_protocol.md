@@ -1,10 +1,8 @@
 # Desktop GUI command and event protocol
 
-This document characterizes the **current** desktop protocol. It is a
-reference for maintaining the Python engine, Qt bridge, and JavaScript page,
-not a new schema, version-negotiation mechanism, or API compatibility promise.
-PR3 characterized the existing behavior; PR3a corrects exact-conversation
-restoration for the `resume` command.
+This document specifies the **current** desktop protocol between the Python
+engine, Qt bridge and JavaScript page. It is not a version-negotiated
+schema or an API compatibility guarantee.
 
 ## Ownership and transport
 

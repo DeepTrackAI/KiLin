@@ -149,5 +149,5 @@ For every PR touching these boundaries, verify: core import without Qt,
 existing-profile precedence, source-original protection, index matching,
 answer/citation/checkpoint semantics, lock ownership, and both test runners.
 A performance optimization must additionally measure latency and preserve
-observable results. The baseline and workflow are in
+observable results. The verification procedure is in
 [Development](development.md).

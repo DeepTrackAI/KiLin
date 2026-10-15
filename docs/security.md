@@ -54,8 +54,8 @@ Automatic directory scans exclude common secrets, metadata and binary model
 weights. The exclusion lists are not exhaustive, and **explicit file
 selection can override some directory-scan exclusions**, including certain
 protected-looking filenames. That capability may be necessary for legitimate
-research, but it makes informed user consent essential. The PR7 structured
-`reason_code` mechanism identifies why a scanner entry was skipped; it is
+research, but it makes informed user consent essential. The structured
+`reason_code` field identifies why a scanner entry was skipped; it is
 not an access-control token and cannot make a forbidden symlink safe.
 
 Imported sources are copied to managed workspaces. Deleting a managed source
