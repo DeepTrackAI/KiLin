@@ -14,10 +14,14 @@ tool's configuration.
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 import unittest
 
 from kilin.tools._shared.references import (
     ReferenceLayout,
+    joined_text,
+    numbered_reference_entries,
+    pdf_text,
     reference_body,
     reference_entries,
     reference_list,
@@ -30,6 +34,10 @@ LAYOUT = ReferenceLayout(
     running_line_repeats=3,
     running_line_words=12,
     entry_min_words=5,
+)
+
+PAPERS = Path(__file__).resolve().parents[4] / "example_repos" / (
+    "literature_repo/papers"
 )
 
 NUMBERED = """Introduction
@@ -186,9 +194,89 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertTrue(entries[1].startswith("Liu Y"))
 
+    def test_lone_numbers_go_to_unnumbered_entries(self) -> None:
+        # PLOS prints some numbers apart from their entries ("6.", "7."),
+        # others inline ("8. Baggio"); a DOI broken after "2013." must not
+        # start an entry that takes a number.
+        text = (
+            "References\n"
+            "4. Meunier D, Tyler LK. Age-related reorganization. Neurobiol\n"
+            "Aging 2014; 35: 42–54. https://doi.org/10.1016/j.neuro.2013.\n"
+            "07.003 PMID: 23942392\n"
+            "6.\n7.\n"
+            "van den Heuvel MP, Pol HE. Exploring the brain network.\n"
+            "Eur Neuropsychopharmacol 2010; 20: 519–534. PMID: 20471808\n"
+            "Tijms BM, Wink AM. Connecting findings from graph studies.\n"
+            "Neurobiol Aging 2013; 34: 2023–2036. PMID: 23541878\n"
+            "8. Baggio HC, Junque C. Resting-state networks in Parkinson.\n"
+            "CNS Neurosci Ther 2015; 21: 793–801. PMID: 26224057\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(
+            [(e.number, e.text.split()[0], e.printed) for e in entries],
+            [(4, "Meunier", True), (6, "van", True), (7, "Tijms", True),
+             (8, "Baggio", True)],
+        )
+        self.assertIn("2013. 07.003 PMID", entries[0].text)
+
+    def test_unprinted_numbers_follow_the_previous(self) -> None:
+        entries = numbered_reference_entries(
+            (chunk("a", TWO_COLUMN.replace("1.\n2.\n", "")),), LAYOUT
+        )
+        self.assertEqual(
+            [(e.number, e.printed) for e in entries],
+            [(1, False), (2, False), (3, False)],
+        )
+
+    def test_overlapping_passages_are_read_once(self) -> None:
+        # Lines 5-6 ("1. Smith", "2. Lee") are in both passages.
+        lines = NUMBERED.splitlines()
+        passages = (
+            chunk("a", "\n".join(lines[:6])),
+            chunk("b", "\n".join(lines[4:]), line=5),
+        )
+        self.assertEqual(passages[0].end_line, 6)
+        self.assertEqual(joined_text(passages), "\n".join(lines))
+        self.assertEqual(len(reference_entries(passages, LAYOUT)), 5)
+
+    def test_differing_overlap_is_kept(self) -> None:
+        passages = (
+            chunk("a", "one\ntwo"),
+            chunk("b", "TWO\nthree", line=2),
+        )
+        self.assertEqual(joined_text(passages), "one\ntwo\nTWO\nthree")
+
     def test_layout_is_immutable(self) -> None:
         with self.assertRaises(FrozenInstanceError):
             LAYOUT.entry_min_words = 1  # type: ignore[misc]
+
+
+class TestPdfText(unittest.TestCase):
+    """Read PDF pages in column order."""
+
+    @unittest.skipUnless(
+        (PAPERS / "mijalkov25computational.pdf").is_file(),
+        "example paper missing",
+    )
+    def test_two_column_reference_list_in_order(self) -> None:
+        file = PAPERS / "mijalkov25computational.pdf"
+        text = pdf_text(file)
+        self.assertIn("\f", text)
+        # Extracted text interleaves references 1-4 and 23-28; read in
+        # column order, the 96 printed numbers come out 1, 2, ..., 96.
+        entries = numbered_reference_entries((), LAYOUT, file)
+        self.assertEqual([e.number for e in entries], list(range(1, 97)))
+        self.assertTrue(all(e.printed for e in entries))
+        self.assertTrue(entries[26].text.startswith("LeCun, Y."))
+
+    def test_other_files_use_the_passages(self) -> None:
+        self.assertEqual(pdf_text(Path("notes.md")), "")
+        self.assertEqual(pdf_text(Path("missing.pdf")), "")
+        passages = (chunk("a", NUMBERED),)
+        self.assertEqual(
+            reference_list(passages, LAYOUT, Path("missing.pdf")),
+            reference_list(passages, LAYOUT),
+        )
 
 
 if __name__ == "__main__":
