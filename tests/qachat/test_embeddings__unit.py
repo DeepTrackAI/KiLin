@@ -26,8 +26,8 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from qachat import embeddings
-from qachat.trace_logging import TRACE_EVENT_EMBEDDING_TOKENS_PREPARED
+from kilin import embeddings
+from kilin.trace_logging import TRACE_EVENT_EMBEDDING_TOKENS_PREPARED
 
 
 class FakeTokenizer:

@@ -56,7 +56,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.project_layout import plan_project_layout
+>>> from kilin.project_layout import plan_project_layout
 >>> plan = plan_project_layout("code")
 >>> plan.resources
 ()
@@ -71,9 +71,9 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 from typing import Final
 
-from qachat.project_type import project_type
-from qachat.tools._registry import TOOL_REGISTRY
-from qachat.workspace_resources import (
+from kilin.project_type import project_type
+from kilin.tools._registry import TOOL_REGISTRY
+from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
     TEMPLATES_FOLDER,
     WorkspaceResource,
@@ -202,7 +202,7 @@ def _tool_owned_source(source: Path, tool_name: str) -> Path:
     """
 
     path = _validated_source(source)
-    package = Path(files(f"qachat.tools.{tool_name}")).resolve()
+    package = Path(files(f"kilin.tools.{tool_name}")).resolve()
     if not path.is_relative_to(package):
         raise ValueError(
             f"Tool {tool_name!r} declared a resource outside "
@@ -361,7 +361,7 @@ def source_scan_exclusions(root: Path, source: Path) -> tuple[str, ...]:
     Parameters
     ----------
     root: pathlib.Path
-        Absolute root of an opened QAChat project.
+        Absolute root of an opened KíLín project.
     source: pathlib.Path
         Resolved source folder recorded in the project profile.
 
@@ -374,7 +374,7 @@ def source_scan_exclusions(root: Path, source: Path) -> tuple[str, ...]:
     Notes
     -----
     Source folders of unrelated repositories named ``templates`` or
-    ``outputs`` are not excluded globally; only QAChat-owned root folders
+    ``outputs`` are not excluded globally; only KíLín-owned root folders
     are skipped in the root-as-source profile layout.
 
     """

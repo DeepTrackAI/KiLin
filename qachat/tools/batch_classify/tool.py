@@ -49,7 +49,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.batch_classify import ClassifySettings
+>>> from kilin.tools.batch_classify import ClassifySettings
 >>> ClassifySettings().whole_words
 True
 
@@ -64,9 +64,9 @@ import re
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
-from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.batch_classify import _configuration as _config
-from qachat.tools._contract import (
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools.batch_classify import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -74,7 +74,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -82,15 +82,15 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools._shared.mentions import (
+from kilin.tools._shared.mentions import (
     Mention,
     MentionScan,
     collect_mentions,
     mention_location,
     mention_snippet,
 )
-from qachat.tools._shared.paths import short_names
-from qachat.tools._shared.scan_settings import (
+from kilin.tools._shared.paths import short_names
+from kilin.tools._shared.scan_settings import (
     SCAN_SETTING_NAMES,
     scan_fields,
 )
@@ -271,7 +271,7 @@ def run(
     request: ToolRequest
         The question and the user's words.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------
@@ -752,7 +752,7 @@ def classify_prompt(
     """
 
     system = (
-        "You classify passages for QAChat. You never answer the question "
+        "You classify passages for KíLín. You never answer the question "
         "itself. You reply with JSON only."
     )
     quoted = " or ".join(f"“{term}”" for term in terms)

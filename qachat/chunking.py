@@ -64,13 +64,13 @@ Examples
 --------
 Use a simple character counter to illustrate the API without loading a model:
 
->>> import qachat
+>>> import kilin
 >>> from pathlib import Path
->>> unit = qachat.SourceUnit(
+>>> unit = kilin.SourceUnit(
 ...     path=Path("notes.txt"), text="Brownian motion.",
 ...     start_line=1, end_line=1, kind="text",
 ... )
->>> chunks = qachat.chunk_source_units(
+>>> chunks = kilin.chunk_source_units(
 ...     [unit], count_tokens=len,
 ...     target_tokens=20, max_tokens=30, overlap_tokens=5,
 ... )
@@ -87,12 +87,12 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from qachat.defaults import (
+from kilin.defaults import (
     load_defaults_section,
     require_default_int,
     require_default_nonnegative_int,
 )
-from qachat.sources.sources import SourceUnit
+from kilin.sources.sources import SourceUnit
 
 __all__ = [
     "Chunk",

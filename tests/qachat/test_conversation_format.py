@@ -16,7 +16,7 @@ from copy import deepcopy
 import unittest
 from unittest.mock import patch
 
-from qachat import conversation_format as fmt
+from kilin import conversation_format as fmt
 
 
 class TestConversationFormatConstants(unittest.TestCase):

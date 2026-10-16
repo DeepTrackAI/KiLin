@@ -1,7 +1,7 @@
 """Expose the registered ``scan_and_list`` tool.
 
 Its implementation and configuration are local to this package.
-Common algorithms are provided by private ``qachat.tools._shared``
+Common algorithms are provided by private ``kilin.tools._shared``
 modules, not by other registered tools.
 
 Key Features
@@ -24,13 +24,13 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.scan_and_list import parse_settings
+>>> from kilin.tools.scan_and_list import parse_settings
 >>> callable(parse_settings)
 True
 
 """
 
-from qachat.tools._shared.mentions import (
+from kilin.tools._shared.mentions import (
     Mention,
     MentionCollection,
     MentionScan,
@@ -40,9 +40,9 @@ from qachat.tools._shared.mentions import (
     mention_snippet,
     scan_mentions,
 )
-from qachat.tools._shared.paths import short_names
-from qachat.tools._shared.scan_settings import SCAN_SETTING_NAMES
-from qachat.tools._shared.terms import (
+from kilin.tools._shared.paths import short_names
+from kilin.tools._shared.scan_settings import SCAN_SETTING_NAMES
+from kilin.tools._shared.terms import (
     MAX_TERMS,
     document_phrase,
     quoted_terms,
@@ -51,7 +51,7 @@ from qachat.tools._shared.terms import (
     validated_document,
     validated_terms,
 )
-from qachat.tools.scan_and_list.tool import (
+from kilin.tools.scan_and_list.tool import (
     ScanSettings,
     mention_report,
     parse_settings,

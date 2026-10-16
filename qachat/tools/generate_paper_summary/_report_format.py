@@ -31,7 +31,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary._report_format import (
+>>> from kilin.tools.generate_paper_summary._report_format import (
 ...     markdown_to_html,
 ... )
 >>> "Example" in markdown_to_html("# Example")
@@ -187,11 +187,11 @@ def report_title(markdown: str) -> str:
     Returns
     -------
     str
-        First top-level heading, or ``"QAChat report"`` if absent.
+        First top-level heading, or ``"KíLín report"`` if absent.
 
     """
 
     for line in markdown.splitlines():
         if line.startswith("# "):
             return line[2:].strip()
-    return "QAChat report"
+    return "KíLín report"

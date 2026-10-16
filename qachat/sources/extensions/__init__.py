@@ -1,6 +1,6 @@
 """Group optional suffix-specific source readers and extractors.
 
-``qachat.sources.sources`` discovers a module named ``sources_<suffix>`` for
+``kilin.sources.sources`` discovers a module named ``sources_<suffix>`` for
 the final file suffix. An extension may provide ``read_source_file`` for
 specialized input decoding and ``extract_source_units`` for structural
 partitioning. Missing hooks use the core fallback; dependency failures inside
@@ -26,10 +26,10 @@ separate exported API. The related implementation modules are described above.
 
 Examples
 --------
->>> import qachat.sources.extensions
+>>> import kilin.sources.extensions
 
-Normal callers use ``qachat.read_repository_files`` and
-``qachat.extract_source_units`` rather than importing individual hooks.
+Normal callers use ``kilin.read_repository_files`` and
+``kilin.extract_source_units`` rather than importing individual hooks.
 
 """
 

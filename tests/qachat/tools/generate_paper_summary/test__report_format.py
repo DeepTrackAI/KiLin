@@ -17,7 +17,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from qachat.tools.generate_paper_summary import _report_format
+from kilin.tools.generate_paper_summary import _report_format
 
 
 class TestReportFormat(unittest.TestCase):
@@ -111,11 +111,11 @@ class TestReportFormat(unittest.TestCase):
         )
         self.assertEqual(
             _report_format.report_title('## Subtitle\nText'),
-            'QAChat report',
+            'KíLín report',
         )
         self.assertEqual(
             _report_format.report_title('prefix # Not a heading'),
-            'QAChat report',
+            'KíLín report',
         )
 
     def test_formatter_import_does_not_require_qt(self) -> None:

@@ -20,14 +20,14 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock
 
-from qachat.conversation_format import (
+from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
     new_conversation_session,
 )
-from qachat.rag import RAGSession, _conversation_trace
-from qachat.conversations import ConversationStore
-from qachat.trace_logging import (
+from kilin.rag import RAGSession, _conversation_trace
+from kilin.conversations import ConversationStore
+from kilin.trace_logging import (
     NullTraceLogger,
     TraceConfig,
     TraceLogger,

@@ -2,17 +2,17 @@
 
 ## Responsibilities and public interfaces
 
-QAChat separates **source processing** from **retrieval**. The former yields
+KíLín separates **source processing** from **retrieval**. The former yields
 provenance-bearing `Chunk` records; the latter produces several rankings,
 combines them and expands evidence for explicit code or document references.
-The main orchestration belongs to `qachat.rag.RAGSession` and the algorithms
-live under `qachat/retrievals/`.
+The main orchestration belongs to `kilin.rag.RAGSession` and the algorithms
+live under `kilin/retrievals/`.
 
 ![Semantic, lexical and code-aware channels rank aligned chunks before reciprocal-rank fusion and evidence selection.](figures/retrieval-indexes.svg)
 
 *Figure: The three channels preserve different ranking signals; reciprocal-rank fusion combines their ranks, and persisted indexes must pass integrity and model-identity validation.*
 
-`qachat.retrievals.__init__` exposes the supported records and functions;
+`kilin.retrievals.__init__` exposes the supported records and functions;
 private helpers and individual extension internals should not be treated as
 stable public interfaces. The three ranking channels can operate over the
 **same ordered chunks** but employ different scores and heuristics.
@@ -144,7 +144,7 @@ snapshots see [Model management](model_management.md).
 records with source location and exact text. These are inputs to the
 answer-generation prompt or a registered tool. It may append evidence cited
 by related prior turns as configured. Retrieval **does not guarantee** that
-the model uses, cites or correctly interprets its evidence; QAChat performs a
+the model uses, cites or correctly interprets its evidence; KíLín performs a
 fast deterministic check for citation identifiers that do not correspond to
 available evidence, records the invalid identifiers, and does not retry or
 rewrite the answer solely to repair citations.
@@ -166,7 +166,7 @@ checks justify it.
 Relevant sources: `retrievals/persistence.py`, `strategies/retrieval_*`,
 `code_graph/`, `document_reading.py`, `routing.py`, `rag.py`.
 Relevant regression suites are those matching `retrieval`, `rag`,
-`embeddings`, `chunking` and `project` in `tests/qachat/`.
+`embeddings`, `chunking` and `project` in `tests/kilin/`.
 
 Related: [Source pipeline](source_pipeline.md),
 [Answering pipeline](answering_pipeline.md),

@@ -1,30 +1,30 @@
-"""Load project types from the JSON files in ``qachat/project_types/``.
+"""Load project types from the JSON files in ``kilin/project_types/``.
 
 A project type (for example a code repository or a literature collection)
 decides which files a new project reads by default, which intents the
 router may choose, and for each intent the instructions, history,
 retrieval, or tool. Editing a JSON file changes behaviour without code
-changes; restart QAChat afterwards. Saved conversations keep the system
+changes; restart KíLín afterwards. Saved conversations keep the system
 prompt they were answered with.
 
 Files are read once per folder and cached for the process. A malformed
 file stops loading with a ``ValueError``; no type is skipped silently. This
 module does not check that the built-in ``code`` and ``literature`` types
-exist: ``qachat.project`` owns those kinds and checks them.
+exist: ``kilin.project`` owns those kinds and checks them.
 
 Key Features
 ------------
 
 - **One file per type**
 
-    ``code.json`` and ``literature.json`` sit in ``qachat/project_types/``,
+    ``code.json`` and ``literature.json`` sit in ``kilin/project_types/``,
     a folder that holds only data. The file name is the type's ID, and
     types are listed in file-name order. The built-in ``code`` and
     ``literature`` types must stay; add a file to add a type.
 
 - **Tools by name**
 
-    An intent may name a registered tool (``qachat.tools._registry``) with
+    An intent may name a registered tool (``kilin.tools._registry``) with
     its settings; the tool validates them.
 
 - **Validated on load**
@@ -115,7 +115,7 @@ public API.
 
 Examples
 --------
->>> from qachat.project_type import load_project_types, project_type
+>>> from kilin.project_type import load_project_types, project_type
 >>> list(load_project_types())
 ['code', 'literature']
 >>> project_type("code").display_name
@@ -132,14 +132,14 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
-from qachat.defaults import (
+from kilin.defaults import (
     load_defaults_section,
     require_default_int,
     require_default_nonnegative_int,
 )
-from qachat.repository import normalize_extensions
-from qachat.tools._contract import reject_unknown
-from qachat.tools._registry import ToolUse, parse_tool
+from kilin.repository import normalize_extensions
+from kilin.tools._contract import reject_unknown
+from kilin.tools._registry import ToolUse, parse_tool
 
 __all__ = [
     "CODE_GRAPH_AUTO",
@@ -273,7 +273,7 @@ class Intent:
         longer document keeps its parts most relevant to the question.
     tool: ToolUse | None
         Tool that replaces retrieval and the answering model, if any (see
-        ``qachat.tools``).
+        ``kilin.tools``).
 
     """
 
@@ -292,7 +292,7 @@ class Intent:
 
 @dataclass(frozen=True, slots=True)
 class ProjectType:
-    """One project type from ``qachat/project_types/<type>.json``.
+    """One project type from ``kilin/project_types/<type>.json``.
 
     Attributes
     ----------
@@ -771,7 +771,7 @@ def load_project_types(
     ----------
     directory: pathlib.Path, optional
         Folder with one ``<type>.json`` per project type. Defaults to the
-        packaged ``qachat/project_types``.
+        packaged ``kilin/project_types``.
 
     Returns
     -------
@@ -785,7 +785,7 @@ def load_project_types(
         If the folder has no project types, a file is not valid JSON, or a
         type contains invalid or unknown fields. Every JSON file is checked;
         loading stops at the first invalid definition. The built-in project
-        kinds are checked by ``qachat.project``, which owns them.
+        kinds are checked by ``kilin.project``, which owns them.
 
     """
 

@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.retrievals import model_identity as identity
+from kilin.retrievals import model_identity as identity
 
 
 class TestMutableModelIdentity(unittest.TestCase):
@@ -450,7 +450,7 @@ class TestMutableModelIdentity(unittest.TestCase):
 
         with patch.dict(os.environ, {"XDG_CACHE_HOME": str(self.root)}):
             baseline = self._identity()
-            self.assertFalse((self.root / "qachat").exists())
+            self.assertFalse((self.root / "kilin").exists())
         self.assertEqual(self._identity(), baseline)
 
     def test_relative_xdg_home_falls_back_to_user_cache(self) -> None:
@@ -461,7 +461,7 @@ class TestMutableModelIdentity(unittest.TestCase):
         with patch.dict(os.environ, {"XDG_CACHE_HOME": "relative"}):
             directory = identity._manifest_directory(None)
         self.assertEqual(
-            directory, Path.home() / ".cache" / "qachat" / "model_identity",
+            directory, Path.home() / ".cache" / "kilin" / "model_identity",
         )
 
     def test_model_change_mid_hash_is_rejected(self) -> None:

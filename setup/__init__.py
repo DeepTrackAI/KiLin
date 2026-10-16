@@ -1,1 +1,1 @@
-"""QAChat setup and environment checks."""
+"""KíLín setup and environment checks."""

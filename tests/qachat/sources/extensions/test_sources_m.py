@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from qachat.sources.extensions import sources_m
-from qachat.sources.sources import SourceFile
-from tests.qachat.sources._support import fixture_text
+from kilin.sources.extensions import sources_m
+from kilin.sources.sources import SourceFile
+from tests.kilin.sources._support import fixture_text
 
 
 class TestMatlabExtraction(unittest.TestCase):

@@ -1,7 +1,7 @@
 """Expose the registered ``find_passages`` tool.
 
 Its implementation and configuration are local to this package.
-Common algorithms are provided by private ``qachat.tools._shared``
+Common algorithms are provided by private ``kilin.tools._shared``
 modules, not by other registered tools.
 
 Key Features
@@ -24,14 +24,14 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.find_passages import parse_settings
+>>> from kilin.tools.find_passages import parse_settings
 >>> callable(parse_settings)
 True
 
 """
 
-from qachat.tools._shared.sentences import Sentence, split_sentences
-from qachat.tools.find_passages.tool import (
+from kilin.tools._shared.sentences import Sentence, split_sentences
+from kilin.tools.find_passages.tool import (
     PassageSettings,
     judge_prompt,
     parse_settings,

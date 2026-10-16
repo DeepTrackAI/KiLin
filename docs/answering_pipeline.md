@@ -2,14 +2,14 @@
 
 ## Top-level API and state ownership
 
-`qachat.rag.RAGSession` is the coordinator for one opened project,
+`kilin.rag.RAGSession` is the coordinator for one opened project,
 retrieval state, live chat/embedding sessions, optional separate router and
 one active conversation. The Python entry point for a question is:
 
 ```python
-import qachat
+import kilin
 
-session = qachat.RAGSession("/path/to/existing/project")
+session = kilin.RAGSession("/path/to/existing/project")
 try:
     answer = session.ask("Which module builds the lexical index?")
 finally:
@@ -129,7 +129,7 @@ history and tool notes have different limits. See
 
 ## Answer production: model versus tool
 
-For a normal answer, QAChat rebuilds `ChatSession` history from the selected
+For a normal answer, KíLín rebuilds `ChatSession` history from the selected
 turns and project/intent system prompts, constructs an evidence prompt and
 calls `ChatSession.reply()`. Generation settings permit validated
 `thinking`, `temperature` and `max_new_tokens`. The implementation restores
@@ -205,7 +205,7 @@ change both results and latency.
 
 Relevant regression areas: `test_rag.py`, `test_answering.py`,
 `test_conversations.py`, `test_trace_logging.py`, tool-package tests and
-`tests/qachat/gui/` protocol/recovery tests. Exact test filenames should be
+`tests/kilin/gui/` protocol/recovery tests. Exact test filenames should be
 confirmed against the current tree before running an isolated subset.
 
 Related: [Architecture](architecture.md),

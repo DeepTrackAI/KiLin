@@ -74,7 +74,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from qachat.retrievals import estimate_tokens, named_paths
+>>> from kilin.retrievals import estimate_tokens, named_paths
 >>> estimate_tokens("one two three")
 4
 >>> named_paths("summarize smith2020", [Path("papers/smith2020.pdf")])
@@ -91,16 +91,16 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
-from qachat.chunking import Chunk
-from qachat.defaults import load_defaults_section, require_default_int
-from qachat.retrievals.code_graph import CodeGraph
-from qachat.retrievals.routing import (
+from kilin.chunking import Chunk
+from kilin.defaults import load_defaults_section, require_default_int
+from kilin.retrievals.code_graph import CodeGraph
+from kilin.retrievals.routing import (
     RetrievalPlan,
     _chunk_matches_function,
     expand_retrieval_context,
     plan_retrieval,
 )
-from qachat.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
 __all__ = [
     "DOCUMENT_REASON_CHOICES",

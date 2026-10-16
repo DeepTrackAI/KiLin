@@ -16,9 +16,9 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools._registry import TOOL_REGISTRY
 
-_ROOT = Path(__file__).resolve().parents[3] / "qachat" / "tools"
+_ROOT = Path(__file__).resolve().parents[3] / "kilin" / "tools"
 _REGISTERED = frozenset(TOOL_REGISTRY)
 
 
@@ -64,7 +64,7 @@ class TestToolPackageArchitecture(unittest.TestCase):
                                 alias.name for alias in node.names
                             )
                         for other in _REGISTERED - {name}:
-                            prefix = f"qachat.tools.{other}"
+                            prefix = f"kilin.tools.{other}"
                             self.assertNotIn(prefix, imported)
 
     def test_private_shared_modules_do_not_import_tools(self) -> None:
@@ -80,7 +80,7 @@ class TestToolPackageArchitecture(unittest.TestCase):
                         imported = node.module or ""
                         for name in _REGISTERED:
                             self.assertFalse(
-                                imported.startswith(f"qachat.tools.{name}")
+                                imported.startswith(f"kilin.tools.{name}")
                             )
 
 

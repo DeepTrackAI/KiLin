@@ -1,4 +1,4 @@
-"""Define the canonical persisted conversation-record structure in QAChat.
+"""Define the canonical persisted conversation-record structure in KíLín.
 
 Conversation storage, RAG persistence, and structured tracing share one JSON
 format. Resumable state belongs exclusively to the ``resume_state`` mapping
@@ -41,11 +41,11 @@ Module Structure
 
     Construct a complete grouped conversation-session record.
 
-The names are internal to persistence and are not exported by ``qachat``.
+The names are internal to persistence and are not exported by ``kilin``.
 
 Examples
 --------
->>> from qachat.conversation_format import new_conversation_session
+>>> from kilin.conversation_format import new_conversation_session
 >>> record = new_conversation_session()
 >>> record["category"]
 'conversations'

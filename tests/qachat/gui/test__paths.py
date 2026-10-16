@@ -16,8 +16,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.gui import _paths
-from qachat.gui import engine as gui_engine
+from kilin.gui import _paths
+from kilin.gui import engine as gui_engine
 
 
 class TestGUIPaths(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestGUIPaths(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.home = self.root / "home"
-        self.module = self.root / "site-packages/qachat/gui/_paths.py"
+        self.module = self.root / "site-packages/kilin/gui/_paths.py"
         self.module.parent.mkdir(parents=True)
         self.module.write_text("", encoding="utf-8")
         self.module_patch = patch.object(_paths, "__file__", str(self.module))
@@ -49,11 +49,11 @@ class TestGUIPaths(unittest.TestCase):
         """Preserve a development checkout's original workspace location."""
 
         checkout = self.root / "checkout"
-        module = checkout / "qachat/gui/_paths.py"
+        module = checkout / "kilin/gui/_paths.py"
         module.parent.mkdir(parents=True)
         module.write_text("", encoding="utf-8")
-        (checkout / "qachat/gui/engine.py").touch()
-        (checkout / "tests/qachat").mkdir(parents=True)
+        (checkout / "kilin/gui/engine.py").touch()
+        (checkout / "tests/kilin").mkdir(parents=True)
         (checkout / "pyproject.toml").write_text("[project]\n")
         with patch.object(_paths, "__file__", str(module)):
             self.assertEqual(
@@ -68,11 +68,11 @@ class TestGUIPaths(unittest.TestCase):
             workspace = _paths.default_workspace_directory()
             self.assertEqual(
                 workspace,
-                self.home / "Library/Application Support/QAChat/workspaces",
+                self.home / "Library/Application Support/kilin/workspaces",
             )
             self.assertEqual(
                 _paths.preferences_path(),
-                self.home / "Library/Application Support/QAChat/"
+                self.home / "Library/Application Support/kilin/"
                 "preferences.json",
             )
         self.assertFalse(workspace.exists())
@@ -90,11 +90,11 @@ class TestGUIPaths(unittest.TestCase):
         ):
             self.assertEqual(
                 _paths.preferences_path(),
-                self.root / "xdg-config/qachat/preferences.json",
+                self.root / "xdg-config/kilin/preferences.json",
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "xdg-data/qachat/workspaces",
+                self.root / "xdg-data/kilin/workspaces",
             )
         with patch.object(_paths.sys, "platform", "linux"), patch.dict(
             "os.environ",
@@ -102,11 +102,11 @@ class TestGUIPaths(unittest.TestCase):
         ):
             self.assertEqual(
                 _paths.preferences_path(),
-                self.home / ".config/qachat/preferences.json",
+                self.home / ".config/kilin/preferences.json",
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.home / ".local/share/qachat/workspaces",
+                self.home / ".local/share/kilin/workspaces",
             )
 
     def test_windows_config_and_data_use_distinct_locations(self) -> None:
@@ -121,11 +121,11 @@ class TestGUIPaths(unittest.TestCase):
         ):
             self.assertEqual(
                 _paths.preferences_path(),
-                self.root / "roaming/QAChat/preferences.json",
+                self.root / "roaming/kilin/preferences.json",
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "local/QAChat/workspaces",
+                self.root / "local/kilin/workspaces",
             )
 
     def test_environment_overrides_are_explicit(self) -> None:
@@ -134,8 +134,8 @@ class TestGUIPaths(unittest.TestCase):
         with patch.dict(
             "os.environ",
             {
-                "QACHAT_DEFAULTS_FILE": str(self.root / "prefs.json"),
-                "QACHAT_WORKSPACES_DIR": str(self.root / "workspaces"),
+                "KILIN_DEFAULTS_FILE": str(self.root / "prefs.json"),
+                "KILIN_WORKSPACES_DIR": str(self.root / "workspaces"),
             },
         ):
             self.assertEqual(
@@ -150,12 +150,12 @@ class TestGUIPaths(unittest.TestCase):
         """Avoid silently writing relative paths under site-packages."""
 
         with patch.dict(
-            "os.environ", {"QACHAT_DEFAULTS_FILE": "preferences.json"}
+            "os.environ", {"KILIN_DEFAULTS_FILE": "preferences.json"}
         ):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 _paths.preferences_path()
         with patch.dict(
-            "os.environ", {"QACHAT_WORKSPACES_DIR": "sandbox"}
+            "os.environ", {"KILIN_WORKSPACES_DIR": "sandbox"}
         ):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 _paths.default_workspace_directory()

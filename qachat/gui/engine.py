@@ -1,6 +1,6 @@
 """Run repository and model operations behind the desktop interface.
 
-``ChatEngine`` converts frontend requests into synchronous QAChat operations
+``ChatEngine`` converts frontend requests into synchronous KíLín operations
 and emits structured status, progress, result, and error events. The module's
 entry point reads newline-delimited JSON commands from standard input and
 writes newline-delimited JSON events to standard output. Backend diagnostic
@@ -54,10 +54,10 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat.gui.engine
+>>> import kilin.gui.engine
 >>> from pathlib import Path
 >>> events = []
->>> engine = qachat.gui.engine.ChatEngine(
+>>> engine = kilin.gui.engine.ChatEngine(
 ...     Path("/path/to/workspaces"), events.append,
 ... )
 >>> engine.close()
@@ -83,9 +83,9 @@ from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.gui._paths import default_workspace_directory
-from qachat.gui.preferences import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.gui._paths import default_workspace_directory
+from kilin.gui.preferences import (
     default_appearance,
     default_effort_levels,
     default_embedding_model,
@@ -98,8 +98,8 @@ from qachat.gui.preferences import (
     validate_search_depth,
     write_defaults,
 )
-from qachat.gui._report_pdf import write_report_pdf
-from qachat.gui.model_settings import (
+from kilin.gui._report_pdf import write_report_pdf
+from kilin.gui.model_settings import (
     DEFAULT_LEVEL,
     LEVEL_COUNT,
     PROFILE_FILE,
@@ -111,26 +111,26 @@ from qachat.gui.model_settings import (
     write_router_model,
     write_search_depth,
 )
-from qachat.gui.model_catalog import (
+from kilin.gui.model_catalog import (
     MODEL_CHOICES,
     cached_model_roles,
     installed_backends,
     model_choices,
 )
-from qachat import RAGSession, prepare_sources_workspace
-from qachat.workspace import remove_workspace_sources
-from qachat.project_files import (
+from kilin import RAGSession, prepare_sources_workspace
+from kilin.workspace import remove_workspace_sources
+from kilin.project_files import (
     add_project_files,
     list_project_files,
     remove_project_files,
     replace_project_file,
 )
-from qachat.conversation_format import conversation_state
-from qachat.conversation_ownership import ConversationFileLock
-from qachat.conversations import ConversationInfo, ConversationStore
-from qachat.huggingface import available_models, download_model
-from qachat.project_type import load_project_types, project_type
-from qachat.project import (
+from kilin.conversation_format import conversation_state
+from kilin.conversation_ownership import ConversationFileLock
+from kilin.conversations import ConversationInfo, ConversationStore
+from kilin.huggingface import available_models, download_model
+from kilin.project_type import load_project_types, project_type
+from kilin.project import (
     PROJECT_KIND_CODE,
     PROJECT_KIND_CHOICES,
     PROJECT_KIND_LITERATURE,
@@ -139,26 +139,26 @@ from qachat.project import (
     default_project_profile,
     open_project,
 )
-from qachat.repository import DEFAULT_EXTENSIONS, scan_repository
-from qachat.repository_reason_codes import (
+from kilin.repository import DEFAULT_EXTENSIONS, scan_repository
+from kilin.repository_reason_codes import (
     SELECTION_REASON_CODES,
     SELECTION_REASON_EMPTY_FILE,
     SELECTION_REASON_FILE_TOO_LARGE,
 )
-from qachat.runtime import (
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
     BACKEND_TORCH,
     choose_backend,
 )
-from qachat.sources import read_repository_files
-from qachat.tools import (
+from kilin.sources import read_repository_files
+from kilin.tools import (
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_CHOICES,
     PlanChoice,
     ToolPlan,
 )
-from qachat.trace_logging import (
+from kilin.trace_logging import (
     FAILURE_POLICY_WARN,
     NullTraceLogger,
     TraceConfig,
@@ -282,7 +282,7 @@ class ChatEngine:
     preview(sources, extensions, max_file_bytes, workspace='')
         List eligible files before copying any source.
     open_project(sources, kind, workspace, selected_files=None, settings=None)
-        Add selected sources and open one QAChat workspace.
+        Add selected sources and open one KíLín workspace.
     ask(question, retrieval_count=None, generation_settings=None)
         Ask the loaded project and return its saved answer and evidence.
     preview_reference(turn_index, citation)
@@ -597,7 +597,7 @@ class ChatEngine:
         Notes
         -----
         The required models are those the app-wide preferences use (see
-        ``qachat.gui.preferences``). For each missing one, the closest
+        ``kilin.gui.preferences``). For each missing one, the closest
         installed model of the same role is offered as a replacement;
         ``can_use_installed`` is true when every missing model has one.
 
@@ -698,8 +698,8 @@ class ChatEngine:
             if not installed_backends().get(backend, False):
                 raise RuntimeError(
                     f"The {backend.upper()} runtime is not installed. Restart "
-                    "QAChat through "
-                    f"`uv run qachat --gui --backend {backend}`."
+                    "KíLín through "
+                    f"`uv run kilin --gui --backend {backend}`."
                 )
             cached = {str(item["model_id"]) for item in available_models()}
             missing = [
@@ -838,7 +838,7 @@ class ChatEngine:
         send_progress()
         ticker = Thread(
             target=heartbeat,
-            name="qachat-download-progress",
+            name="kilin-download-progress",
             daemon=True,
         )
         ticker.start()
@@ -1541,7 +1541,7 @@ class ChatEngine:
         selected_files: dict[str, list[str]] | None = None,
         settings: dict[str, object] | None = None,
     ) -> None:
-        """Add selected sources and open one QAChat workspace.
+        """Add selected sources and open one KíLín workspace.
 
         The selected source snapshot is prepared before models are loaded. An
         empty source list can reopen a managed workspace unchanged.
@@ -2329,7 +2329,7 @@ class ChatEngine:
             while not stopped.wait(0.5):
                 self._send("usage_progress", **session.usage_since(mark))
 
-        ticker = Thread(target=tick, name="qachat-usage", daemon=True)
+        ticker = Thread(target=tick, name="kilin-usage", daemon=True)
         ticker.start()
         try:
             yield
@@ -2906,7 +2906,7 @@ class ChatEngine:
         previous_trace = self.project_trace
         try:
             # Acquiring the target first leaves the active writer untouched
-            # if the conversation is locked by another QAChat process.
+            # if the conversation is locked by another KíLín process.
             self._start_project_trace(
                 self.session.project.root, conversation
             )
@@ -3034,7 +3034,7 @@ def _reference_context(
     """Find the retrieved text and return a small, numbered line window.
 
     PDF line numbers restart on each extracted page. Matching the saved excerpt
-    also tells us which page to show without changing QAChat's stored evidence
+    also tells us which page to show without changing KíLín's stored evidence
     format.
 
     A notebook cell (``cell`` is not None) is never searched for in the raw

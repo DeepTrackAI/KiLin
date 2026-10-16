@@ -1,11 +1,11 @@
-# QAChat
+# KíLín
 
-QAChat runs locally to answer questions about your code and literature,
+KíLín runs locally to answer questions about your code and literature,
 with citations to your files and customizable project types, intents, and tools.
 
 ## Setup
 
-After downloading the code, open a terminal in the QAChat folder and run
+After downloading the code, open a terminal in the KíLín folder and run
 the setup command for your operating system.
 
 macOS or Linux:
@@ -28,7 +28,7 @@ For notebooks, select the project's
 To open the desktop GUI, run the command:
 
 ```sh
-uv run qachat --gui
+uv run kilin --gui
 ```
 
 The launcher installs missing GUI/backend dependencies; follow the setup
@@ -36,7 +36,7 @@ panel to download the required models.
 
 ## Tests and formatting
 
-Run these commands from the QAChat folder after setup. `--no-sync` keeps
+Run these commands from the KíLín folder after setup. `--no-sync` keeps
 the installed backend dependencies unchanged.
 
 Run all unit tests:
@@ -48,8 +48,8 @@ uv run --no-sync python -m tests
 Format Python code with Black, then check it with Ruff:
 
 ```sh
-uv run --no-sync black qachat setup tests
-uv run --no-sync ruff check qachat setup tests
+uv run --no-sync black kilin setup tests
+uv run --no-sync ruff check kilin setup tests
 ```
 
 To check formatting without changing files, add `--check` to the Black
@@ -57,7 +57,7 @@ command. Format only the files you changed when preserving existing style.
 
 ## Diagnostic tracing
 
-QAChat records complete diagnostic events for enabled tracing, including
+KíLín records complete diagnostic events for enabled tracing, including
 available prompts, generated answers, retrieved content, token IDs, errors,
 and local paths. Embedding vectors are opt-in because they can be large.
 There are no selectable trace-detail modes. `RAGSession(trace=None)` enables
@@ -70,7 +70,7 @@ sanitized reports. See [trace recording](docs/trace_recording.md).
 ## Conversation persistence and exclusive ownership
 
 Each active conversation has a single writable `conversation_*.json` record.
-QAChat holds an OS-level advisory lock on a stable `.json.lock` companion
+KíLín holds an OS-level advisory lock on a stable `.json.lock` companion
 while an active trace or tracing-disabled RAG session owns that file. A second
 writer targeting the same conversation raises `ConversationLockedError` and
 leaves the saved JSON unchanged. Locks are released on close and by the
@@ -90,7 +90,7 @@ Follow these notebooks in order, or open the one you need.
 - [10 · Setup](tutorials/10_setup.ipynb): Check the environment and computation backend without loading a model.
 - [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect the model cache and optionally download a chat model.
 - [30 · Model chat](tutorials/30_model_chat.ipynb): Load a model, exchange messages, and release it.
-- [40 · Repository files](tutorials/40_repository_files.ipynb): Select the files QAChat will read from a repository.
+- [40 · Repository files](tutorials/40_repository_files.ipynb): Select the files KíLín will read from a repository.
 - [50 · Source structure](tutorials/50_source_structure.ipynb): Read source files and split their structural units into searchable chunks.
 - [60 · Embeddings](tutorials/60_embeddings.ipynb): Convert chunks and questions into vectors with an embedding model.
 - [70 · Semantic retrieval](tutorials/70_semantic_retrieval.ipynb): Rank chunks by similarity in meaning.

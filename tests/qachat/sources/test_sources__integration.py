@@ -18,13 +18,13 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock
 
-from qachat.repository import scan_repository
-from qachat.sources.sources import (
+from kilin.repository import scan_repository
+from kilin.sources.sources import (
     SourceFile,
     extract_source_units,
     read_repository_files,
 )
-from tests.qachat.sources._support import fixture_path
+from tests.kilin.sources._support import fixture_path
 
 
 class TestSourceIntegration(unittest.TestCase):

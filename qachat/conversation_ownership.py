@@ -15,7 +15,7 @@ On POSIX the implementation uses
 releases locks when the owning process exits. The companion file is retained;
 its presence alone does not indicate active ownership.
 
-This protocol coordinates cooperating QAChat writers, not external programs
+This protocol coordinates cooperating KíLín writers, not external programs
 that bypass the lock. It does not provide a multi-file transaction, durable
 sync on power loss, or a guarantee against crashes during separate writes.
 
@@ -53,7 +53,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.conversation_ownership import ConversationFileLock
+>>> from kilin.conversation_ownership import ConversationFileLock
 >>> lock = ConversationFileLock("/path/to/conversation_example.json")
 >>> with lock:
 ...     # Read, modify, and replace the conversation while owning its path.

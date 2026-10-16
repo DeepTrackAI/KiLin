@@ -1,8 +1,8 @@
-"""Read and validate defaults owned by individual QAChat tools.
+"""Read and validate defaults owned by individual KíLín tools.
 
 Each tool package can contain a ``defaults.json`` next to its Python
 implementation. This private reader keeps the package's configuration
-independent of the core ``qachat_defaults.json`` and returns defensive
+independent of the core ``kilin_defaults.json`` and returns defensive
 copies so one tool cannot change another tool's defaults at runtime.
 
 Key Features
@@ -40,7 +40,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from qachat.tools._defaults import require_int
+>>> from kilin.tools._defaults import require_int
 >>> require_int({'size': 3}, 'size', 'example', 1, 10)
 3
 

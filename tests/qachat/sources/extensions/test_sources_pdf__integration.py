@@ -17,15 +17,15 @@ import shutil
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.repository import scan_repository
-from qachat.sources.sources import (
+from kilin.repository import scan_repository
+from kilin.sources.sources import (
     extract_source_units,
     read_repository_files,
 )
-from tests.qachat.sources._support import fixture_path
+from tests.kilin.sources._support import fixture_path
 
 try:
-    from qachat.sources.extensions import sources_pdf
+    from kilin.sources.extensions import sources_pdf
 except ModuleNotFoundError as error:
     if error.name not in {"pdfminer", "pypdf"}:
         raise
@@ -52,8 +52,8 @@ class TestPdfIntegration(unittest.TestCase):
         self.assertEqual(len(units), 2)
         self.assertEqual([unit.section for unit in units],
                          ["Page 1", "Page 2"])
-        self.assertIn("QAChat fixture page one.", units[0].text)
-        self.assertIn("QAChat fixture page two.", units[1].text)
+        self.assertIn("KíLín fixture page one.", units[0].text)
+        self.assertIn("KíLín fixture page two.", units[1].text)
         self.assertEqual(
             [unit.path for unit in units],
             [Path("papers/sample.pdf"), Path("papers/sample.pdf")],

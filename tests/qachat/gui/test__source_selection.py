@@ -19,7 +19,7 @@ import unittest
 
 _APP_JS = (
     Path(__file__).resolve().parents[3]
-    / "qachat" / "gui" / "web" / "app.js"
+    / "kilin" / "gui" / "web" / "app.js"
 )
 
 

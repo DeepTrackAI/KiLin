@@ -16,8 +16,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.gui.engine import ChatEngine, _installed_replacements
-from qachat.gui.preferences import required_models
+from kilin.gui.engine import ChatEngine, _installed_replacements
+from kilin.gui.preferences import required_models
 
 
 class TestEngineReadiness(unittest.TestCase):
@@ -64,7 +64,7 @@ class TestEngineReadiness(unittest.TestCase):
             replacement = "example/Qwen3-8B-MLX-4bit"
             with patch.dict(
                 os.environ,
-                {"QACHAT_DEFAULTS_FILE": str(preference_file)},
+                {"KILIN_DEFAULTS_FILE": str(preference_file)},
             ):
                 required = required_models("mlx")
                 self.assertIn(missing_model, required)
@@ -80,19 +80,19 @@ class TestEngineReadiness(unittest.TestCase):
                         roles[value] = "embedding"
                 with (
                     patch(
-                        "qachat.gui.engine.choose_backend",
+                        "kilin.gui.engine.choose_backend",
                         return_value="mlx",
                     ),
                     patch(
-                        "qachat.gui.engine.installed_backends",
+                        "kilin.gui.engine.installed_backends",
                         return_value={"mlx": True},
                     ),
                     patch(
-                        "qachat.gui.engine.available_models",
+                        "kilin.gui.engine.available_models",
                         return_value=cached,
                     ),
                     patch(
-                        "qachat.gui.engine.cached_model_roles",
+                        "kilin.gui.engine.cached_model_roles",
                         return_value=roles,
                     ),
                 ):

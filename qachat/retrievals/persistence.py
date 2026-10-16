@@ -59,9 +59,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> indexes = qachat.load_indexes("/path/to/workspace/indexes/retrieval.json")
->>> matches = qachat.indexes_are_current(
+>>> import kilin
+>>> indexes = kilin.load_indexes("/path/to/workspace/indexes/retrieval.json")
+>>> matches = kilin.indexes_are_current(
 ...     indexes, list(indexes.semantic.chunks), indexes.code_graph,
 ... )
 
@@ -77,15 +77,15 @@ import json
 import math
 from pathlib import Path
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.chunking import Chunk
-from qachat.retrievals.code_graph.code_graph import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.chunking import Chunk
+from kilin.retrievals.code_graph.code_graph import (
     CodeEntity,
     CodeGraph,
     CodeRelation,
 )
-from qachat.retrievals.strategies.retrieval_lexical import LexicalIndex
-from qachat.retrievals.strategies.retrieval_semantic import (
+from kilin.retrievals.strategies.retrieval_lexical import LexicalIndex
+from kilin.retrievals.strategies.retrieval_semantic import (
     SemanticIndex,
     _validate_semantic_embeddings,
 )

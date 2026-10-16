@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import show_source as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import show_source as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestShowSource(unittest.TestCase):
@@ -81,7 +81,7 @@ class TestShowSource(unittest.TestCase):
         """
 
         from pathlib import Path
-        from qachat.tools._contract import EarlierTurn
+        from kilin.tools._contract import EarlierTurn
         recent = EarlierTurn(
             3, "recent", paths=(Path("a.md"),),
             texts=("a",), linked=False,

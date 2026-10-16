@@ -13,7 +13,7 @@ size and filesystem checks.
 This API is cumulative: adding or reselecting sources copies their current
 selected files but does not remove old copies merely because the originals
 were deleted or deselected. It differs from the single-source mirroring API
-in ``qachat.project``. A workspace organizes local files; it is not an
+in ``kilin.project``. A workspace organizes local files; it is not an
 execution sandbox or a complete defense against hostile filesystem changes.
 First-time initialization commits profile.ini last and rolls back newly
 created entries on failure. Later cumulative imports can leave earlier
@@ -62,9 +62,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> project = qachat.prepare_sources_workspace(
-...     ["/path/to/source_repository"], qachat.PROJECT_KIND_CODE,
+>>> import kilin
+>>> project = kilin.prepare_sources_workspace(
+...     ["/path/to/source_repository"], kilin.PROJECT_KIND_CODE,
 ...     "/path/to/new_workspace",
 ... )
 
@@ -84,15 +84,15 @@ from typing import (
     Callable, Final, Mapping, NotRequired, Sequence, TypedDict, cast,
 )
 
-from qachat.project import (
+from kilin.project import (
     PROJECT_KIND_CHOICES,
     ProjectKind,
     QAProject,
     _preparing_project,
     open_project,
 )
-from qachat.repository import scan_repository
-from qachat.trace_logging import NullTraceLogger, TraceSink
+from kilin.repository import scan_repository
+from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "prepare_sources_workspace",
@@ -100,8 +100,8 @@ __all__ = [
     "include_explicit_imports",
 ]
 
-# Workspace folders whose files may be copied into the sources: what QAChat
-# wrote (qachat.tools._shared.outputs) and the report templates.
+# Workspace folders whose files may be copied into the sources: what KíLín
+# wrote (kilin.tools._shared.outputs) and the report templates.
 _COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
 
 
@@ -142,7 +142,7 @@ def prepare_sources_workspace(
         although the annotation is Sequence. Entries are resolved,
         deduplicated, and checked against the destination workspace.
     kind: ProjectKind
-        Project type ID from ``qachat/project_types/``.
+        Project type ID from ``kilin/project_types/``.
     workspace_directory: str | pathlib.Path
         Destination managed workspace, new/empty or already containing a
         compatible profile.ini. Relative paths use the current working
@@ -229,7 +229,7 @@ def prepare_sources_workspace(
         if any(workspace.iterdir()) and not _contains_only_trace_output(
             workspace
         ):
-            raise ValueError("Choose an empty folder or a QAChat workspace.")
+            raise ValueError("Choose an empty folder or a KíLín workspace.")
 
     chosen: list[Path] = []
     for value in source_paths:
@@ -239,7 +239,7 @@ def prepare_sources_workspace(
         source = source.resolve(strict=True)
         if not source.is_file() and not source.is_dir():
             raise ValueError(f"Choose a regular file or folder: {source}")
-        # A file QAChat wrote (outputs/) or a template may become a source;
+        # A file KíLín wrote (outputs/) or a template may become a source;
         # the rest of the workspace (sources, indexes, logs) may not.
         inside = source == workspace or source.is_relative_to(workspace)
         if inside and not any(

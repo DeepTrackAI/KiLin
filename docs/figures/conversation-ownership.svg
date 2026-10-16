@@ -27,7 +27,7 @@
 
 <rect x="0" y="780" width="1280" height="50" fill="#F8FAFC"/>
 <line x1="44" y1="780" x2="1236" y2="780" stroke="#E2E8F0"/>
-<text x="45" y="810" font-size="13" fill="#475569" font-family="Inter,Arial,sans-serif">Advisory locks coordinate QAChat writers, not hostile local processes · single-file atomicity is not a database</text>
-<text x="1235" y="810" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">QAChat · PR9b</text>
+<text x="45" y="810" font-size="13" fill="#475569" font-family="Inter,Arial,sans-serif">Advisory locks coordinate KíLín writers, not hostile local processes · single-file atomicity is not a database</text>
+<text x="1235" y="810" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín · PR9b</text>
 
 </svg>

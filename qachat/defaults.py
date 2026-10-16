@@ -1,6 +1,6 @@
-"""Load and validate QAChat's packaged configuration defaults.
+"""Load and validate KíLín's packaged configuration defaults.
 
-The packaged ``qachat_defaults.json`` is read once per process. Its sections
+The packaged ``kilin_defaults.json`` is read once per process. Its sections
 provide starting values for the modules that own each configurable policy.
 Consumers validate domain-specific rules before exposing their constants.
 Returned sections are independent copies, so callers cannot mutate the
@@ -20,7 +20,7 @@ Key Features
 - **Independent consumers**
 
     Return a defensive copy of each section without importing higher-level
-    QAChat modules or optional dependencies.
+    KíLín modules or optional dependencies.
 
 Module Structure
 ----------------
@@ -63,7 +63,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.defaults import load_defaults_section, require_default_int
+>>> from kilin.defaults import load_defaults_section, require_default_int
 >>> settings = load_defaults_section("ANSWERING")
 >>> require_default_int(settings, "MAX_RELATED_TURNS", "ANSWERING")
 3
@@ -71,7 +71,7 @@ Examples
 Notes
 -----
 Values are loaded at import time by the consuming modules. Editing the
-packaged JSON requires restarting QAChat; it does not override settings
+packaged JSON requires restarting KíLín; it does not override settings
 already saved in a project profile.
 
 """
@@ -98,7 +98,7 @@ __all__ = [
     "require_default_strings",
 ]
 
-_DEFAULTS_PATH = Path(__file__).with_name("qachat_defaults.json")
+_DEFAULTS_PATH = Path(__file__).with_name("kilin_defaults.json")
 
 
 @lru_cache(maxsize=1)
@@ -126,7 +126,7 @@ def _packaged_defaults() -> dict[str, object]:
             f"Invalid JSON in {_DEFAULTS_PATH.name}: {error.msg}"
         ) from error
     if not isinstance(data, dict):
-        raise ValueError("qachat_defaults.json must contain a JSON object.")
+        raise ValueError("kilin_defaults.json must contain a JSON object.")
     if any(not isinstance(key, str) for key in data):
         raise ValueError("Default section names must be strings.")
     return data
@@ -138,12 +138,12 @@ def load_defaults_section(name: str) -> dict[str, object]:
     Parameters
     ----------
     name: str
-        Required top-level section in ``qachat_defaults.json``.
+        Required top-level section in ``kilin_defaults.json``.
 
     Returns
     -------
     dict[str, object]
-        Configured values owned by the corresponding QAChat module.
+        Configured values owned by the corresponding KíLín module.
 
     Raises
     ------
@@ -156,7 +156,7 @@ def load_defaults_section(name: str) -> dict[str, object]:
     section = data.get(name)
     if not isinstance(section, dict):
         raise ValueError(
-            f"qachat_defaults.json requires an object section {name!r}."
+            f"kilin_defaults.json requires an object section {name!r}."
         )
     if any(not isinstance(key, str) for key in section):
         raise ValueError(f"{name} setting names must be strings.")

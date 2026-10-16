@@ -1,7 +1,7 @@
 """Expose the registered ``batch_classify`` tool.
 
 Its implementation and configuration are local to this package.
-Common algorithms are provided by private ``qachat.tools._shared``
+Common algorithms are provided by private ``kilin.tools._shared``
 modules, not by other registered tools.
 
 Key Features
@@ -24,13 +24,13 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.batch_classify import parse_settings
+>>> from kilin.tools.batch_classify import parse_settings
 >>> callable(parse_settings)
 True
 
 """
 
-from qachat.tools.batch_classify.tool import (
+from kilin.tools.batch_classify.tool import (
     CANDIDATES_MENTIONS,
     CANDIDATE_CHOICES,
     UNCLEAR,

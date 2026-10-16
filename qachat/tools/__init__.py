@@ -1,7 +1,7 @@
 """Tools that intents in a project type can use.
 
 An intent normally retrieves evidence and asks the answering model. An
-intent may instead name a tool in ``qachat/project_types/<type>.json``:
+intent may instead name a tool in ``kilin/project_types/<type>.json``:
 ``"tool": {"name": "scan_and_list", ...settings}``. The router still
 selects the intent; the tool then produces the answer. Intents without a
 tool are unchanged.
@@ -147,13 +147,13 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools import TOOL_REGISTRY, TOOL_SCAN_AND_LIST
+>>> from kilin.tools import TOOL_REGISTRY, TOOL_SCAN_AND_LIST
 >>> print(TOOL_REGISTRY[TOOL_SCAN_AND_LIST].summary)
 List and count every exact mention of the question's terms.
 
 """
 
-from qachat.tools.batch_classify import (
+from kilin.tools.batch_classify import (
     CANDIDATE_CHOICES,
     CANDIDATES_MENTIONS,
     UNCLEAR,
@@ -161,13 +161,13 @@ from qachat.tools.batch_classify import (
     ClassifySettings,
     Label,
 )
-from qachat.tools._contract import (
+from kilin.tools._contract import (
     EarlierTurn,
     ToolContext,
     ToolRequest,
     ToolResult,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     CONFIRMATION_NEVER,
@@ -181,7 +181,7 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     needs_confirmation,
 )
-from qachat.tools._registry import (
+from kilin.tools._registry import (
     TOOL_BATCH_CLASSIFY,
     TOOL_BATCH_REVIEW,
     TOOL_CHOICES,
@@ -195,7 +195,7 @@ from qachat.tools._registry import (
     parse_tool,
     run_tool,
 )
-from qachat.tools.scan_and_list import (
+from kilin.tools.scan_and_list import (
     MAX_TERMS,
     Mention,
     MentionScan,

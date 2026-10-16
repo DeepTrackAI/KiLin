@@ -1,13 +1,13 @@
-# QAChat technical documentation
+# KíLín technical documentation
 
 This directory is the implementation-oriented reference for developers who
-maintain or extend QAChat. It describes **the code in this repository**, not a
+maintain or extend KíLín. It describes **the code in this repository**, not a
 future general-purpose agent platform. The root [`README.md`](../README.md)
 remains the short installation and entry-point guide; the
 [`tutorials/`](../tutorials/) notebooks demonstrate use, and Python docstrings
 specify individual call signatures and validation rules.
 
-These references describe the accompanying source tree. QAChat targets
+These references describe the accompanying source tree. KíLín targets
 Python 3.12; backend and desktop behavior also depend on optional
 dependencies and the host operating system.
 
@@ -60,10 +60,10 @@ These documents specify individual contracts in greater detail:
 - [Modular tool packages](tool_packages.md)
 - [Diagnostic trace recording](trace_recording.md)
 - [Performance analysis](performance.md)
-- [Desktop GUI README](../qachat/gui/README.md)
+- [Desktop GUI README](../kilin/gui/README.md)
 
 The ten registered tools each have their own README under
-[`qachat/tools/`](../qachat/tools/), which is the authoritative guide to
+[`kilin/tools/`](../kilin/tools/), which is the authoritative guide to
 that tool's settings, supported requests and outputs. Do not infer tool
 behavior from its identifier alone.
 

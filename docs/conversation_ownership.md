@@ -1,24 +1,24 @@
 # Conversation-file ownership
 
-QAChat stores resumable conversation state and, when tracing is enabled,
+KíLín stores resumable conversation state and, when tracing is enabled,
 structured diagnostic events in the same `conversation_*.json` document.
 The session's checkpoint and callback lifecycles distinguish committed turns
-from unsuccessful operations. This document describes how QAChat keeps
+from unsuccessful operations. This document describes how KíLín keeps
 individual conversation files consistent across components and processes.
 
 ## The ownership contract
 
 ![TraceLogger or a session owns a companion lock before validated state is atomically checkpointed to conversation JSON; conflicting writers fail.](figures/conversation-ownership.svg)
 
-*Figure: Companion-file advisory ownership coordinates QAChat writers while atomic replacement protects one committed conversation file.*
+*Figure: Companion-file advisory ownership coordinates KíLín writers while atomic replacement protects one committed conversation file.*
 
-**At most one active QAChat writer can own a canonical conversation JSON path
+**At most one active KíLín writer can own a canonical conversation JSON path
 at any time.** Before reading an existing conversation for modification, a
 writer must acquire exclusive ownership. A conflicting acquisition raises
 `ConversationLockedError` immediately; it never replaces the conversation
 JSON or waits indefinitely for the existing writer.
 
-The implementation lives in `qachat/conversation_ownership.py`:
+The implementation lives in `kilin/conversation_ownership.py`:
 
 - `ConversationFileLock(path)` holds exclusive ownership for the duration of
   an open session or a short-lived store operation.
@@ -44,7 +44,7 @@ On macOS/Linux, the lock uses nonblocking `fcntl.flock`. On Windows, it uses
 inside one Python process. The JSON itself is atomically replaced, so the
 lock cannot be attached to its replaceable inode. The companion remains on
 disk after closure; **its existence does not mean that the file is locked**.
-Do not remove lock files while QAChat may still be using them, because a
+Do not remove lock files while KíLín may still be using them, because a
 removed/recreated companion can break coordination between writers.
 
 ## Lifetimes and ownership
@@ -115,7 +115,7 @@ force data to stable storage after power loss. File access and permissions
 remain the responsibility of the local environment; this helper introduces
 no configurable permissions policy.
 
-On `RAGSession.close()`, QAChat attempts to close every owned model, its
+On `RAGSession.close()`, KíLín attempts to close every owned model, its
 owned trace, and its direct-write lock even if one cleanup step raises. The
 first failure still propagates, with later failures attached as exception
 notes. Errors during partial initialization likewise do not prevent other
@@ -129,15 +129,15 @@ has closed:
 ```python
 from pathlib import Path
 
-import qachat
-from qachat.conversation_ownership import ConversationLockedError
+import kilin
+from kilin.conversation_ownership import ConversationLockedError
 
 path = Path("/path/to/project/logs/traces/conversation_example.json")
-config = qachat.TraceConfig(enabled=True, output_path=path)
-first = qachat.TraceLogger(config, default_directory=path.parent)
+config = kilin.TraceConfig(enabled=True, output_path=path)
+first = kilin.TraceLogger(config, default_directory=path.parent)
 try:
     try:
-        qachat.TraceLogger(config, default_directory=path.parent)
+        kilin.TraceLogger(config, default_directory=path.parent)
     except ConversationLockedError:
         # The first logger still owns the path and can keep writing.
         pass
@@ -152,7 +152,7 @@ cleanup. A failure while opening an existing trace releases any newly
 acquired lock even if the saved JSON is invalid. Failure to acquire a lock
 does not alter the existing conversation JSON.
 
-These locks are **advisory**. They coordinate QAChat components that use the
+These locks are **advisory**. They coordinate KíLín components that use the
 ownership protocol; they cannot prevent another program from ignoring the
 companion file and modifying the JSON. They do not provide encryption,
 resistance to hostile local processes, a durable disk-flush guarantee, or a
@@ -164,11 +164,11 @@ The following suites cover the main ownership guarantees:
 
 ```sh
 python -m pytest -q \
-    tests/qachat/test_conversation_ownership.py \
-    tests/qachat/test_trace_logging.py \
-    tests/qachat/test_rag.py \
-    tests/qachat/test_conversations.py \
-    tests/qachat/gui/test__conversation_ownership.py
+    tests/kilin/test_conversation_ownership.py \
+    tests/kilin/test_trace_logging.py \
+    tests/kilin/test_rag.py \
+    tests/kilin/test_conversations.py \
+    tests/kilin/gui/test__conversation_ownership.py
 ```
 
 Tests verify competing writers in one process and across separate processes,

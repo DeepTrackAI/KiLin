@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.conversation_ownership import (
+from kilin.conversation_ownership import (
     ConversationFileLock,
     ConversationLockedError,
     conversation_write_ownership,
@@ -29,7 +29,7 @@ from qachat.conversation_ownership import (
 
 _CHILD = """
 import sys
-from qachat.conversation_ownership import ConversationFileLock
+from kilin.conversation_ownership import ConversationFileLock
 
 with ConversationFileLock(sys.argv[1]):
     print('LOCKED', flush=True)
@@ -114,7 +114,7 @@ class TestConversationFileLock(unittest.TestCase):
 
         owner = ConversationFileLock(self.path)
         with patch(
-            "qachat.conversation_ownership.os.open",
+            "kilin.conversation_ownership.os.open",
             side_effect=PermissionError("not allowed"),
         ):
             with self.assertRaisesRegex(PermissionError, "not allowed"):
@@ -130,7 +130,7 @@ class TestConversationFileLock(unittest.TestCase):
         owner = ConversationFileLock(self.path)
         error = PermissionError(errno.EACCES, "permission denied")
         with patch(
-            "qachat.conversation_ownership.os.open",
+            "kilin.conversation_ownership.os.open",
             side_effect=error,
         ):
             with self.assertRaises(PermissionError):
@@ -145,7 +145,7 @@ class TestConversationFileLock(unittest.TestCase):
         script = """
 import os
 import sys
-from qachat.conversation_ownership import ConversationFileLock
+from kilin.conversation_ownership import ConversationFileLock
 
 with ConversationFileLock(sys.argv[1]) as owner:
     reader, writer = os.pipe()
@@ -185,7 +185,7 @@ with ConversationFileLock(sys.argv[1]) as owner:
         """Reject concurrent subprocess writers, then allow reopening."""
 
         script = (
-            "import sys; from qachat.conversation_ownership import "
+            "import sys; from kilin.conversation_ownership import "
             "ConversationFileLock; "
             "lock = ConversationFileLock(sys.argv[1]); "
             "lock.acquire(); lock.release()"

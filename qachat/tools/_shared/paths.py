@@ -19,7 +19,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.paths import short_names
+>>> from kilin.tools._shared.paths import short_names
 >>> short_names([])
 {}
 

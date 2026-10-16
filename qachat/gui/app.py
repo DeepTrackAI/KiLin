@@ -1,4 +1,4 @@
-"""Create and run QAChat's Qt desktop application.
+"""Create and run KíLín's Qt desktop application.
 
 ``main`` imports the optional Qt components, builds the main window, and runs
 the application event loop. Missing GUI dependencies produce an explanatory
@@ -25,8 +25,8 @@ Module Structure
 
 Examples
 --------
->>> import qachat.gui.app
->>> exit_code = qachat.gui.app.main(["qachat"])
+>>> import kilin.gui.app
+>>> exit_code = kilin.gui.app.main(["kilin"])
 
 This example opens a desktop window and returns after the application exits.
 
@@ -61,7 +61,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     try:
         from PySide6.QtWidgets import QApplication
 
-        from qachat.gui.window import ChatWindow
+        from kilin.gui.window import ChatWindow
     except ImportError as error:
         print(
             f"GUI dependency missing: {error}. Install with "
@@ -71,7 +71,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 1
 
     app = QApplication(list(arguments) if arguments is not None else sys.argv)
-    app.setApplicationName("QAChat")
+    app.setApplicationName("KíLín")
     window = ChatWindow()
     window.show()
     return app.exec()

@@ -3,7 +3,7 @@
 The first integration path uses real source extraction, chunking, graph
 building, lexical ranking, fusion, routing, and persistence with a controlled
 embedding adapter. The backend tests use locally generated tiny model weights
-and the real QAChat EmbeddingSession. Optional tests also use the standard
+and the real KíLín EmbeddingSession. Optional tests also use the standard
 pretrained embedding models when already cached locally. No test downloads
 model weights or requires an external service.
 
@@ -28,17 +28,17 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from qachat import embeddings
-from qachat.chunking import chunk_source_units
-from qachat.embeddings import EmbeddingSession
-from qachat.huggingface import model_is_available
-from qachat.model_defaults import (
+from kilin import embeddings
+from kilin.chunking import chunk_source_units
+from kilin.embeddings import EmbeddingSession
+from kilin.huggingface import model_is_available
+from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from qachat.query_formats import format_qwen3_query
-from qachat.retrievals.model_identity import embedding_model_identity
-from qachat.retrievals import (
+from kilin.query_formats import format_qwen3_query
+from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals import (
     CodeGraph,
     build_code_graph,
     build_lexical_index,
@@ -56,8 +56,8 @@ from qachat.retrievals import (
     semantic_matrix,
     semantic_search,
 )
-from qachat.sources.sources import extract_source_units
-from tests.qachat.retrievals._support import (
+from kilin.sources.sources import extract_source_units
+from tests.kilin.retrievals._support import (
     FakeEmbeddings,
     chunk,
     source_file,
@@ -347,7 +347,7 @@ def _save_tiny_mlx_model(path: Path) -> None:
 
 
 class TestLocalQwen3ModelRetrieval(unittest.TestCase):
-    """Exercise real QAChat sessions with tiny offline model snapshots."""
+    """Exercise real KíLín sessions with tiny offline model snapshots."""
 
     def _exercise_backend(self, backend: str, model_path: Path) -> None:
         """Check actual embeddings through both semantic search paths.
@@ -480,7 +480,7 @@ def _load_cached_default_model(
     Parameters
     ----------
     model_id: str
-        Model identifier supplied by ``qachat.model_defaults``.
+        Model identifier supplied by ``kilin.model_defaults``.
     backend: str
         Explicit ``'torch'`` or ``'mlx'`` embedding backend.
 

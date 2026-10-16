@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>QAChat</title>
+    <title>KíLín</title>
     <link rel="stylesheet" href="styles.css">
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <script src="app.js" defer></script>
@@ -31,13 +31,13 @@
       </header>
 
       <section id="setup" class="setup">
-        <h1>QAChat</h1>
+        <h1>KíLín</h1>
         <p class="intro">Runs locally. Cites your files.</p>
         <section id="saved-projects" class="saved-projects hidden" aria-label="Saved projects"></section>
         <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
           <label for="kind">Project type</label>
-          <!-- Filled from qachat/project_types.json, in file order. -->
+          <!-- Filled from kilin/project_types.json, in file order. -->
           <select id="kind"></select>
           <label>Sources</label>
           <button id="drop-zone" class="drop-zone" type="button">Drop files or folders here, or click here to browse…</button>
@@ -150,7 +150,7 @@
       <div class="models-card">
         <div class="models-heading"><h2 id="models-title">Settings</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
         <details id="first-run-setup" class="settings-section readiness-card hidden" aria-live="polite">
-          <summary class="readiness-heading"><h3>QAChat setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
+          <summary class="readiness-heading"><h3>KíLín setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
           <p id="readiness-summary">Checking the local environment…</p>
           <ol id="readiness-steps" class="readiness-steps"></ol>
           <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
@@ -192,7 +192,7 @@
           <h3>Project</h3>
           <div class="advanced-fields">
             <label for="workspace-path">Workspace folder</label>
-            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: QAChat sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
+            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: KíLín sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
             <label for="backend">Computation backend</label>
             <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
             <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">

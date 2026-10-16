@@ -55,7 +55,7 @@ sizes; they are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.project_inventory import file_types_in
+>>> from kilin.tools.project_inventory import file_types_in
 >>> file_types_in("list the PDFs and notebooks")
 ('.pdf', '.ipynb')
 
@@ -70,15 +70,15 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.tools.project_inventory import _configuration as _config
-from qachat.tools._contract import (
+from kilin.tools.project_inventory import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.paths import short_names
+from kilin.tools._shared.paths import short_names
 
 __all__ = [
     "InventorySettings",
@@ -219,7 +219,7 @@ def run(
     request: ToolRequest
         The question.
     context: ToolContext
-        QAChat's services (``source_files`` and ``chunks``).
+        KíLín's services (``source_files`` and ``chunks``).
 
     Returns
     -------
@@ -284,7 +284,7 @@ def run(
 
     lines += [
         "",
-        "Counts are of files QAChat selected for this project; a folder of "
+        "Counts are of files KíLín selected for this project; a folder of "
         "PDFs can hold tutorials as well as papers.",
     ]
 

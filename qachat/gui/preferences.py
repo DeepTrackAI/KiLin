@@ -1,6 +1,6 @@
 """Validate GUI defaults and persist user-owned preference overrides.
 
-The package ships immutable ``qachat/gui/defaults.json``. Application-wide
+The package ships immutable ``kilin/gui/defaults.json``. Application-wide
 changes are written to a user-owned ``preferences.json`` and merged with the
 shipped defaults when initializing new projects. Project-specific settings
 remain authoritative in each workspace's ``profile.ini``.
@@ -38,7 +38,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.gui.preferences import default_search_depth
+>>> from kilin.gui.preferences import default_search_depth
 >>> len(default_search_depth())
 5
 
@@ -54,12 +54,12 @@ from typing import Final
 
 from huggingface_hub.utils import validate_repo_id
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.gui._paths import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.gui._paths import (
     PREFERENCES_ENVIRONMENT,
     preferences_path,
 )
-from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
+from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "APPEARANCE_CHOICES",
@@ -139,7 +139,7 @@ def validate_effort_levels(value: object) -> list[dict[str, object]]:
     list[dict[str, object]]
         Levels with names collapsed to single spaces. A ``retrieval``
         count saved by earlier versions is ignored; see
-        ``qachat.gui.model_settings.read_search_depth``.
+        ``kilin.gui.model_settings.read_search_depth``.
 
     Raises
     ------
@@ -296,7 +296,7 @@ def defaults_file() -> Path:
     Returns
     -------
     pathlib.Path
-        Shipped ``qachat/gui/defaults.json``.
+        Shipped ``kilin/gui/defaults.json``.
 
     """
 
@@ -309,7 +309,7 @@ def preferences_file() -> Path:
     Returns
     -------
     pathlib.Path
-        ``QACHAT_DEFAULTS_FILE`` when explicitly supplied, or a
+        ``KILIN_DEFAULTS_FILE`` when explicitly supplied, or a
         platform-specific user configuration path.
 
     """

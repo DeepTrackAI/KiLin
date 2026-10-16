@@ -11,7 +11,7 @@ the passages that exist.
 
 The document is chosen as for document reading: a function named in the
 question, a file it names, or the file that dominates a search for the
-question (see ``qachat.retrievals.document_reading``). Like other
+question (see ``kilin.retrievals.document_reading``). Like other
 expensive tools, the plan can be confirmed first; the quick version reads
 only the parts most relevant to the question.
 
@@ -44,11 +44,11 @@ Module Structure
 - ``notes_prompt``
 - ``clean_notes``
 - ``answer_prompt``
-- ``qachat.tools._shared.document_notes.answer_citations``
+- ``kilin.tools._shared.document_notes.answer_citations``
 
 Examples
 --------
->>> from qachat.tools.batch_review import ReviewSettings
+>>> from kilin.tools.batch_review import ReviewSettings
 >>> ReviewSettings().part_tokens
 6000
 
@@ -56,7 +56,7 @@ Examples
 
 from __future__ import annotations
 
-from qachat.tools._shared.document_notes import (
+from kilin.tools._shared.document_notes import (
     NOTHING,
     answer_citations,
     plan_parts,
@@ -68,15 +68,15 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Final
 
-from qachat.retrievals.document_reading import (
+from kilin.retrievals.document_reading import (
     DOCUMENT_REASON_SEARCH,
     estimate_tokens,
     read_document,
 )
-from qachat.tools._shared.choose_document import choose_document
-from qachat.tools._shared.term_filter import term_hits, term_label
-from qachat.tools.batch_review import _configuration as _config
-from qachat.tools._contract import (
+from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._shared.term_filter import term_hits, term_label
+from kilin.tools.batch_review import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -84,7 +84,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -229,7 +229,7 @@ def answer_prompt(
     """
 
     system = (
-        "You answer questions for QAChat from notes taken while reading a "
+        "You answer questions for KíLín from notes taken while reading a "
         "document in full. Use only the notes, and cite passage numbers "
         "exactly as the notes give them, like [12]."
     )
@@ -262,7 +262,7 @@ def run(
     request: ToolRequest
         The question, the user's words, and answer guidance.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

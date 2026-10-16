@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import scan_and_list as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import scan_and_list as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestScanAndList(unittest.TestCase):
@@ -80,7 +80,7 @@ class TestScanAndList(unittest.TestCase):
 
         """
 
-        from tests.qachat.tools._shared._support import chunk
+        from tests.kilin.tools._shared._support import chunk
         first = chunk("a", "Before XYZ\n2 there", line=1)
         overlap = chunk("b", "2 there\nthen XYZ 2", line=2)
         scan = tool.scan_mentions([first, overlap], ["XYZ 2"])
@@ -94,7 +94,7 @@ class TestScanAndList(unittest.TestCase):
 
         """
 
-        from tests.qachat.tools._shared._support import chunk
+        from tests.kilin.tools._shared._support import chunk
         scan = tool.scan_mentions(
             [chunk("a", "ABC and other evidence")], ["ABC"]
         )

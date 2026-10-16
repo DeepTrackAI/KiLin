@@ -19,10 +19,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat.project_type import project_type
-from qachat.tools._contract import ToolRequest
-from qachat.tools._registry import TOOL_GENERATE_PAPER_SUMMARY, TOOL_REGISTRY
-from qachat.tools.generate_paper_summary import (
+from kilin.project_type import project_type
+from kilin.tools._contract import ToolRequest
+from kilin.tools._registry import TOOL_GENERATE_PAPER_SUMMARY, TOOL_REGISTRY
+from kilin.tools.generate_paper_summary import (
     SHIPPED_TEMPLATES_DIR,
     SummarySettings,
     check_report,
@@ -34,8 +34,8 @@ from qachat.tools.generate_paper_summary import (
     template_names,
     workspace_resources,
 )
-from qachat.tools.generate_paper_summary import _configuration as config
-from qachat.workspace_resources import templates_folder
+from kilin.tools.generate_paper_summary import _configuration as config
+from kilin.workspace_resources import templates_folder
 
 
 class TestGeneratePaperSummary(unittest.TestCase):
@@ -320,7 +320,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         )
         request = ToolRequest("Make a paper summary", "Make a paper summary")
         with patch(
-            "qachat.tools.generate_paper_summary.tool.choose_paper"
+            "kilin.tools.generate_paper_summary.tool.choose_paper"
         ) as choose_paper:
             result = run(SummarySettings(), request, context)
         choose_paper.assert_not_called()
@@ -343,7 +343,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         )
         request = ToolRequest("Summarize that paper", "Summarize that paper")
         with patch(
-            "qachat.tools.generate_paper_summary.tool.choose_paper",
+            "kilin.tools.generate_paper_summary.tool.choose_paper",
             return_value="No matching paper",
         ) as choose_paper:
             result = run(SummarySettings(), request, context)

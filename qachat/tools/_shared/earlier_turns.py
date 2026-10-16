@@ -19,7 +19,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.earlier_turns import newest_listed
+>>> from kilin.tools._shared.earlier_turns import newest_listed
 >>> newest_listed([]) is None
 True
 
@@ -28,7 +28,7 @@ True
 from __future__ import annotations
 
 from collections.abc import Sequence
-from qachat.tools._contract import EarlierTurn
+from kilin.tools._contract import EarlierTurn
 
 __all__ = [
     "newest_listed",

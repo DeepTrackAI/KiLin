@@ -35,7 +35,7 @@ Key Features
 - **Canonical trace vocabulary**
 
     Provide canonical identifiers for failure policies and shared event types
-    interpreted across QAChat components.
+    interpreted across KíLín components.
 
 - **Structured spans**
 
@@ -69,7 +69,7 @@ Module Structure
 
 - ``TRACE_EVENT_*`` constants
 
-    Canonical event identifiers interpreted across QAChat components.
+    Canonical event identifiers interpreted across KíLín components.
 
 - ``NullTraceLogger``
 
@@ -77,7 +77,7 @@ Module Structure
 
 - ``TraceConfig``
 
-    Settings for one QAChat execution trace.
+    Settings for one KíLín execution trace.
 
 - ``TraceLogger``
 
@@ -104,9 +104,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> logger = qachat.TraceLogger(
-...     qachat.TraceConfig(enabled=True),
+>>> import kilin
+>>> logger = kilin.TraceLogger(
+...     kilin.TraceConfig(enabled=True),
 ...     default_directory="/path/to/local/traces",
 ... )
 >>> try:
@@ -141,9 +141,9 @@ from typing import Final, Literal, TypeAlias
 from uuid import uuid4
 import warnings
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.conversation_ownership import ConversationFileLock
-from qachat.conversation_format import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_ownership import ConversationFileLock
+from kilin.conversation_format import (
     CONVERSATION_RESUME_STATE_KEY,
     CONVERSATION_SESSION_CATEGORY,
     CONVERSATION_SESSION_KEY,
@@ -215,7 +215,7 @@ _EXACT_CONTENT_SECTIONS = {
 
 @dataclass(frozen=True, slots=True)
 class TraceConfig:
-    """Settings for one QAChat execution trace.
+    """Settings for one KíLín execution trace.
 
     Parameters
     ----------
@@ -432,7 +432,7 @@ class TraceLogger:
         self._previous_sessions: dict[str, object] = {}
         self._last_readable_write = 0.0
         self._active_span_id: ContextVar[str | None] = ContextVar(
-            f"qachat_active_span_{id(self)}",
+            f"kilin_active_span_{id(self)}",
             default=None,
         )
         self.output_path = _trace_path(
@@ -1085,7 +1085,7 @@ class TraceLogger:
 
         A uniquely created temporary JSON file replaces the target while
         the exclusive companion-file lock is held. This is not an
-        immutable snapshot history or multi-file transaction. Other QAChat
+        immutable snapshot history or multi-file transaction. Other KíLín
         writers cannot open this path until this logger releases ownership.
 
         """
@@ -1282,10 +1282,10 @@ class TraceLogger:
         self._failed = True
         if self.config.failure_policy == FAILURE_POLICY_RAISE:
             raise RuntimeError(
-                f"Could not write QAChat trace: {error}"
+                f"Could not write KíLín trace: {error}"
             ) from error
         warnings.warn(
-            f"QAChat trace disabled after a write failure: {error}",
+            f"KíLín trace disabled after a write failure: {error}",
             RuntimeWarning,
             stacklevel=3,
         )
@@ -2407,17 +2407,17 @@ def _restrict_permissions(path: Path, mode: int) -> None:
 
 
 def _package_versions() -> dict[str, str | None]:
-    """Return versions of packages that can affect a QAChat trace.
+    """Return versions of packages that can affect a KíLín trace.
 
     Returns
     -------
     dict[str, str | None]
-        Versions of packages that can affect a QAChat trace.
+        Versions of packages that can affect a KíLín trace.
 
     """
 
     names = (
-        "qachat",
+        "kilin",
         "huggingface-hub",
         "numpy",
         "pypdf",

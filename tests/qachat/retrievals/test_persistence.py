@@ -20,14 +20,14 @@ from unittest.mock import patch
 
 import numpy as np
 
-from qachat.retrievals import persistence as rp
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
-from qachat.retrievals.strategies.retrieval_semantic import SemanticIndex
-from qachat.retrievals.strategies.retrieval_lexical import (
+from kilin.retrievals import persistence as rp
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
+from kilin.retrievals.strategies.retrieval_semantic import SemanticIndex
+from kilin.retrievals.strategies.retrieval_lexical import (
     LexicalIndex,
     build_lexical_index,
 )
-from tests.qachat.retrievals._support import chunk
+from tests.kilin.retrievals._support import chunk
 
 
 class _PersistentIndexFixtures(unittest.TestCase):

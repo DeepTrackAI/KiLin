@@ -7,7 +7,7 @@ such as ``generate_paper_summary`` write the content; this module reads the
 template and checks the finished report in Python, so a report is not
 trusted merely because the model was asked to follow the format.
 
-Templates shipped with QAChat live inside this tool package, in its
+Templates shipped with KíLín live inside this tool package, in its
 ``templates/`` directory. For
 example ``research_briefing.md`` (the one-page Research Briefing format of
 Nature-family journals). Each project has its own ``templates/`` folder,
@@ -66,7 +66,7 @@ Module Structure
 
 - ``SHIPPED_TEMPLATES_DIR``
 
-    Folder of the templates shipped with QAChat.
+    Folder of the templates shipped with KíLín.
 
 - ``TEMPLATES_FOLDER``
 
@@ -138,7 +138,7 @@ sections; they are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary import (
+>>> from kilin.tools.generate_paper_summary import (
 ...     SHIPPED_TEMPLATES_DIR, check_report, load_template,
 ... )
 >>> template = load_template("research_briefing", SHIPPED_TEMPLATES_DIR)
@@ -157,7 +157,7 @@ from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
-from qachat.tools.generate_paper_summary._configuration import (
+from kilin.tools.generate_paper_summary._configuration import (
     LIMIT_TOLERANCE as _CONFIG_LIMIT_TOLERANCE,
     MIN_TOTAL_WORDS,
 )
@@ -182,7 +182,7 @@ __all__ = [
     "template_names",
 ]
 
-# Templates shipped with QAChat; the core selects relevant files.
+# Templates shipped with KíLín; the core selects relevant files.
 SHIPPED_TEMPLATES_DIR: Final[Path] = Path(__file__).parent / "templates"
 # A project's own templates, next to sources/ and outputs/; never indexed.
 # Word limits (of each section and of the whole report) allow this fraction

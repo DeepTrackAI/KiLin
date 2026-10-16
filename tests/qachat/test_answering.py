@@ -20,15 +20,15 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from qachat import answering
-from qachat.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
-from qachat.project_type import (
+from kilin import answering
+from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
+from kilin.project_type import (
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
     HISTORY_POLICY_RELEVANT,
     project_type,
 )
-from qachat.rag import Evidence
+from kilin.rag import Evidence
 
 
 def _turn(
@@ -196,7 +196,7 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
     def test_configured_limits_match_runtime_constants(self) -> None:
         """Keep numerical routing limits consistent with the JSON values."""
 
-        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        path = Path(answering.__file__).with_name("kilin_defaults.json")
         config = json.loads(path.read_text(encoding="utf-8"))["ANSWERING"]
         names = {
             "MAX_RELATED_TURNS": answering.MAX_RELATED_TURNS,
@@ -218,7 +218,7 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
     def test_configured_language_heuristics_match_runtime(self) -> None:
         """Compile exactly the stored regex and use the stored vocabulary."""
 
-        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        path = Path(answering.__file__).with_name("kilin_defaults.json")
         config = json.loads(path.read_text(encoding="utf-8"))["ANSWERING"]
         self.assertEqual(
             answering._REFERS_BACK.pattern, config["REFERS_BACK_PATTERN"]
@@ -235,7 +235,7 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
     def test_section_has_only_documented_answering_keys(self) -> None:
         """Prevent unreviewed default keys or accidental format additions."""
 
-        path = Path(answering.__file__).with_name("qachat_defaults.json")
+        path = Path(answering.__file__).with_name("kilin_defaults.json")
         config = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(
             set(config["ANSWERING"]),

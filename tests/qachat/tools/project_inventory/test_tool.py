@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import project_inventory as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import project_inventory as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestProjectInventory(unittest.TestCase):
@@ -82,8 +82,8 @@ class TestProjectInventory(unittest.TestCase):
 
         from pathlib import Path
         from unittest.mock import Mock
-        from qachat.tools._contract import ToolRequest
-        from tests.qachat.tools._shared._support import chunk
+        from kilin.tools._contract import ToolRequest
+        from tests.kilin.tools._shared._support import chunk
 
         self.assertEqual(tool.file_types_in("List PDFs"), (".pdf",))
         self.assertEqual(tool.file_types_in("text files"), (".txt",))

@@ -26,13 +26,13 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
-from qachat import workspace
-from qachat.project import (
+from kilin import workspace
+from kilin.project import (
     default_project_profile,
     open_project,
 )
-from qachat.project_type import project_type
-from qachat.repository import SKIP_DIRECTORIES
+from kilin.project_type import project_type
+from kilin.repository import SKIP_DIRECTORIES
 
 
 class WorkspaceFixture(unittest.TestCase):
@@ -118,7 +118,7 @@ class WorkspaceFixture(unittest.TestCase):
 
         Returns
         -------
-        qachat.project.QAProject
+        kilin.project.QAProject
             Opened project representing the managed copy.
 
         """
@@ -224,7 +224,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         self.assertFalse(self.destination.exists())
 
     def test_empty_existing_directory_can_be_adopted(self) -> None:
-        """An empty user-chosen folder may become a QAChat workspace."""
+        """An empty user-chosen folder may become a KíLín workspace."""
 
         self.destination.mkdir()
         original = self._file("code.py")
@@ -1446,7 +1446,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
     def test_temporary_copy_symlink_must_not_modify_external_file(
         self,
     ) -> None:
-        """A stale .tmp symlink must not redirect the copy outside QAChat."""
+        """A stale .tmp symlink must not redirect the copy outside KíLín."""
 
         original = self._file("code.py", "source = 1\n")
         self._prepare([original])
@@ -1819,8 +1819,8 @@ class TestWorkspaceTracing(WorkspaceFixture):
         self._prepare([original])
         trace = MagicMock()
         with patch(
-            "qachat.project.configure_project",
-            wraps=__import__("qachat.project", fromlist=["configure_project"])
+            "kilin.project.configure_project",
+            wraps=__import__("kilin.project", fromlist=["configure_project"])
             .configure_project,
         ) as configure:
             self._prepare(

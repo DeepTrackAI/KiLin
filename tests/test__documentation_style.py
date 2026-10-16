@@ -1,4 +1,4 @@
-"""Regression tests for QAChat documentation and formatting conventions.
+"""Regression tests for KíLín documentation and formatting conventions.
 
 These checks apply the Python parts of ``DTDV411_style.ipynb`` to the
 library, setup helpers, and test suite. Source-extraction fixtures are not
@@ -22,7 +22,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_DIRECTORIES = (ROOT / "qachat", ROOT / "setup")
+SOURCE_DIRECTORIES = (ROOT / "kilin", ROOT / "setup")
 PYTHON_DIRECTORIES = (*SOURCE_DIRECTORIES, ROOT / "tests")
 DOCSTRING_SECTIONS = ("Key Features", "Module Structure", "Examples")
 DOCSTRING_PARAMETER = re.compile(r"^\**[a-zA-Z_]\w*\s*:")
@@ -183,7 +183,7 @@ class TestDocumentationStyle(unittest.TestCase):
         """Require feature, structure, and example sections in modules."""
 
         failures = []
-        for file in source_files(ROOT / "qachat"):
+        for file in source_files(ROOT / "kilin"):
             docstring = ast.get_docstring(ast.parse(file.read_text())) or ""
             for title in DOCSTRING_SECTIONS:
                 heading = f"\n{title}\n{'-' * len(title)}\n"
@@ -228,7 +228,7 @@ class TestDocumentationStyle(unittest.TestCase):
     def test_frontend_named_functions_have_jsdoc(self) -> None:
         """Describe named JavaScript functions and their parameters."""
 
-        file = ROOT / "qachat" / "gui" / "web" / "app.js"
+        file = ROOT / "kilin" / "gui" / "web" / "app.js"
         lines = file.read_text().splitlines()
         failures = []
         for index, line in enumerate(lines):

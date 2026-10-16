@@ -21,8 +21,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import conversations as module
-from qachat.conversation_format import (
+from kilin import conversations as module
+from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
     new_conversation_session,
@@ -309,7 +309,7 @@ class TestStoreDiscovery(ConversationStoreFixture):
     def test_scan_discards_non_dictionary_state_from_helper(self):
         """Retain a defensive guard if the format helper changes."""
         self._candidate("conversation_saved.json")
-        with patch("qachat.conversations.conversation_state",
+        with patch("kilin.conversations.conversation_state",
                    return_value=[]):
             self.store._scan()
         self.assertEqual(self.store.conversations(), [])
@@ -571,7 +571,7 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
 
     def test_new_path_suffixes_timestamp_collision(self):
         self.store.root.mkdir(parents=True)
-        with patch("qachat.conversations.datetime") as clock:
+        with patch("kilin.conversations.datetime") as clock:
             clock.now.return_value.strftime.return_value = "same-time"
             first = self.store._new_path()
             first.touch()
@@ -584,7 +584,7 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
 
     def test_create_does_not_replace_an_existing_file_on_collision(self):
         self.store.root.mkdir(parents=True)
-        with patch("qachat.conversations.datetime", wraps=datetime) as clock:
+        with patch("kilin.conversations.datetime", wraps=datetime) as clock:
             clock.now.return_value = datetime(
                 2026, 10, 12, 12, 0, tzinfo=timezone.utc
             )
@@ -739,7 +739,7 @@ class TestStoreMetadata(ConversationStoreFixture):
 
     def test_rename_collapses_whitespace_and_persists(self):
         item = self.store.create()
-        with patch("qachat.conversations._utc_timestamp",
+        with patch("kilin.conversations._utc_timestamp",
                    return_value="2026-10-12T12:00:00.000Z"):
             renamed = self.store.rename(
                 item.conversation_id, "  New \n\t conversation  "
@@ -809,7 +809,7 @@ class TestStoreMetadata(ConversationStoreFixture):
     def test_touch_updates_metadata_and_preserves_other_fields(self):
         item = self.store.create()
         self._persist(item, {"turns": [1], "checkpoint_id": "one"})
-        with patch("qachat.conversations._utc_timestamp",
+        with patch("kilin.conversations._utc_timestamp",
                    return_value="2026-10-12T15:00:00.000Z"):
             touched = self.store.touch(item.conversation_id)
         self.assertEqual(touched.name, item.name)
@@ -956,7 +956,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         first = self.store.create()
         second = self.store.create()
         third = self.store.create()
-        with patch("qachat.conversations._utc_timestamp",
+        with patch("kilin.conversations._utc_timestamp",
                    return_value="2099-01-01T00:00:00Z"):
             self.store.touch(first.conversation_id)
         self.store.select(third.conversation_id)
@@ -1122,8 +1122,8 @@ class TestStoreFileOwnership(ConversationStoreFixture):
     def test_mutations_refuse_a_competing_logger(self) -> None:
         """Keep file bytes and store registry unchanged on contention."""
 
-        from qachat.conversation_ownership import ConversationLockedError
-        from qachat.trace_logging import TraceConfig, TraceLogger
+        from kilin.conversation_ownership import ConversationLockedError
+        from kilin.trace_logging import TraceConfig, TraceLogger
 
         item = self.store.create()
         path = self.store.state_path(item)
@@ -1151,7 +1151,7 @@ class TestStoreFileOwnership(ConversationStoreFixture):
     ) -> None:
         """Keep the trace snapshot current without a store replacement."""
 
-        from qachat.trace_logging import TraceConfig, TraceLogger
+        from kilin.trace_logging import TraceConfig, TraceLogger
 
         item = self.store.create()
         path = self.store.state_path(item)
@@ -1181,7 +1181,7 @@ class TestStoreFileOwnership(ConversationStoreFixture):
     ) -> None:
         """Do not commit metadata when its active trace write fails."""
 
-        from qachat.trace_logging import TraceConfig, TraceLogger
+        from kilin.trace_logging import TraceConfig, TraceLogger
 
         item = self.store.create()
         path = self.store.state_path(item)
@@ -1229,7 +1229,7 @@ class TestStoreFileOwnership(ConversationStoreFixture):
     ) -> None:
         """Allow metadata updates and archival under an existing file lock."""
 
-        from qachat.trace_logging import TraceConfig, TraceLogger
+        from kilin.trace_logging import TraceConfig, TraceLogger
 
         item = self.store.create()
         path = self.store.state_path(item)

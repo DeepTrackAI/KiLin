@@ -1,4 +1,4 @@
-"""Unit tests for QAChat's shared model defaults.
+"""Unit tests for KíLín's shared model defaults.
 
 Tests verify the canonical model roles, default model identifiers, and
 model identifier structure without loading or downloading any models.
@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat import model_defaults
+from kilin import model_defaults
 
 
 class TestModelRoles(unittest.TestCase):
@@ -41,7 +41,7 @@ class TestDefaultModels(unittest.TestCase):
         """Expose exactly the model IDs configured in the packaged JSON."""
 
         config_path = Path(model_defaults.__file__).with_name(
-            "qachat_defaults.json"
+            "kilin_defaults.json"
         )
         config = json.loads(config_path.read_text(encoding="utf-8"))
         expected_names = (

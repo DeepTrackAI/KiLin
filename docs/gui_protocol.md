@@ -16,16 +16,16 @@ window.py (Qt/QWebChannel, GUI process)
   | newline-delimited JSON on child stdin/stdout
   v
 engine.py (synchronous child process)
-  | core QAChat project, retrieval, model, and conversation APIs
+  | core KíLín project, retrieval, model, and conversation APIs
 ```
 
-- `ChatBridge` in `qachat/gui/window.py` exposes **camelCase** Qt slots and
+- `ChatBridge` in `kilin/gui/window.py` exposes **camelCase** Qt slots and
   typed Qt signals. Some operations, such as native file dialogs, opening a
   workspace file, appearance, and Stop, are handled locally rather than being
   passed to the child as commands.
 - `ChatWindow._send_command()` queues dictionaries until the child runs;
   `_send_pending()` writes one JSON object followed by `\n` per command.
-- `qachat.gui.engine.main()` reads commands from stdin and emits one JSON
+- `kilin.gui.engine.main()` reads commands from stdin and emits one JSON
   object followed by `\n` per event. The event name is under `event`; the
   command action is under `action`. There is currently **no protocol version
   field** or central runtime message schema.
@@ -168,10 +168,10 @@ selecting it increases the submitted size limit. The human-readable `reason`
 is still displayed but is never used to decide file eligibility. All other
 skipped entries remain unavailable.
 
-The core `qachat.repository.scan_repository()` owns selection decisions.
+The core `kilin.repository.scan_repository()` owns selection decisions.
 The identifiers themselves are defined in the packaged
-`qachat/repository_reason_codes.json` and loaded and validated once by
-`qachat.repository_reason_codes`. The scanner and Python GUI engine import
+`kilin/repository_reason_codes.json` and loaded and validated once by
+`kilin.repository_reason_codes`. The scanner and Python GUI engine import
 the corresponding named constants. Its `entries` contain `reason_code` for
 both selected and skipped rows. The supported values are:
 
@@ -209,9 +209,9 @@ without a compatibility fallback to interpreting the English message.
 ### Answer phases and event ordering
 
 The phase strings used by the web page are the values of
-`qachat.rag.ANSWER_PHASE_*`: `routing`, `routed`, `retrieving`,
+`kilin.rag.ANSWER_PHASE_*`: `routing`, `routed`, `retrieving`,
 `evidence_ready`, `generating`, `saving`, `completed`, and `processing`.
-`qachat.gui.engine.ENGINE_PHASE_LOADING_MODEL` adds `loading_model` when
+`kilin.gui.engine.ENGINE_PHASE_LOADING_MODEL` adds `loading_model` when
 switching the MLX chat model. The strings are duplicated as JavaScript
 constants and are covered by the Qt-free protocol tests.
 
@@ -269,7 +269,7 @@ partial visible stream.
    isolated `test__webengine_smoke.py` can be enabled on a supported GUI
    installation; it is not a default full native acceptance suite.
 
-Implementation owners: `qachat/gui/window.py`, `qachat/gui/engine.py`,
-`qachat/gui/web/app.js`; core phases in `qachat/rag.py`. Regression tests:
-`tests/qachat/gui/test__protocol.py` and
-`tests/qachat/gui/test_engine__resume.py`.
+Implementation owners: `kilin/gui/window.py`, `kilin/gui/engine.py`,
+`kilin/gui/web/app.js`; core phases in `kilin/rag.py`. Regression tests:
+`tests/kilin/gui/test__protocol.py` and
+`tests/kilin/gui/test_engine__resume.py`.

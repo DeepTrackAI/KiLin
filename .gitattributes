@@ -1,2 +1,4 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Keep generated document and image assets opaque to text diff tools.
+*.pdf binary
+*.png binary
+*.jpg binary

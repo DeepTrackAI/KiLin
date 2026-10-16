@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import repository
+from kilin import repository
 
 
 class _RepositoryFixture(unittest.TestCase):
@@ -78,7 +78,7 @@ class TestRepositoryScanSelection(_RepositoryFixture):
     def test_packaged_selection_defaults_match_runtime(self) -> None:
         """Load selection defaults from the bundled JSON resource."""
 
-        path = Path(repository.__file__).with_name("qachat_defaults.json")
+        path = Path(repository.__file__).with_name("kilin_defaults.json")
         defaults = json.loads(path.read_text(encoding="utf-8"))
         # New domain sections must not change repository selection policy.
         self.assertTrue(
@@ -487,7 +487,7 @@ class TestRepositoryScanValidation(_RepositoryFixture):
                 repository.scan_repository(self.root)
 
     def test_relative_repository_paths_use_project_root(self) -> None:
-        """Resolve a relative source against QAChat's project root."""
+        """Resolve a relative source against KíLín's project root."""
 
         with patch.object(
             repository, "PROJECT_ROOT", self.root.parent

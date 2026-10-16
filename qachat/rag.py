@@ -114,10 +114,10 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> session = qachat.RAGSession(
+>>> import kilin
+>>> session = kilin.RAGSession(
 ...     "/path/to/configured/workspace",
-...     trace=qachat.TraceConfig(enabled=False),
+...     trace=kilin.TraceConfig(enabled=False),
 ... )
 >>> try:
 ...     answer = session.ask("How does this repository select files?")
@@ -146,13 +146,13 @@ import sys
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.defaults import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.defaults import (
     load_defaults_section,
     require_default_int,
     require_default_number,
 )
-from qachat.answering import (
+from kilin.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
     history_messages,
@@ -162,40 +162,40 @@ from qachat.answering import (
     side_reply,
     turn_representation,
 )
-from qachat.chat import (
+from kilin.chat import (
     ASSISTANT_ROLE,
     SYSTEM_ROLE,
     USER_ROLE,
     ChatSession,
 )
-from qachat.chunking import Chunk, chunk_source_units
-from qachat.embeddings import EmbeddingSession
-from qachat.conversation_format import conversation_state
-from qachat.conversation_ownership import (
+from kilin.chunking import Chunk, chunk_source_units
+from kilin.embeddings import EmbeddingSession
+from kilin.conversation_format import conversation_state
+from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
 )
-from qachat.project import PROJECT_KIND_CODE, QAProject, open_project
-from qachat.project_layout import source_scan_exclusions
-from qachat.workspace import include_explicit_imports
-from qachat.project_type import (
+from kilin.project import PROJECT_KIND_CODE, QAProject, open_project
+from kilin.project_layout import source_scan_exclusions
+from kilin.workspace import include_explicit_imports
+from kilin.project_type import (
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
     project_type,
 )
-from qachat.query_formats import (
+from kilin.query_formats import (
     QUERY_FORMAT_PLAIN,
     format_qwen3_query,
 )
-from qachat.repository import (
+from kilin.repository import (
     build_repository_manifest,
     compare_repository_manifests,
     scan_repository,
 )
-from qachat.retrievals.model_identity import embedding_model_identity
-from qachat.retrievals import (
+from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals import (
     CodeGraph,
     DocumentSelection,
     HybridResult,
@@ -215,14 +215,14 @@ from qachat.retrievals import (
     save_indexes,
     semantic_search,
 )
-from qachat.runtime import BACKEND_MLX, SelectedBackend, choose_backend
-from qachat.sources import (
+from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
+from kilin.sources import (
     SourceFile,
     extract_source_units,
     read_repository_files,
 )
-from qachat.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
-from qachat.tools import (
+from kilin.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
+from kilin.tools import (
     EarlierTurn,
     ToolContext,
     ToolPlan,
@@ -231,8 +231,8 @@ from qachat.tools import (
     ToolUse,
     run_tool,
 )
-from qachat.tools._shared.choose_document import document_scope
-from qachat.trace_logging import (
+from kilin.tools._shared.choose_document import document_scope
+from kilin.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
     NullTraceLogger,
     TraceConfig,
@@ -573,7 +573,7 @@ class RAGSession:
     Parameters
     ----------
     project_directory: str | pathlib.Path
-        QAChat project folder containing profile.ini.
+        KíLín project folder containing profile.ini.
     progress_callback: ProgressCallback | None, optional
         Optional callback receiving ProgressEvent records during preparation.
         Callback exceptions propagate. Defaults to ``None``.
@@ -682,7 +682,7 @@ class RAGSession:
         Parameters
         ----------
         project_directory: str | pathlib.Path
-            QAChat project folder containing profile.ini.
+            KíLín project folder containing profile.ini.
         progress_callback: ProgressCallback | None, optional
             Optional callback receiving ProgressEvent records during
             preparation. Callback exceptions propagate. Defaults to ``None``.
@@ -819,7 +819,7 @@ class RAGSession:
         self._emit_progress(
             "opening_project",
             0.0,
-            "Opening QAChat project...",
+            "Opening KíLín project...",
         )
         profile = self.project.profile
         self.backend = choose_backend(profile.backend)
@@ -955,7 +955,7 @@ class RAGSession:
         self._emit_progress(
             "ready",
             100.0,
-            f"QAChat ready. Index {self.index_status}.",
+            f"KíLín ready. Index {self.index_status}.",
         )
 
     def _emit_progress(
@@ -3452,7 +3452,7 @@ class RAGSession:
         -----
         Every chunk is ranked (semantic, lexical, and code graph, fused),
         so a document longer than the budget keeps its parts most relevant
-        to the question. See ``qachat.retrievals.document_reading``.
+        to the question. See ``kilin.retrievals.document_reading``.
 
         """
 

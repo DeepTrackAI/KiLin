@@ -143,7 +143,7 @@ are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.scan_and_list import quoted_terms, term_pattern
+>>> from kilin.tools.scan_and_list import quoted_terms, term_pattern
 >>> quoted_terms('list all mentions of "XYZ 2"')
 ('XYZ 2',)
 >>> bool(term_pattern("XYZ 2", False, True).search("we used xyz-2"))
@@ -158,26 +158,26 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from qachat.tools.scan_and_list import _configuration as _config
-from qachat.tools._shared.scan_settings import (
+from kilin.tools.scan_and_list import _configuration as _config
+from kilin.tools._shared.scan_settings import (
     SCAN_SETTING_NAMES,
     scan_fields as _shared_scan_fields,
 )
-from qachat.tools._shared.mentions import (
+from kilin.tools._shared.mentions import (
     MentionScan,
     collect_mentions,
     mention_evidence,
     mention_location,
     mention_snippet,
 )
-from qachat.tools._shared.paths import short_names
-from qachat.tools._contract import (
+from kilin.tools._shared.paths import short_names
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
     reject_unknown,
 )
-from qachat.tools._shared.long_lists import (
+from kilin.tools._shared.long_lists import (
     CHAT_LIST_LIMIT,
     file_name,
     offer_export,
@@ -288,7 +288,7 @@ def run(
     request: ToolRequest
         The question and the user's words.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

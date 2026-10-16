@@ -52,11 +52,11 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> terms = qachat.lexical_terms("ChatSession.restore_history")
+>>> import kilin
+>>> terms = kilin.lexical_terms("ChatSession.restore_history")
 
 Build an index from previously prepared chunks with
-``qachat.build_lexical_index(chunks)``.
+``kilin.build_lexical_index(chunks)``.
 
 """
 
@@ -67,7 +67,7 @@ from dataclasses import dataclass
 import math
 import re
 
-from qachat.chunking import Chunk
+from kilin.chunking import Chunk
 
 __all__ = [
     "LexicalIndex",

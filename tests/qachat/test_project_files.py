@@ -15,8 +15,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.project import initialize_project
-from qachat.project_files import (
+from kilin.project import initialize_project
+from kilin.project_files import (
     add_project_files,
     list_project_files,
     remove_project_files,

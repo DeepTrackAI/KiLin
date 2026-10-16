@@ -10,7 +10,7 @@ Key Features
 - **Development workspace**
 
     Use the checkout's ``sandbox/`` when the running code belongs to a
-    recognizable QAChat source tree.
+    recognizable KíLín source tree.
 
 - **Installed workspace and preferences**
 
@@ -29,7 +29,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.gui._paths import default_workspace_directory
+>>> from kilin.gui._paths import default_workspace_directory
 >>> default_workspace_directory().name in ("sandbox", "workspaces")
 True
 
@@ -44,8 +44,8 @@ from typing import Final
 
 __all__ = ["default_workspace_directory", "preferences_path"]
 
-PREFERENCES_ENVIRONMENT: Final[str] = "QACHAT_DEFAULTS_FILE"
-WORKSPACES_ENVIRONMENT: Final[str] = "QACHAT_WORKSPACES_DIR"
+PREFERENCES_ENVIRONMENT: Final[str] = "KILIN_DEFAULTS_FILE"
+WORKSPACES_ENVIRONMENT: Final[str] = "KILIN_WORKSPACES_DIR"
 
 
 def _user_config_directory() -> Path:
@@ -54,7 +54,7 @@ def _user_config_directory() -> Path:
     Returns
     -------
     pathlib.Path
-        Directory used for QAChat's user preference overrides.
+        Directory used for KíLín's user preference overrides.
 
     Notes
     -----
@@ -66,15 +66,15 @@ def _user_config_directory() -> Path:
 
     home = Path.home()
     if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "QAChat"
+        return home / "Library" / "Application Support" / "kilin"
     if sys.platform == "win32":
         base = os.environ.get("APPDATA")
-        return Path(base) / "QAChat" if base else (
-            home / "AppData" / "Roaming" / "QAChat"
+        return Path(base) / "kilin" if base else (
+            home / "AppData" / "Roaming" / "kilin"
         )
     configured = Path(os.environ.get("XDG_CONFIG_HOME", ""))
     base = configured if configured.is_absolute() else home / ".config"
-    return base / "qachat"
+    return base / "kilin"
 
 
 def _user_data_directory() -> Path:
@@ -89,22 +89,22 @@ def _user_data_directory() -> Path:
 
     home = Path.home()
     if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "QAChat"
+        return home / "Library" / "Application Support" / "kilin"
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA")
-        return Path(base) / "QAChat" if base else (
-            home / "AppData" / "Local" / "QAChat"
+        return Path(base) / "kilin" if base else (
+            home / "AppData" / "Local" / "kilin"
         )
     configured = Path(os.environ.get("XDG_DATA_HOME", ""))
     base = (
         configured if configured.is_absolute()
         else home / ".local" / "share"
     )
-    return base / "qachat"
+    return base / "kilin"
 
 
 def _development_checkout() -> Path | None:
-    """Find the QAChat source root only when running from its source tree.
+    """Find the KíLín source root only when running from its source tree.
 
     Returns
     -------
@@ -114,7 +114,7 @@ def _development_checkout() -> Path | None:
     Notes
     -----
     A site-packages directory does not become a checkout merely because
-    it contains the installed ``qachat`` package. Requiring the project
+    it contains the installed ``kilin`` package. Requiring the project
     metadata and test tree avoids writing into an ordinary wheel install.
 
     """
@@ -122,8 +122,8 @@ def _development_checkout() -> Path | None:
     root = Path(__file__).resolve().parents[2]
     if (
         (root / "pyproject.toml").is_file()
-        and (root / "tests" / "qachat").is_dir()
-        and (root / "qachat" / "gui" / "engine.py").is_file()
+        and (root / "tests" / "kilin").is_dir()
+        and (root / "kilin" / "gui" / "engine.py").is_file()
     ):
         return root
     return None
@@ -135,7 +135,7 @@ def preferences_path() -> Path:
     Returns
     -------
     pathlib.Path
-        Explicit absolute ``QACHAT_DEFAULTS_FILE`` path, or a user
+        Explicit absolute ``KILIN_DEFAULTS_FILE`` path, or a user
         configuration file. The packaged defaults are never the default.
 
     Raises
@@ -162,7 +162,7 @@ def default_workspace_directory() -> Path:
     Returns
     -------
     pathlib.Path
-        Explicit ``QACHAT_WORKSPACES_DIR`` directory, checkout sandbox,
+        Explicit ``KILIN_WORKSPACES_DIR`` directory, checkout sandbox,
         or user-owned installed-application workspace directory.
 
     Raises

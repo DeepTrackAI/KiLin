@@ -18,8 +18,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, Mock, patch
 
-from qachat import chat
-from qachat.trace_logging import (
+from kilin import chat
+from kilin.trace_logging import (
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,

@@ -1,4 +1,4 @@
-"""Host QAChat's local web interface in a Qt desktop window.
+"""Host KíLín's local web interface in a Qt desktop window.
 
 ``ChatWindow`` connects a local HTML page to ``ChatBridge`` through Qt's web
 channel and routes bridge commands to a separate Python engine process.
@@ -46,8 +46,8 @@ Examples
 Start the window through the application entry point rather than constructing
 Qt widgets without an application:
 
->>> import qachat.gui.app
->>> exit_code = qachat.gui.app.main(["qachat"])
+>>> import kilin.gui.app
+>>> exit_code = kilin.gui.app.main(["kilin"])
 
 """
 
@@ -82,7 +82,7 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
-from qachat.gui.preferences import default_appearance, write_defaults
+from kilin.gui.preferences import default_appearance, write_defaults
 
 __all__ = [
     "ChatBridge",
@@ -122,7 +122,7 @@ class ChatBridge(QObject):
     chooseFiles()
         Add one or more individual files.
     chooseWorkspace()
-        Choose the folder in which QAChat stores its project.
+        Choose the folder in which KíLín stores its project.
     requestSettings(kind, workspace)
         Read the existing profile or new-project defaults.
     downloadModel(model_id)
@@ -291,10 +291,10 @@ class ChatBridge(QObject):
 
     @Slot()
     def chooseWorkspace(self) -> None:
-        """Choose the folder in which QAChat stores its project."""
+        """Choose the folder in which KíLín stores its project."""
 
         path = QFileDialog.getExistingDirectory(
-            None, "Choose QAChat workspace"
+            None, "Choose KíLín workspace"
         )
         if path:
             self.workspaceSelected.emit(path)
@@ -813,7 +813,7 @@ class ChatBridge(QObject):
         Parameters
         ----------
         directory: str
-            Folder containing the saved QAChat profile.ini.
+            Folder containing the saved KíLín profile.ini.
 
         """
 
@@ -1075,7 +1075,7 @@ class ChatWindow(QMainWindow):
     Notes
     -----
     Requires an existing QApplication. The web channel exposes the bridge as
-    "qachat". The child process uses the current Python executable and handles
+    "kilin". The child process uses the current Python executable and handles
     blocking source/model operations. Local-page remote URL access is disabled,
     but backend network access is governed separately by model operations.
 
@@ -1085,7 +1085,7 @@ class ChatWindow(QMainWindow):
         """Create the bridge, backend process, and local web view."""
 
         super().__init__()
-        self.setWindowTitle("QAChat")
+        self.setWindowTitle("KíLín")
         self.resize(1180, 820)
         self.setMinimumSize(760, 560)
         self._closing = False
@@ -1130,7 +1130,7 @@ class ChatWindow(QMainWindow):
             False,
         )
         self.channel = QWebChannel(self.view.page())
-        self.channel.registerObject("qachat", self.bridge)
+        self.channel.registerObject("kilin", self.bridge)
         self.view.page().setWebChannel(self.channel)
         self.setCentralWidget(self.view)
         page = Path(__file__).resolve().parent / "web" / "index.html"
@@ -1169,7 +1169,7 @@ class ChatWindow(QMainWindow):
             and QGuiApplication.styleHints().colorScheme()
             == Qt.ColorScheme.Dark
         )
-        path = ICONS / ("qachat-dark.png" if dark else "qachat-light.png")
+        path = ICONS / ("kilin-dark.png" if dark else "kilin-light.png")
         if not path.is_file():
             return
         icon = QIcon(str(path))
@@ -1181,7 +1181,7 @@ class ChatWindow(QMainWindow):
 
         self._stdout.clear()
         self._stderr.clear()
-        self.process.start(sys.executable, ["-m", "qachat.gui.engine"])
+        self.process.start(sys.executable, ["-m", "kilin.gui.engine"])
 
     def _process_started(self) -> None:
         """Report a successful automatic restart after an unexpected exit."""
@@ -1315,7 +1315,7 @@ class ChatWindow(QMainWindow):
             self._recovery_event = {
                 "event": "backend_restarted",
                 "message": (
-                    f"{reason}, so QAChat restarted it. Downloaded model "
+                    f"{reason}, so KíLín restarted it. Downloaded model "
                     "files were kept."
                 ),
                 "exit_code": exit_code,

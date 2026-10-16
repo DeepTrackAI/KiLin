@@ -46,8 +46,8 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> embedding = qachat.EmbeddingSession(
+>>> import kilin
+>>> embedding = kilin.EmbeddingSession(
 ...     "/path/to/local/embedding-model", allow_download=False,
 ... )
 >>> try:
@@ -73,8 +73,8 @@ from typing import Any
 
 from huggingface_hub import snapshot_download
 
-from qachat.huggingface import cached_model_snapshot
-from qachat.runtime import (
+from kilin.huggingface import cached_model_snapshot
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
     Backend,
@@ -82,7 +82,7 @@ from qachat.runtime import (
     choose_backend,
     torch_device,
 )
-from qachat.trace_logging import (
+from kilin.trace_logging import (
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
     NullTraceLogger,
     TraceSink,
@@ -476,7 +476,7 @@ class EmbeddingSession:
 
         Notes
         -----
-        The query is embedded as supplied. Apply qachat.format_qwen3_query or
+        The query is embedded as supplied. Apply kilin.format_qwen3_query or
         another model-specific instruction format before calling this method
         when required by the chosen model.
 

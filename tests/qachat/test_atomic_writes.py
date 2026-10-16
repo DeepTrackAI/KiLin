@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.atomic_writes import atomic_write_text
+from kilin.atomic_writes import atomic_write_text
 
 
 class TestAtomicTextWrites(unittest.TestCase):

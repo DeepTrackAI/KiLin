@@ -19,7 +19,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.sentences import split_sentences
+>>> from kilin.tools._shared.sentences import split_sentences
 >>> split_sentences([])
 []
 
@@ -33,7 +33,7 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.chunking import Chunk
+from kilin.chunking import Chunk
 
 _SENTENCE_END: Final[re.Pattern[str]] = re.compile(
     r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])|\n\s*\n"

@@ -41,7 +41,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.document_notes import clean_notes
+>>> from kilin.tools._shared.document_notes import clean_notes
 >>> clean_notes("- Fact [2]", [1, 2])
 ['- Fact [2]']
 
@@ -54,9 +54,9 @@ import re
 from time import perf_counter
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools._contract import ToolContext
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._contract import ToolContext
 
 __all__ = [
     "NOTHING",
@@ -131,7 +131,7 @@ def notes_prompt(
     """
 
     system = (
-        "You read one part of a document for QAChat and take notes. You do "
+        "You read one part of a document for KíLín and take notes. You do "
         "not answer the question yet. You reply with short bullet notes "
         "only."
     )
@@ -238,7 +238,7 @@ def take_notes(
     note_tokens: int
         Longest notes for one part, in tokens.
     context: ToolContext
-        QAChat's services (``ask_model``, ``progress``, ``trace``).
+        KíLín's services (``ask_model``, ``progress``, ``trace``).
     what: str, optional
         What is read, for progress messages: "paper", "file",
         "function", ... Defaults to ``"document"``.

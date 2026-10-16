@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qachat.chunking import Chunk
+from kilin.chunking import Chunk
 
 __all__ = ["chunk"]
 

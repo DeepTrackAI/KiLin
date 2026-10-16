@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import batch_classify as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import batch_classify as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestBatchClassify(unittest.TestCase):

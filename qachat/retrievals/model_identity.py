@@ -42,7 +42,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.retrievals.model_identity import embedding_model_identity
+>>> from kilin.retrievals.model_identity import embedding_model_identity
 >>> callable(embedding_model_identity)
 True
 
@@ -84,8 +84,8 @@ def embedding_model_identity(
         Directory resolved and loaded by ``EmbeddingSession``.
     cache_directory: str | pathlib.Path | None, optional
         Directory for local-file fingerprint manifests. Defaults to
-        ``$XDG_CACHE_HOME/qachat/model_identity`` when XDG_CACHE_HOME is
-        absolute, or ``~/.cache/qachat/model_identity`` otherwise.
+        ``$XDG_CACHE_HOME/kilin/model_identity`` when XDG_CACHE_HOME is
+        absolute, or ``~/.cache/kilin/model_identity`` otherwise.
     force_verify: bool, optional
         Rehash all mutable model files even when cached metadata matches.
         Does not affect immutable Hugging Face snapshot identification.
@@ -113,7 +113,7 @@ def embedding_model_identity(
     be spoofed; use ``force_verify=True`` to detect such changes. A standard
     Hugging Face snapshot is assumed immutable by convention.
 
-    Cache read/write failures are nonfatal: QAChat rehashes the model files
+    Cache read/write failures are nonfatal: KíLín rehashes the model files
     and still returns their identity. No cache files are stored in the model.
 
     """
@@ -168,7 +168,7 @@ def _hub_snapshot_commit(model_id: str, root: Path) -> str | None:
 
 
 def _manifest_directory(directory: str | Path | None) -> Path:
-    """Resolve a persistent QAChat cache directory outside the model tree.
+    """Resolve a persistent KíLín cache directory outside the model tree.
 
     Parameters
     ----------
@@ -188,7 +188,7 @@ def _manifest_directory(directory: str | Path | None) -> Path:
     base = Path(xdg) if xdg and Path(xdg).is_absolute() else None
     if base is None:
         base = Path.home() / ".cache"
-    return base / "qachat" / "model_identity"
+    return base / "kilin" / "model_identity"
 
 
 def _manifest_path(root: Path, directory: Path) -> Path:

@@ -1,4 +1,4 @@
-"""Represent packaged resources installed into a QAChat project workspace.
+"""Represent packaged resources installed into a KíLín project workspace.
 
 A tool may declare files that a new project needs, independently of the
 GUI. This module holds the resource contract and common folder names, so tool
@@ -34,7 +34,7 @@ Examples
 --------
 >>> from pathlib import Path
 from typing import Final
->>> from qachat.workspace_resources import WorkspaceResource
+>>> from kilin.workspace_resources import WorkspaceResource
 >>> resource = WorkspaceResource(Path("format.md"), "templates/format.md")
 >>> resource.destination
 'templates/format.md'

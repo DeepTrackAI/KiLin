@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import paper_overview as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import paper_overview as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestPaperOverview(unittest.TestCase):
@@ -80,7 +80,7 @@ class TestPaperOverview(unittest.TestCase):
 
         """
 
-        from tests.qachat.tools._shared._support import chunk
+        from tests.kilin.tools._shared._support import chunk
         _, prompt = tool.overview_prompt(
             "Summarize findings", "paper.pdf",
             [(3, chunk("a", "A result of interest."))],

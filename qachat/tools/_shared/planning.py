@@ -81,7 +81,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.planning import (
+>>> from kilin.tools._shared.planning import (
 ...     CONFIRMATION_WHEN_LARGE, ToolPlan, needs_confirmation
 ... )
 >>> plan = ToolPlan(
@@ -106,7 +106,7 @@ from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
 if TYPE_CHECKING:
-    from qachat.tools._contract import ToolContext
+    from kilin.tools._contract import ToolContext
 
 __all__ = [
     "CONFIRMATION_ALWAYS",
@@ -265,7 +265,7 @@ def confirm_plan(
     large_batches: int
         The tool's threshold for ``when_large``.
     context: ToolContext
-        QAChat's services; ``context.confirm`` asks the user.
+        KíLín's services; ``context.confirm`` asks the user.
 
     Returns
     -------
@@ -317,7 +317,7 @@ def ask_choice(
     options: tuple[str, ...]
         The options, shown as buttons.
     context: ToolContext
-        QAChat's services; ``context.choose`` asks the user.
+        KíLín's services; ``context.choose`` asks the user.
 
     Returns
     -------

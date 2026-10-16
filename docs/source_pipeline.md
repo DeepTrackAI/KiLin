@@ -38,7 +38,7 @@ The report contains the resolved repository root, normalized suffixes,
 include/exclude paths, byte/entry totals, `selected_files`, and entry rows.
 Each row has `path`, `status`, a human-readable `reason`, and a stable
 `reason_code`. The codes are defined in
-[`repository_reason_codes.json`](../qachat/repository_reason_codes.json),
+[`repository_reason_codes.json`](../kilin/repository_reason_codes.json),
 validated once by `repository_reason_codes.py`, and transmitted to the
 frontend in its settings event. The only special GUI opt-in is a file skipped
 for `file_too_large`; protected or linked files do not become selectable
@@ -61,7 +61,7 @@ also set selection rules; see [Configuration](configuration.md).
 
 ## 2. Snapshot and provenance alternatives
 
-QAChat has two different, deliberately retained workflows:
+KíLín has two different, deliberately retained workflows:
 
 - `prepare_sources_workspace(source_paths, kind, workspace_directory=...)`
   accumulates individually selected local files/folders into managed
@@ -176,8 +176,8 @@ payload integrity. The exact reindex/reuse contract is described in
 ## Relevant tests and cross-references
 
 Start with the test files matching `repository`, `sources`, `chunking`,
-`workspace`, `project` and `rag` under `tests/qachat/`. The GUI selection
-contract is additionally tested under `tests/qachat/gui/`. The latter also
+`workspace`, `project` and `rag` under `tests/kilin/`. The GUI selection
+contract is additionally tested under `tests/kilin/gui/`. The latter also
 covers reason-code independence from human-readable messages.
 
 Related: [Project workspaces](project_workspaces.md),

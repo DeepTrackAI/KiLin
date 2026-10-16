@@ -15,8 +15,8 @@ from dataclasses import FrozenInstanceError
 import math
 import unittest
 
-from qachat.retrievals.strategies import retrieval_lexical as rl
-from tests.qachat.retrievals._support import chunk
+from kilin.retrievals.strategies import retrieval_lexical as rl
+from tests.kilin.retrievals._support import chunk
 
 
 class TestLexicalTerms(unittest.TestCase):

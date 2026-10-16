@@ -2,7 +2,7 @@
 
 ## Principle: settings have different owners
 
-QAChat intentionally does not have one mutable global configuration file.
+KíLín intentionally does not have one mutable global configuration file.
 Packaged default values, project-type definitions, persistent project
 profiles, per-user GUI preferences, tool-specific defaults and per-turn
 options have **different lifetimes and authority**. A new default does not
@@ -10,10 +10,10 @@ rewrite an existing project's configuration.
 
 | Layer | Source | Scope and owner | Mutability |
 | --- | --- | --- | --- |
-| Core packaged defaults | `qachat/qachat_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
-| Project types | `qachat/project_types/code.json`, `literature.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a kind | Packaged declarations; not editable user profiles |
-| Tool defaults | `qachat/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
-| GUI packaged defaults | `qachat/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
+| Core packaged defaults | `kilin/kilin_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
+| Project types | `kilin/project_types/code.json`, `literature.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a kind | Packaged declarations; not editable user profiles |
+| Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
+| GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
 | Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort/router choices | Persistent, authoritative for the opened project |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
@@ -21,7 +21,7 @@ rewrite an existing project's configuration.
 
 Read [Package defaults](package_defaults.md) for **every key** in the core
 JSON and its validated type/range. For exact GUI user-preference keys and
-current model presets see [GUI README](../qachat/gui/README.md),
+current model presets see [GUI README](../kilin/gui/README.md),
 `gui/defaults.json` and `gui/preferences.py`. For each tool's parameters
 use its README and `_configuration.py`.
 
@@ -41,10 +41,10 @@ it does not opportunistically copy/replace templates based on a new
 version of a tool. These invariants are detailed in
 [Project workspaces](project_workspaces.md).
 
-`qachat.project.configure_project()` is the core API for validated project
+`kilin.project.configure_project()` is the core API for validated project
 settings. GUI-specific project settings (effort levels, search-depth steps,
 router model) are saved in additional `profile.ini` sections by
-`qachat.gui.model_settings`. They are not a separate active
+`kilin.gui.model_settings`. They are not a separate active
 `effort_levels.json` database. The module still supports a controlled
 migration of recognized older files on first use; moving or deleting files
 outside that migration is not authorized.
@@ -70,7 +70,7 @@ outside that migration is not authorized.
 
 ## Core packaged defaults
 
-`qachat.defaults.load_defaults_section()` reads the packaged core JSON via
+`kilin.defaults.load_defaults_section()` reads the packaged core JSON via
 `importlib.resources` and provides typed validators. Individual modules
 validate the sections they own, rather than trusting arbitrary JSON values.
 The resource is loaded once per process, not watched for hot reload.
@@ -117,17 +117,17 @@ Missing user preferences are normal on first run. Invalid values are
 reported, not silently substituted with unknown settings.
 
 By default GUI preferences live in a per-user configuration directory;
-`QACHAT_DEFAULTS_FILE` is an explicit **absolute-path** override for that
+`KILIN_DEFAULTS_FILE` is an explicit **absolute-path** override for that
 user preferences file (despite its historic name). It does **not** point to
 the immutable shipped defaults during normal use.
 
 A recognized development checkout defaults GUI workspaces to its repository
 `sandbox/`; an installed package uses a user data folder. Explicit
-`QACHAT_WORKSPACES_DIR` (absolute or home-expanded) overrides the default,
+`KILIN_WORKSPACES_DIR` (absolute or home-expanded) overrides the default,
 and a workspace explicitly chosen in the GUI overrides the suggested
 parent. No installed package directory should become the normal writable
 location for conversations, workspaces or preferences. See
-[GUI architecture](gui_architecture.md) and [GUI README](../qachat/gui/README.md).
+[GUI architecture](gui_architecture.md) and [GUI README](../kilin/gui/README.md).
 
 ### Saved project settings take precedence
 
@@ -153,7 +153,7 @@ contract is [Project workspaces](project_workspaces.md).
 ## File-selection protocol constants
 
 Repository scan reason identifiers live in one validated
-[`repository_reason_codes.json`](../qachat/repository_reason_codes.json)
+[`repository_reason_codes.json`](../kilin/repository_reason_codes.json)
 resource. Python exposes named constants through
 `repository_reason_codes.py`, and the GUI settings event supplies the same
 mapping to JavaScript. Human-readable skip messages are **not** protocol

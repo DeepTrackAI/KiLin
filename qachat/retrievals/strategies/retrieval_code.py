@@ -42,9 +42,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> graph = qachat.CodeGraph(entities=(), relations=())
->>> names = qachat.resolve_code_entities(graph, "How does loading work?")
+>>> import kilin
+>>> graph = kilin.CodeGraph(entities=(), relations=())
+>>> names = kilin.resolve_code_entities(graph, "How does loading work?")
 
 """
 
@@ -53,12 +53,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 
-from qachat.chunking import Chunk
-from qachat.defaults import (
+from kilin.chunking import Chunk
+from kilin.defaults import (
     load_defaults_section,
     require_default_nonnegative_int,
 )
-from qachat.retrievals.code_graph.code_graph import CodeEntity, CodeGraph
+from kilin.retrievals.code_graph.code_graph import CodeEntity, CodeGraph
 
 __all__ = [
     "CodeResult",
@@ -399,7 +399,7 @@ def _contains_whole_words(query_words: str, name_words: str) -> bool:
     match inside an unrelated longer word that merely starts the same way --
     for example the module entity ``project`` would match the query word
     ``projects`` (an ordinary English plural, not a reference to
-    ``qachat/project.py``), or ``act`` would match inside ``react``. This
+    ``kilin/project.py``), or ``act`` would match inside ``react``. This
     instead requires name_words to appear at a word boundary on both sides, so
     only an actual whole-word (or whole-phrase, for multi-word names)
     occurrence counts as an explicit reference.

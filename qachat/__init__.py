@@ -1,8 +1,8 @@
-"""Expose the package-level QAChat API.
+"""Expose the package-level KíLín API.
 
 This initializer re-exports the conversation, source-processing, retrieval,
 project, workspace, and tracing objects listed in ``__all__``. Examples in
-QAChat documentation use this namespace when an object is exported here.
+KíLín documentation use this namespace when an object is exported here.
 Objects exported only by a submodule must be accessed through that submodule.
 
 Importing this package does not construct a model session or start the GUI.
@@ -32,8 +32,8 @@ not export every public object from every submodule.
 
 Examples
 --------
->>> import qachat
->>> qachat.PROJECT_KIND_CODE
+>>> import kilin
+>>> kilin.PROJECT_KIND_CODE
 'code'
 
 """

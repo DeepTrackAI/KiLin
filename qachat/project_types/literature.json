@@ -314,7 +314,7 @@
         "mode": "none"
       },
       "shortcuts": [
-        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| qachat)?",
+        "(hi|hello|hey|hiya|hej|yo|greetings|good (morning|afternoon|evening|day))( there| kilin)?",
         "(thanks|thank you|thx|ty|cheers|many thanks)( (very|so) much| a lot| again)?",
         "(ok|okay|great|cool|nice|perfect|got it|i see|awesome|sounds good)( thanks| thank you)?",
         "how (are|r) (you|u)( doing)?( today)?",

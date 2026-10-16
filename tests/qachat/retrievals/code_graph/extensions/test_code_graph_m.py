@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import unittest
 
-from qachat.retrievals.code_graph import code_graph as cg
-from qachat.retrievals.code_graph.extensions import code_graph_m as matlab
-from tests.qachat.retrievals._support import source_file
+from kilin.retrievals.code_graph import code_graph as cg
+from kilin.retrievals.code_graph.extensions import code_graph_m as matlab
+from tests.kilin.retrievals._support import source_file
 
 
 class TestMatlabCodeGraphExtension(unittest.TestCase):

@@ -2,8 +2,8 @@
 
 A project has two kinds of documents. ``sources/`` holds the knowledge base:
 it is copied in, indexed, embedded, and searched. ``outputs/`` holds what
-QAChat writes (research briefings, reports) and anything the user adds to
-work on: it is never indexed, so a report QAChat writes there can never
+KíLín writes (research briefings, reports) and anything the user adds to
+work on: it is never indexed, so a report KíLín writes there can never
 come back as a "source", and it is read only when a tool asks for it.
 
 ``load_output`` reads one file with the same readers that index sources
@@ -80,7 +80,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from qachat.tools._shared.outputs import load_output, save_output_file
+>>> from kilin.tools._shared.outputs import load_output, save_output_file
 >>> root = Path("/path/to/project")
 >>> saved = save_output_file(root, "notes.md", "# Notes\n\nMRI results.\n")
 >>> document = load_output(root, saved.name)
@@ -93,7 +93,7 @@ The path is illustrative; saving creates ``outputs/`` in that project.
 
 from __future__ import annotations
 
-from qachat.workspace_resources import OUTPUTS_FOLDER
+from kilin.workspace_resources import OUTPUTS_FOLDER
 
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -105,9 +105,9 @@ import stat
 import tempfile
 from typing import Final, Iterator
 
-from qachat.chunking import Chunk, chunk_source_units
-from qachat.retrievals.document_reading import estimate_tokens, named_paths
-from qachat.sources import extract_source_units, read_repository_files
+from kilin.chunking import Chunk, chunk_source_units
+from kilin.retrievals.document_reading import estimate_tokens, named_paths
+from kilin.sources import extract_source_units, read_repository_files
 
 __all__ = [
     "OUTPUTS_FOLDER",
@@ -417,7 +417,7 @@ def staged_output_file(
     _output_name("staging" + suffix)
     folder = output_folder(project_root)
     descriptor, name = tempfile.mkstemp(
-        prefix=".qachat-output-", suffix=suffix, dir=folder
+        prefix=".kilin-output-", suffix=suffix, dir=folder
     )
     os.close(descriptor)
     staged = Path(name)

@@ -1,8 +1,8 @@
 """Select and verify the local calculation backend.
 
-This auxiliary repository module checks that the local QAChat development
+This auxiliary repository module checks that the local KíLín development
 setup can use an appropriate numerical backend. It is intended for setup and
-development workflows and is not part of the released ``qachat`` package.
+development workflows and is not part of the released ``kilin`` package.
 
 The module selects MLX on native Apple Silicon and PyTorch on supported Linux
 and Windows systems unless a backend is requested explicitly. It then performs

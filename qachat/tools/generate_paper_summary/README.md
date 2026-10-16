@@ -18,15 +18,15 @@ The tool is a self-contained package:
 
 The `SETTINGS` section supplies defaults for the tool's
 `SummarySettings`. Each intent's `tool` entry in
-`qachat/project_types/<type>.json` may override these eight settings.
+`kilin/project_types/<type>.json` may override these eight settings.
 Missing keys use this tool's packaged defaults, **not** values from
-`qachat_defaults.json`. The remaining sections are tool-internal
+`kilin_defaults.json`. The remaining sections are tool-internal
 heuristics and estimation parameters; they are not project-type settings.
-Project-type overrides of unrelated core QAChat defaults are not yet
+Project-type overrides of unrelated core KíLín defaults are not yet
 supported and belong to a separate configuration-precedence change.
 
 All packaged values are validated before the tool is usable. Values are
-read once per Python process; edits require restarting QAChat. No tool
+read once per Python process; edits require restarting KíLín. No tool
 uses the global README to define its settings.
 
 ## `SETTINGS` — project-type-overridable values
@@ -103,7 +103,7 @@ formatter, not tool defaults.
 
 PDF generation is **optional**: the caller can supply the `ToolContext`
 `write_pdf` callback to render the Markdown. The desktop GUI supplies the
-private `qachat/gui/_report_pdf.py` adapter, which uses Qt's `QPdfWriter`
+private `kilin/gui/_report_pdf.py` adapter, which uses Qt's `QPdfWriter`
 and tries to fit the report on an A4 page by reducing its font size.
 When no callback is available (for example, from the CLI or a notebook),
 the Markdown report is still saved and no PDF is attempted. PDF errors
@@ -137,8 +137,8 @@ Symbolic links are not accepted as project templates. See
 
 ## Tests
 
-`tests/qachat/tools/generate_paper_summary/test_tool.py` tests the settings,
+`tests/kilin/tools/generate_paper_summary/test_tool.py` tests the settings,
 registry integration, resource selection, parsing, and model-free error
-paths. `tests/qachat/tools/test__defaults.py` tests the shared private
+paths. `tests/kilin/tools/test__defaults.py` tests the shared private
 defaults reader. Further model orchestration tests can exercise the
 `ToolContext` callbacks with fakes instead of requiring an LLM.

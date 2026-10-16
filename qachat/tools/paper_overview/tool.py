@@ -52,10 +52,10 @@ Module Structure
 
 Examples
 --------
-``context`` is the ``ToolContext`` that QAChat passes to a tool:
+``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
->>> from qachat.tools import ToolRequest
->>> from qachat.tools.paper_overview import OverviewSettings, run
+>>> from kilin.tools import ToolRequest
+>>> from kilin.tools.paper_overview import OverviewSettings, run
 >>> question = "give me a short summary of smith2020.pdf"
 >>> request = ToolRequest(question, question)
 >>> result = run(OverviewSettings(), request, context)
@@ -68,12 +68,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools._shared.document_notes import answer_citations
-from qachat.tools._shared.choose_document import choose_document
-from qachat.tools.paper_overview import _configuration as _config
-from qachat.tools._contract import (
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.document_notes import answer_citations
+from kilin.tools._shared.choose_document import choose_document
+from kilin.tools.paper_overview import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -172,7 +172,7 @@ def overview_prompt(
     """
 
     system = (
-        "You summarize one scientific paper for QAChat from passages of "
+        "You summarize one scientific paper for KíLín from passages of "
         "it. Use only the passages, cite them like [3], and never add "
         "results they do not state."
     )
@@ -204,7 +204,7 @@ def run(
     request: ToolRequest
         The question, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

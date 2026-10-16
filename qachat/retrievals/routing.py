@@ -48,9 +48,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> graph = qachat.CodeGraph(entities=(), relations=())
->>> plan = qachat.plan_retrieval("Explain this project.", graph)
+>>> import kilin
+>>> graph = kilin.CodeGraph(entities=(), relations=())
+>>> plan = kilin.plan_retrieval("Explain this project.", graph)
 
 """
 
@@ -61,10 +61,10 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 
-from qachat.chunking import Chunk
-from qachat.defaults import load_defaults_section, require_default_strings
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph
-from qachat.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.chunking import Chunk
+from kilin.defaults import load_defaults_section, require_default_strings
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph
+from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
 __all__ = [
     "RetrievalPlan",

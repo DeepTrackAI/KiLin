@@ -1,9 +1,9 @@
-"""Provide the optional QAChat graphical-interface package.
+"""Provide the optional KíLín graphical-interface package.
 
 The package initializer has no GUI-startup side effects. The ``app`` module
 launches the Qt interface, ``window`` hosts a local web page, and ``engine``
 runs model and repository operations in a separate process. Web assets live
-in the sibling ``web`` directory. Importing ``qachat.gui`` does not start Qt.
+in the sibling ``web`` directory. Importing ``kilin.gui`` does not start Qt.
 
 Key Features
 ------------
@@ -25,9 +25,9 @@ separate exported API. The related implementation modules are described above.
 
 Examples
 --------
->>> import qachat.gui
+>>> import kilin.gui
 
-Launch the interface explicitly with ``python -m qachat.gui`` in a suitable
+Launch the interface explicitly with ``python -m kilin.gui`` in a suitable
 environment. This package does not re-export the Qt classes.
 
 """

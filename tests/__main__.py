@@ -1,4 +1,4 @@
-"""Entry point for the QAChat unit test suite.
+"""Entry point for the KíLín unit test suite.
 
 Run the complete test suite using::
 
@@ -11,7 +11,7 @@ import unittest
 
 
 def main():
-    """Discover and run all QAChat unit tests.
+    """Discover and run all KíLín unit tests.
 
     Returns
     -------

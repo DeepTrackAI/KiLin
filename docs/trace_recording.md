@@ -1,6 +1,6 @@
 # Diagnostic trace recording
 
-QAChat uses **one diagnostic tracing behavior**. Enabled traces record all
+KíLín uses **one diagnostic tracing behavior**. Enabled traces record all
 available structured diagnostic events, including complete prompts, model
 responses, retrieved content and token IDs. There is no standard/forensic
 mode switch and no automatic redaction or sanitization.
@@ -10,7 +10,7 @@ mode switch and no automatic redaction or sanitization.
 A `RAGSession` creates an enabled trace when `trace=None` (the default):
 
 ```python
-session = qachat.RAGSession(project_directory)
+session = kilin.RAGSession(project_directory)
 ```
 
 A low-level `TraceConfig` is disabled by default; activate it explicitly when
@@ -18,18 +18,18 @@ constructing a `TraceLogger` or supplying configuration to another caller:
 
 ```python
 from pathlib import Path
-import qachat
+import kilin
 
 path = Path("/path/to/workspace/logs/traces/conversation.json")
-config = qachat.TraceConfig(enabled=True, output_path=path)
-logger = qachat.TraceLogger(config, default_directory=path.parent)
+config = kilin.TraceConfig(enabled=True, output_path=path)
+logger = kilin.TraceLogger(config, default_directory=path.parent)
 try:
     logger.emit("custom.ready", component="example", data={"ok": True})
 finally:
     logger.close()
 ```
 
-Pass `qachat.TraceConfig(enabled=False)` to a RAG session to disable diagnostic
+Pass `kilin.TraceConfig(enabled=False)` to a RAG session to disable diagnostic
 events. This **does not disable conversation persistence**. The session still
 holds exclusive ownership of its conversation path and saves checkpoints
 there; see [conversation-file ownership](conversation_ownership.md).
@@ -84,8 +84,8 @@ state, or multiple files; no power-loss durability is claimed.
 Remove any `mode=...` argument from `TraceConfig` construction and any imports
 of `TraceMode`, `TRACE_MODE_STANDARD`, `TRACE_MODE_FORENSIC`,
 `TRACE_MODE_CHOICES`, or `DEFAULT_TRACE_MODE`. These options are no longer
-part of QAChat's Python API. The `TRACE.DEFAULT_MODE` entry is also removed
-from `qachat_defaults.json`; no replacement setting is needed. The change
+part of KíLín's Python API. The `TRACE.DEFAULT_MODE` entry is also removed
+from `kilin_defaults.json`; no replacement setting is needed. The change
 does not migrate, rewrite, or delete older conversation files.
 
 ## Privacy, storage, and deletion
@@ -109,9 +109,9 @@ The tracing contract is tested without network or model dependencies:
 
 ```sh
 python -m pytest -q \
-    tests/qachat/test_trace_logging.py \
-    tests/qachat/test_rag.py \
-    tests/qachat/test_conversation__lifecycle.py
+    tests/kilin/test_trace_logging.py \
+    tests/kilin/test_rag.py \
+    tests/kilin/test_conversation__lifecycle.py
 ```
 
 The project targets Python 3.12; run these tests under that interpreter and

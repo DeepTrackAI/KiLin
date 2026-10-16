@@ -1,4 +1,4 @@
-"""Unit tests for exact-term parsing shared by multiple QAChat tools.
+"""Unit tests for exact-term parsing shared by multiple KíLín tools.
 
 Check deterministic validation of model-produced terms and flexible
 literal matching independently of registered tool implementations.
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import unittest
 
-from qachat.tools._shared.terms import (
+from kilin.tools._shared.terms import (
     MAX_TERMS,
     document_phrase,
     quoted_terms,

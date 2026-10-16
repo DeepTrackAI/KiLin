@@ -1,6 +1,6 @@
 """Regression tests for the PR4 notebook and read-only trace analysis.
 
-Tests use synthetic QAChat traces and never load a language model, download
+Tests use synthetic KíLín traces and never load a language model, download
 artifacts, or modify the production answering and tracing implementations.
 
 """
@@ -20,7 +20,7 @@ import sys
 from tempfile import TemporaryDirectory
 import unittest
 
-import qachat
+import kilin
 from assets.trace_benchmark import (
     question_statistics,
     read_trace_operations,
@@ -43,8 +43,8 @@ class TestTraceBenchmark(unittest.TestCase):
 
     def _make_trace(self) -> None:
         """Create a representative numbered trace with sensitive content."""
-        logger = qachat.TraceLogger(
-            qachat.TraceConfig(enabled=True, output_path=self.path),
+        logger = kilin.TraceLogger(
+            kilin.TraceConfig(enabled=True, output_path=self.path),
             default_directory=self.path.parent,
         )
         try:
@@ -178,8 +178,8 @@ class TestTraceBenchmark(unittest.TestCase):
     def test_reopened_conversation_turns_are_distinct(self) -> None:
         """Associate turns by ordinal rather than a re-used turn ID."""
         for _ in range(2):
-            logger = qachat.TraceLogger(
-                qachat.TraceConfig(enabled=True, output_path=self.path),
+            logger = kilin.TraceLogger(
+                kilin.TraceConfig(enabled=True, output_path=self.path),
                 default_directory=self.path.parent,
             )
             try:
@@ -278,7 +278,7 @@ class TestTraceBenchmarkNotebook(unittest.TestCase):
             exec(compile(source, "workspace_guard", "exec"), environment)
             validate = environment["validate_benchmark_workspace"]
             self.assertEqual(validate(project), project)
-            with self.assertRaisesRegex(ValueError, "inside QAChat"):
+            with self.assertRaisesRegex(ValueError, "inside KíLín"):
                 validate(root / "outside_project")
             profile.write_text(
                 "[models]\nallow_download = true\n", encoding="utf-8"
@@ -290,7 +290,7 @@ class TestTraceBenchmarkNotebook(unittest.TestCase):
                 validate(project)
 
     def test_offline_default_does_not_start_models(self) -> None:
-        """Run all notebook cells without opening QAChat sessions or files."""
+        """Run all notebook cells without opening KíLín sessions or files."""
         notebook = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
         source = "\n\n".join(
             "".join(cell["source"])

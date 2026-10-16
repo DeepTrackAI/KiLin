@@ -1,6 +1,6 @@
 # Project workspaces and tool resources
 
-QAChat creates and opens project workspaces through **core Python APIs**.
+KíLín creates and opens project workspaces through **core Python APIs**.
 The GUI does not decide which folders or packaged tool resources a project
 needs. This document describes the filesystem contract and how to extend it
 without adding tool-specific conditions to project creation.
@@ -27,19 +27,19 @@ not currently use a templated tool. Users can add Markdown templates or
 other resources manually. The `outputs/` directory is a general area for
 project-owned results. Neither `outputs/` nor `templates/` is indexed as a
 source directory by default. When a project's source is its own root
-(`source = .`), QAChat's RAG scans explicitly exclude these managed
+(`source = .`), KíLín's RAG scans explicitly exclude these managed
 folders and the project-owned metadata files `profile.ini`, `sources.json`,
 and `source_snapshot.json`; ordinary external source directories and files
 with these names are not globally excluded.
 
 Source layout depends on which core API creates the workspace:
 
-- `qachat.initialize_project(path, kind)` uses an existing folder; it selects
+- `kilin.initialize_project(path, kind)` uses an existing folder; it selects
   `sources/`, a recognized existing source folder, or the project root as
   the source location according to existing profile rules.
-- `qachat.prepare_sources_workspace(...)` creates or reuses a cumulative
+- `kilin.prepare_sources_workspace(...)` creates or reuses a cumulative
   `sources/` tree and records imported source provenance in `sources.json`.
-- `qachat.prepare_project_workspace(...)` mirrors one original source
+- `kilin.prepare_project_workspace(...)` mirrors one original source
   directory inside a managed workspace, preserving its directory name and
   recording `source_snapshot.json`.
 
@@ -48,7 +48,7 @@ core initializer for `profile.ini`, shared directories, and resources.
 
 ## Initial project creation
 
-`qachat.project` calls `qachat.project_layout.plan_project_layout(kind)` for
+`kilin.project` calls `kilin.project_layout.plan_project_layout(kind)` for
 **new profiles**. The planner reads the validated `ProjectType` and
 examines its intents. When an intent uses a registered tool, the tool may
 provide an optional `workspace_resources(settings)` declaration. The settings
@@ -78,7 +78,7 @@ because the project initializer hard-codes their names.
 
 ## Existing projects and user ownership
 
-`qachat.open_project()` validates the existing profile and source path and
+`kilin.open_project()` validates the existing profile and source path and
 ensures the four core directories exist. It **does not reinstall templates**.
 Likewise, calling `initialize_project()` on a directory with an existing
 profile does not install resources again. As a result:
@@ -95,7 +95,7 @@ profile does not install resources again. As a result:
 An explicit, **opt-in** restoration is possible from the Python API:
 
 ```python
-from qachat.project_layout import (
+from kilin.project_layout import (
     install_project_resources,
     plan_project_layout,
 )
@@ -113,12 +113,12 @@ is created independently. No legacy migration is performed.
 ## Tool resource contract
 
 An independently implemented tool may declare resources by adding an
-optional callback to its `Tool` entry in `qachat.tools._registry`. The
+optional callback to its `Tool` entry in `kilin.tools._registry`. The
 callback accepts validated tool settings and returns a tuple of
-`qachat.workspace_resources.WorkspaceResource` objects.
+`kilin.workspace_resources.WorkspaceResource` objects.
 
 For example, the existing report tool declares a packaged file under
-`qachat/tools/generate_paper_summary/templates/` and a destination under the project's
+`kilin/tools/generate_paper_summary/templates/` and a destination under the project's
 `templates/` folder. A custom template name that has no bundled file is
 not declared as a packaged resource; its `templates/` folder is still
 created, and the user can add the file manually before running the tool.
@@ -149,7 +149,7 @@ exclude them. Actual extraction may still fail for unsupported or binary
 content, and such errors must be reported to the user.
 
 When a source snapshot is deleted through
-`qachat.remove_workspace_sources(project, paths)`, only files within a
+`kilin.remove_workspace_sources(project, paths)`, only files within a
 managed `sources/` folder can be removed. Original source paths are not
 modified, and `sources.json` is updated to reflect removed entries. Projects
 with external or root-as-source locations cannot use that deletion API.
@@ -159,16 +159,16 @@ Index refreshing is a separate core operation.
 
 The following GUI-independent core functions manage user-owned files:
 
-- `qachat.add_project_files(project, folder, paths, replace=False)` copies
+- `kilin.add_project_files(project, folder, paths, replace=False)` copies
   selected local files or directories into `outputs/` or `templates/`.
   Naming collisions are given numerical suffixes unless replacement is
   explicitly requested.
-- `qachat.replace_project_file(project, path, source)` replaces an existing
+- `kilin.replace_project_file(project, path, source)` replaces an existing
   regular file in one of those folders.
-- `qachat.remove_project_files(project, paths)` removes files or directories
+- `kilin.remove_project_files(project, paths)` removes files or directories
   inside **either** `outputs/` or `templates/`, but cannot remove the managed
   folders themselves.
-- `qachat.list_project_files(project)` provides a filesystem inventory,
+- `kilin.list_project_files(project)` provides a filesystem inventory,
   including empty folders, without importing the GUI.
 
 All paths are checked for containment and symlink traversal. These
@@ -180,7 +180,7 @@ the file operations and reports their results.
 An invalid or conflicting resource plan fails before creating a new profile.
 The first initialization of a project is committed by writing `profile.ini`
 **last**, using a temporary file and atomic replacement. If directory,
-template, source-copy, or final profile writing fails, QAChat attempts to
+template, source-copy, or final profile writing fails, KíLín attempts to
 remove only entries created by that initialization attempt. Existing user
 files are preserved. A process termination can still leave uncommitted
 files on disk; without `profile.ini` they do not constitute an initialized

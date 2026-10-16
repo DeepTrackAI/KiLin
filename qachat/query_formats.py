@@ -42,7 +42,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.query_formats import format_qwen3_query
+>>> from kilin.query_formats import format_qwen3_query
 >>> query = format_qwen3_query(
 ...     "How are sources split?",
 ...     "Retrieve relevant source code.",

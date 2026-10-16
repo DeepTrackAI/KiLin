@@ -1,4 +1,4 @@
-"""Unit tests for QAChat's public Python API.
+"""Unit tests for KíLín's public Python API.
 
 Tests verify that every library module is importable and declares a valid
 public interface, including nested packages and GUI components.
@@ -18,7 +18,7 @@ import subprocess
 import sys
 import unittest
 
-import qachat
+import kilin
 
 
 class TestPublicAPI(unittest.TestCase):
@@ -28,8 +28,8 @@ class TestPublicAPI(unittest.TestCase):
     def _module_names() -> list[str]:
         """Discover all library modules without importing them."""
 
-        root = Path(qachat.__file__).resolve().parent
-        names = ["qachat"]
+        root = Path(kilin.__file__).resolve().parent
+        names = ["kilin"]
         for path in sorted(root.rglob("*.py")):
             if "__pycache__" in path.parts or path.name == "__main__.py":
                 continue
@@ -37,7 +37,7 @@ class TestPublicAPI(unittest.TestCase):
             parts = relative.parts
             if parts[-1] == "__init__":
                 parts = parts[:-1]
-            name = ".".join(("qachat", *parts))
+            name = ".".join(("kilin", *parts))
             if name not in names:
                 names.append(name)
         return names
@@ -71,7 +71,7 @@ for name in json.loads(sys.stdin.read()):
         results[name] = None
     except Exception as error:
         results[name] = type(error).__name__ + ": " + str(error)
-print("QACHAT_API_RESULTS=" + json.dumps(results))
+print("KILIN_API_RESULTS=" + json.dumps(results))
 """
         process = subprocess.run(
             [sys.executable, "-c", script],
@@ -86,7 +86,7 @@ print("QACHAT_API_RESULTS=" + json.dumps(results))
             0,
             f"API subprocess failed:\n{process.stderr}",
         )
-        prefix = "QACHAT_API_RESULTS="
+        prefix = "KILIN_API_RESULTS="
         lines = [
             line
             for line in process.stdout.splitlines()
@@ -98,7 +98,7 @@ print("QACHAT_API_RESULTS=" + json.dumps(results))
         for name, error in results.items():
             with self.subTest(module=name):
                 if (
-                    name.startswith("qachat.gui.")
+                    name.startswith("kilin.gui.")
                     and error == (
                         "ModuleNotFoundError: "
                         "No module named 'PySide6'"
@@ -111,17 +111,17 @@ print("QACHAT_API_RESULTS=" + json.dumps(results))
     def test_root_exports(self) -> None:
         """Verify that root package exports resolve at runtime."""
 
-        for name in qachat.__all__:
+        for name in kilin.__all__:
             with self.subTest(name=name):
-                self.assertTrue(hasattr(qachat, name))
+                self.assertTrue(hasattr(kilin, name))
 
     def test_model_defaults_reexports(self) -> None:
         """Preserve public access to the shared model defaults."""
 
-        module = importlib.import_module("qachat.model_defaults")
+        module = importlib.import_module("kilin.model_defaults")
         for name in module.__all__:
             with self.subTest(name=name):
-                self.assertIs(getattr(qachat, name), getattr(module, name))
+                self.assertIs(getattr(kilin, name), getattr(module, name))
 
 
 if __name__ == "__main__":

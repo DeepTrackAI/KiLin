@@ -54,44 +54,44 @@ class TestSetupScript(unittest.TestCase):
         _command(
             self.uv_stub,
             'printf "uv:%s:%s\\n" "$PWD" "$*" '
-            '>> "$QACHAT_TEST_LOG"\n'
-            'exit "${QACHAT_TEST_SYNC_EXIT:-0}"\n',
+            '>> "$KILIN_TEST_LOG"\n'
+            'exit "${KILIN_TEST_SYNC_EXIT:-0}"\n',
         )
         shutil.copyfile(self.uv_stub, self.fake_bin / "uv")
         (self.fake_bin / "uv").chmod(0o755)
         _command(
             self.fake_bin / "uname",
-            'if [ "$1" = "-s" ]; then echo "$QACHAT_TEST_OS"; '
-            'else echo "$QACHAT_TEST_ARCH"; fi\n',
+            'if [ "$1" = "-s" ]; then echo "$KILIN_TEST_OS"; '
+            'else echo "$KILIN_TEST_ARCH"; fi\n',
         )
         _command(
             self.project / ".venv/bin/python",
-            'printf "python:%s\\n" "$*" >> "$QACHAT_TEST_LOG"\n'
-            'exit "${QACHAT_TEST_CHECK_EXIT:-0}"\n',
+            'printf "python:%s\\n" "$*" >> "$KILIN_TEST_LOG"\n'
+            'exit "${KILIN_TEST_CHECK_EXIT:-0}"\n',
         )
         installer = self.temporary_root / "fake-installer"
         _command(
             installer,
-            'echo installer >> "$QACHAT_TEST_LOG"\n'
+            'echo installer >> "$KILIN_TEST_LOG"\n'
             'mkdir -p "$UV_INSTALL_DIR"\n'
-            'cp "$QACHAT_TEST_UV_STUB" "$UV_INSTALL_DIR/uv"\n'
+            'cp "$KILIN_TEST_UV_STUB" "$UV_INSTALL_DIR/uv"\n'
             'chmod +x "$UV_INSTALL_DIR/uv"\n',
         )
         _command(
             self.fake_bin / "curl",
-            'echo curl >> "$QACHAT_TEST_LOG"\n'
-            'cp "$QACHAT_TEST_INSTALLER" "$4"\n'
-            'exit "${QACHAT_TEST_CURL_EXIT:-0}"\n',
+            'echo curl >> "$KILIN_TEST_LOG"\n'
+            'cp "$KILIN_TEST_INSTALLER" "$4"\n'
+            'exit "${KILIN_TEST_CURL_EXIT:-0}"\n',
         )
         self.environment = {
             **os.environ,
             "PATH": str(self.fake_bin),
             "UV_INSTALL_DIR": str(self.temporary_root / "uv install"),
-            "QACHAT_TEST_LOG": str(self.log),
-            "QACHAT_TEST_UV_STUB": str(self.uv_stub),
-            "QACHAT_TEST_INSTALLER": str(installer),
-            "QACHAT_TEST_OS": "Darwin",
-            "QACHAT_TEST_ARCH": "arm64",
+            "KILIN_TEST_LOG": str(self.log),
+            "KILIN_TEST_UV_STUB": str(self.uv_stub),
+            "KILIN_TEST_INSTALLER": str(installer),
+            "KILIN_TEST_OS": "Darwin",
+            "KILIN_TEST_ARCH": "arm64",
         }
 
     def tearDown(self) -> None:
@@ -117,8 +117,8 @@ class TestSetupScript(unittest.TestCase):
         for system, machine in choices:
             with self.subTest(system=system, machine=machine):
                 self.log.unlink(missing_ok=True)
-                self.environment["QACHAT_TEST_OS"] = system
-                self.environment["QACHAT_TEST_ARCH"] = machine
+                self.environment["KILIN_TEST_OS"] = system
+                self.environment["KILIN_TEST_ARCH"] = machine
                 result = self._run()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 backend = "mlx" if system == "Darwin" else "torch"
@@ -131,8 +131,8 @@ class TestSetupScript(unittest.TestCase):
                 )
 
     def test_unsupported_platform_stops(self) -> None:
-        self.environment["QACHAT_TEST_OS"] = "Darwin"
-        self.environment["QACHAT_TEST_ARCH"] = "x86_64"
+        self.environment["KILIN_TEST_OS"] = "Darwin"
+        self.environment["KILIN_TEST_ARCH"] = "x86_64"
         result = self._run()
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(self.log.exists())
@@ -146,7 +146,7 @@ class TestSetupScript(unittest.TestCase):
         self.assertEqual(calls[:2], ["curl", "installer"])
 
     def test_failure_does_not_claim_success(self) -> None:
-        self.environment["QACHAT_TEST_SYNC_EXIT"] = "7"
+        self.environment["KILIN_TEST_SYNC_EXIT"] = "7"
         result = self._run()
         self.assertEqual(result.returncode, 7)
         self.assertNotIn("python:", self.log.read_text(encoding="utf-8"))
@@ -167,7 +167,7 @@ class TestSetupScript(unittest.TestCase):
 
     def test_download_failure_stops_before_install(self) -> None:
         (self.fake_bin / "uv").unlink()
-        self.environment["QACHAT_TEST_CURL_EXIT"] = "22"
+        self.environment["KILIN_TEST_CURL_EXIT"] = "22"
         result = self._run()
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(
@@ -176,7 +176,7 @@ class TestSetupScript(unittest.TestCase):
         self.assertNotIn("Setup complete", result.stdout)
 
     def test_backend_check_failure_does_not_claim_success(self) -> None:
-        self.environment["QACHAT_TEST_CHECK_EXIT"] = "3"
+        self.environment["KILIN_TEST_CHECK_EXIT"] = "3"
         result = self._run()
         self.assertEqual(result.returncode, 3)
         self.assertNotIn("Setup complete", result.stdout)

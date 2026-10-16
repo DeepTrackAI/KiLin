@@ -1,3 +1,3 @@
-"""Tests for the corresponding qachat.retrievals package.
+"""Tests for the corresponding kilin.retrievals package.
 
 """

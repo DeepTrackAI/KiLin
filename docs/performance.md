@@ -1,6 +1,6 @@
 # Trace-based performance analysis
 
-The benchmark examines existing QAChat behavior without changing the
+The benchmark examines existing KíLín behavior without changing the
 answering pipeline or adding production instrumentation. The main tool is
 [`assets/benchmark_traces.ipynb`](../assets/benchmark_traces.ipynb), supported
 by a small, read-only parser in
@@ -14,12 +14,12 @@ The notebook supports two workflows:
    conversation JSON files and run the notebook. No models or projects are
    opened. Readable spans are extracted from the existing numbered session,
    turn, stage, and operation hierarchy.
-2. **Repeat standardized questions (opt-in):** create a separate QAChat project
+2. **Repeat standardized questions (opt-in):** create a separate KíLín project
    under `sandbox/`, configure its models in `profile.ini`, disable model
    downloads, and set `RUN_BENCHMARK = True`. Each repetition creates a new
    conversation in this benchmark project and asks the same ordered questions.
    The notebook measures external wall time around session initialization and
-   each `RAGSession.ask()` call. Existing QAChat traces provide stage timings.
+   each `RAGSession.ask()` call. Existing KíLín traces provide stage timings.
 
 The included `code` and `literature` question sets each contain three fixed
 question roles: overview, mechanism, and limitations. They are intended for
@@ -36,13 +36,13 @@ subsequent questions are not independent of earlier answers.
 
 ### Preparation for a local model run
 
-1. Prepare a dedicated QAChat project under
-   `QAChat/sandbox/performance_workspace/`, using normal QAChat project
+1. Prepare a dedicated KíLín project under
+   `KíLín/sandbox/performance_workspace/`, using normal KíLín project
    creation. A regular project is not suitable for benchmark writes.
 2. Add a fixed, small source corpus and verify the intended profile, retrieval
    settings, and locally available models. Set `[models] allow_download = false`
    in its `profile.ini`. The notebook refuses to run if this is not set.
-3. Open `assets/benchmark_traces.ipynb` with the QAChat Python environment.
+3. Open `assets/benchmark_traces.ipynb` with the KíLín Python environment.
    Set `QUESTION_SET`, `REPEATS` (for example, `2`), and `RUN_BENCHMARK`.
 4. Execute the notebook in order. For a coarse tracing on/off comparison, set
    `TRACE_SETTINGS = (True, False)`; otherwise keep `(True,)` for stage detail.
@@ -53,8 +53,8 @@ subsequent questions are not independent of earlier answers.
 Each repetition creates and closes a fresh RAG session. It does not reset
 operating-system caches, so the result is **not** a controlled hardware cold
 start. The notebook sets commonly supported Hugging Face offline flags before
-loading QAChat; other third-party backends may not honor them. The actual
-`profile.ini` `allow_download = false` setting is the primary QAChat safeguard.
+loading KíLín; other third-party backends may not honor them. The actual
+`profile.ini` `allow_download = false` setting is the primary KíLín safeguard.
 
 ## Measurements and meanings
 
@@ -111,7 +111,7 @@ optimization is necessary.
 
 ## Data location and privacy
 
-Enabled QAChat traces record diagnostic content, including prompts, answers,
+Enabled KíLín traces record diagnostic content, including prompts, answers,
 retrieved passages, token IDs, local file paths, and exceptions. **Do not
 share raw traces as benchmark output.** The parser deliberately returns only
 safe, enumerated timing fields, status, counts, and a user-assigned run label.

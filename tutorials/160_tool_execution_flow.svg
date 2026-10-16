@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1700" height="360" viewBox="0 0 1700 360" role="img" aria-labelledby="title desc">
-  <title id="title">QAChat tool execution flow</title>
+  <title id="title">KíLín tool execution flow</title>
   <desc id="desc">Project type to selected intent to registered tool to ToolRequest and ToolContext to ToolResult.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
@@ -63,6 +63,6 @@
   <text class="body" x="1560" y="178" text-anchor="middle">
     <tspan x="1560">Returns content,</tspan>
     <tspan x="1560" dy="25">files, and metadata</tspan>
-    <tspan x="1560" dy="25">to QAChat.</tspan>
+    <tspan x="1560" dy="25">to KíLín.</tspan>
   </text>
 </svg>

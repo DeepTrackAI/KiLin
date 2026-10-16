@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from qachat.tools.generate_paper_summary.tool import _write_pdf
+from kilin.tools.generate_paper_summary.tool import _write_pdf
 
 
 class TestReportOutputs(unittest.TestCase):

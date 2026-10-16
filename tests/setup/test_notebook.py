@@ -26,7 +26,7 @@ class TestNotebookSetup(unittest.TestCase):
     def test_project_root(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "qachat").mkdir()
+            (root / "kilin").mkdir()
             (root / "pyproject.toml").touch()
             nested = root / "tutorials/examples"
             nested.mkdir(parents=True)
@@ -39,7 +39,7 @@ class TestNotebookSetup(unittest.TestCase):
     def test_prepare_notebook_when_ready(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "qachat").mkdir()
+            (root / "kilin").mkdir()
             (root / "pyproject.toml").touch()
 
             with patch.object(notebook, "_same_python", return_value=True):
@@ -55,7 +55,7 @@ class TestNotebookSetup(unittest.TestCase):
     def test_prepare_notebook_repairs_missing_packages(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "qachat").mkdir()
+            (root / "kilin").mkdir()
             (root / "pyproject.toml").touch()
 
             with patch.object(notebook, "_same_python", return_value=True):
@@ -75,7 +75,7 @@ class TestNotebookSetup(unittest.TestCase):
     def test_wrong_kernel_is_repaired_then_reported(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "qachat").mkdir()
+            (root / "kilin").mkdir()
             (root / "pyproject.toml").touch()
 
             with patch.object(notebook, "_same_python", return_value=False):
@@ -90,7 +90,7 @@ class TestNotebookSetup(unittest.TestCase):
 
     def test_project_root_rejects_missing_repository(self) -> None:
         with TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(RuntimeError, "QAChat project"):
+            with self.assertRaisesRegex(RuntimeError, "KíLín project"):
                 notebook._project_root(Path(directory))
 
     def test_project_python_for_both_platforms(self) -> None:
@@ -148,7 +148,7 @@ class TestNotebookSetup(unittest.TestCase):
     def test_missing_packages_after_sync_raise(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "qachat").mkdir()
+            (root / "kilin").mkdir()
             (root / "pyproject.toml").touch()
             with patch.object(notebook, "_same_python", return_value=True):
                 with patch.object(

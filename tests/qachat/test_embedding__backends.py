@@ -27,8 +27,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import embeddings
-from qachat.embeddings import EmbeddingSession
+from kilin import embeddings
+from kilin.embeddings import EmbeddingSession
 
 
 __all__ = [
@@ -254,7 +254,7 @@ class EmbeddingBackendTestCase(unittest.TestCase):
         -----
         A short input is embedded alongside a longer padded input and also
         individually. The results should agree up to backend precision.
-        QAChat's snapshot resolvers must not run for these local snapshots.
+        KíLín's snapshot resolvers must not run for these local snapshots.
 
         """
 

@@ -2,11 +2,11 @@
 
 ## Threat model and explicit non-goals
 
-![User-owned local data, local QAChat execution and optional remote services occupy separate trust zones.](figures/trust-boundaries.svg)
+![User-owned local data, local KíLín execution and optional remote services occupy separate trust zones.](figures/trust-boundaries.svg)
 
 *Figure: A local-first application still processes untrusted evidence and may contact external services through explicitly allowed operations.*
 
-QAChat is designed for **locally controlled knowledge work**. Projects,
+KíLín is designed for **locally controlled knowledge work**. Projects,
 indexes, source snapshots, generated outputs and conversations can be kept
 under the user's filesystem control and inference can use local models.
 These features are valuable, but they are **not** equivalent to a secure
@@ -14,7 +14,7 @@ sandbox, authenticated multi-user service, encryption system or adversarial
 prompt-injection defense. This document states implemented boundaries and
 where users or deployers remain responsible for security.
 
-| Boundary | What QAChat does | What it does not guarantee |
+| Boundary | What KíLín does | What it does not guarantee |
 | --- | --- | --- |
 | Local source selection | Applies scan exclusions, size limits, path containment checks and explicit import rules. | Comprehensive secret detection; race-free protection against filesystem changes. |
 | Project workspaces | Keeps managed copies, outputs, templates and indexes organized; validates path destinations for managed operations. | OS process/filesystem isolation or safe execution of arbitrary untrusted code. |
@@ -41,7 +41,7 @@ which may themselves contain question, answer and evidence text. See
 [Trace recording](trace_recording.md) and
 [Conversation ownership](conversation_ownership.md).
 
-QAChat does not provide a general automatic secret scrubber, encrypted
+KíLín does not provide a general automatic secret scrubber, encrypted
 workspace format, backup retention policy or secure deletion mechanism.
 Access control, disk encryption, user separation, backups and permissions
 are deployment responsibilities. Files under ignored local `sandbox/` are
@@ -68,22 +68,22 @@ filesystem modification by another process.
 
 ## External access and third-party components
 
-Running QAChat locally does not imply every action is offline:
+Running KíLín locally does not imply every action is offline:
 
-- `qachat --gui` may invoke `uv sync` to prepare missing optional
+- `kilin --gui` may invoke `uv sync` to prepare missing optional
   dependencies; dependency resolution can contact package registries.
 - Model downloads and backend loaders may contact Hugging Face repositories
   when permitted. `allow_download=False` prevents model download through the
   supported local-only loader path, but is not a general network firewall.
 - Users may explicitly open output files with native desktop applications
-  whose subsequent behavior is outside QAChat's control.
+  whose subsequent behavior is outside KíLín's control.
 - Optional tool/model dependencies or OS libraries may have their own
   telemetry, cache locations, permissions and vulnerabilities.
 
 For a constrained offline workflow, preinstall known dependencies, cache
 verified compatible model revisions, choose `allow_download=False`, and
 launch without automatic synchronization (see
-[GUI README](../qachat/gui/README.md)). Network isolation, when required,
+[GUI README](../kilin/gui/README.md)). Network isolation, when required,
 should additionally be enforced by the host OS/environment.
 
 ## Model content and prompt injection
@@ -97,14 +97,14 @@ not that the answer is supported or correct. Human review is still required
 for scientific conclusions, software changes and high-impact decisions.
 
 Tools are explicitly registered, and `ToolContext` limits how models
-interact with QAChat operations. This is good architectural containment but
+interact with KíLín operations. This is good architectural containment but
 not a comprehensive prompt-injection mitigation or command-execution sandbox.
 There is no general agentic OS-shell execution boundary documented as
 implemented in this repository snapshot.
 
 ## Persistence, concurrency and failure
 
-QAChat acquires per-conversation companion-file advisory locks; macOS/Linux
+KíLín acquires per-conversation companion-file advisory locks; macOS/Linux
 use `flock`, Windows uses `msvcrt.locking`, and a process-local registry
 rejects competing same-process writers. Canonical paths prevent distinct
 owners through `/var` versus `/private/var` aliases on macOS. Locks are

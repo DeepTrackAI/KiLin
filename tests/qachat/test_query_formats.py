@@ -15,10 +15,10 @@ from __future__ import annotations
 from typing import get_args
 import unittest
 
-import qachat
-from qachat import query_formats
-from qachat.project_type import project_type
-from qachat.query_formats import format_qwen3_query
+import kilin
+from kilin import query_formats
+from kilin.project_type import project_type
+from kilin.query_formats import format_qwen3_query
 
 
 class TestQueryFormatIdentifiers(unittest.TestCase):
@@ -51,8 +51,8 @@ class TestQueryFormatIdentifiers(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertNotIn(name, query_formats.__all__)
                 self.assertFalse(hasattr(query_formats, name))
-                self.assertNotIn(name, qachat.__all__)
-                self.assertFalse(hasattr(qachat, name))
+                self.assertNotIn(name, kilin.__all__)
+                self.assertFalse(hasattr(kilin, name))
 
 
 class TestQwen3QueryFormatting(unittest.TestCase):

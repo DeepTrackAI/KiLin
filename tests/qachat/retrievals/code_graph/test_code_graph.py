@@ -17,10 +17,10 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from qachat.retrievals.code_graph import code_graph as cg
-from qachat.retrievals.code_graph.extensions import code_graph_m as matlab
-from qachat.retrievals.code_graph.extensions import code_graph_py as py
-from tests.qachat.retrievals._support import source_file, source_unit
+from kilin.retrievals.code_graph import code_graph as cg
+from kilin.retrievals.code_graph.extensions import code_graph_m as matlab
+from kilin.retrievals.code_graph.extensions import code_graph_py as py
+from tests.kilin.retrievals._support import source_file, source_unit
 
 
 class TestCodeGraphNames(unittest.TestCase):
@@ -295,9 +295,9 @@ class TestGraphDeterminismRegression(unittest.TestCase):
         """
         program = (
             "from pathlib import Path; "
-            "from qachat.sources.sources import SourceFile, SourceUnit; "
-            "from qachat.retrievals.code_graph import build_code_graph; "
-            "from qachat.retrievals.persistence import "
+            "from kilin.sources.sources import SourceFile, SourceUnit; "
+            "from kilin.retrievals.code_graph import build_code_graph; "
+            "from kilin.retrievals.persistence import "
             "_repository_fingerprint; "
             "p=Path('x.py'); "
             "k=['python_module_context','python_class_context',"

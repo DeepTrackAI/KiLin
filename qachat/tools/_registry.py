@@ -1,4 +1,4 @@
-"""Register QAChat's tools and resolve an intent's tool.
+"""Register KíLín's tools and resolve an intent's tool.
 
 The registry is the controlled boundary between configuration and code. A
 project type names a tool (``"tool": {"name": "scan_and_list", ...}``); the
@@ -10,7 +10,7 @@ the core resolves and copies them, not the GUI.
 
 Adding a tool means providing a package with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
-context)`` (see ``qachat.tools._contract``), then adding it here. A tool
+context)`` (see ``kilin.tools._contract``), then adding it here. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
 question sent to it to an earlier turn even when the router named none.
 
@@ -71,7 +71,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._registry import TOOL_SCAN_AND_LIST, parse_tool
+>>> from kilin.tools._registry import TOOL_SCAN_AND_LIST, parse_tool
 >>> use = parse_tool("code.intents.list", {"name": TOOL_SCAN_AND_LIST})
 >>> use.name
 'scan_and_list'
@@ -84,7 +84,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
-from qachat.tools import (
+from kilin.tools import (
     batch_classify,
     batch_review,
     filter_results,
@@ -96,8 +96,8 @@ from qachat.tools import (
     scan_and_list,
     show_source,
 )
-from qachat.tools._contract import ToolContext, ToolRequest, ToolResult
-from qachat.workspace_resources import WorkspaceResource
+from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
+from kilin.workspace_resources import WorkspaceResource
 
 __all__ = [
     "TOOL_BATCH_CLASSIFY",
@@ -332,7 +332,7 @@ def run_tool(
     request: ToolRequest
         The question and the user's words.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

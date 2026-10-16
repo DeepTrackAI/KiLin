@@ -1,4 +1,4 @@
-"""Shared synthetic fixture paths for QAChat source-extraction tests.
+"""Shared synthetic fixture paths for KíLín source-extraction tests.
 
 Fixtures live beside the format-specific tests and are never imported or
 executed. Unit tests generally use in-memory text instead.

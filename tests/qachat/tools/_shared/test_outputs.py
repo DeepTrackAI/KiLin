@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.tools._shared.outputs import (
+from kilin.tools._shared.outputs import (
     output_folder,
     publish_output_file,
     save_output_file,
@@ -181,7 +181,7 @@ class TestOutputFilePublication(unittest.TestCase):
             original_link(source, destination, **kwargs)
 
         with patch(
-            "qachat.tools._shared.outputs.os.link",
+            "kilin.tools._shared.outputs.os.link",
             side_effect=competing_link,
         ):
             saved = save_output_file(self.root, "report.md", "new")
@@ -219,7 +219,7 @@ class TestOutputFilePublication(unittest.TestCase):
             set(data),
         )
         self.assertFalse(
-            any(name.startswith(".qachat-output-")
+            any(name.startswith(".kilin-output-")
                 for name in os.listdir(self.folder))
         )
 
@@ -264,7 +264,7 @@ class TestOutputFilePublication(unittest.TestCase):
         first = self.folder / "report.md"
         first.write_text("protected", encoding="utf-8")
         with patch(
-            "qachat.tools._shared.outputs.os.link",
+            "kilin.tools._shared.outputs.os.link",
             side_effect=OSError("hard links unavailable"),
         ):
             saved = save_output_file(self.root, "report.md", "new")
@@ -280,10 +280,10 @@ class TestOutputFilePublication(unittest.TestCase):
         """
 
         with patch(
-            "qachat.tools._shared.outputs.os.link",
+            "kilin.tools._shared.outputs.os.link",
             side_effect=OSError("hard links unavailable"),
         ), patch(
-            "qachat.tools._shared.outputs.shutil.copyfileobj",
+            "kilin.tools._shared.outputs.shutil.copyfileobj",
             side_effect=OSError("copy failed"),
         ):
             with self.assertRaisesRegex(OSError, "copy failed"):

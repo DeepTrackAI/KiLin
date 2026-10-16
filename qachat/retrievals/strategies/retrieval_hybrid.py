@@ -34,8 +34,8 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> results = qachat.hybrid_search(count=5)
+>>> import kilin
+>>> results = kilin.hybrid_search(count=5)
 
 """
 
@@ -45,8 +45,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from qachat.chunking import Chunk
-from qachat.defaults import load_defaults_section, require_default_int
+from kilin.chunking import Chunk
+from kilin.defaults import load_defaults_section, require_default_int
 
 
 __all__ = [

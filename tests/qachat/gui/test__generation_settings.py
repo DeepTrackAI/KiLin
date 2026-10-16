@@ -1,4 +1,4 @@
-"""Test GUI delegation of generation defaults to the QAChat core.
+"""Test GUI delegation of generation defaults to the KíLín core.
 
 The GUI is tested without starting Qt or loading pretrained models.
 
@@ -15,9 +15,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat.gui import engine as gui_engine
-from qachat.gui.preferences import built_in_defaults
-from qachat.project import default_project_profile
+from kilin.gui import engine as gui_engine
+from kilin.gui.preferences import built_in_defaults
+from kilin.project import default_project_profile
 
 
 class TestGUIGenerationSettings(unittest.TestCase):

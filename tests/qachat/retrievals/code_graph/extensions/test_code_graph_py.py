@@ -11,9 +11,9 @@ from __future__ import annotations
 import ast
 import unittest
 
-from qachat.retrievals.code_graph import code_graph as cg
-from qachat.retrievals.code_graph.extensions import code_graph_py as py
-from tests.qachat.retrievals._support import source_file
+from kilin.retrievals.code_graph import code_graph as cg
+from kilin.retrievals.code_graph.extensions import code_graph_py as py
+from tests.kilin.retrievals._support import source_file
 
 
 class TestPythonCodeGraphExtension(unittest.TestCase):

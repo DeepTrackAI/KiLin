@@ -21,8 +21,8 @@ from itertools import product
 import unittest
 from unittest.mock import Mock
 
-from qachat.chunking import Chunk, chunk_source_units
-from qachat.sources.sources import SourceUnit
+from kilin.chunking import Chunk, chunk_source_units
+from kilin.sources.sources import SourceUnit
 
 
 def make_unit(

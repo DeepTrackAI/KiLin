@@ -1,4 +1,4 @@
-"""Private services shared by registered QAChat tools.
+"""Private services shared by registered KíLín tools.
 
 These modules implement document selection, saved-output handling,
 planning, list presentation, mention scanning, source-path
@@ -31,7 +31,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.planning import PLAN_CHOICE_CONTINUE
+>>> from kilin.tools._shared.planning import PLAN_CHOICE_CONTINUE
 >>> PLAN_CHOICE_CONTINUE
 'continue'
 

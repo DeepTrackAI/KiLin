@@ -2,7 +2,7 @@
 
 ## Extension philosophy
 
-QAChat is extensible through **explicit, validated components**, not by
+KíLín is extensible through **explicit, validated components**, not by
 loading arbitrary Python code mentioned in a project JSON. A new reader,
 project type or registered tool must preserve provenance, settings and
 workspace ownership and must not require Qt in the core. This document
@@ -12,7 +12,7 @@ snapshot.
 
 | Extension | Registration / owner | Main invariant |
 | --- | --- | --- |
-| Project type | `qachat/project_types/<kind>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
+| Project type | `kilin/project_types/<kind>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
 | New source format | `sources/extensions/sources_<suffix>.py`, dispatched by `sources.py` | Return well-formed `SourceFile` / `SourceUnit` records with exact provenance. |
 | Code graph language | `retrievals/code_graph/extensions/` | Extract structural hints without executing source code. |
 | Built-in tool | `tools/<name>/` plus `tools/_registry.py` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
@@ -77,11 +77,11 @@ require source-unit conventions, graph entity typing and retrieval tests.
 
 *Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
 
-All tools are registered under `qachat/tools/`. Existing packages demonstrate
+All tools are registered under `kilin/tools/`. Existing packages demonstrate
 the expected structure:
 
 ```text
-qachat/tools/<name>/
+kilin/tools/<name>/
     __init__.py
     tool.py                 # Settings dataclass, parse_settings(), run()
     _configuration.py       # Validate owned defaults
@@ -129,16 +129,16 @@ callback, so document the default policy and cost.
 
 | Tool ID | Main implementation purpose | Authoritative reference |
 | --- | --- | --- |
-| `project_inventory` | Summarize selected files and unsearchable source coverage. | [README](../qachat/tools/project_inventory/README.md) |
-| `scan_and_list` | Count and list literal mentions with source locations. | [README](../qachat/tools/scan_and_list/README.md) |
-| `batch_classify` | Classify many mentions in model-assisted batches. | [README](../qachat/tools/batch_classify/README.md) |
-| `batch_review` | Read one document in parts and answer from notes. | [README](../qachat/tools/batch_review/README.md) |
-| `filter_results` | Filter items of an earlier answer against a follow-up. | [README](../qachat/tools/filter_results/README.md) |
-| `find_fact` | Find one fact or a complete set across a document/corpus. | [README](../qachat/tools/find_fact/README.md) |
-| `find_passages` | Locate relevant literal passages/sentences. | [README](../qachat/tools/find_passages/README.md) |
-| `paper_overview` | Produce a structured overview of a paper. | [README](../qachat/tools/paper_overview/README.md) |
-| `show_source` | Display requested exact source context. | [README](../qachat/tools/show_source/README.md) |
-| `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../qachat/tools/generate_paper_summary/README.md) |
+| `project_inventory` | Summarize selected files and unsearchable source coverage. | [README](../kilin/tools/project_inventory/README.md) |
+| `scan_and_list` | Count and list literal mentions with source locations. | [README](../kilin/tools/scan_and_list/README.md) |
+| `batch_classify` | Classify many mentions in model-assisted batches. | [README](../kilin/tools/batch_classify/README.md) |
+| `batch_review` | Read one document in parts and answer from notes. | [README](../kilin/tools/batch_review/README.md) |
+| `filter_results` | Filter items of an earlier answer against a follow-up. | [README](../kilin/tools/filter_results/README.md) |
+| `find_fact` | Find one fact or a complete set across a document/corpus. | [README](../kilin/tools/find_fact/README.md) |
+| `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
+| `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
+| `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
+| `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 
 These tools do not have identical output formats, costs or confirmation
 policies. Consult their own READMEs, `defaults.json` and tests before
@@ -195,11 +195,11 @@ an index file format.
 - Check tool `summary` JSON serializability and citation/evidence numbering.
 - Confirm resource destinations cannot traverse outside the project or
   overwrite edited user files.
-- Preserve `qachat` imports without Qt and test the headless path.
+- Preserve `kilin` imports without Qt and test the headless path.
 - Test both project creation and reopened profiles; no unintended migration.
 - Update tool README, local module docstrings and the module map.
 
-The tool architecture tests are under `tests/qachat/tools/`; each tool also
+The tool architecture tests are under `tests/kilin/tools/`; each tool also
 has dedicated tests. For platform-specific GUI adapters, run appropriate
 Qt smoke tests separately. See [Development](development.md).
 

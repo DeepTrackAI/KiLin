@@ -7,10 +7,10 @@ Tools that list results call ``offer_export`` when a list is longer than
 file is) and seeing the first items in the chat.
 
 The saved file drops passage citations such as ``[3]``, which point at
-evidence shown in the chat and mean nothing outside QAChat. Where nobody
+evidence shown in the chat and mean nothing outside KíLín. Where nobody
 can be asked (notebooks), nothing is saved and the tool shows the first
 items as usual. A file never replaces an existing one; see
-``qachat.tools._shared.outputs``.
+``kilin.tools._shared.outputs``.
 
 Key Features
 ------------
@@ -44,7 +44,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.long_lists import file_name, offer_export
+>>> from kilin.tools._shared.long_lists import file_name, offer_export
 >>> file_name("mentions", "Gradient descent")
 'mentions_gradient_descent.md'
 >>> saved = offer_export(
@@ -66,15 +66,15 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.tools._contract import ToolContext
-from qachat.tools._shared.outputs import save_output_file
-from qachat.tools._shared.planning import ask_choice
+from kilin.tools._contract import ToolContext
+from kilin.tools._shared.outputs import save_output_file
+from kilin.tools._shared.planning import ask_choice
 
 __all__ = ["CHAT_LIST_LIMIT", "file_name", "offer_export"]
 
 # Longest list shown in the chat; longer lists are offered as a file.
 CHAT_LIST_LIMIT: Final[int] = 20
-# Passage citations, which mean nothing outside QAChat.
+# Passage citations, which mean nothing outside KíLín.
 _CITATION: Final[re.Pattern[str]] = re.compile(r"\s*\[\d+(?:\s*,\s*\d+)*\]")
 # Longest part of a file name taken from the listed words.
 _SLUG_LENGTH: Final[int] = 40
@@ -93,7 +93,7 @@ def offer_export(
     Parameters
     ----------
     context: ToolContext
-        QAChat's services (``choose``, ``project_root``).
+        KíLín's services (``choose``, ``project_root``).
     count: int
         Number of items in the list.
     what: str

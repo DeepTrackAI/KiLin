@@ -21,7 +21,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat.gui import _report_pdf
+from kilin.gui import _report_pdf
 
 
 class _FakePageSize:
@@ -262,7 +262,7 @@ class TestReportPdfAdapter(unittest.TestCase):
         self.assertEqual(writer.properties['resolution'], 72)
         self.assertEqual(writer.properties['page_size'].value, 'A4')
         self.assertEqual(writer.properties['title'], 'My report')
-        self.assertEqual(writer.properties['creator'], 'QAChat')
+        self.assertEqual(writer.properties['creator'], 'KíLín')
         self.assertEqual(writer.properties['margins'][1], 'mm')
         self.assertIs(writer.printed_document,
                       _FakeTextDocument.instances[-1])
@@ -285,7 +285,7 @@ class TestReportPdfAdapter(unittest.TestCase):
         self.assertEqual(len(_FakeTextDocument.instances), 2)
         self.assertEqual(
             _FakePdfWriter.instances[0].properties['title'],
-            'QAChat report',
+            'KíLín report',
         )
 
     def test_import_has_no_qt_startup_side_effect(self) -> None:
@@ -321,7 +321,7 @@ class TestReportPdfAdapter(unittest.TestCase):
             _report_pdf._application()
             self.assertEqual(len(holders), 1)
         application.assert_called_once_with(
-            ['qachat-pdf', '-platform', 'offscreen']
+            ['kilin-pdf', '-platform', 'offscreen']
         )
 
     def test_existing_application_is_reused(self) -> None:

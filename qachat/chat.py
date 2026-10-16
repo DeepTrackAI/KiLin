@@ -67,8 +67,8 @@ Examples
 --------
 Create a session from a model directory compatible with the selected backend:
 
->>> import qachat
->>> chat = qachat.ChatSession(
+>>> import kilin
+>>> chat = kilin.ChatSession(
 ...     "/path/to/local/chat-model",
 ...     allow_download=False,
 ...     system_prompt="Explain scientific concepts clearly.",
@@ -94,8 +94,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
-from qachat.huggingface import cached_model_snapshot
-from qachat.runtime import (
+from kilin.huggingface import cached_model_snapshot
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
     Backend,
@@ -103,7 +103,7 @@ from qachat.runtime import (
     choose_backend as _choose_backend,
     torch_device as _torch_device,
 )
-from qachat.trace_logging import (
+from kilin.trace_logging import (
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT_TOKENS,
@@ -157,7 +157,7 @@ class ChatSession:
         Hugging Face model ID or path to a local model directory.
     backend: "auto" | "mlx" | "torch", optional
         Calculation backend. ``auto`` delegates platform selection to the
-        shared QAChat runtime utilities. Defaults to ``'auto'``.
+        shared KíLín runtime utilities. Defaults to ``'auto'``.
     thinking: bool, optional
         Whether a compatible chat template should enable thinking output.
         Defaults to ``False``.
@@ -290,7 +290,7 @@ class ChatSession:
             Hugging Face model ID or path to a local model directory.
         backend: "auto" | "mlx" | "torch", optional
             Calculation backend. ``auto`` delegates platform selection to the
-            shared QAChat runtime utilities. Defaults to ``'auto'``.
+            shared KíLín runtime utilities. Defaults to ``'auto'``.
         thinking: bool, optional
             Whether a compatible chat template should enable thinking output.
             Defaults to ``False``.

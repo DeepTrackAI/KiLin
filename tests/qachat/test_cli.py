@@ -1,4 +1,4 @@
-"""Test the QAChat console entry point without launching desktop Qt.
+"""Test the KíLín console entry point without launching desktop Qt.
 
 Argument parsing, platform-specific dependency selection, and optional
 ``uv sync`` preparation are tested using mocked boundaries. No test starts
@@ -21,8 +21,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import call, patch
 
-from qachat import cli
-from qachat.runtime import (
+from kilin import cli
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_MLX,
     BACKEND_TORCH,
@@ -38,13 +38,13 @@ class TestCommandLine(unittest.TestCase):
         output = StringIO()
         with (
             patch.object(cli, "_ensure_gui_environment") as ensure,
-            patch("qachat.gui.app.main") as gui_main,
+            patch("kilin.gui.app.main") as gui_main,
             redirect_stdout(output),
         ):
             result = cli.main([])
 
         self.assertEqual(result, 0)
-        self.assertIn("usage: qachat", output.getvalue())
+        self.assertIn("usage: kilin", output.getvalue())
         self.assertIn("--gui", output.getvalue())
         self.assertIn("--backend", output.getvalue())
         ensure.assert_not_called()
@@ -57,7 +57,7 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(backend=backend):
                 with (
                     patch.object(cli, "_ensure_gui_environment") as ensure,
-                    patch("qachat.gui.app.main") as gui_main,
+                    patch("kilin.gui.app.main") as gui_main,
                     redirect_stdout(StringIO()) as output,
                 ):
                     result = cli.main(["--backend", backend])
@@ -73,7 +73,7 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 with (
                     patch.object(cli, "_ensure_gui_environment") as ensure,
-                    patch("qachat.gui.app.main") as gui_main,
+                    patch("kilin.gui.app.main") as gui_main,
                     redirect_stdout(StringIO()) as output,
                 ):
                     with self.assertRaises(SystemExit) as caught:
@@ -96,7 +96,7 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 with (
                     patch.object(cli, "_ensure_gui_environment") as ensure,
-                    patch("qachat.gui.app.main") as gui_main,
+                    patch("kilin.gui.app.main") as gui_main,
                     redirect_stderr(StringIO()) as output,
                 ):
                     with self.assertRaises(SystemExit) as caught:
@@ -111,28 +111,28 @@ class TestCommandLine(unittest.TestCase):
 
         with (
             patch.object(cli, "_ensure_gui_environment") as ensure,
-            patch("qachat.gui.app.main", return_value=7) as gui_main,
-            patch.object(cli.sys, "argv", ["qachat-launcher", "unused"]),
+            patch("kilin.gui.app.main", return_value=7) as gui_main,
+            patch.object(cli.sys, "argv", ["kilin-launcher", "unused"]),
         ):
             result = cli.main(["--gui", "--backend", BACKEND_MLX])
 
         self.assertEqual(result, 7)
         ensure.assert_called_once_with(BACKEND_MLX)
-        gui_main.assert_called_once_with(["qachat-launcher"])
+        gui_main.assert_called_once_with(["kilin-launcher"])
 
     def test_gui_launch_uses_auto_backend_by_default(self) -> None:
         """Prepare the auto backend without forwarding it to Qt."""
 
         with (
             patch.object(cli, "_ensure_gui_environment") as ensure,
-            patch("qachat.gui.app.main", return_value=0) as gui_main,
-            patch.object(cli.sys, "argv", ["qachat-executable"]),
+            patch("kilin.gui.app.main", return_value=0) as gui_main,
+            patch.object(cli.sys, "argv", ["kilin-executable"]),
         ):
             result = cli.main(["--gui"])
 
         self.assertEqual(result, 0)
         ensure.assert_called_once_with(BACKEND_AUTO)
-        gui_main.assert_called_once_with(["qachat-executable"])
+        gui_main.assert_called_once_with(["kilin-executable"])
 
     def test_explicit_backends_are_used_for_preparation_only(self) -> None:
         """Keep backend extras separate from the GUI argument vector."""
@@ -141,7 +141,7 @@ class TestCommandLine(unittest.TestCase):
             with self.subTest(backend=backend):
                 with (
                     patch.object(cli, "_ensure_gui_environment") as ensure,
-                    patch("qachat.gui.app.main", return_value=0) as gui_main,
+                    patch("kilin.gui.app.main", return_value=0) as gui_main,
                     patch.object(cli.sys, "argv", ["launcher"]),
                 ):
                     result = cli.main(["--gui", "--backend", backend])
@@ -154,18 +154,18 @@ class TestCommandLine(unittest.TestCase):
 
         with (
             patch.object(cli, "_ensure_gui_environment") as ensure,
-            patch("qachat.gui.app.main", return_value=3) as gui_main,
+            patch("kilin.gui.app.main", return_value=3) as gui_main,
             patch.object(
                 cli.sys,
                 "argv",
-                ["installed-qachat", "--gui", "--backend", "torch"],
+                ["installed-kilin", "--gui", "--backend", "torch"],
             ),
         ):
             result = cli.main()
 
         self.assertEqual(result, 3)
         ensure.assert_called_once_with(BACKEND_TORCH)
-        gui_main.assert_called_once_with(["installed-qachat"])
+        gui_main.assert_called_once_with(["installed-kilin"])
 
     def test_environment_failure_prevents_gui_launch(self) -> None:
         """Propagate preparation failures without starting the desktop."""
@@ -176,7 +176,7 @@ class TestCommandLine(unittest.TestCase):
                 "_ensure_gui_environment",
                 side_effect=RuntimeError("missing dependencies"),
             ) as ensure,
-            patch("qachat.gui.app.main") as gui_main,
+            patch("kilin.gui.app.main") as gui_main,
         ):
             with self.assertRaisesRegex(RuntimeError, "missing dependencies"):
                 cli.main(["--gui"])
@@ -190,7 +190,7 @@ class TestCommandLine(unittest.TestCase):
         with (
             patch.object(cli, "_ensure_gui_environment") as ensure,
             patch(
-                "qachat.gui.app.main",
+                "kilin.gui.app.main",
                 side_effect=RuntimeError("GUI startup failed"),
             ) as gui_main,
         ):
@@ -328,7 +328,7 @@ class TestGUIEnvironment(unittest.TestCase):
         """Require a project pyproject before attempting synchronization."""
 
         with TemporaryDirectory() as directory:
-            fake_cli_path = Path(directory) / "qachat" / "cli.py"
+            fake_cli_path = Path(directory) / "kilin" / "cli.py"
             with (
                 patch.object(cli, "__file__", str(fake_cli_path)),
                 patch.object(cli, "find_spec", return_value=None),
@@ -360,7 +360,7 @@ class TestGUIEnvironment(unittest.TestCase):
             root = Path(directory) / "checkout"
             root.mkdir()
             (root / "pyproject.toml").write_text("[project]\n")
-            fake_cli_path = root / "qachat" / "cli.py"
+            fake_cli_path = root / "kilin" / "cli.py"
 
             for backend, missing, extra in cases:
                 with self.subTest(backend=backend, missing=missing):
@@ -427,7 +427,7 @@ class TestGUIEnvironment(unittest.TestCase):
             (root / "pyproject.toml").write_text("[project]\n")
             error = subprocess.CalledProcessError(9, ["uv", "sync"])
             with (
-                patch.object(cli, "__file__", str(root / "qachat/cli.py")),
+                patch.object(cli, "__file__", str(root / "kilin/cli.py")),
                 patch.object(cli, "find_spec", return_value=None),
                 patch.object(
                     cli.shutil, "which", return_value="/fake/uv"
@@ -456,8 +456,8 @@ class TestLazyCLIImport(unittest.TestCase):
 
         command = (
             "import sys\n"
-            "import qachat.cli\n"
-            "assert 'qachat.gui.app' not in sys.modules\n"
+            "import kilin.cli\n"
+            "assert 'kilin.gui.app' not in sys.modules\n"
             "assert 'PySide6' not in sys.modules\n"
         )
         result = subprocess.run(

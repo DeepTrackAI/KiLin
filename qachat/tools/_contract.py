@@ -1,19 +1,19 @@
-"""Define what QAChat gives a tool and what the tool returns.
+"""Define what KíLín gives a tool and what the tool returns.
 
 A tool performs one explicit operation for an intent, such as listing every
 mention of a term. An intent in a project type names its tool and settings
 (``"tool": {"name": "scan_and_list", ...}``); the router selects the
-intent, and QAChat runs the tool instead of retrieval and the answering
-model. A tool receives the question as a ``ToolRequest`` and QAChat's
+intent, and KíLín runs the tool instead of retrieval and the answering
+model. A tool receives the question as a ``ToolRequest`` and KíLín's
 services as a ``ToolContext``, and returns a ``ToolResult``: the answer,
 the evidence it cites, and a summary saved with the turn.
 
-Tools never import ``qachat.rag``. Everything they may use (indexed
+Tools never import ``kilin.rag``. Everything they may use (indexed
 chunks, ranking, the router and answering models, progress, confirmation,
 tracing) arrives through the context, so a tool can be tested with plain
 functions in place of models. The context does not check what a tool does
 with these services; a tool is trusted code registered in
-``qachat.tools._registry``.
+``kilin.tools._registry``.
 
 The settings checks raise ``ValueError`` with the intent location and the
 field name, so a mistake in a project type file points at its line of
@@ -30,7 +30,7 @@ Key Features
 
 - **Context**
 
-    QAChat's services, as plain callables.
+    KíLín's services, as plain callables.
 
 - **Result**
 
@@ -54,7 +54,7 @@ Module Structure
 
 - ``ToolContext``
 
-    QAChat's services, as a tool may use them.
+    KíLín's services, as a tool may use them.
 
 - ``ToolResult``
 
@@ -78,7 +78,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._contract import ToolRequest, check_int
+>>> from kilin.tools._contract import ToolRequest, check_int
 >>> question = "list every mention of MRI"
 >>> request = ToolRequest(question, question)
 >>> check_int("code.intents.x.tool", {"max_calls": 5}, "max_calls", 10, 1, 50)
@@ -94,10 +94,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from qachat.chunking import Chunk
-    from qachat.retrievals import CodeGraph, HybridResult
-    from qachat.tools._shared.planning import ToolPlan
-    from qachat.trace_logging import TraceSink
+    from kilin.chunking import Chunk
+    from kilin.retrievals import CodeGraph, HybridResult
+    from kilin.tools._shared.planning import ToolPlan
+    from kilin.trace_logging import TraceSink
 
 __all__ = [
     "EarlierTurn",
@@ -179,13 +179,13 @@ class ToolRequest:
 
 @dataclass(frozen=True, slots=True)
 class ToolContext:
-    """QAChat's services, as a tool may use them.
+    """KíLín's services, as a tool may use them.
 
     Attributes
     ----------
     project_root: pathlib.Path
         The project folder (``outputs/`` and ``templates/`` live here; see
-        ``qachat.tools._shared.outputs`` and the report-summary tool).
+        ``kilin.tools._shared.outputs`` and the report-summary tool).
     chunks: Sequence[Chunk]
         Every indexed chunk, in index order.
     graph: CodeGraph

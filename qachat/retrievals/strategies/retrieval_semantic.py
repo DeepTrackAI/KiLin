@@ -53,11 +53,11 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> indexes = qachat.load_indexes("/path/to/workspace/indexes/retrieval.json")
->>> matrix = qachat.semantic_matrix(indexes.semantic)
+>>> import kilin
+>>> indexes = kilin.load_indexes("/path/to/workspace/indexes/retrieval.json")
+>>> matrix = kilin.semantic_matrix(indexes.semantic)
 
-Pass a compatible live embedding session to ``qachat.semantic_search`` when
+Pass a compatible live embedding session to ``kilin.semantic_search`` when
 performing a query.
 
 """
@@ -70,8 +70,8 @@ import math
 
 import numpy as np
 
-from qachat.chunking import Chunk
-from qachat.embeddings import EmbeddingSession
+from kilin.chunking import Chunk
+from kilin.embeddings import EmbeddingSession
 
 __all__ = [
     "SemanticIndex",

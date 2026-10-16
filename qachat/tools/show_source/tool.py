@@ -59,11 +59,11 @@ sentences; they are not part of the public API.
 
 Examples
 --------
-``context`` is the ``ToolContext`` that QAChat passes to a tool, and
+``context`` is the ``ToolContext`` that KíLín passes to a tool, and
 ``earlier`` holds the turns the follow-up points back to:
 
->>> from qachat.tools import ToolRequest
->>> from qachat.tools.show_source import SourceSettings, run
+>>> from kilin.tools import ToolRequest
+>>> from kilin.tools.show_source import SourceSettings, run
 >>> question = "show me that sentence"
 >>> request = ToolRequest(question, question, earlier=earlier)
 >>> result = run(SourceSettings(), request, context)
@@ -80,10 +80,10 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.tools.show_source import _configuration as _config
-from qachat.tools._shared.earlier_turns import newest_listed
-from qachat.tools._contract import (
+from kilin.chunking import Chunk
+from kilin.tools.show_source import _configuration as _config
+from kilin.tools._shared.earlier_turns import newest_listed
+from kilin.tools._contract import (
     EarlierTurn,
     ToolContext,
     ToolRequest,
@@ -91,7 +91,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.sentences import Sentence, split_sentences
+from kilin.tools._shared.sentences import Sentence, split_sentences
 
 __all__ = [
     "SourceSettings",
@@ -192,7 +192,7 @@ def explain_prompt(
     """
 
     system = (
-        "You explain source text for QAChat. Use only the text shown, cite "
+        "You explain source text for KíLín. Use only the text shown, cite "
         "it like [1], and say plainly when the text does not make "
         "something clear."
     )
@@ -223,7 +223,7 @@ def run(
     request: ToolRequest
         The follow-up, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

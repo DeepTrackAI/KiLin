@@ -1,4 +1,4 @@
-"""Test the shared loader for QAChat's packaged configuration defaults.
+"""Test the shared loader for KíLín's packaged configuration defaults.
 
 Tests use temporary JSON files and require no model, GUI, or network access.
 They verify cached reads, defensive section copies, and strict type checks.
@@ -19,7 +19,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import defaults
+from kilin import defaults
 
 
 class TestPackagedDefaultsLoader(unittest.TestCase):
@@ -30,7 +30,7 @@ class TestPackagedDefaultsLoader(unittest.TestCase):
 
         self.temporary = TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.path = Path(self.temporary.name) / "qachat_defaults.json"
+        self.path = Path(self.temporary.name) / "kilin_defaults.json"
         self.path_patch = patch.object(defaults, "_DEFAULTS_PATH", self.path)
         self.path_patch.start()
         self.addCleanup(self.path_patch.stop)
@@ -279,7 +279,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         """
 
-        from qachat import project
+        from kilin import project
 
         settings = defaults.load_defaults_section("PROJECT_PROFILE")
         profile = project.default_project_profile("code")
@@ -304,7 +304,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         """
 
-        from qachat.chunking import chunk_source_units
+        from kilin.chunking import chunk_source_units
 
         settings = defaults.load_defaults_section("CHUNKING")
         signature = inspect.signature(chunk_source_units)
@@ -326,7 +326,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         """
 
-        from qachat import rag
+        from kilin import rag
 
         settings = defaults.load_defaults_section("RAG")
         values = {
@@ -350,7 +350,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         import importlib
 
-        project_type_module = importlib.import_module("qachat.project_type")
+        project_type_module = importlib.import_module("kilin.project_type")
 
         settings = defaults.load_defaults_section("PROJECT_TYPES")
         self.assertEqual(
@@ -368,8 +368,8 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         """
 
-        from qachat.retrievals import document_reading, routing
-        from qachat.retrievals.strategies import (
+        from kilin.retrievals import document_reading, routing
+        from kilin.retrievals.strategies import (
             retrieval_code,
             retrieval_hybrid,
         )
@@ -407,7 +407,7 @@ class TestDefaultDocumentation(unittest.TestCase):
 
         root = Path(__file__).resolve().parents[2]
         config = json.loads(
-            (root / "qachat" / "qachat_defaults.json").read_text(
+            (root / "kilin" / "kilin_defaults.json").read_text(
                 encoding="utf-8"
             )
         )

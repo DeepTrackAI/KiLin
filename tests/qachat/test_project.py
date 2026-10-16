@@ -1,4 +1,4 @@
-"""Test QAChat project profiles, configuration, and managed workspaces.
+"""Test KíLín project profiles, configuration, and managed workspaces.
 
 Exercise real profile files and disposable source directories without
 loading models or writing to user projects. Cross-check that packaged
@@ -22,15 +22,15 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
-from qachat import project
-from qachat.defaults import load_defaults_section
-from qachat.model_defaults import (
+from kilin import project
+from kilin.defaults import load_defaults_section
+from kilin.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from qachat.project_type import load_project_types, project_type
+from kilin.project_type import load_project_types, project_type
 
 
 class ProjectFixture(unittest.TestCase):
@@ -1223,7 +1223,7 @@ class TestWorkspaceHelpers(ProjectFixture):
         project._write_json(alternate / "source_snapshot.json", {
             "source_directory": "someone_else"
         })
-        with self.assertRaisesRegex(ValueError, "unique QAChat workspace"):
+        with self.assertRaisesRegex(ValueError, "unique KíLín workspace"):
             project._select_workspace_root(root, source)
 
     def test_select_workspace_root_reuses_matching_collision_owner(

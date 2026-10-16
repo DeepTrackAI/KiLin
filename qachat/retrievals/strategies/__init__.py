@@ -79,8 +79,8 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> terms = qachat.lexical_terms("read_repository_files")
+>>> import kilin
+>>> terms = kilin.lexical_terms("read_repository_files")
 
 """
 

@@ -4,7 +4,7 @@ This tool package owns its code, ``defaults.json`` and shipped Markdown
 templates. A project type may override the tool's ordinary settings; only
 its selected packaged template is installed in a new project's workspace.
 Shared model execution, output handling, and planning remain private
-infrastructure in ``qachat.tools`` rather than other executable tools.
+infrastructure in ``kilin.tools`` rather than other executable tools.
 
 Key Features
 ------------
@@ -40,13 +40,13 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary import parse_settings
+>>> from kilin.tools.generate_paper_summary import parse_settings
 >>> parse_settings({}, "example").template
 'research_briefing'
 
 """
 
-from qachat.tools.generate_paper_summary._report_template import (
+from kilin.tools.generate_paper_summary._report_template import (
     LIMIT_TOLERANCE,
     SECTION_SOURCE_CHOICES,
     SECTION_SOURCE_CITATION,
@@ -65,7 +65,7 @@ from qachat.tools.generate_paper_summary._report_template import (
     section_problem,
     template_names,
 )
-from qachat.tools.generate_paper_summary.tool import (
+from kilin.tools.generate_paper_summary.tool import (
     SummarySettings,
     choose_paper,
     choose_template,

@@ -1,6 +1,6 @@
 """Offline smoke tests for cached default pretrained chat models.
 
-Only the backend-specific default IDs from qachat.model_defaults are used.
+Only the backend-specific default IDs from kilin.model_defaults are used.
 Tests skip when an optional backend is unavailable or the corresponding
 model has not been fully downloaded. A cached model that fails to load or
 produce a reply is a test failure, not a skip. No downloads are permitted.
@@ -27,8 +27,8 @@ from unittest.mock import patch
 
 from huggingface_hub.errors import LocalEntryNotFoundError
 
-from qachat import chat, model_defaults
-from qachat import huggingface
+from kilin import chat, model_defaults
+from kilin import huggingface
 
 
 def _has_package(name: str) -> bool:

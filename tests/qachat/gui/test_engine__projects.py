@@ -19,12 +19,12 @@ import unittest
 from unittest.mock import patch
 
 
-from qachat.conversation_format import conversation_state
-from qachat.conversations import ConversationStore
-from qachat.gui.engine import ChatEngine
-from qachat.project import open_project
+from kilin.conversation_format import conversation_state
+from kilin.conversations import ConversationStore
+from kilin.gui.engine import ChatEngine
+from kilin.project import open_project
 
-from qachat.workspace import prepare_sources_workspace
+from kilin.workspace import prepare_sources_workspace
 
 
 @dataclass
@@ -114,7 +114,7 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.events = []
         self.engine = ChatEngine(self.root, self.events.append)
         self.addCleanup(self.engine.close)
-        patcher = patch("qachat.gui.engine.RAGSession", FakeSession)
+        patcher = patch("kilin.gui.engine.RAGSession", FakeSession)
         patcher.start()
         self.addCleanup(patcher.stop)
         self.engine.conversation_store = store

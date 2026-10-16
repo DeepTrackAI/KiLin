@@ -1,6 +1,6 @@
-# QAChat desktop interface
+# KíLín desktop interface
 
-The desktop interface is a local Qt shell around QAChat's project, retrieval,
+The desktop interface is a local Qt shell around KíLín's project, retrieval,
 and model APIs. The web page owns presentation state; a separate Python
 process owns filesystem access, indexing, model sessions, and conversation
 storage. Closing or stopping that process is not the same as pausing a model.
@@ -11,10 +11,10 @@ With synchronization and automatic preparation of missing GUI/backend
 dependencies, launch from the repository with:
 
 ```sh
-uv run qachat --gui
+uv run kilin --gui
 ```
 
-`uv run` synchronizes the project environment. The `qachat` command checks
+`uv run` synchronizes the project environment. The `kilin` command checks
 the required modules and may invoke `uv sync --extra gui --extra mlx` on an
 Apple Silicon Mac, or `uv sync --extra gui --extra torch` on other supported
 platforms, when GUI/backend modules are missing. This can modify the local
@@ -23,20 +23,20 @@ environment and contact package repositories. Models are managed separately.
 To use an already-installed environment **without synchronization**, run:
 
 ```sh
-uv run --no-sync python -m qachat.gui
+uv run --no-sync python -m kilin.gui
 ```
 
-This bypasses both uv's initial synchronization and the QAChat CLI's optional
+This bypasses both uv's initial synchronization and the KíLín CLI's optional
 dependency repair. Missing GUI modules will instead cause startup to fail.
-The `--no-sync` option is an **uv** option, not a `qachat` option. Running
-`uv run --no-sync qachat --gui` skips only uv's initial synchronization:
-QAChat's launcher can still call `uv sync` if dependencies are missing.
+The `--no-sync` option is an **uv** option, not a `kilin` option. Running
+`uv run --no-sync kilin --gui` skips only uv's initial synchronization:
+KíLín's launcher can still call `uv sync` if dependencies are missing.
 
-`qachat.cli.main` checks dependency module discoverability and may invoke
+`kilin.cli.main` checks dependency module discoverability and may invoke
 `uv sync` in a development checkout before launching the GUI. This can modify
 the environment and contact package repositories. Its `--backend` argument
 controls dependency preparation; it does not override the project's backend
-selection in the GUI. `python -m qachat.gui` delegates directly to the GUI
+selection in the GUI. `python -m kilin.gui` delegates directly to the GUI
 application and does not perform that synchronization step.
 
 ## Components and communication
@@ -47,7 +47,7 @@ and converts bridge calls into JSON-line commands. Engine responses are
 relayed to JavaScript as JSON events. Unexpected diagnostic output is kept
 separate from protocol messages where the bridge implements that handling.
 
-`engine.py` handles commands synchronously, invokes QAChat's APIs, and emits
+`engine.py` handles commands synchronously, invokes KíLín's APIs, and emits
 project, progress, answer, reference, and failure events. `model_catalog.py`
 contains suggested model records and distribution-presence checks. A cache
 entry or an installed distribution is not proof that a model can load or run.
@@ -86,7 +86,7 @@ The selected sources are copied into the workspace's `sources/` directory.
 This multi-source route is cumulative: re-adding a source updates matching
 files, but deletion or deselection at the origin does not automatically remove
 old workspace copies. It differs from the single-source synchronization API
-in `qachat.project`. The original source is not intentionally modified.
+in `kilin.project`. The original source is not intentionally modified.
 
 In an open project, only the sidebar's `sources` tree accepts dropped files
 or folders. It highlights during a native file drag; other workspace areas
@@ -117,15 +117,15 @@ without embedding-snapshot metadata require one full rebuild.
 
 A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
 selected explicitly or created under the GUI's default workspace parent. In
-a source checkout (containing `pyproject.toml`, `tests/qachat/`, and the GUI
+a source checkout (containing `pyproject.toml`, `tests/kilin/`, and the GUI
 source), the default is the repository's `sandbox/` folder. In an installed
 package, it is a per-user application-data directory:
 
-- macOS: `~/Library/Application Support/QAChat/workspaces/`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/qachat/workspaces/`
-- Windows: `%LOCALAPPDATA%/QAChat/workspaces/` (with a home fallback)
+- macOS: `~/Library/Application Support/kilin/workspaces/`
+- Linux: `${XDG_DATA_HOME:-~/.local/share}/kilin/workspaces/`
+- Windows: `%LOCALAPPDATA%/kilin/workspaces/` (with a home fallback)
 
-`QACHAT_WORKSPACES_DIR` overrides this default in both cases and must
+`KILIN_WORKSPACES_DIR` overrides this default in both cases and must
 be an absolute path (or a home-expanded `~/...` path). Explicit
 workspace paths entered through the interface take precedence. The engine
 does not create the default directory until a project needs it; existing
@@ -141,7 +141,7 @@ profile and the current GUI fields remain the effective configuration.
 
 ## Project types
 
-Project types live in `qachat/project_types/`, one JSON file per type
+Project types live in `kilin/project_types/`, one JSON file per type
 (`code.json`, `literature.json`); the file name is the type's ID and types
 are listed in file-name order. Each file sets the display name shown in the
 type menu, a one-line description (shown to the router), default file
@@ -167,8 +167,8 @@ inference call.
 An intent may instead name a **tool** (`"tool": {"name": ..., settings}`),
 which replaces retrieval and the answering prompt for that intent; its
 retrieval mode must be "none" and it needs no system prompt. Tools live in
-`qachat/tools/`, one module each, and must be registered in
-`qachat/tools/_registry.py`; each validates its own settings when the type
+`kilin/tools/`, one module each, and must be registered in
+`kilin/tools/_registry.py`; each validates its own settings when the type
 is loaded, and unknown settings are rejected. The tools are:
 
 - `project_inventory` (intent `project_inventory`): exact counts and lists
@@ -193,13 +193,13 @@ is loaded, and unknown settings are rejected. The tools are:
   own `.md` template and name it in the question ("…with the lab_summary
   template"); the rules (limits in brackets after a heading, `{citation}`
   and `{references}` placeholders) are in tutorial 160 and in
-  `qachat/tools/generate_paper_summary/_report_template.py`. The headline and each section are
+  `kilin/tools/generate_paper_summary/_report_template.py`. The headline and each section are
   written separately and checked in Python (word and item limits), with
   targeted fixes; the result is saved as Markdown in the project's
   `outputs/` folder. In the desktop app, an additional PDF is generated
   when rendering succeeds. The answer lists the generated files and
   shows the saved Markdown. PDF rendering uses the private Qt adapter
-  `qachat/gui/_report_pdf.py`; formatting belongs to the report tool.
+  `kilin/gui/_report_pdf.py`; formatting belongs to the report tool.
   The adapter attempts a one-page A4 layout but can produce more pages
   when the report does not fit. Without a renderer callback, the core
   saves only Markdown. Bibliographic information is not invented by the
@@ -218,22 +218,22 @@ setting (`confirmation`: always, when_large, or never).
 A GUI-managed project has `sources/` (copied in, indexed, searched),
 `outputs/` and `templates/` (never indexed). The core creates the latter
 two folders for every project, even when no templates are selected.
-Summaries and reports QAChat writes go to
+Summaries and reports KíLín writes go to
 `outputs/`, so they can never come back as sources; you can also put a
 paper you are working on there. Saving never overwrites a file: `-2`, `-3`, ... is added instead.
 Workspace initialization never renames unrelated directories.
 
-Types are validated when QAChat starts; mistakes name the type and field.
+Types are validated when KíLín starts; mistakes name the type and field.
 Add a JSON file to create a new type; `code` and `literature` must stay.
-Restart QAChat after editing. Only `code` and `literature` have bundled
+Restart KíLín after editing. Only `code` and `literature` have bundled
 example repositories, so other types need sources. Tutorial 150 explains
 project types and intents and builds a new type; tutorial 160 shows how to
 write and register a new tool.
 
 ## Models and generation settings
 
-The window and Dock icon follow the Appearance setting: `icons/qachat-light.png`
-for light, `icons/qachat-dark.png` for dark, and the operating system's color
+The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
+for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
 
 Settings are ordered Appearance, Effort levels, Search depth, Embedding
@@ -263,7 +263,7 @@ settings remain authoritative: later changes to packaged defaults or user
 preferences affect new projects, not existing ones. To change an existing
 project's choices, use Settings rather than deleting its saved profile.
 
-Earlier QAChat versions stored effort levels, router models, and search depth
+Earlier KíLín versions stored effort levels, router models, and search depth
 in `effort_levels.json`, and model substitutions in `model_choices.json`.
 When opening an older project, the GUI imports compatible values into
 `profile.ini` and removes the legacy files after saving the settings.
@@ -283,17 +283,17 @@ choices are saved per backend in the `[router]` section of `profile.ini`;
 application-wide choices are saved as user-preference overrides.
 
 **GUI defaults** ship in the read-only
-`qachat/gui/defaults.json`: appearance, the five effort levels (names and
+`kilin/gui/defaults.json`: appearance, the five effort levels (names and
 models), search depth, router and embedding models, and query format.
 Application-wide changes are stored separately in a user-owned
 `preferences.json`, using only keys (and backend values) that differ from
 the shipped defaults. The file is not created just to read defaults.
 
-- macOS: `~/Library/Application Support/QAChat/preferences.json`
-- Linux: `${XDG_CONFIG_HOME:-~/.config}/qachat/preferences.json`
-- Windows: `%APPDATA%/QAChat/preferences.json` (with a home fallback)
+- macOS: `~/Library/Application Support/kilin/preferences.json`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/kilin/preferences.json`
+- Windows: `%APPDATA%/kilin/preferences.json` (with a home fallback)
 
-`QACHAT_DEFAULTS_FILE` explicitly overrides the **writable preferences
+`KILIN_DEFAULTS_FILE` explicitly overrides the **writable preferences
 file**, not the packaged defaults. The override must be an absolute path (or
 a home-expanded `~/...` path). Existing complete settings files at that
 path are accepted and written as sparse overrides on the next update. Invalid
@@ -301,13 +301,13 @@ JSON, unsupported keys, and invalid values produce errors; the file is not
 silently reset. Updates use atomic replacement, and no package files are
 modified. When working from a source checkout, edits made directly to the
 shipped `defaults.json` remain readable as checkout defaults but are not
-copied into the user-preferences file. Before reinstalling an earlier QAChat
+copied into the user-preferences file. Before reinstalling an earlier KíLín
 version with edited installed defaults, manually preserve those edits:
 automatic migration from previously mutable package resources is not part
 of this PR.
 
 **Generation defaults** for new projects remain core-owned in
-`qachat/qachat_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
+`kilin/kilin_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
 `temperature=0.0`, and `max_new_tokens=8192`. All interfaces use these
 new-project generation defaults. Existing projects retain the settings in
 their own `profile.ini`, including an explicit 256-token limit. A saved
@@ -318,7 +318,7 @@ project open, the Settings switch chooses **This project** (the default) or
 **New projects**. The latter edits application preferences while preserving
 the active project. Settings reopen on **This project**. Returning a setting
 to its packaged value removes its override. The first-run check asks for the
-models selected by the effective preferences. Its **QAChat setup** card stays at the top of
+models selected by the effective preferences. Its **KíLín setup** card stays at the top of
 Settings: folded with "Ready" when everything is installed (click to see
 each check), and opened by itself when something is missing or a download
 runs. When some are missing but installed models of the
@@ -357,7 +357,7 @@ checkpoint identifiers; it does not copy the entire parent event history.
 Renaming a conversation updates display metadata. The project name can be edited in the heading or floating top bar.
 Renaming a project moves
 its workspace folder, reloads the conversation registry, and restores the
-selected chat. If reopening fails, QAChat attempts to restore the old folder. Changing conversation retains already loaded
+selected chat. If reopening fails, KíLín attempts to restore the old folder. Changing conversation retains already loaded
 models and indexes where the engine implements that reuse.
 
 Conversation files use exclusive single-writer ownership. The GUI opens a
@@ -401,7 +401,7 @@ once); its menu splits it into read and written, and shows this chat's
 total.
 
 Routing normally uses the project's selected intent router model
-(see `qachat/answering.py`) to choose an intent and decide whether the
+(see `kilin/answering.py`) to choose an intent and decide whether the
 question stands alone or refers to earlier turns. Configured intent
 shortcuts, such as simple greetings, skip router inference; callers can
 also disable routing and use the project type's default intent. When the

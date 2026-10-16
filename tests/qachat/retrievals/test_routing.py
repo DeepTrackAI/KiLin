@@ -15,9 +15,9 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 import unittest
 
-from qachat.retrievals import routing
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
-from tests.qachat.retrievals._support import chunk, ranked
+from kilin.retrievals import routing
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
+from tests.kilin.retrievals._support import chunk, ranked
 
 
 class TestRetrievalPlanning(unittest.TestCase):

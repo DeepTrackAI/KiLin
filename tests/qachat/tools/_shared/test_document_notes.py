@@ -16,8 +16,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from qachat.chunking import Chunk
-from qachat.tools._shared.document_notes import (
+from kilin.chunking import Chunk
+from kilin.tools._shared.document_notes import (
     NOTHING,
     answer_citations,
     clean_notes,

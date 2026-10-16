@@ -1,9 +1,9 @@
-"""Extract performance measurements from existing QAChat conversation traces.
+"""Extract performance measurements from existing KíLín conversation traces.
 
 The helpers only read the numbered operation hierarchy stored by
-``qachat.TraceLogger``. They intentionally discard prompts, generated text,
+``kilin.TraceLogger``. They intentionally discard prompts, generated text,
 retrieved passages, file paths, token IDs, and arbitrary diagnostic fields.
-No models are loaded and no QAChat project is modified.
+No models are loaded and no KíLín project is modified.
 
 Key Features
 ------------
@@ -63,7 +63,7 @@ __all__ = [
 _NUMBERED_OPERATION = re.compile(r"^\d+_(.+)$")
 _TURN_NAME = re.compile(r"^turn_(\d+)$")
 
-# Explicit known QAChat metrics prevent arbitrary diagnostic event names from
+# Explicit known KíLín metrics prevent arbitrary diagnostic event names from
 # appearing in exported timing-only reports. Extend this list deliberately
 # when the core trace vocabulary gains another measured operation.
 _TRACKED_EVENTS = frozenset({
@@ -219,12 +219,12 @@ def _operation_rows(
 def read_trace_operations(
     path: str | Path, label: str
 ) -> list[dict[str, object]]:
-    """Read timing-only operations from one QAChat conversation JSON file.
+    """Read timing-only operations from one KíLín conversation JSON file.
 
     Parameters
     ----------
     path: str | pathlib.Path
-        Explicit path of a saved QAChat conversation trace.
+        Explicit path of a saved KíLín conversation trace.
     label: str
         Local, non-sensitive run label used to associate its measurements.
 
@@ -255,7 +255,7 @@ def read_trace_operations(
         raise ValueError("A non-empty run label is required.")
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise ValueError("A QAChat trace must contain a JSON object.")
+        raise ValueError("A KíLín trace must contain a JSON object.")
     sessions = payload.get("sessions")
     if not isinstance(sessions, dict):
         raise ValueError("The trace has no valid sessions mapping.")

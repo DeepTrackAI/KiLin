@@ -1,5 +1,5 @@
 /**
- * Present the local QAChat interface inside Qt WebEngine.
+ * Present the local KíLín interface inside Qt WebEngine.
  *
  * The page owns transient UI state and delegates filesystem/model operations
  * through QWebChannel. Engine events update project, conversation, evidence,
@@ -16,7 +16,7 @@
 
 // Resolve fixed DOM identifiers after the deferred script can see the page.
 const byId = (id) => document.getElementById(id);
-// Answer phases sent by RAGSession (qachat.rag.ANSWER_PHASE_*); the strings
+// Answer phases sent by RAGSession (kilin.rag.ANSWER_PHASE_*); the strings
 // are the core's wire values and must stay identical to it.
 const ANSWER_PHASE_ROUTING = "routing";
 const ANSWER_PHASE_ROUTED = "routed";
@@ -26,11 +26,11 @@ const ANSWER_PHASE_GENERATING = "generating";
 const ANSWER_PHASE_SAVING = "saving";
 const ANSWER_PHASE_COMPLETED = "completed";
 const ANSWER_PHASE_PROCESSING = "processing";
-// Mirrors qachat.tools.planning.PlanChoice.
+// Mirrors kilin.tools.planning.PlanChoice.
 const PLAN_CHOICE_CONTINUE = "continue";
 const PLAN_CHOICE_QUICK = "quick";
 const PLAN_CHOICE_CANCEL = "cancel";
-// Phase added by the GUI engine (qachat.gui.engine.ENGINE_PHASE_*).
+// Phase added by the GUI engine (kilin.gui.engine.ENGINE_PHASE_*).
 const ENGINE_PHASE_LOADING_MODEL = "loading_model";
 const setup = byId("setup");
 const chat = byId("chat");
@@ -56,7 +56,7 @@ let workspacePaths = new Set();
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
-const WORKSPACE_DRAG_TYPE = "application/x-qachat-workspace-path";
+const WORKSPACE_DRAG_TYPE = "application/x-kilin-workspace-path";
 let profile = null;
 let cachedModels = new Set();
 let modelChoices = [];
@@ -113,7 +113,7 @@ let activeProjectKind = "code";
 let lastEmptyPrompt = { code: -1, literature: -1 };
 let messageAttachments = [];
 let currentTurnCount = 0;
-// Project types sent by the engine from qachat/project_types/*.json.
+// Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = {};
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
@@ -233,7 +233,7 @@ function showConversations(visible) {
 function applyAppearance(value) {
   const selected = ["system", "light", "dark"].includes(value) ? value : "system";
   document.documentElement.dataset.appearance = selected;
-  localStorage.setItem("qachat-appearance", selected);
+  localStorage.setItem("kilin-appearance", selected);
   if (byId("appearance")) byId("appearance").value = selected;
   bridge?.setAppearance(selected);
 }
@@ -285,7 +285,7 @@ function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
     const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources to this project?\n\n${names}\n\nQAChat will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
+    if (!confirm(`Add these sources to this project?\n\n${names}\n\nKíLín will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
     error.classList.add("hidden");
     setBusy(true, "Adding sources and updating the index…");
     bridge.addProjectSources(JSON.stringify(paths));
@@ -665,7 +665,7 @@ function renderModelsPanel() {
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the QAChat folder first.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the KíLín folder first.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -970,9 +970,9 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
 function closeModels() {
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
   if (busy) {
-    // Nothing to apply: just close. Edits wait until QAChat is idle.
+    // Nothing to apply: just close. Edits wait until KíLín is idle.
     if (!modelEditsPending()) hideModels();
-    else byId("model-download-status").textContent = "QAChat is busy. Close Settings again when it finishes to apply your changes.";
+    else byId("model-download-status").textContent = "KíLín is busy. Close Settings again when it finishes to apply your changes.";
     return;
   }
   applyModelEdits(true);
@@ -1084,7 +1084,7 @@ function showSettings(data) {
   defaultDepth = data.default_search_depth || defaultDepth;
   // The appearance is an app-wide preference; a choice from before
   // preferences existed (kept by the page) is carried over once.
-  const remembered = localStorage.getItem("qachat-appearance");
+  const remembered = localStorage.getItem("kilin-appearance");
   if (data.appearance && data.appearance !== "system") applyAppearance(data.appearance);
   else if (remembered && remembered !== "system") applyAppearance(remembered);
   renderProjectTypes(data.project_types);
@@ -1574,7 +1574,7 @@ function setBusy(value, message = "") {
   byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  // Settings can close while QAChat works; only unsaved edits must wait.
+  // Settings can close while KíLín works; only unsaved edits must wait.
   byId("close-models").disabled = false;
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
@@ -2655,7 +2655,7 @@ function addPendingTurn(question) {
  * Show a tool plan with Continue, Quick, and Cancel under the pending
  * answer. The backend waits for the choice; one click answers it.
  *
- * @param plan Plan fields from qachat.tools.planning.ToolPlan.
+ * @param plan Plan fields from kilin.tools.planning.ToolPlan.
  */
 function showToolPlan(plan) {
   if (!pendingTurn) return;
@@ -2805,7 +2805,7 @@ function completePendingTurn(turn) {
 }
 
 /**
- * Put the cursor back in the message box when QAChat is free again, unless
+ * Put the cursor back in the message box when KíLín is free again, unless
  * the user is typing somewhere else (a rename, a field) or Settings is open.
  */
 function focusComposer() {
@@ -2963,7 +2963,7 @@ function onEvent(raw) {
     const runtime = document.createElement("li");
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
-      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run qachat --gui`;
+      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -2985,7 +2985,7 @@ function onEvent(raw) {
     byId("readiness-status").textContent = data.ready ? "Ready" : `${missing} missing`;
     byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
     byId("readiness-summary").textContent = data.ready
-      ? "QAChat is ready."
+      ? "KíLín is ready."
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
@@ -3640,7 +3640,7 @@ for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("ch
 
 // Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {
-  bridge = channel.objects.qachat;
+  bridge = channel.objects.kilin;
   bridge.setAppearance(document.documentElement.dataset.appearance || "system");
   bridge.event.connect(onEvent);
   bridge.pathsSelected.connect(addSources);
@@ -3673,7 +3673,7 @@ document.addEventListener("visibilitychange", () => {
 });
 // Also catch files removed while the project chooser stays in the foreground.
 window.setInterval(refreshSavedProject, 3000);
-applyAppearance(localStorage.getItem("qachat-appearance") || "system");
+applyAppearance(localStorage.getItem("kilin-appearance") || "system");
 
 // Draggable borders beside the conversation list and the side panels.
 const PANEL_LIMITS = { left: [180, 420], right: [260, 640] };
@@ -3726,7 +3726,7 @@ for (const side of ["left", "right"]) {
   const panelClass = `collapsing-${side}`;
   const reset = () => {
     setPanelWidth(side, null);
-    try { localStorage.removeItem(`qachat-${side}-width`); } catch {}
+    try { localStorage.removeItem(`kilin-${side}-width`); } catch {}
     positionPanelResizers();
     syncSourceDropTarget();
   };
@@ -3778,7 +3778,7 @@ for (const side of ["left", "right"]) {
       return;
     }
     try {
-      localStorage.setItem(`qachat-${side}-width`, shell.style.getPropertyValue(`--${side}-width`));
+      localStorage.setItem(`kilin-${side}-width`, shell.style.getPropertyValue(`--${side}-width`));
     } catch {}
     syncSourceDropTarget();
   };
@@ -3787,7 +3787,7 @@ for (const side of ["left", "right"]) {
   document.body.append(handle);
   panelResizers[side] = handle;
   try {
-    const saved = parseFloat(localStorage.getItem(`qachat-${side}-width`));
+    const saved = parseFloat(localStorage.getItem(`kilin-${side}-width`));
     if (Number.isFinite(saved)) setPanelWidth(side, saved);
   } catch {}
 }

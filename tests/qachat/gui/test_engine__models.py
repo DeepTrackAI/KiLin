@@ -16,11 +16,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from qachat.gui.engine import ChatEngine
-from qachat.gui.model_settings import read_effort_levels
-from qachat.gui.preferences import default_effort_levels
-from qachat.project import open_project
-from qachat.workspace import prepare_sources_workspace
+from kilin.gui.engine import ChatEngine
+from kilin.gui.model_settings import read_effort_levels
+from kilin.gui.preferences import default_effort_levels
+from kilin.project import open_project
+from kilin.workspace import prepare_sources_workspace
 
 
 class TestEngineModelTransitions(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestEngineModelTransitions(unittest.TestCase):
         source.write_text("Original document about memory.")
         user_preferences = patch.dict(
             "os.environ",
-            {"QACHAT_DEFAULTS_FILE": str(self.root / "preferences.json")},
+            {"KILIN_DEFAULTS_FILE": str(self.root / "preferences.json")},
         )
         user_preferences.start()
         self.addCleanup(user_preferences.stop)
@@ -67,20 +67,20 @@ class TestEngineModelTransitions(unittest.TestCase):
                 _clear_backend_cache=lambda: None,
                 close=lambda: None,
             )
-        backend = patch("qachat.rag.choose_backend", return_value="mlx")
+        backend = patch("kilin.rag.choose_backend", return_value="mlx")
         backend.start()
         self.addCleanup(backend.stop)
         chat_backend = patch(
-            "qachat.chat._choose_backend", return_value="mlx"
+            "kilin.chat._choose_backend", return_value="mlx"
         )
         chat_backend.start()
         self.addCleanup(chat_backend.stop)
         for target, options in (
             (
-                "qachat.rag.EmbeddingSession",
+                "kilin.rag.EmbeddingSession",
                 {"side_effect": embedding_session},
             ),
-            ("qachat.chat.ChatSession._load", {}),
+            ("kilin.chat.ChatSession._load", {}),
         ):
             patcher = patch(target, **options)
             patcher.start()
@@ -104,7 +104,7 @@ class TestEngineModelTransitions(unittest.TestCase):
             "download": False,
         }
         self.cached = patch(
-            "qachat.gui.engine.available_models",
+            "kilin.gui.engine.available_models",
             return_value=[
                 {"model_id": value}
                 for value in {
@@ -237,7 +237,7 @@ class TestEngineModelTransitions(unittest.TestCase):
 
     def test_only_new_or_changed_files_are_read_again(self):
         """Avoid rereading unchanged source snapshots during refresh."""
-        import qachat.rag as rag
+        import kilin.rag as rag
 
         reads = []
         original = rag.read_repository_files
@@ -297,7 +297,7 @@ class TestEngineModelTransitions(unittest.TestCase):
 
     def test_answer_text_is_streamed_before_the_saved_turn(self):
         """Deliver text increments before publishing the completed turn."""
-        from qachat.rag import ConversationTurn
+        from kilin.rag import ConversationTurn
 
         session = self.engine.session
         session.turns = [SimpleNamespace()]
@@ -323,7 +323,7 @@ class TestEngineModelTransitions(unittest.TestCase):
 
     def test_new_chat_is_named_after_its_first_answer(self):
         """Name a new conversation only after its answer is available."""
-        from qachat.rag import ConversationTurn
+        from kilin.rag import ConversationTurn
 
         session = self.engine.session
         session.chat_session.backend = "mlx"
@@ -367,7 +367,7 @@ class TestEngineModelTransitions(unittest.TestCase):
 
     def test_router_model_is_saved_and_applied(self):
         """Persist the router model and update the active session."""
-        from qachat.gui.model_settings import (
+        from kilin.gui.model_settings import (
             default_router_model,
             read_router_model,
         )

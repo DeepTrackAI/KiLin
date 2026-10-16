@@ -69,7 +69,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.choose_document import choose_document
+>>> from kilin.tools._shared.choose_document import choose_document
 >>> chosen = choose_document(
 ...     request,
 ...     context,
@@ -94,9 +94,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
-from qachat.retrievals.document_reading import dominant_path, named_paths
-from qachat.tools._contract import ToolContext, ToolRequest
-from qachat.tools._shared.planning import ask_choice
+from kilin.retrievals.document_reading import dominant_path, named_paths
+from kilin.tools._contract import ToolContext, ToolRequest
+from kilin.tools._shared.planning import ask_choice
 
 __all__ = [
     "choose_document",
@@ -138,7 +138,7 @@ def choose_document(
     request: ToolRequest
         The question, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
     question: str
         What to ask when the file is unclear, such as "Which paper should
         I turn into a research briefing?".
@@ -296,7 +296,7 @@ def means_same_file(
     Parameters
     ----------
     context: ToolContext
-        QAChat's services (``ask_router``).
+        KíLín's services (``ask_router``).
     question: str
         The request.
     path: pathlib.Path

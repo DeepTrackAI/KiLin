@@ -16,8 +16,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.project import initialize_project, prepare_project_workspace
-from qachat.workspace import prepare_sources_workspace
+from kilin.project import initialize_project, prepare_project_workspace
+from kilin.workspace import prepare_sources_workspace
 
 
 class TestProjectTransaction(unittest.TestCase):
@@ -40,7 +40,7 @@ class TestProjectTransaction(unittest.TestCase):
         keep = workspace / "keep.txt"
         keep.write_text("user-owned\n")
         with patch(
-            "qachat.project.install_project_resources",
+            "kilin.project.install_project_resources",
             side_effect=OSError("disk full"),
         ):
             with self.assertRaisesRegex(OSError, "disk full"):
@@ -65,7 +65,7 @@ class TestProjectTransaction(unittest.TestCase):
             raise OSError("resource write failed")
 
         with patch(
-            "qachat.project_layout.shutil.copyfileobj",
+            "kilin.project_layout.shutil.copyfileobj",
             side_effect=interrupted,
         ):
             with self.assertRaisesRegex(OSError, "resource write failed"):
@@ -83,7 +83,7 @@ class TestProjectTransaction(unittest.TestCase):
         keep = workspace / "original.md"
         keep.write_text("manual\n")
         with patch(
-            "qachat.project.atomic_write_text",
+            "kilin.project.atomic_write_text",
             side_effect=OSError("cannot commit"),
         ):
             with self.assertRaisesRegex(OSError, "cannot commit"):
@@ -97,7 +97,7 @@ class TestProjectTransaction(unittest.TestCase):
 
         workspace = self.root / "workspace"
         workspace.mkdir()
-        from qachat.project import atomic_write_text
+        from kilin.project import atomic_write_text
 
         def inspect_commit(path, text):
             self.assertTrue(
@@ -108,7 +108,7 @@ class TestProjectTransaction(unittest.TestCase):
             return atomic_write_text(path, text)
 
         with patch(
-            "qachat.project.atomic_write_text", side_effect=inspect_commit
+            "kilin.project.atomic_write_text", side_effect=inspect_commit
         ):
             initialize_project(workspace, "literature")
 
@@ -116,7 +116,7 @@ class TestProjectTransaction(unittest.TestCase):
         """New-project source copies are prepared before profile commit."""
 
         workspace = self.root / "workspace"
-        from qachat import workspace as source_module
+        from kilin import workspace as source_module
 
         with patch.object(
             source_module, "_copy_file", side_effect=OSError("copy fail")
@@ -140,7 +140,7 @@ class TestProjectTransaction(unittest.TestCase):
         (origin / "code.py").write_text("number = 2\n")
         sandbox = self.root / "sandbox"
         with patch(
-            "qachat.project.shutil.copy2", side_effect=OSError("copy fail")
+            "kilin.project.shutil.copy2", side_effect=OSError("copy fail")
         ):
             with self.assertRaisesRegex(OSError, "copy fail"):
                 prepare_project_workspace(origin, "code", sandbox)

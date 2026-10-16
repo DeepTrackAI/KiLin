@@ -37,7 +37,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.terms import quoted_terms
+>>> from kilin.tools._shared.terms import quoted_terms
 >>> quoted_terms('list "MRI"')
 ('MRI',)
 
@@ -136,7 +136,7 @@ def terms_prompt(
     tuple[str, str]
         System prompt and user prompt. The reply is checked with
         ``validated_terms``, ``validated_document``, and (for categories)
-        ``qachat.tools.batch_classify.validated_categories``.
+        ``kilin.tools.batch_classify.validated_categories``.
 
     """
 

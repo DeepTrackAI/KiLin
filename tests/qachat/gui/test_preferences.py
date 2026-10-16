@@ -17,8 +17,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat.gui import preferences
-from qachat.project import (
+from kilin.gui import preferences
+from kilin.project import (
     default_project_profile,
     initialize_project,
     open_project,
@@ -36,7 +36,7 @@ class TestGUIPreferences(unittest.TestCase):
         self.root = Path(temporary.name)
         self.path = self.root / "config" / "preferences.json"
         self.override = patch.dict(
-            "os.environ", {"QACHAT_DEFAULTS_FILE": str(self.path)}
+            "os.environ", {"KILIN_DEFAULTS_FILE": str(self.path)}
         )
         self.override.start()
         self.addCleanup(self.override.stop)

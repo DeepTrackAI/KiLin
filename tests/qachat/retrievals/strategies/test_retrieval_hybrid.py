@@ -12,9 +12,9 @@ from dataclasses import FrozenInstanceError
 import unittest
 from types import SimpleNamespace
 
-from qachat.defaults import load_defaults_section
-from qachat.retrievals.strategies import retrieval_hybrid as rh
-from tests.qachat.retrievals._support import chunk
+from kilin.defaults import load_defaults_section
+from kilin.retrievals.strategies import retrieval_hybrid as rh
+from tests.kilin.retrievals._support import chunk
 
 
 class TestHybridSearch(unittest.TestCase):

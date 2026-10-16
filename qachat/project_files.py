@@ -31,7 +31,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.project_files import list_project_files
+>>> from kilin.project_files import list_project_files
 >>> isinstance(list_project_files, object)
 True
 
@@ -44,8 +44,8 @@ import shutil
 from tempfile import NamedTemporaryFile
 from typing import Sequence
 
-from qachat.project import QAProject
-from qachat.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
+from kilin.project import QAProject
+from kilin.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
 
 __all__ = [
     "add_project_files",
@@ -236,7 +236,7 @@ def _copy_regular_file(source: Path, destination: Path) -> None:
     """
 
     stream = NamedTemporaryFile(
-        mode="wb", dir=destination.parent, prefix=".qachat-copy-",
+        mode="wb", dir=destination.parent, prefix=".kilin-copy-",
         delete=False,
     )
     temporary = Path(stream.name)

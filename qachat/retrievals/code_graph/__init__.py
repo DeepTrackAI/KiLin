@@ -37,8 +37,8 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> graph = qachat.CodeGraph(entities=(), relations=())
+>>> import kilin
+>>> graph = kilin.CodeGraph(entities=(), relations=())
 
 """
 

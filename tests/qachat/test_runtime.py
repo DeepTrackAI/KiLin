@@ -1,4 +1,4 @@
-"""Unit tests for QAChat's backend and device selection policies.
+"""Unit tests for KíLín's backend and device selection policies.
 
 Tests cover supported backend settings, platform detection, explicit MLX
 restrictions, and PyTorch device priority without probing actual hardware.
@@ -14,7 +14,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from qachat import runtime
+from kilin import runtime
 
 
 class TestBackendConstants(unittest.TestCase):

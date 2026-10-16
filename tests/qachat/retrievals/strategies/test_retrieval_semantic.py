@@ -18,8 +18,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from qachat.retrievals.strategies import retrieval_semantic as rs
-from tests.qachat.retrievals._support import FakeEmbeddings, chunk
+from kilin.retrievals.strategies import retrieval_semantic as rs
+from tests.kilin.retrievals._support import FakeEmbeddings, chunk
 
 
 class TestSemanticIndexConstruction(unittest.TestCase):

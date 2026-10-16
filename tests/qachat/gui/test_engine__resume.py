@@ -17,8 +17,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from qachat.conversations import ConversationStore
-from qachat.gui import engine as gui_engine
+from kilin.conversations import ConversationStore
+from kilin.gui import engine as gui_engine
 
 
 class TestEngineResume(unittest.TestCase):
@@ -32,7 +32,7 @@ class TestEngineResume(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         store = ConversationStore(self.root)
         with patch(
-            "qachat.conversations._utc_timestamp",
+            "kilin.conversations._utc_timestamp",
             side_effect=[
                 "2026-10-14T10:00:00.000Z",
                 "2026-10-14T10:01:00.000Z",

@@ -31,7 +31,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.repository_reason_codes import (
+>>> from kilin.repository_reason_codes import (
 ...     SELECTION_REASON_FILE_TOO_LARGE,
 ... )
 >>> SELECTION_REASON_FILE_TOO_LARGE
@@ -39,7 +39,7 @@ Examples
 
 Notes
 -----
-The JSON resource must be shipped with QAChat. Invalid or missing definitions
+The JSON resource must be shipped with KíLín. Invalid or missing definitions
 are startup errors, not a reason to substitute implicit protocol values.
 
 """
@@ -180,7 +180,7 @@ def _load_reason_codes() -> Mapping[str, str]:
 
     """
 
-    text = resources.files("qachat").joinpath(_RESOURCE_NAME).read_text(
+    text = resources.files("kilin").joinpath(_RESOURCE_NAME).read_text(
         encoding="utf-8"
     )
     try:

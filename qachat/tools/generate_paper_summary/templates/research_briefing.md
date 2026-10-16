@@ -2,7 +2,7 @@
 title: Research Briefing
 description: Decision-oriented scientific briefing on one paper for researchers across disciplines.
 max_words: 700
-reference: QAChat single-paper research briefing.
+reference: KíLín single-paper research briefing.
 ---
 
 # Headline (max 90 characters)

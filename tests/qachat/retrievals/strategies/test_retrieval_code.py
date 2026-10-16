@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 import unittest
 
-from qachat.retrievals.strategies import retrieval_code as rc
-from tests.qachat.retrievals._support import chunk, graph
+from kilin.retrievals.strategies import retrieval_code as rc
+from tests.kilin.retrievals._support import chunk, graph
 
 
 class TestCodeEntityResolution(unittest.TestCase):

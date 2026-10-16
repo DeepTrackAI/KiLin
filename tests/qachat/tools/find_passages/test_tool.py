@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import find_passages as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import find_passages as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestFindPassages(unittest.TestCase):
@@ -82,7 +82,7 @@ class TestFindPassages(unittest.TestCase):
 
         _, prompt = tool.topic_prompt("List papers using deep learning")
         self.assertIn("deep learning", prompt)
-        from tests.qachat.tools._shared._support import chunk
+        from tests.kilin.tools._shared._support import chunk
         sentences = tool.split_sentences([
             chunk("1", "This sentence has enough words for testing."
                   " Another sentence has enough useful words.")
@@ -96,7 +96,7 @@ class TestFindPassages(unittest.TestCase):
 
         """
 
-        from tests.qachat.tools._shared._support import chunk
+        from tests.kilin.tools._shared._support import chunk
         same = "This sentence clearly contains enough words."
         pieces = [chunk("1", same), chunk("2", same)]
         self.assertEqual(len(tool.split_sentences(pieces)), 1)

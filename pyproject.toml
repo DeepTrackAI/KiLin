@@ -1,5 +1,5 @@
 [project]
-name = "qachat"
+name = "kilin"
 version = "0.1.0"
 description = "Local, provider-independent question-answering application"
 requires-python = ">=3.12,<3.13"
@@ -32,37 +32,37 @@ bench = [
 
 
 [project.scripts]
-qachat = "qachat.cli:main"
+kilin = "kilin.cli:main"
 
 [build-system]
 requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["qachat*"]
+include = ["kilin*"]
 
 [tool.setuptools.package-data]
 # Data-only folders: project types and report templates.
-"qachat" = [
-    "qachat_defaults.json",
+"kilin" = [
+    "kilin_defaults.json",
     "repository_reason_codes.json",
     "project_types/*.json",
 ]
-"qachat.tools.project_inventory" = ["README.md", "defaults.json"]
-"qachat.tools.scan_and_list" = ["README.md", "defaults.json"]
-"qachat.tools.batch_classify" = ["README.md", "defaults.json"]
-"qachat.tools.batch_review" = ["README.md", "defaults.json"]
-"qachat.tools.filter_results" = ["README.md", "defaults.json"]
-"qachat.tools.find_fact" = ["README.md", "defaults.json"]
-"qachat.tools.find_passages" = ["README.md", "defaults.json"]
-"qachat.tools.paper_overview" = ["README.md", "defaults.json"]
-"qachat.tools.show_source" = ["README.md", "defaults.json"]
-"qachat.tools.generate_paper_summary" = [
+"kilin.tools.project_inventory" = ["README.md", "defaults.json"]
+"kilin.tools.scan_and_list" = ["README.md", "defaults.json"]
+"kilin.tools.batch_classify" = ["README.md", "defaults.json"]
+"kilin.tools.batch_review" = ["README.md", "defaults.json"]
+"kilin.tools.filter_results" = ["README.md", "defaults.json"]
+"kilin.tools.find_fact" = ["README.md", "defaults.json"]
+"kilin.tools.find_passages" = ["README.md", "defaults.json"]
+"kilin.tools.paper_overview" = ["README.md", "defaults.json"]
+"kilin.tools.show_source" = ["README.md", "defaults.json"]
+"kilin.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",
     "templates/*.md",
 ]
-"qachat.gui" = [
+"kilin.gui" = [
     "defaults.json",
     "web/*.html",
     "web/*.css",

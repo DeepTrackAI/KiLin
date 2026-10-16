@@ -21,8 +21,8 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
-from qachat.gui import engine
-from qachat.rag import ANSWER_PHASE_CHOICES
+from kilin.gui import engine
+from kilin.rag import ANSWER_PHASE_CHOICES
 
 
 class TestGUIProtocolCommands(unittest.TestCase):
@@ -369,7 +369,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
     def test_settings_include_canonical_selection_reason_codes(self) -> None:
         """Pass the packaged code vocabulary through the settings event."""
 
-        from qachat.repository_reason_codes import SELECTION_REASON_CODES
+        from kilin.repository_reason_codes import SELECTION_REASON_CODES
 
         events: list[dict[str, object]] = []
         worker = engine.ChatEngine.__new__(engine.ChatEngine)
@@ -601,7 +601,7 @@ class TestGUIProtocolBridge(unittest.TestCase):
 
         try:
             cls.bridge_type = importlib.import_module(
-                "qachat.gui.window"
+                "kilin.gui.window"
             ).ChatBridge
         except ModuleNotFoundError as error:
             if error.name and error.name.startswith("PySide6"):

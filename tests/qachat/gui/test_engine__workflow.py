@@ -17,9 +17,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
 import unittest
 
-from qachat.gui.engine import ChatEngine
-from qachat.gui.model_catalog import MODEL_CHOICES
-from qachat.workspace import prepare_sources_workspace
+from kilin.gui.engine import ChatEngine
+from kilin.gui.model_catalog import MODEL_CHOICES
+from kilin.workspace import prepare_sources_workspace
 
 
 @dataclass
@@ -75,7 +75,7 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertTrue(callable(options["token_callback"]))
         self.assertTrue(callable(options["phase_callback"]))
 
-    @patch("qachat.gui.engine.download_model")
+    @patch("kilin.gui.engine.download_model")
     def test_download_accepts_explicit_catalog_and_custom_models(
         self, download
         ) -> None:
@@ -105,8 +105,8 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertEqual(download.call_count, 2)
         self.assertEqual(events[-1]["event"], "error")
 
-    @patch("qachat.gui.engine.RAGSession")
-    @patch("qachat.gui.engine.prepare_sources_workspace")
+    @patch("kilin.gui.engine.RAGSession")
+    @patch("kilin.gui.engine.prepare_sources_workspace")
     def test_open_ask_and_reset(self, prepare, rag_session) -> None:
         """Delegate project creation, answering, and reset to the core."""
         session = self.model_session()
@@ -140,8 +140,8 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertEqual(answered["turn"]["answer"], "New answer")
         self.assertEqual(events[-1]["event"], "reset")
 
-    @patch("qachat.gui.engine.RAGSession")
-    @patch("qachat.gui.engine.prepare_sources_workspace")
+    @patch("kilin.gui.engine.RAGSession")
+    @patch("kilin.gui.engine.prepare_sources_workspace")
     def test_blank_source_uses_bundled_example(
         self, prepare, rag_session
         ) -> None:
@@ -200,8 +200,8 @@ class TestEngineWorkflow(unittest.TestCase):
             "Question", retrieval_count=6, generation_settings=settings
         )
 
-    @patch("qachat.gui.engine.RAGSession")
-    @patch("qachat.gui.engine.open_project")
+    @patch("kilin.gui.engine.RAGSession")
+    @patch("kilin.gui.engine.open_project")
     def test_resume_does_not_copy_sources(
         self, open_saved, rag_session
         ) -> None:
@@ -220,7 +220,7 @@ class TestEngineWorkflow(unittest.TestCase):
         rag_session.assert_called_once()
         self.assertEqual(events[-1]["event"], "opened")
 
-    @patch("qachat.gui.engine.RAGSession")
+    @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):
         """Deletion archives durable content without a closing rewrite."""
 

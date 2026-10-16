@@ -2,8 +2,8 @@
 
 ## Scope and supported environment
 
-This guide applies to developers working with the current QAChat codebase,
-not a separately distributed deployment procedure. QAChat declares
+This guide applies to developers working with the current KíLín codebase,
+not a separately distributed deployment procedure. KíLín declares
 `requires-python = ">=3.12,<3.13"` in `pyproject.toml`. A test run under
 Python 3.13 may be useful for early review but **does not establish**
 compatibility on the target Python 3.12. Model backends and Qt/PDF behavior
@@ -16,14 +16,14 @@ matrix, how to inspect changes, and what maintainers should verify.
 ## Source organization
 
 ```text
-qachat/                # Python core and optional gui/ package
+kilin/                # Python core and optional gui/ package
     project_types/     # Packaged declarations for code and literature
     sources/           # Format-specific text readers/extractors
     retrievals/        # Search, graph, index persistence
     tools/             # Registered built-in tools and their defaults
     gui/               # Optional engine, Qt bridge and web UI
 
-tests/qachat/          # Mirrored core + gui/ + tool tests
+tests/kilin/          # Mirrored core + gui/ + tool tests
 assets/                # Maintenance/benchmark notebooks and helpers
 tutorials/             # Progressive notebooks, some SVG examples
 docs/                  # Architecture and reference documentation
@@ -42,7 +42,7 @@ without production timing hooks.
 ## Architectural conventions
 
 - Core behavior must remain callable without constructing Qt or importing
-  optional PySide6 from the `qachat` facade.
+  optional PySide6 from the `kilin` facade.
 - A project owns its source snapshot, profile, indexes, outputs/templates,
   conversations and traces. GUI presentation must not silently reinterpret
   saved project settings.
@@ -66,7 +66,7 @@ Use the established DeepTrack-oriented NumPy docstrings for modules,
 classes, methods and functions: purpose, important behavior, parameters,
 returns, errors, notes and examples where useful. Multiline docstrings keep
 an empty line before the closing triple quotes. Examples for public APIs
-should use `qachat`-qualified imports. Comments should explain design
+should use `kilin`-qualified imports. Comments should explain design
 rationale, preconditions or constraints rather than restating an assignment.
 
 Python source follows a strict **79-character** line limit, with the
@@ -96,8 +96,8 @@ The independent `tests/__main__.py` uses Python `unittest` discovery.
 Keep new tests discoverable by **both** runners. Its naming convention is
 `test_<module>.py` for a module, `test_<module>__<aspect>.py` for a focused
 aspect, and `test__<topic>.py` for a cross-module concern. Tests under
-`tests/qachat/gui/`, `tests/qachat/retrievals/`,
-`tests/qachat/sources/` and `tests/qachat/tools/` mirror the package.
+`tests/kilin/gui/`, `tests/kilin/retrievals/`,
+`tests/kilin/sources/` and `tests/kilin/tools/` mirror the package.
 
 Unit tests should use isolated temporary files, deterministic fake models
 and controlled clocks where appropriate. Never require model downloads for
@@ -112,8 +112,8 @@ A Qt test that creates a `QCoreApplication` in the same process can prevent
 later tests from initializing a full `QApplication` for PDF rendering; this
 previously caused a native Qt abort on macOS. Prefer tests of pure protocol
 logic without any Qt application. The optional
-`tests/qachat/gui/test__webengine_smoke.py` launches a **separate** process
-and runs only with `QACHAT_RUN_NATIVE_GUI_TESTS=1` and appropriate PySide6
+`tests/kilin/gui/test__webengine_smoke.py` launches a **separate** process
+and runs only with `KILIN_RUN_NATIVE_GUI_TESTS=1` and appropriate PySide6
 support. It cannot be treated as an always-on CI test without a verified
 headless WebEngine environment. Avoid sharing application instances between
 PDF and WebEngine fixtures.

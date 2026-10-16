@@ -2,7 +2,7 @@
 title: Technical Summary
 description: Method- and evidence-focused account of one paper for specialists seeking to assess or reproduce its work.
 max_words: 1500
-reference: QAChat single-paper technical analysis.
+reference: KíLín single-paper technical analysis.
 ---
 
 # Headline (max 110 characters)

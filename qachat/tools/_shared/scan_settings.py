@@ -18,7 +18,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.scan_settings import SCAN_SETTING_NAMES
+>>> from kilin.tools._shared.scan_settings import SCAN_SETTING_NAMES
 >>> "max_listed" in SCAN_SETTING_NAMES
 True
 
@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Final, Protocol
 
-from qachat.tools._contract import check_bool, check_int
+from kilin.tools._contract import check_bool, check_int
 
 __all__ = ["SCAN_SETTING_NAMES", "ScanFieldDefaults", "scan_fields"]
 

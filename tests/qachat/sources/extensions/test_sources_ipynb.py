@@ -15,9 +15,9 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.sources.extensions import sources_ipynb
-from qachat.sources.sources import SourceFile, SourceUnit
-from tests.qachat.sources._support import fixture_text
+from kilin.sources.extensions import sources_ipynb
+from kilin.sources.sources import SourceFile, SourceUnit
+from tests.kilin.sources._support import fixture_text
 
 
 class TestNotebookExtraction(unittest.TestCase):

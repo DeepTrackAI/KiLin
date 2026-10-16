@@ -25,9 +25,9 @@ separate exported API. The related implementation modules are described above.
 
 Examples
 --------
->>> import qachat.retrievals.code_graph.extensions
+>>> import kilin.retrievals.code_graph.extensions
 
-Normal callers should use ``qachat.build_code_graph(files, units)`` rather
+Normal callers should use ``kilin.build_code_graph(files, units)`` rather
 than invoking a language hook directly.
 
 """

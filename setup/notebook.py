@@ -1,10 +1,10 @@
-"""Prepare the QAChat development environment for tutorial notebooks.
+"""Prepare the KíLín development environment for tutorial notebooks.
 
-This auxiliary repository module prepares notebooks that run from the QAChat
+This auxiliary repository module prepares notebooks that run from the KíLín
 source tree. It is intended for tutorials and development workflows and is not
-part of the released ``qachat`` package.
+part of the released ``kilin`` package.
 
-The main entry point locates the QAChat repository, makes the source tree
+The main entry point locates the KíLín repository, makes the source tree
 importable, verifies that the notebook uses the project's virtual environment,
 and repairs missing declared dependencies through the repository setup route.
 The helper functions implement repository discovery, interpreter validation,
@@ -15,7 +15,7 @@ Key Features
 - **Repository discovery**
 
     Find the nearest parent directory containing both ``pyproject.toml`` and
-    the ``qachat`` source directory.
+    the ``kilin`` source directory.
 
 - **Kernel validation**
 
@@ -44,7 +44,7 @@ Private helpers:
 
 - ``_project_root(start) -> pathlib.Path``
 
-    Locate the QAChat repository root.
+    Locate the KíLín repository root.
 
 - ``_project_python(root) -> pathlib.Path``
 
@@ -68,7 +68,7 @@ Private helpers:
 
 Examples
 --------
-At the start of a tutorial notebook located inside the QAChat repository::
+At the start of a tutorial notebook located inside the KíLín repository::
 
     from notebook import prepare_notebook
 
@@ -107,13 +107,13 @@ def prepare_notebook(start: str | Path | None = None) -> Path:
     Parameters
     ----------
     start: str | pathlib.Path | None, optional
-        Directory at or below the QAChat root. The current directory is used
+        Directory at or below the KíLín root. The current directory is used
         when this value is omitted.
 
     Returns
     -------
     pathlib.Path
-        QAChat repository root.
+        KíLín repository root.
 
     Raises
     ------
@@ -134,7 +134,7 @@ def prepare_notebook(start: str | Path | None = None) -> Path:
     if not _same_python(expected_python):
         _sync_environment(root)
         raise RuntimeError(
-            "QAChat is ready, but this notebook uses another Python. "
+            "KíLín is ready, but this notebook uses another Python. "
             f"Select this kernel and rerun the cell: {expected_python}"
         )
 
@@ -151,39 +151,39 @@ def prepare_notebook(start: str | Path | None = None) -> Path:
             f"Packages are still missing after uv sync: {names}"
         )
 
-    print(f"QAChat environment ready: {sys.executable}")
+    print(f"KíLín environment ready: {sys.executable}")
     return root
 
 
 def _project_root(start: Path) -> Path:
-    """Find the QAChat repository root above a starting path.
+    """Find the KíLín repository root above a starting path.
 
     Parameters
     ----------
     start: pathlib.Path
-        Directory at or below the QAChat repository root.
+        Directory at or below the KíLín repository root.
 
     Returns
     -------
     pathlib.Path
-        Nearest parent containing ``pyproject.toml`` and ``qachat``.
+        Nearest parent containing ``pyproject.toml`` and ``kilin``.
 
     Raises
     ------
     RuntimeError
-        If no QAChat repository root can be found.
+        If no KíLín repository root can be found.
 
     """
 
     candidate = start.expanduser().resolve()
     for directory in (candidate, *candidate.parents):
         if (directory / "pyproject.toml").is_file() and (
-            directory / "qachat"
+            directory / "kilin"
         ).is_dir():
             return directory
 
     raise RuntimeError(
-        "You need to open notebook from inside the QAChat project. "
+        "You need to open notebook from inside the KíLín project. "
         f"The current directory is {candidate}."
     )
 
@@ -194,7 +194,7 @@ def _project_python(root: Path) -> Path:
     Parameters
     ----------
     root: pathlib.Path
-        QAChat repository root.
+        KíLín repository root.
 
     Returns
     -------
@@ -268,7 +268,7 @@ def _missing_modules() -> tuple[str, ...]:
 
 
 def _sync_environment(root: Path) -> None:
-    """Synchronize the QAChat development environment.
+    """Synchronize the KíLín development environment.
 
     ``uv sync`` is preferred when ``uv`` is available. Otherwise, the
     repository's platform-specific setup script is used.
@@ -276,7 +276,7 @@ def _sync_environment(root: Path) -> None:
     Parameters
     ----------
     root: pathlib.Path
-        QAChat repository root in which to run the synchronization command.
+        KíLín repository root in which to run the synchronization command.
 
     Raises
     ------

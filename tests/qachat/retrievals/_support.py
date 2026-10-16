@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qachat.chunking import Chunk
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
-from qachat.retrievals.strategies.retrieval_hybrid import HybridResult
-from qachat.sources.sources import SourceFile, SourceUnit
+from kilin.chunking import Chunk
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
+from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.sources.sources import SourceFile, SourceUnit
 
 
 def chunk(

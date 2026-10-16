@@ -1,4 +1,4 @@
-"""Verify GUI startup and discovery of saved QAChat workspaces.
+"""Verify GUI startup and discovery of saved KíLín workspaces.
 
 No model backend or Qt application is needed for these checks.
 
@@ -15,7 +15,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.gui.engine import ChatEngine
+from kilin.gui.engine import ChatEngine
 
 
 class TestEngineSavedProjects(unittest.TestCase):

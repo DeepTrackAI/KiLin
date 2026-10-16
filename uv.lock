@@ -1953,7 +1953,7 @@ wheels = [
 ]
 
 [[package]]
-name = "qachat"
+name = "kilin"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

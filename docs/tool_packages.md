@@ -1,9 +1,9 @@
-# Modular tools in QAChat
+# Modular tools in KíLín
 
 ## Ownership and boundaries
 
-QAChat's registered tools are Python subpackages under `qachat/tools/`.
-The central registry (`qachat/tools/_registry.py`) connects a stable tool
+KíLín's registered tools are Python subpackages under `kilin/tools/`.
+The central registry (`kilin/tools/_registry.py`) connects a stable tool
 identifier from a project type to `parse_settings` and `run`. It can also
 register an optional `workspace_resources` function. Project-type JSON may
 select and configure registered tools, but cannot load arbitrary code.
@@ -32,7 +32,7 @@ but shared infrastructure should not depend on a tool's configuration.
 ## Standard tool layout
 
 ```text
-qachat/tools/example_tool/
+kilin/tools/example_tool/
     __init__.py        # Tool's documented exports
     tool.py            # Settings dataclass, parser, runner
     _configuration.py  # Strictly validate defaults on import
@@ -43,18 +43,18 @@ qachat/tools/example_tool/
 
 The reference `generate_paper_summary` tool additionally has a private
 report-template parser and a pure report HTML formatter. Qt-based PDF writing
-remains an optional private GUI adapter (`qachat/gui/_report_pdf.py`), passed
+remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
 to the tool as a callback. The tool does not import the GUI, and it always
 saves Markdown even without a PDF backend. Other tools can add private
 modules as needed.
 All ten built-in registered tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
-QAChat is a prerelease package.
+KíLín is a prerelease package.
 
 ## Generated output safety
 
 Tools that create files use the private shared output service in
-`qachat/tools/_shared/outputs.py`. Names must be single, portable basenames;
+`kilin/tools/_shared/outputs.py`. Names must be single, portable basenames;
 absolute paths, parent traversal, path separators, and Windows device names
 are rejected. Existing filenames and symbolic links are not overwritten.
 
@@ -83,12 +83,12 @@ settings retain the packaged defaults.
 Other sections, such as `ESTIMATES` and `HEURISTICS`, define internal
 parameters used by the tool and are not project-type overrides.
 
-`qachat_defaults.json` is independent of these tool-specific defaults.
-Allowing project-type definitions to override *core* QAChat defaults is
+`kilin_defaults.json` is independent of these tool-specific defaults.
+Allowing project-type definitions to override *core* KíLín defaults is
 an intended separate change and is not implemented by this refactor.
 
 Configuration files are loaded once per process. Changing a packaged
-file requires restarting QAChat. Incorrect JSON, missing/unknown keys,
+file requires restarting KíLín. Incorrect JSON, missing/unknown keys,
 invalid types, and values outside the documented constraints fail early.
 
 ## Creating a tool
@@ -99,14 +99,14 @@ invalid types, and values outside the documented constraints fail early.
 4. Register the package in `_registry.py`, including a resource provider
    if workspace files must be copied during project creation.
 5. Add the tool to a project type intent to make it selectable.
-6. Add `tests/qachat/tools/<tool_name>/test_tool.py` with deterministic unit
+6. Add `tests/kilin/tools/<tool_name>/test_tool.py` with deterministic unit
    tests for settings, rejection of invalid overrides, the registry entry,
    and logic that does not require live language models. Test resource
    declarations if applicable.
 7. Include tool-owned JSON, documentation, and resource files in the
    relevant package-data section of `pyproject.toml`. Verify a wheel build.
 
-Tests for shared services belong in `tests/qachat/tools/_shared/`. They
-can be exercised independently from every registered tool. Full QAChat
-regression tests must pass after changes to shared services. QAChat's coding
+Tests for shared services belong in `tests/kilin/tools/_shared/`. They
+can be exercised independently from every registered tool. Full KíLín
+regression tests must pass after changes to shared services. KíLín's coding
 and DeepTrack-style documentation conventions apply to all Python modules.

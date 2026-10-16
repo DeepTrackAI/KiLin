@@ -16,10 +16,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from qachat.gui.engine import (
+from kilin.gui.engine import (
     ChatEngine, _reference_context, _turn_payloads
 )
-from qachat.rag import Evidence
+from kilin.rag import Evidence
 
 
 class TestReferencePreview(unittest.TestCase):
@@ -124,7 +124,7 @@ class TestAnswerTimelines(unittest.TestCase):
             engine.save_answer_timeline(second.timestamp, {"steps": "x"})
 
             with patch(
-                "qachat.gui.engine.asdict",
+                "kilin.gui.engine.asdict",
                 side_effect=lambda turn: {"timestamp": turn.timestamp},
             ):
                 payloads = _turn_payloads([first, second], root)
@@ -142,7 +142,7 @@ class TestAnswerTimelines(unittest.TestCase):
             )
             turn = SimpleNamespace(timestamp="t")
             with patch(
-                "qachat.gui.engine.asdict",
+                "kilin.gui.engine.asdict",
                 side_effect=lambda turn: {"timestamp": turn.timestamp},
             ):
                 self.assertEqual(

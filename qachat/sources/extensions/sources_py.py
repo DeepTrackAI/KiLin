@@ -35,9 +35,9 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> report = qachat.scan_repository("/path/to/repository", extensions=[".py"])
->>> units = qachat.extract_source_units(qachat.read_repository_files(report))
+>>> import kilin
+>>> report = kilin.scan_repository("/path/to/repository", extensions=[".py"])
+>>> units = kilin.extract_source_units(kilin.read_repository_files(report))
 
 """
 
@@ -46,7 +46,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from qachat.sources.sources import (
+from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
     _source_unit,

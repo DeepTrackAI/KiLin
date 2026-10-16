@@ -1,6 +1,6 @@
 # Architecture diagrams
 
-Eleven editable SVG schematics illustrate implemented QAChat components,
+Eleven editable SVG schematics illustrate implemented KíLín components,
 execution paths and ownership boundaries. Each figure belongs to one
 technical reference. The diagrams complement the documented contracts;
 they do not describe unimplemented capabilities.

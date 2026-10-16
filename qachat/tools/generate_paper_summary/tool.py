@@ -6,7 +6,7 @@ Research Briefing format of Nature-family journals), and saves it in the
 project's ``outputs/`` folder. Templates live in the project's
 ``templates/`` folder, which receives only the project type's required
 templates on creation; the question picks one by title or name, and the
-intent's default applies otherwise. It is QAChat's reference example of a
+intent's default applies otherwise. It is KíLín's reference example of a
 custom tool (see tutorial 160): it composes existing capabilities instead
 of re-implementing them.
 
@@ -122,11 +122,11 @@ they are not part of the public API.
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary import (
+>>> from kilin.tools.generate_paper_summary import (
 ...     choose_template,
 ...     parse_settings,
 ... )
->>> from qachat.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
+>>> from kilin.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
 >>> settings = parse_settings({"repair_attempts": 2}, "paper_summary")
 >>> template = choose_template(
 ...     "make a research briefing of it",
@@ -147,18 +147,18 @@ import re
 from time import perf_counter
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import (
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import (
     estimate_tokens,
     named_paths,
 )
-from qachat.tools._shared.document_notes import (
+from kilin.tools._shared.document_notes import (
     NOTHING,
     plan_parts,
     take_notes,
 )
-from qachat.tools._shared.choose_document import choose_document
-from qachat.tools._contract import (
+from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -166,7 +166,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.outputs import (
+from kilin.tools._shared.outputs import (
     OUTPUTS_FOLDER,
     find_output,
     load_output,
@@ -175,7 +175,7 @@ from qachat.tools._shared.outputs import (
     save_output_file,
     staged_output_file,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_ALWAYS,
     CONFIRMATION_CHOICES,
     CONFIRMATION_WHEN_LARGE,
@@ -185,11 +185,11 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.workspace_resources import (
+from kilin.workspace_resources import (
     WorkspaceResource,
     templates_folder,
 )
-from qachat.tools.generate_paper_summary._configuration import (
+from kilin.tools.generate_paper_summary._configuration import (
     BEGINNING_CHARACTERS,
     BEGINNING_PASSAGES,
     CALL_SECONDS,
@@ -219,7 +219,7 @@ from qachat.tools.generate_paper_summary._configuration import (
     RUNNING_LINE_WORDS,
     SECTION_PROMPT_TOKENS,
 )
-from qachat.tools.generate_paper_summary._report_template import (
+from kilin.tools.generate_paper_summary._report_template import (
     SECTION_SOURCE_CITATION,
     SECTION_SOURCE_NOTES,
     SECTION_SOURCE_REFERENCES,
@@ -499,7 +499,7 @@ def choose_paper(
     request: ToolRequest
         The question, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
     what: str, optional
         What will be made, for the question to the user, such as
         "research briefing". Defaults to ``"summary"``.
@@ -938,7 +938,7 @@ def headline_prompt(
     """
 
     system = (
-        "You write headlines for QAChat. You reply with the headline only, "
+        "You write headlines for KíLín. You reply with the headline only, "
         "on one line, without quotes or a '#'."
     )
     user = f"""Write the headline of a {template.title} of {name}.
@@ -984,7 +984,7 @@ def section_prompt(
 
     system = (
         "You write one section of a structured summary of a scientific "
-        "paper for QAChat. You use only the reading notes you are given "
+        "paper for KíLín. You use only the reading notes you are given "
         "and never invent results."
     )
     earlier = "\n".join(
@@ -1050,7 +1050,7 @@ def references_prompt(
 
     low, high = section.items or _DEFAULT_REFERENCE_ITEMS
     system = (
-        "You choose references for QAChat. You reply with entry numbers "
+        "You choose references for KíLín. You reply with entry numbers "
         "only, separated by commas, and nothing else."
     )
     guidance = section.guidance.replace("{references}", "the list below")
@@ -1102,7 +1102,7 @@ def fix_prompt(
     """
 
     system = (
-        "You revise one section of a summary for QAChat. You keep its facts "
+        "You revise one section of a summary for KíLín. You keep its facts "
         "and citations and change only what the problem requires."
     )
     user = f"""Problem: {problem}
@@ -1216,14 +1216,14 @@ def summary_file_text(summary: str, source: Path) -> str:
     -------
     str
         Markdown for the file. Passage numbers only make sense inside
-        QAChat, so they are removed; a closing line names the source, so
+        KíLín, so they are removed; a closing line names the source, so
         the headline and citation stay together at the top.
 
     """
 
     text = _CITATION.sub("", summary).strip()
     note = (
-        f"*Source: {source.name}. Written by QAChat from the paper's text; "
+        f"*Source: {source.name}. Written by KíLín from the paper's text; "
         "check important details against the paper.*"
     )
     return f"{text}\n\n{note}\n"
@@ -1241,7 +1241,7 @@ def run(
     request: ToolRequest
         The question.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------
@@ -1316,7 +1316,7 @@ def run(
         details=(
             *(
                 (
-                    "QAChat chose this paper from your question; name the "
+                    "KíLín chose this paper from your question; name the "
                     "file if it is not the right one.",
                 )
                 if guessed
@@ -1533,7 +1533,7 @@ def _write_headline(
     notes: list[tuple[int, list[str]]]
         Part numbers and note lines.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------
@@ -1594,7 +1594,7 @@ def _write_section(
     settings: SummarySettings
         The intent's settings (``repair_attempts``, ``section_tokens``).
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------
@@ -1660,7 +1660,7 @@ def _fill_references(
     entries: list[str]
         The paper's reference entries, from ``reference_entries``.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------
@@ -1793,7 +1793,7 @@ def _write_pdf(
     template: ReportTemplate
         The report template, for the PDF's label.
     context: ToolContext
-        QAChat's services (``write_pdf``).
+        KíLín's services (``write_pdf``).
 
     Returns
     -------
@@ -1843,7 +1843,7 @@ def _paper_file(path: Path, context: ToolContext) -> Path | None:
         The paper's path: ``outputs/...`` (relative to the project) or an
         indexed source path (relative to the project's ``sources/``).
     context: ToolContext
-        QAChat's services (``project_root``).
+        KíLín's services (``project_root``).
 
     Returns
     -------

@@ -8,7 +8,7 @@ router model is chosen per backend.
 
 Every project keeps all its settings, changed or not, in its own
 ``profile.ini``, next to the core settings, so it resumes exactly as it was
-set up even when ``qachat/gui/defaults.json`` changes later:
+set up even when ``kilin/gui/defaults.json`` changes later:
 
 .. code-block:: ini
 
@@ -29,7 +29,7 @@ opened, from the defaults, or from the ``effort_levels.json`` and
 ``model_choices.json`` files earlier versions kept, which it then removes.
 
 The defaults and the shared validation live in
-``qachat.gui.preferences``.
+``kilin.gui.preferences``.
 
 Key Features
 ------------
@@ -64,7 +64,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.gui.model_settings import read_search_depth
+>>> from kilin.gui.model_settings import read_search_depth
 >>> len(read_search_depth(None))
 5
 
@@ -75,8 +75,8 @@ from io import StringIO
 import json
 from pathlib import Path
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.gui.preferences import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.gui.preferences import (
     LEVEL_COUNT,
     MAX_LEVEL_NAME,
     MAX_SEARCH_DEPTH,
@@ -87,7 +87,7 @@ from qachat.gui.preferences import (
     validate_model_id,
     validate_search_depth,
 )
-from qachat.runtime import BACKEND_MLX, BACKEND_TORCH
+from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "DEFAULT_LEVEL",

@@ -33,7 +33,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.generate_paper_summary._configuration import (
+>>> from kilin.tools.generate_paper_summary._configuration import (
 ...     DEFAULT_PART_TOKENS,
 ... )
 >>> DEFAULT_PART_TOKENS
@@ -47,7 +47,7 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.tools._defaults import (
+from kilin.tools._defaults import (
     load_tool_defaults,
     require_int,
     require_int_pair,
@@ -57,7 +57,7 @@ from qachat.tools._defaults import (
     require_string,
     require_words,
 )
-from qachat.tools._shared.planning import CONFIRMATION_CHOICES
+from kilin.tools._shared.planning import CONFIRMATION_CHOICES
 
 __all__ = [
     "BEGINNING_CHARACTERS",

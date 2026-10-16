@@ -1,3 +1,3 @@
-"""Tests for the QAChat GUI package.
+"""Tests for the KíLín GUI package.
 
 """

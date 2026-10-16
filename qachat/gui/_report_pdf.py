@@ -4,7 +4,7 @@ This private GUI adapter receives report text from the core through an
 explicit callback. Report parsing, escaping, styling and title extraction
 belong to ``generate_paper_summary._report_format``, which has no Qt
 imports. The adapter uses PySide6 only when ``write_report_pdf`` is called,
-so importing the QAChat core does not require the graphical interface.
+so importing the KíLín core does not require the graphical interface.
 
 Key Features
 ------------
@@ -26,7 +26,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.gui._report_pdf import write_report_pdf
+>>> from kilin.gui._report_pdf import write_report_pdf
 >>> callable(write_report_pdf)
 True
 
@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qachat.tools.generate_paper_summary._report_format import (
+from kilin.tools.generate_paper_summary._report_format import (
     markdown_to_html,
     report_title,
 )
@@ -59,7 +59,7 @@ def _application() -> None:
 
     if QGuiApplication.instance() is None and not _APPLICATION:
         _APPLICATION.append(
-            QApplication(["qachat-pdf", "-platform", "offscreen"])
+            QApplication(["kilin-pdf", "-platform", "offscreen"])
         )
 
 
@@ -114,7 +114,7 @@ def write_report_pdf(
         QMarginsF(16, 14, 16, 14), QPageLayout.Unit.Millimeter
     )
     writer.setTitle(report_title(markdown))
-    writer.setCreator("QAChat")
+    writer.setCreator("KíLín")
     area = writer.pageLayout().paintRectPoints()
     size = font_size
     while True:

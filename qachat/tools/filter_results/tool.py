@@ -49,11 +49,11 @@ Module Structure
 
 Examples
 --------
-``context`` is the ``ToolContext`` that QAChat passes to a tool, and
+``context`` is the ``ToolContext`` that KíLín passes to a tool, and
 ``earlier`` holds the turns the follow-up points back to:
 
->>> from qachat.tools import ToolRequest
->>> from qachat.tools.filter_results import FilterSettings, run
+>>> from kilin.tools import ToolRequest
+>>> from kilin.tools.filter_results import FilterSettings, run
 >>> question = "among those, which are about XYZ 2?"
 >>> request = ToolRequest(question, question, earlier=earlier)
 >>> result = run(FilterSettings(), request, context)
@@ -67,16 +67,16 @@ from dataclasses import dataclass
 import re
 from typing import Final
 
-from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools.filter_results import _configuration as _config
-from qachat.tools._contract import (
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools.filter_results import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.earlier_turns import newest_listed
+from kilin.tools._shared.earlier_turns import newest_listed
 
 __all__ = [
     "FilterSettings",
@@ -194,7 +194,7 @@ def run(
     request: ToolRequest
         The follow-up, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

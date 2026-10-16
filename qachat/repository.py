@@ -74,27 +74,27 @@ used by these operations; they are not added to the package-level API.
 Module settings
 ---------------
 ``PROJECT_ROOT`` anchors relative repository paths to the package parent.
-The packaged ``qachat_defaults.json`` contains the repository-selection
+The packaged ``kilin_defaults.json`` contains the repository-selection
 defaults. Stable reason identifiers come from the separately packaged
-``repository_reason_codes.json`` via ``qachat.repository_reason_codes``.
+``repository_reason_codes.json`` via ``kilin.repository_reason_codes``.
 ``DEFAULT_EXTENSIONS`` supplies the literal filename suffixes;
 ``SKIP_DIRECTORIES``, ``SKIP_FILES``, and ``BLOCKED_SUFFIXES`` provide
 name-based exclusions. These lists are loaded at import time and define
 which extensions are considered, which directory and file names are skipped,
 and which binary or sensitive suffixes are rejected. They can be edited in
-the packaged JSON; changes require restarting QAChat. They are not
+the packaged JSON; changes require restarting KíLín. They are not
 included in ``__all__`` or re-exported from the package root.
 
 Examples
 --------
->>> import qachat
->>> report = qachat.scan_repository(
+>>> import kilin
+>>> report = kilin.scan_repository(
 ...     "/path/to/repository", extensions=[".py", ".md"],
 ... )
 >>> if not report["complete"]:
 ...     raise RuntimeError("Repository scan was incomplete.")
->>> manifest = qachat.build_repository_manifest(report)
->>> changes = qachat.compare_repository_manifests(manifest, manifest)
+>>> manifest = kilin.build_repository_manifest(report)
+>>> changes = kilin.compare_repository_manifests(manifest, manifest)
 
 Use an absolute repository path to avoid dependence on the package location.
 
@@ -109,11 +109,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 
-from qachat.defaults import (
+from kilin.defaults import (
     load_defaults_section,
     require_default_strings,
 )
-from qachat.repository_reason_codes import (
+from kilin.repository_reason_codes import (
     SELECTION_REASON_SELECTED,
     SELECTION_REASON_FILE_TOO_LARGE,
     SELECTION_REASON_EMPTY_FILE,
@@ -197,7 +197,7 @@ def _selection_paths(
     """
 
     if not isinstance(values, (list, tuple)):
-        raise ValueError(f"{label} must be a list, for example ['qachat'].")
+        raise ValueError(f"{label} must be a list, for example ['kilin'].")
 
     result: list[str] = []
     for value in values:
@@ -914,8 +914,8 @@ def detect_repository_changes(
 
     Examples
     --------
-    >>> import qachat
-    >>> changes = qachat.detect_repository_changes(
+    >>> import kilin
+    >>> changes = kilin.detect_repository_changes(
     ...     "/path/to/repository", "/path/to/source_manifest.json",
     ... )
 

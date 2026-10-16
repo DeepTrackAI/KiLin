@@ -17,10 +17,10 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat.sources.sources import SourceFile
+from kilin.sources.sources import SourceFile
 
 try:
-    from qachat.sources.extensions import sources_pdf
+    from kilin.sources.extensions import sources_pdf
 except ModuleNotFoundError as error:
     if error.name not in {"pdfminer", "pypdf"}:
         raise

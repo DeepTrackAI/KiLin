@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.tools._defaults import (
+from kilin.tools._defaults import (
     load_tool_defaults,
     require_int,
     require_int_pair,

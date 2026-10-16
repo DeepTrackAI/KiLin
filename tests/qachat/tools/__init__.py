@@ -1,1 +1,1 @@
-"""Unit tests for modular QAChat tool packages and private services."""
+"""Unit tests for modular KíLín tool packages and private services."""

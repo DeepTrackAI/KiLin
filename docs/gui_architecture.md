@@ -3,13 +3,13 @@
 ## Optional adapter, not the core application
 
 The desktop interface is implemented with PySide6/Qt WebEngine and a local
-HTML/CSS/JavaScript page. Importing `qachat` or running the Python core in a
+HTML/CSS/JavaScript page. Importing `kilin` or running the Python core in a
 notebook must not require Qt. The GUI provides a file picker, setup forms,
 model management, project/conversation controls, progress, rendered answers
 and reference previews; source policy, model sessions, indexing and
 persistence remain delegated to Python core APIs.
 
-The more detailed [GUI README](../qachat/gui/README.md) is the user- and
+The more detailed [GUI README](../kilin/gui/README.md) is the user- and
 implementation-facing companion, while the exact command/event names and
 payloads are owned by [GUI protocol](gui_protocol.md).
 
@@ -19,9 +19,9 @@ payloads are owned by [GUI protocol](gui_protocol.md).
 
 *Figure: QWebChannel traffic stays inside the Qt process; newline-delimited JSON messages cross the engine subprocess boundary.*
 
-`gui/__main__.py` launches `gui.app.main()`. The `qachat --gui` CLI can
+`gui/__main__.py` launches `gui.app.main()`. The `kilin --gui` CLI can
 first check/prepare optional dependencies using `uv` in a development
-checkout, whereas `python -m qachat.gui` does not perform dependency
+checkout, whereas `python -m kilin.gui` does not perform dependency
 installation. The GUI process imports Qt; the child engine can run without
 Qt for ordinary answering, except optional PDF rendering injected into
 report tools. A Qt application's existence is a per-process global
@@ -73,7 +73,7 @@ Packaged `gui/defaults.json` is **immutable** during normal operation.
 preferences; `gui/_paths.py` resolves config/data locations independently
 of Qt. In a validated development checkout, the GUI's default workspace
 parent remains its root `sandbox/`; in an installed distribution it is a
-platform-specific per-user data directory. `QACHAT_WORKSPACES_DIR` and an
+platform-specific per-user data directory. `KILIN_WORKSPACES_DIR` and an
 explicit workspace selection override that suggested parent.
 
 An existing project's `profile.ini` remains authoritative for backend,
@@ -162,10 +162,10 @@ does not authenticate untrusted source content.
   `QApplication` can crash native PDF tests; isolate optional Qt/WebEngine
   smoke tests in a **subprocess**.
 
-Focused regression tests are under `tests/qachat/gui/`, including protocol,
+Focused regression tests are under `tests/kilin/gui/`, including protocol,
 model, project, source-selection, reference preview, PDF and optional native
 smoke suites. General persistence and source-management guarantees are
-covered by tests under `tests/qachat/` independent of Qt.
+covered by tests under `tests/kilin/` independent of Qt.
 
 Related: [Architecture](architecture.md),
 [GUI protocol](gui_protocol.md),

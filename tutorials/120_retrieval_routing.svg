@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="720"
      viewBox="0 0 1000 720" role="img"
      aria-labelledby="title desc">
-  <title id="title">QAChat retrieval routing pipeline</title>
+  <title id="title">KíLín retrieval routing pipeline</title>
   <desc id="desc">
     A question is ranked independently by semantic, lexical, and code-aware
     retrieval. Reciprocal Rank Fusion combines the rankings. Deterministic

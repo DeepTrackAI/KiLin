@@ -1,8 +1,8 @@
-# QAChat architecture
+# KíLín architecture
 
 ## Purpose and current scope
 
-QAChat is a local-first question-answering application and extensible Python
+KíLín is a local-first question-answering application and extensible Python
 framework for working with user-supplied code and literature. The currently
 shipped project types are `code` and `literature`. It provides a core API,
 retrieval, locally executed model sessions, structured conversations, a set
@@ -11,16 +11,16 @@ are implemented capabilities. Arbitrary plugin discovery, autonomous
 multi-agent operation, secure code execution and distributed inference are
 **not** established capabilities of this snapshot.
 
-A major design invariant is that importing `qachat` does not construct a
+A major design invariant is that importing `kilin` does not construct a
 model or start Qt. Project creation, source ownership, indexing, retrieval,
 conversation persistence and tool contracts are core responsibilities. The
 GUI is an adapter over these operations. See the source-level package facade
-at [`qachat/__init__.py`](../qachat/__init__.py) to distinguish exported
+at [`kilin/__init__.py`](../kilin/__init__.py) to distinguish exported
 names from private implementation functions.
 
 ## Executable boundaries
 
-![Python clients and an optional Qt desktop both use the same GUI-independent QAChat core.](figures/architecture.svg)
+![Python clients and an optional Qt desktop both use the same GUI-independent KíLín core.](figures/architecture.svg)
 
 *Figure: The optional desktop has its own Qt-to-engine transport; the Python core owns projects, retrieval, answering and local persistence.*
 
@@ -39,7 +39,7 @@ presentation state). Their lifetimes and owners must not be conflated.
 
 | Layer | Modules and responsibility |
 | --- | --- |
-| API and entry points | `qachat/__init__.py` is the curated public facade; `cli.py` is the optional GUI launcher; `gui/__main__.py` launches the GUI directly. |
+| API and entry points | `kilin/__init__.py` is the curated public facade; `cli.py` is the optional GUI launcher; `gui/__main__.py` launches the GUI directly. |
 | Project lifecycle | `project.py` validates `profile.ini`, creates/opens workspaces; `project_layout.py` plans shared folders and tool resources. |
 | Workspace contents | `workspace.py` imports cumulative sources; `project_files.py` edits outputs/templates; `workspace_resources.py` validates packaged resource declarations. |
 | Selection and text | `repository.py` enforces scan policy and manifests; `sources/` supplies readers and provenance-bearing source units; `chunking.py` creates bounded chunks. |
@@ -102,7 +102,7 @@ user-owned data directory, while a recognized source checkout defaults to
 its `sandbox/`. See [Configuration](configuration.md).
 
 A conversation file can contain both committed turns and detailed traces.
-Advisory companion-file locks coordinate QAChat writers; atomic replacement
+Advisory companion-file locks coordinate KíLín writers; atomic replacement
 protects individual writes, but does not create a multi-file database
 transaction or prevent a noncooperating local process from altering files.
 See [Conversation ownership](conversation_ownership.md) and

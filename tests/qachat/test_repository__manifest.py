@@ -20,7 +20,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import repository
+from kilin import repository
 
 
 class TestRepositoryManifestBuild(unittest.TestCase):

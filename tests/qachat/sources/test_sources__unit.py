@@ -19,8 +19,8 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import Mock, call, patch
 
-from qachat.sources import sources
-from qachat.sources.sources import (
+from kilin.sources import sources
+from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
     extract_source_units,
@@ -326,7 +326,7 @@ class TestExtensionDiscovery(unittest.TestCase):
         ) as imp:
             self.assertIs(sources._extension_module(Path("DOC.PY")), module)
         imp.assert_called_once_with(
-            "qachat.sources.extensions.sources_py"
+            "kilin.sources.extensions.sources_py"
         )
 
     def test_missing_suffix_does_not_attempt_import(self) -> None:
@@ -339,7 +339,7 @@ class TestExtensionDiscovery(unittest.TestCase):
     def test_missing_extension_is_an_optional_fallback(self) -> None:
         """Suppress only the missing requested extension module."""
 
-        name = "qachat.sources.extensions.sources_rst"
+        name = "kilin.sources.extensions.sources_rst"
         with patch.object(
             sources, "import_module",
             side_effect=ModuleNotFoundError(name=name),

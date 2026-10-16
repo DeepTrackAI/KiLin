@@ -22,13 +22,13 @@ import unittest
 from unittest.mock import DEFAULT, MagicMock, Mock, patch, sentinel
 import warnings
 
-from qachat import rag
-from qachat.conversation_format import (
+from kilin import rag
+from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     new_conversation_session,
 )
-from qachat.answering import RouteDecision
-from qachat.project_type import (
+from kilin.answering import RouteDecision
+from kilin.project_type import (
     HISTORY_POLICY_RECENT,
     Intent,
     RETRIEVAL_MODE_DOCUMENT,
@@ -36,11 +36,11 @@ from qachat.project_type import (
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
 )
-from qachat.retrievals import DocumentSelection, RetrievalPlan
-from qachat.retrievals.code_graph import CodeGraph
-from qachat.runtime import BACKEND_MLX
-from qachat.tools import ToolResult, ToolUse
-from qachat.trace_logging import (
+from kilin.retrievals import DocumentSelection, RetrievalPlan
+from kilin.retrievals.code_graph import CodeGraph
+from kilin.runtime import BACKEND_MLX
+from kilin.tools import ToolResult, ToolUse
+from kilin.trace_logging import (
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
     FailurePolicy,
@@ -48,7 +48,7 @@ from qachat.trace_logging import (
     TraceConfig,
     TraceLogger,
 )
-from tests.qachat.retrievals._support import (
+from tests.kilin.retrievals._support import (
     FakeEmbeddings,
     chunk,
     graph,
@@ -79,7 +79,7 @@ def _profile() -> SimpleNamespace:
 
 def _session(root: Path | None = None) -> rag.RAGSession:
     """Create a coordinator without initializing or downloading models."""
-    directory = root or Path("/unused-qachat-test-project")
+    directory = root or Path("/unused-kilin-test-project")
     session = rag.RAGSession.__new__(rag.RAGSession)
     session.project = SimpleNamespace(
         root=directory,
@@ -201,7 +201,7 @@ class TestCitationIdentifierValidation(unittest.TestCase):
     """Check citation syntax against supplied evidence in one fast pass."""
 
     def test_groups_and_deduplication(self) -> None:
-        """Recognize the citation groups already supported by QAChat."""
+        """Recognize the citation groups already supported by KíLín."""
         self.assertEqual(
             rag._invalid_citations(
                 "[2] [1, 3] [3] [0]", (_evidence(1), _evidence(2))
@@ -2345,7 +2345,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         (self.root / "logs").mkdir()
-        from qachat.project import QAProject, default_project_profile
+        from kilin.project import QAProject, default_project_profile
 
         self.project = QAProject(
             self.root,
@@ -2446,7 +2446,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     def test_untraced_constructor_holds_lease_until_close(self) -> None:
         """Protect conversation history even with tracing disabled."""
 
-        from qachat.conversation_ownership import (
+        from kilin.conversation_ownership import (
             ConversationFileLock,
             ConversationLockedError,
         )
@@ -2467,7 +2467,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
     ) -> None:
         """Release an acquired lock if preparation fails before model load."""
 
-        from qachat.conversation_ownership import ConversationFileLock
+        from kilin.conversation_ownership import ConversationFileLock
 
         path = self.root / "logs" / "traces" / "conversation_fixed.json"
 
@@ -2722,7 +2722,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
     ) -> None:
         """Preserve a caller-owned trace after constructor failure."""
         with TemporaryDirectory() as directory:
-            from qachat.project import QAProject, default_project_profile
+            from kilin.project import QAProject, default_project_profile
             root = Path(directory)
             (root / "logs").mkdir()
             project = QAProject(
@@ -3299,7 +3299,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
             trace, "_write_readable_trace", side_effect=write_or_fail
         ):
             with self.assertRaisesRegex(
-                RuntimeError, "Could not write QAChat trace"
+                RuntimeError, "Could not write KíLín trace"
             ):
                 self._ask_with_real_save(
                     "Saved despite strict failure", _intent()
@@ -3562,7 +3562,7 @@ class TestRAGTraceIntegration(unittest.TestCase):
             trace, "_write_readable_trace", side_effect=write_or_fail
         ):
             with self.assertRaisesRegex(
-                RuntimeError, "Could not write QAChat trace"
+                RuntimeError, "Could not write KíLín trace"
             ):
                 self._ask_with_real_save(
                     "Strict failed event", _intent(),
@@ -3613,7 +3613,7 @@ class TestRAGFileOwnership(unittest.TestCase):
     def test_direct_save_refuses_a_competing_lease(self) -> None:
         """Do not replace JSON when a separate writer owns the same file."""
 
-        from qachat.conversation_ownership import (
+        from kilin.conversation_ownership import (
             ConversationFileLock,
             ConversationLockedError,
         )
@@ -3634,7 +3634,7 @@ class TestRAGFileOwnership(unittest.TestCase):
     ) -> None:
         """Retain the old path and its lock if the new file is occupied."""
 
-        from qachat.conversation_ownership import (
+        from kilin.conversation_ownership import (
             ConversationFileLock,
             ConversationLockedError,
         )

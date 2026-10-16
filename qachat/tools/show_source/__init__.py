@@ -1,7 +1,7 @@
 """Expose the registered ``show_source`` tool.
 
 Its implementation and configuration are local to this package.
-Common algorithms are provided by private ``qachat.tools._shared``
+Common algorithms are provided by private ``kilin.tools._shared``
 modules, not by other registered tools.
 
 Key Features
@@ -24,14 +24,14 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.show_source import parse_settings
+>>> from kilin.tools.show_source import parse_settings
 >>> callable(parse_settings)
 True
 
 """
 
-from qachat.tools._shared.earlier_turns import newest_listed
-from qachat.tools.show_source.tool import (
+from kilin.tools._shared.earlier_turns import newest_listed
+from kilin.tools.show_source.tool import (
     SourceSettings,
     explain_prompt,
     parse_settings,

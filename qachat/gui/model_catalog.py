@@ -31,7 +31,7 @@ Module Structure
 
 - ``ModelChoice``
 
-    One QAChat starting model and the role it is offered for.
+    One KíLín starting model and the role it is offered for.
 
 - ``installed_backends``
 
@@ -43,9 +43,9 @@ Module Structure
 
 Examples
 --------
->>> import qachat.gui.model_catalog
->>> backends = qachat.gui.model_catalog.installed_backends()
->>> presets = qachat.gui.model_catalog.MODEL_CHOICES
+>>> import kilin.gui.model_catalog
+>>> backends = kilin.gui.model_catalog.installed_backends()
+>>> presets = kilin.gui.model_catalog.MODEL_CHOICES
 
 """
 
@@ -57,7 +57,7 @@ import json
 from pathlib import Path
 from typing import Final, TypeAlias
 
-from qachat.model_defaults import (
+from kilin.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
     DEFAULT_EMBEDDING_MODEL_MLX,
@@ -66,8 +66,8 @@ from qachat.model_defaults import (
     MODEL_ROLE_EMBEDDING,
     ModelRole,
 )
-from qachat.query_formats import QUERY_FORMAT_QWEN3, QueryFormat
-from qachat.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
+from kilin.query_formats import QUERY_FORMAT_QWEN3, QueryFormat
+from kilin.runtime import BACKEND_MLX, BACKEND_TORCH, SelectedBackend
 
 
 __all__ = [
@@ -84,7 +84,7 @@ __all__ = [
 ModelBackend: TypeAlias = SelectedBackend
 
 # Cached models that are neither chat nor embedding models. Only the GUI's
-# cache classification uses it; qachat.model_defaults owns the model roles.
+# cache classification uses it; kilin.model_defaults owns the model roles.
 MODEL_ROLE_OTHER: Final[str] = "other"
 
 # The GUI's smallest and largest effort models on MLX.
@@ -94,7 +94,7 @@ DEEP_CHAT_MODEL_MLX = "mlx-community/Qwen3-14B-4bit"
 
 @dataclass(frozen=True, slots=True)
 class ModelChoice:
-    """One QAChat starting model and the role it is offered for.
+    """One KíLín starting model and the role it is offered for.
 
     Parameters
     ----------
@@ -201,7 +201,7 @@ def installed_backends() -> dict[str, bool]:
 def model_choices(cached_models: set[str]) -> list[dict[str, object]]:
     """Mark the suggested models that are present in the local cache.
 
-    Cache presence is not a load test. The actual model is checked when QAChat
+    Cache presence is not a load test. The actual model is checked when KíLín
     opens the project.
 
     Parameters
@@ -242,7 +242,7 @@ def cached_model_roles(
     Parameters
     ----------
     cached_models: list[dict[str, object]]
-        Entries from ``qachat.huggingface.available_models``.
+        Entries from ``kilin.huggingface.available_models``.
 
     Returns
     -------

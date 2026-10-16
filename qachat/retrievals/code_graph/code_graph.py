@@ -47,11 +47,11 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> report = qachat.scan_repository("/path/to/repository", extensions=[".py"])
->>> files = qachat.read_repository_files(report)
->>> units = qachat.extract_source_units(files)
->>> graph = qachat.build_code_graph(files, units)
+>>> import kilin
+>>> report = kilin.scan_repository("/path/to/repository", extensions=[".py"])
+>>> files = kilin.read_repository_files(report)
+>>> units = kilin.extract_source_units(files)
+>>> graph = kilin.build_code_graph(files, units)
 
 """
 
@@ -61,7 +61,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 
-from qachat.sources.sources import SourceFile, SourceUnit
+from kilin.sources.sources import SourceFile, SourceUnit
 
 __all__ = [
     "CodeEntity",
@@ -70,7 +70,7 @@ __all__ = [
     "build_code_graph",
 ]
 
-_EXTENSION_PACKAGE = "qachat.retrievals.code_graph.extensions"
+_EXTENSION_PACKAGE = "kilin.retrievals.code_graph.extensions"
 
 
 @dataclass(frozen=True, slots=True)

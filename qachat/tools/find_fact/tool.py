@@ -64,10 +64,10 @@ estimate the time; they are not part of the public API.
 
 Examples
 --------
-``context`` is the ``ToolContext`` that QAChat passes to a tool:
+``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
->>> from qachat.tools import ToolRequest
->>> from qachat.tools.find_fact import FactSettings, run
+>>> from kilin.tools import ToolRequest
+>>> from kilin.tools.find_fact import FactSettings, run
 >>> question = "how many epochs does each paper use?"
 >>> request = ToolRequest(question, question)
 >>> result = run(FactSettings(), request, context)
@@ -83,16 +83,16 @@ import re
 from time import perf_counter
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import estimate_tokens
-from qachat.tools._shared.document_notes import (
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.document_notes import (
     answer_citations,
     plan_parts,
     take_notes,
 )
-from qachat.tools._shared.choose_document import document_scope
-from qachat.tools.find_fact import _configuration as _config
-from qachat.tools._contract import (
+from kilin.tools._shared.choose_document import document_scope
+from kilin.tools.find_fact import _configuration as _config
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -100,7 +100,7 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -108,7 +108,7 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools._shared.term_filter import term_hits, term_label
+from kilin.tools._shared.term_filter import term_hits, term_label
 
 __all__ = [
     "FactSettings",
@@ -254,7 +254,7 @@ def fact_prompt(
 
     material = "passages" if quick else "notes"
     system = (
-        f"You answer a factual question for QAChat from {material} about "
+        f"You answer a factual question for KíLín from {material} about "
         "documents. Use only them, cite passage numbers exactly as given, "
         "like [12], and never guess a number or name they do not state."
     )
@@ -291,7 +291,7 @@ def run(
     request: ToolRequest
         The question, with the earlier turns it points back to.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

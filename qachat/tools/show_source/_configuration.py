@@ -19,7 +19,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools.show_source import _configuration
+>>> from kilin.tools.show_source import _configuration
 >>> bool(_configuration._DEFAULTS)
 True
 
@@ -30,7 +30,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from qachat.tools._defaults import (
+from kilin.tools._defaults import (
     load_tool_defaults,
     require_int,
     require_keys,

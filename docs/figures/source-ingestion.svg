@@ -28,6 +28,6 @@
 <rect x="0" y="800" width="1280" height="50" fill="#F8FAFC"/>
 <line x1="44" y1="800" x2="1236" y2="800" stroke="#E2E8F0"/>
 <text x="45" y="830" font-size="13" fill="#475569" font-family="Inter,Arial,sans-serif">Two ownership workflows use different manifests · readers do not execute source files or notebooks</text>
-<text x="1235" y="830" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">QAChat · PR9b</text>
+<text x="1235" y="830" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín · PR9b</text>
 
 </svg>

@@ -1,4 +1,4 @@
-"""Launch QAChat's optional graphical interface from the command line.
+"""Launch KíLín's optional graphical interface from the command line.
 
 ``main`` parses the GUI and backend options. Without ``--gui`` it prints help.
 Before a GUI launch it checks for the requested dependency modules and may
@@ -6,10 +6,10 @@ run ``uv sync`` in a development checkout to install missing extras. This
 preparation may modify the environment and require network access.
 
 ``uv run`` synchronizes its environment by default; ``uv run --no-sync``
-skips only that initial uv-managed synchronization. The QAChat launcher may
+skips only that initial uv-managed synchronization. The KíLín launcher may
 still synchronize missing GUI dependencies itself. To launch a preinstalled
 GUI without either synchronization step, use
-``uv run --no-sync python -m qachat.gui``.
+``uv run --no-sync python -m kilin.gui``.
 
 The backend argument selects which dependency extra is checked or installed.
 It is not forwarded to the GUI as a project or model backend setting.
@@ -31,21 +31,21 @@ Module Structure
 
 - ``main``
 
-    Launch the selected QAChat interface.
+    Launch the selected KíLín interface.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat.cli
->>> exit_code = qachat.cli.main([])
+>>> import kilin.cli
+>>> exit_code = kilin.cli.main([])
 
-A normal GUI launch is ``qachat.cli.main(["--gui"])`` and starts an
+A normal GUI launch is ``kilin.cli.main(["--gui"])`` and starts an
 interactive application.
 
-From a QAChat checkout, ``uv run qachat --gui`` launches with environment
-preparation. ``uv run --no-sync python -m qachat.gui`` requires the GUI
+From a KíLín checkout, ``uv run kilin --gui`` launches with environment
+preparation. ``uv run --no-sync python -m kilin.gui`` requires the GUI
 dependencies to have been installed previously.
 
 """
@@ -62,7 +62,7 @@ import shutil
 import subprocess
 import sys
 
-from qachat.runtime import (
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_CHOICES,
     BACKEND_MLX,
@@ -137,11 +137,11 @@ def _ensure_gui_environment(backend: Backend) -> None:
     project = Path(__file__).resolve().parents[1]
     if uv is None or not (project / "pyproject.toml").is_file():
         raise RuntimeError(
-            "The GUI dependencies are missing. From the QAChat repository, "
+            "The GUI dependencies are missing. From the KíLín repository, "
             f"run: uv sync --extra gui --extra {selected}"
         )
 
-    print(f"Preparing the QAChat GUI ({selected.upper()})…")
+    print(f"Preparing the KíLín GUI ({selected.upper()})…")
     subprocess.run(
         [uv, "sync", "--extra", "gui", "--extra", selected],
         cwd=project,
@@ -151,7 +151,7 @@ def _ensure_gui_environment(backend: Backend) -> None:
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    """Launch the selected QAChat interface.
+    """Launch the selected KíLín interface.
 
     Parameters
     ----------
@@ -173,8 +173,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
     """
 
     parser = ArgumentParser(
-        prog="qachat",
-        description="Run QAChat locally against your own project.",
+        prog="kilin",
+        description="Run KíLín locally against your own project.",
     )
     parser.add_argument(
         "--gui",
@@ -194,7 +194,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
     _ensure_gui_environment(options.backend)
 
-    from qachat.gui.app import main as gui_main
+    from kilin.gui.app import main as gui_main
 
-    # Do not forward QAChat's own --gui option to Qt.
+    # Do not forward KíLín's own --gui option to Qt.
     return gui_main([sys.argv[0]])

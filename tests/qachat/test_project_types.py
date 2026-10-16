@@ -22,9 +22,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import project
-from qachat.defaults import load_defaults_section
-from qachat.project_type import (
+from kilin import project
+from kilin.defaults import load_defaults_section
+from kilin.project_type import (
     DOCUMENT_MAX_TOKENS,
     HISTORY_POLICY_CHOICES,
     RETRIEVAL_MODE_CHOICES,
@@ -463,7 +463,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
         """Defensively validate direct calls to the JSON object parser."""
 
         with self.assertRaisesRegex(ValueError, "must be an object"):
-            from qachat.project_type import _parse_project_type
+            from kilin.project_type import _parse_project_type
 
             _parse_project_type("samples", [])
 

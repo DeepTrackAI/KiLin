@@ -41,10 +41,10 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat
->>> report = qachat.scan_repository("/path/to/repository", extensions=[".py"])
->>> files = qachat.read_repository_files(report)
->>> graph = qachat.build_code_graph(files, qachat.extract_source_units(files))
+>>> import kilin
+>>> report = kilin.scan_repository("/path/to/repository", extensions=[".py"])
+>>> files = kilin.read_repository_files(report)
+>>> graph = kilin.build_code_graph(files, kilin.extract_source_units(files))
 
 """
 
@@ -53,12 +53,12 @@ from __future__ import annotations
 import ast
 import re
 
-from qachat.retrievals.code_graph.code_graph import (
+from kilin.retrievals.code_graph.code_graph import (
     CodeRelation,
     _module_name,
     _resolve_name,
 )
-from qachat.sources.sources import SourceFile
+from kilin.sources.sources import SourceFile
 
 
 __all__ = [
@@ -98,7 +98,7 @@ def extract_code_relations(
     try:
         tree = ast.parse(source_file.text)
     except SyntaxError:
-        # Invalid or incomplete source remains usable elsewhere in QAChat.
+        # Invalid or incomplete source remains usable elsewhere in KíLín.
         # Code-graph extraction simply contributes no Python relationships.
         return set()
 

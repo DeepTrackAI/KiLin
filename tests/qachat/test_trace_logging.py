@@ -23,10 +23,10 @@ import unittest
 from unittest.mock import Mock, patch
 import warnings
 
-import qachat
-from qachat.conversation_format import CONVERSATION_SESSION_KEY
-from qachat import trace_logging
-from qachat.trace_logging import (
+import kilin
+from kilin.conversation_format import CONVERSATION_SESSION_KEY
+from kilin import trace_logging
+from kilin.trace_logging import (
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
@@ -83,7 +83,7 @@ class TestTraceConfig(unittest.TestCase):
     def test_packaged_defaults_do_not_select_trace_modes(self) -> None:
         """Keep tracing detail out of package-wide settings."""
         config_path = Path(trace_logging.__file__).with_name(
-            "qachat_defaults.json"
+            "kilin_defaults.json"
         )
         settings = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertNotIn("TRACE", settings)
@@ -97,7 +97,7 @@ class TestTraceConfig(unittest.TestCase):
             "TRACE_MODE_CHOICES",
             "DEFAULT_TRACE_MODE",
         ):
-            self.assertFalse(hasattr(qachat, name))
+            self.assertFalse(hasattr(kilin, name))
         for mode in ("standard", "forensic"):
             with self.subTest(mode=mode):
                 with self.assertRaises(TypeError):
@@ -1114,7 +1114,7 @@ class TestTraceExclusiveOwnership(unittest.TestCase):
     ) -> None:
         """Refuse simultaneous independent loggers without losing events."""
 
-        from qachat.conversation_ownership import ConversationLockedError
+        from kilin.conversation_ownership import ConversationLockedError
 
         first = self._open()
         self.addCleanup(first.close)

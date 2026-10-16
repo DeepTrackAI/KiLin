@@ -18,7 +18,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from qachat import repository_reason_codes as codes
+from kilin import repository_reason_codes as codes
 
 
 class TestRepositoryReasonCodes(unittest.TestCase):
@@ -27,7 +27,7 @@ class TestRepositoryReasonCodes(unittest.TestCase):
     def test_resource_and_python_identifiers_agree(self) -> None:
         """Expose every packaged identifier without changing its value."""
 
-        path = resources.files("qachat").joinpath(
+        path = resources.files("kilin").joinpath(
             "repository_reason_codes.json"
         )
         definitions = json.loads(path.read_text(encoding="utf-8"))

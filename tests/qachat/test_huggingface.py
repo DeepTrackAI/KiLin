@@ -1,4 +1,4 @@
-"""Unit tests for QAChat's Hugging Face cache interface.
+"""Unit tests for KíLín's Hugging Face cache interface.
 
 Tests exercise cache discovery, offline snapshot resolution, and download
 coordination without accessing the network or the user's model cache.
@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat import huggingface
+from kilin import huggingface
 
 
 class TestAvailableModels(unittest.TestCase):

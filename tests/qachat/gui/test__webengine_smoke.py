@@ -1,6 +1,6 @@
 """Optionally smoke-test the actual GUI page in an isolated Qt process.
 
-Run with ``QACHAT_RUN_NATIVE_GUI_TESTS=1`` and PySide6 WebEngine installed.
+Run with ``KILIN_RUN_NATIVE_GUI_TESTS=1`` and PySide6 WebEngine installed.
 The child owns its QApplication, so this test cannot interfere with the
 native PDF tests running in the parent process.
 
@@ -28,7 +28,7 @@ class TestNativeGUIPage(unittest.TestCase):
     def test_webengine_loads_page_and_accepts_a_source_drop(self) -> None:
         """Check page events and native drops without touching real data."""
 
-        if os.environ.get("QACHAT_RUN_NATIVE_GUI_TESTS") != "1":
+        if os.environ.get("KILIN_RUN_NATIVE_GUI_TESTS") != "1":
             self.skipTest("Enable the optional native Qt smoke test")
         if importlib.util.find_spec("PySide6") is None:
             self.skipTest("PySide6 is not installed")
@@ -75,7 +75,7 @@ def _native_smoke(directory: Path) -> None:
     from PySide6.QtWebChannel import QWebChannel
     from PySide6.QtWebEngineCore import QWebEnginePage
 
-    from qachat.gui.window import ChatBridge, SourceDropView
+    from kilin.gui.window import ChatBridge, SourceDropView
 
     app = QApplication([])
 
@@ -93,7 +93,7 @@ def _native_smoke(directory: Path) -> None:
     view.setPage(page)
     bridge = ChatBridge(view)
     channel = QWebChannel(page)
-    channel.registerObject("qachat", bridge)
+    channel.registerObject("kilin", bridge)
     page.setWebChannel(channel)
     bridge.sourceDropTargetChanged.connect(view.set_drop_target)
     view.pathsDropped.connect(bridge.pathsSelected)
@@ -136,7 +136,7 @@ def _native_smoke(directory: Path) -> None:
         view.loadFinished.connect(loaded.append)
         html = (
             Path(__file__).resolve().parents[3]
-            / "qachat/gui/web/index.html"
+            / "kilin/gui/web/index.html"
         )
         view.load(QUrl.fromLocalFile(str(html)))
         for _ in range(50):
@@ -144,7 +144,7 @@ def _native_smoke(directory: Path) -> None:
             if loaded and javascript("Boolean(bridge)"):
                 break
         if loaded != [True]:
-            raise AssertionError("The QAChat WebEngine page did not load")
+            raise AssertionError("The KíLín WebEngine page did not load")
 
         answer = "The response must reach the web page."
         bridge.event.emit(
@@ -169,7 +169,7 @@ def _native_smoke(directory: Path) -> None:
                     "conversations": [
                         {
                             "conversation_id": "chat-1",
-                            "name": "QAChat test",
+                            "name": "KíLín test",
                             "empty": False,
                         }
                     ],

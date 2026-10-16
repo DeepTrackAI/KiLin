@@ -21,7 +21,7 @@ import platform
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat import chat
+from kilin import chat
 
 
 def _has_package(name: str) -> bool:

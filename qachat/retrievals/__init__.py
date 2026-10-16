@@ -1,4 +1,4 @@
-"""Expose QAChat's retrieval, code-graph, and index-persistence API.
+"""Expose KíLín's retrieval, code-graph, and index-persistence API.
 
 This namespace collects the concrete strategy implementations, source-code
 relations, query routing helpers, and serialized index containers. It performs
@@ -172,53 +172,53 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> terms = qachat.lexical_terms("ChatSession.restore_history")
+>>> import kilin
+>>> terms = kilin.lexical_terms("ChatSession.restore_history")
 
 """
 
-from qachat.retrievals.persistence import (
+from kilin.retrievals.persistence import (
     PersistentIndexes,
     indexes_are_current,
     load_indexes,
     prepare_persistent_indexes,
     save_indexes,
 )
-from qachat.retrievals.code_graph.code_graph import (
+from kilin.retrievals.code_graph.code_graph import (
     CodeEntity,
     CodeGraph,
     CodeRelation,
     build_code_graph,
 )
-from qachat.retrievals.strategies.retrieval_code import (
+from kilin.retrievals.strategies.retrieval_code import (
     CodeResult,
     code_search,
     resolve_code_entities,
 )
-from qachat.retrievals.strategies.retrieval_hybrid import (
+from kilin.retrievals.strategies.retrieval_hybrid import (
     HybridResult,
     hybrid_search,
 )
-from qachat.retrievals.strategies.retrieval_lexical import (
+from kilin.retrievals.strategies.retrieval_lexical import (
     LexicalIndex,
     LexicalResult,
     build_lexical_index,
     lexical_search,
     lexical_terms,
 )
-from qachat.retrievals.strategies.retrieval_semantic import (
+from kilin.retrievals.strategies.retrieval_semantic import (
     SemanticIndex,
     SemanticResult,
     build_semantic_index,
     semantic_matrix,
     semantic_search,
 )
-from qachat.retrievals.routing import (
+from kilin.retrievals.routing import (
     RetrievalPlan,
     expand_retrieval_context,
     plan_retrieval,
 )
-from qachat.retrievals.document_reading import (
+from kilin.retrievals.document_reading import (
     DOCUMENT_REASON_CHOICES,
     DOCUMENT_REASON_NAMED_FILE,
     DOCUMENT_REASON_NAMED_FUNCTION,

@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import filter_results as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import filter_results as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestFilterResults(unittest.TestCase):
@@ -81,7 +81,7 @@ class TestFilterResults(unittest.TestCase):
         """
 
         from unittest.mock import Mock
-        from qachat.tools._contract import ToolRequest
+        from kilin.tools._contract import ToolRequest
         context = Mock()
         answer = tool.run(
             tool.FilterSettings(), ToolRequest("which of those?", "..."),

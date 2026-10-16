@@ -17,13 +17,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 
-from qachat.conversation_ownership import (
+from kilin.conversation_ownership import (
     ConversationFileLock,
     ConversationLockedError,
 )
-from qachat.conversations import ConversationStore
-from qachat.gui.engine import ChatEngine
-from qachat.trace_logging import TraceLogger
+from kilin.conversations import ConversationStore
+from kilin.gui.engine import ChatEngine
+from kilin.trace_logging import TraceLogger
 
 
 class TestGUIConversationOwnership(unittest.TestCase):
@@ -145,8 +145,8 @@ class TestGUIConversationOwnership(unittest.TestCase):
 
         import json
 
-        from qachat.conversation_format import conversation_state
-        from qachat import conversations
+        from kilin.conversation_format import conversation_state
+        from kilin import conversations
 
         self.store.select(self.previous.conversation_id)
         self.session._active_conversation_lock.return_value = (
@@ -174,7 +174,7 @@ class TestGUIConversationOwnership(unittest.TestCase):
 
         import json
 
-        from qachat.conversation_format import conversation_state
+        from kilin.conversation_format import conversation_state
 
         self.store.select(self.previous.conversation_id)
         self.engine.session = None
@@ -194,7 +194,7 @@ class TestGUIConversationOwnership(unittest.TestCase):
 
         import json
 
-        from qachat.conversation_format import conversation_state
+        from kilin.conversation_format import conversation_state
 
         self.store.select(self.previous.conversation_id)
         self.session._active_conversation_lock.return_value = (

@@ -1,6 +1,6 @@
 # scan_and_list
 
-This package owns the `scan_and_list` registered tool. Its `defaults.json` is independent of `qachat_defaults.json`. Project-type tool settings override the keys in `SETTINGS`. Other sections are internal execution parameters. All values are read and validated on import.
+This package owns the `scan_and_list` registered tool. Its `defaults.json` is independent of `kilin_defaults.json`. Project-type tool settings override the keys in `SETTINGS`. Other sections are internal execution parameters. All values are read and validated on import.
 
 ## Defaults
 

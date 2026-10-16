@@ -16,10 +16,10 @@ import math
 from pathlib import Path
 import unittest
 
-from qachat.defaults import load_defaults_section
-from qachat.retrievals import document_reading as dr
-from qachat.retrievals.code_graph import CodeEntity, CodeGraph
-from tests.qachat.retrievals._support import chunk, ranked
+from kilin.defaults import load_defaults_section
+from kilin.retrievals import document_reading as dr
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph
+from tests.kilin.retrievals._support import chunk, ranked
 
 
 class TestDocumentPathMatching(unittest.TestCase):

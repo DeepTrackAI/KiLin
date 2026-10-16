@@ -2,12 +2,12 @@
 
 ## Components and dependency boundaries
 
-QAChat supports optional **MLX** and **PyTorch/Transformers** model sessions.
+KíLín supports optional **MLX** and **PyTorch/Transformers** model sessions.
 The common public interfaces are `ChatSession` and `EmbeddingSession`.
-Neither is loaded merely by importing `qachat`; backend imports occur when
-a session is instantiated. `qachat.runtime` resolves backend/device names,
-`qachat.huggingface` inspects/downloads the model cache, and
-`qachat.model_defaults` loads packaged starting model IDs. The optional GUI
+Neither is loaded merely by importing `kilin`; backend imports occur when
+a session is instantiated. `kilin.runtime` resolves backend/device names,
+`kilin.huggingface` inspects/downloads the model cache, and
+`kilin.model_defaults` loads packaged starting model IDs. The optional GUI
 presents suggested models through `gui/model_catalog.py`.
 
 | Component | Responsibility |
@@ -34,7 +34,7 @@ platform string.
 
 ## Backend resolution
 
-With `auto`, QAChat chooses MLX on native Darwin/arm64 and PyTorch otherwise.
+With `auto`, KíLín chooses MLX on native Darwin/arm64 and PyTorch otherwise.
 An explicit MLX request outside that platform is rejected. MLX also checks
 that Metal is available when loading the chat model. PyTorch probes device
 availability and follows CUDA -> MPS -> CPU, then moves the loaded model to

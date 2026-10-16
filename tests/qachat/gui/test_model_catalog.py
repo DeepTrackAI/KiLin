@@ -13,18 +13,18 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from qachat.gui.model_catalog import (
+from kilin.gui.model_catalog import (
     MODEL_CHOICES,
     installed_backends,
     model_choices,
 )
-from qachat.project import default_project_profile
+from kilin.project import default_project_profile
 
 
 class TestModelCatalog(unittest.TestCase):
-    """Suggested choices must agree with QAChat's project defaults."""
+    """Suggested choices must agree with KíLín's project defaults."""
 
-    @patch("qachat.gui.model_catalog.version")
+    @patch("kilin.gui.model_catalog.version")
     def test_backend_packages_are_checked_separately(
         self, get_version
     ) -> None:

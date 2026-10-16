@@ -1,14 +1,14 @@
 """Define shared model purposes and default model identifiers.
 
-This module owns the small set of model-related values shared by QAChat core
+This module owns the small set of model-related values shared by KíLín core
 configuration and interface layers. The constants describe default starting
 models and model purposes; they are not an allowlist of compatible models, a
 cache inventory, or a runtime compatibility check.
 
 Keeping these defaults outside the GUI prevents project configuration and
 interface presets from drifting while preserving the dependency direction from
-core QAChat functionality to optional interfaces. Default model IDs are read
-from the packaged ``qachat_defaults.json`` when this module is imported.
+core KíLín functionality to optional interfaces. Default model IDs are read
+from the packaged ``kilin_defaults.json`` when this module is imported.
 The shared reader validates their strings; the backend is not selected here.
 
 Key Features
@@ -27,7 +27,7 @@ Module Structure
 
 - ``MODEL_ROLE_CHAT`` and ``MODEL_ROLE_EMBEDDING``
 
-    Canonical string values for the two model purposes used by QAChat.
+    Canonical string values for the two model purposes used by KíLín.
 
 - ``MODEL_ROLE_CHOICES``
 
@@ -43,9 +43,9 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> model_id = qachat.DEFAULT_CHAT_MODEL_MLX
->>> role = qachat.MODEL_ROLE_CHAT
+>>> import kilin
+>>> model_id = kilin.DEFAULT_CHAT_MODEL_MLX
+>>> role = kilin.MODEL_ROLE_CHAT
 
 Notes
 -----
@@ -58,7 +58,7 @@ from __future__ import annotations
 
 from typing import Final, Literal, TypeAlias
 
-from qachat.defaults import (
+from kilin.defaults import (
     load_defaults_section,
     require_default_string,
 )

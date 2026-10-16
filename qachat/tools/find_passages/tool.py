@@ -86,10 +86,10 @@ time, and write the answer; they are not part of the public API.
 
 Examples
 --------
-``context`` is the ``ToolContext`` that QAChat passes to a tool:
+``context`` is the ``ToolContext`` that KíLín passes to a tool:
 
->>> from qachat.tools import ToolRequest
->>> from qachat.tools.find_passages import PassageSettings, run
+>>> from kilin.tools import ToolRequest
+>>> from kilin.tools.find_passages import PassageSettings, run
 >>> question = "list the sentences that discuss network analysis"
 >>> request = ToolRequest(question, question)
 >>> result = run(PassageSettings(), request, context)
@@ -106,11 +106,11 @@ from pathlib import Path
 import re
 from typing import Final
 
-from qachat.retrievals.document_reading import estimate_tokens, named_paths
-from qachat.tools._shared.choose_document import document_scope
-from qachat.tools.find_passages import _configuration as _config
-from qachat.tools._shared.sentences import Sentence, split_sentences
-from qachat.tools._contract import (
+from kilin.retrievals.document_reading import estimate_tokens, named_paths
+from kilin.tools._shared.choose_document import document_scope
+from kilin.tools.find_passages import _configuration as _config
+from kilin.tools._shared.sentences import Sentence, split_sentences
+from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
     ToolResult,
@@ -118,12 +118,12 @@ from qachat.tools._contract import (
     check_int,
     reject_unknown,
 )
-from qachat.tools._shared.long_lists import (
+from kilin.tools._shared.long_lists import (
     CHAT_LIST_LIMIT,
     file_name,
     offer_export,
 )
-from qachat.tools._shared.planning import (
+from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
@@ -132,9 +132,9 @@ from qachat.tools._shared.planning import (
     ToolPlan,
     confirm_plan,
 )
-from qachat.tools._shared.paths import short_names
-from qachat.tools._shared.terms import term_pattern
-from qachat.tools._shared.term_filter import term_hits, term_label
+from kilin.tools._shared.paths import short_names
+from kilin.tools._shared.terms import term_pattern
+from kilin.tools._shared.term_filter import term_hits, term_label
 
 __all__ = [
     "PassageSettings",
@@ -363,7 +363,7 @@ def run(
     request: ToolRequest
         The question.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
 
     Returns
     -------

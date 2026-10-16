@@ -1,21 +1,21 @@
 # Packaged configuration defaults
 
-`qachat/qachat_defaults.json` contains package-wide starting values used by
-QAChat core. This document defines **every setting** in that file and the
+`kilin/kilin_defaults.json` contains package-wide starting values used by
+KíLín core. This document defines **every setting** in that file and the
 behavior it controls. The JSON remains valid JSON (without comments); the
 explanations belong here and in the corresponding Python module docstrings.
 
-`qachat.defaults` reads the JSON once per process. Each consumer validates
+`kilin.defaults` reads the JSON once per process. Each consumer validates
 its own settings as it initializes. A missing setting or an invalid type
 causes a descriptive error rather than silently substituting another value.
-Changing the packaged file requires **restarting QAChat**; it is not a
+Changing the packaged file requires **restarting KíLín**; it is not a
 live-reloadable project-preferences file. A setting already persisted in a
 project profile is not overwritten by changing a packaged default.
 
 ## `DEFAULT_MODELS` — initial model identifiers
 
-Owned by `qachat/model_defaults.py`. These strings identify recommended
-starting models, **not an allowlist**. QAChat can load other compatible model
+Owned by `kilin/model_defaults.py`. These strings identify recommended
+starting models, **not an allowlist**. KíLín can load other compatible model
 identifiers supplied by a project or caller. The identifiers use the form
 `organisation/model-name`.
 
@@ -32,7 +32,7 @@ download a model.
 
 ## `REPOSITORY` — source-file selection
 
-Owned by `qachat/repository.py`. The values are JSON arrays of nonempty
+Owned by `kilin/repository.py`. The values are JSON arrays of nonempty
 strings. The loaded module exposes immutable or set-like collections for its
 selection policy. File and directory exclusions remain in effect even if a
 file would otherwise match an allowed extension.
@@ -47,18 +47,18 @@ file would otherwise match an allowed extension.
 Entries in these lists are configuration *values*, not separate Python
 constants. Their spelling and membership are visible directly in the JSON.
 These defaults are **not a security sandbox**: users remain responsible for
-reviewing which files are made accessible to QAChat.
+reviewing which files are made accessible to KíLín.
 
 ## `ANSWERING` — routing and conversation heuristics
 
-Owned by `qachat/answering.py`. The values below are package-wide and are
+Owned by `kilin/answering.py`. The values below are package-wide and are
 used both for newly started and resumed conversations. They do not currently
 have per-project overrides.
 
 | Key | Current value | Meaning |
 | --- | --- | --- |
 | `MAX_RELATED_TURNS` | `3` | Maximum earlier-turn identifiers retained from the router's decision. When more are returned, only the newest valid related identifiers remain. |
-| `MAX_LISTED_TURNS` | `30` | Maximum eligible earlier-turn summaries shown in the router prompt. QAChat takes the newest eligible turns but lists them in chronological order. |
+| `MAX_LISTED_TURNS` | `30` | Maximum eligible earlier-turn summaries shown in the router prompt. KíLín takes the newest eligible turns but lists them in chronological order. |
 | `ROUTER_MAX_TOKENS` | `64` | Maximum number of tokens requested for the router's short JSON reply. It is not the answer-generation limit. |
 | `REPRESENTATION_MAX_CHARACTERS` | `200` | Maximum number of characters kept in each question and answer-summary field of a compact turn representation. |
 | `REPRESENTATION_MAX_SOURCES` | `5` | Maximum distinct source labels included in a compact turn representation. |
@@ -88,7 +88,7 @@ and from the history policies configured in project types.
 
 ## `RAG` — evidence retention, indexing, and progress reporting
 
-Owned by `qachat/rag.py`. These settings affect RAG execution and the number
+Owned by `kilin/rag.py`. These settings affect RAG execution and the number
 of evidence items retained when reusing or supplementing earlier answers.
 They are package-level policies, not retrieval counts stored in a project
 profile. All four evidence limits and the embedding batch size must be
@@ -109,7 +109,7 @@ The tracing system retains its single enabled trace-detail behavior.
 
 ## `PROJECT_PROFILE` — values for newly created projects
 
-Owned by `qachat/project.py`. These settings are rendered into a new
+Owned by `kilin/project.py`. These settings are rendered into a new
 `profile.ini` only when that profile does not yet exist. **Existing profiles
 are not rewritten.** The generic chunking defaults in `CHUNKING` are
 intentionally different from the new-project profile settings.
@@ -134,8 +134,8 @@ query-format setting.
 
 ## `CHUNKING` — generic chunking API defaults
 
-Owned by `qachat/chunking.py`. These are default arguments for a direct call
-to `chunk_source_units()` without explicit size arguments; QAChat projects
+Owned by `kilin/chunking.py`. These are default arguments for a direct call
+to `chunk_source_units()` without explicit size arguments; KíLín projects
 normally pass the separately persisted chunking values from `profile.ini`.
 
 | Key | Current value | Meaning |
@@ -150,7 +150,7 @@ target. Values are loaded once when the module is imported.
 
 ## `PROJECT_TYPES` — fallback settings for project-type JSON
 
-Owned by `qachat/project_type.py`. These are used **only when fields are
+Owned by `kilin/project_type.py`. These are used **only when fields are
 omitted** from an individual `project_types/*.json` definition; explicit
 project-type fields take precedence. They do not overwrite project profiles.
 
@@ -165,7 +165,7 @@ and may be zero. The document budget is a positive exact integer between
 
 ## `RETRIEVAL` — ranking and document-selection heuristics
 
-Owned by retrieval modules in `qachat/retrievals/`. These settings affect
+Owned by retrieval modules in `kilin/retrievals/`. These settings affect
 algorithm defaults rather than the number of search results selected by a
 project profile. A caller's explicit function arguments override the
 corresponding function defaults.
@@ -188,13 +188,13 @@ kinds and source parsing contracts remain defined in Python.
 ## Settings intentionally defined elsewhere
 
 Supported query formats (`plain` and `qwen3`) are implemented in
-`qachat/query_formats.py`. Actual query-format selection belongs to the
+`kilin/query_formats.py`. Actual query-format selection belongs to the
 saved project profile and, when relevant, GUI preferences. There is **no**
 `DEFAULT_QUERY_FORMAT` key in the packaged defaults.
 
 Machine states, conversation roles, trace identifiers, and persistence-format
 versions remain Python contracts, not runtime preferences. GUI presentation
-defaults remain under `qachat/gui/defaults.json`. Tool parameters remain
+defaults remain under `kilin/gui/defaults.json`. Tool parameters remain
 under their current owners; they are intentionally **not** consolidated in
 this refactor. A future independently configurable tool may have its own
 defaults file.

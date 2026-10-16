@@ -21,13 +21,13 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
-from qachat.rag import RAGSession
-from qachat.retrievals.code_graph import CodeGraph
-from qachat.retrievals import model_identity
-from qachat.retrievals.model_identity import embedding_model_identity
-from qachat.retrievals.persistence import load_indexes
-from qachat.trace_logging import NullTraceLogger
-from tests.qachat.retrievals._support import FakeEmbeddings, chunk
+from kilin.rag import RAGSession
+from kilin.retrievals.code_graph import CodeGraph
+from kilin.retrievals import model_identity
+from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals.persistence import load_indexes
+from kilin.trace_logging import NullTraceLogger
+from tests.kilin.retrievals._support import FakeEmbeddings, chunk
 
 
 class TestRAGIndexProvenance(unittest.TestCase):
@@ -175,12 +175,12 @@ class TestRAGIndexProvenance(unittest.TestCase):
                 "removed": sorted(previous - selected),
             }
 
-        with patch("qachat.rag.scan_repository", return_value=report), \
+        with patch("kilin.rag.scan_repository", return_value=report), \
             patch(
-                "qachat.rag.build_repository_manifest",
+                "kilin.rag.build_repository_manifest",
                 return_value=self.manifest,
             ), patch(
-                "qachat.rag.compare_repository_manifests",
+                "kilin.rag.compare_repository_manifests",
                 side_effect=compare,
             ):
             return coordinator._prepare_retrieval(embedding)
@@ -285,7 +285,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
 
         """
 
-        from qachat.retrievals import persistence
+        from kilin.retrievals import persistence
 
         self._prepare(self._coordinator(), self._embedding())
         target = self.index_directory / "retrieval.json"
@@ -306,7 +306,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         coordinator = self._coordinator()
         embedding = self._embedding()
         with patch(
-            "qachat.rag.embedding_model_identity",
+            "kilin.rag.embedding_model_identity",
             wraps=embedding_model_identity,
         ) as digest:
             self._prepare(coordinator, embedding)

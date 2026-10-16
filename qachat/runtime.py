@@ -22,7 +22,7 @@ Module Structure
 
 - ``BACKEND_AUTO``, ``BACKEND_MLX``, and ``BACKEND_TORCH``
 
-    Canonical string values for QAChat calculation backends.
+    Canonical string values for KíLín calculation backends.
 
 - ``BACKEND_CHOICES``
 
@@ -46,9 +46,9 @@ Module Structure
 
 Examples
 --------
->>> import qachat
->>> backend = qachat.choose_backend(qachat.BACKEND_AUTO)
->>> device = qachat.torch_device(False, False)
+>>> import kilin
+>>> backend = kilin.choose_backend(kilin.BACKEND_AUTO)
+>>> device = kilin.torch_device(False, False)
 
 """
 

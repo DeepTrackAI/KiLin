@@ -17,7 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.workspace_resources import WorkspaceResource
+from kilin.workspace_resources import WorkspaceResource
 
 
 class TestWorkspaceResource(unittest.TestCase):

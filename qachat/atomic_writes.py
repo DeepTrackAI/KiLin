@@ -30,7 +30,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from qachat.atomic_writes import atomic_write_text
+>>> from kilin.atomic_writes import atomic_write_text
 >>> path = Path("/path/to/existing/folder/record.json")
 >>> atomic_write_text(path, "{}\\n")
 

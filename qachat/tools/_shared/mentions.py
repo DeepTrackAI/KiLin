@@ -19,7 +19,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.mentions import MentionScan
+>>> from kilin.tools._shared.mentions import MentionScan
 >>> callable(MentionScan)
 True
 
@@ -34,11 +34,11 @@ from pathlib import Path
 import re
 from typing import Protocol
 
-from qachat.chunking import Chunk
-from qachat.retrievals.document_reading import dominant_path
-from qachat.tools._contract import ToolContext, ToolRequest, ToolResult
-from qachat.tools._shared.choose_document import document_scope
-from qachat.tools._shared.terms import (
+from kilin.chunking import Chunk
+from kilin.retrievals.document_reading import dominant_path
+from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
+from kilin.tools._shared.choose_document import document_scope
+from kilin.tools._shared.terms import (
     CATEGORIES_REPLY_TOKENS,
     TERMS_REPLY_TOKENS,
     document_phrase,
@@ -269,7 +269,7 @@ def collect_mentions(
     request: ToolRequest
         The question and the user's words.
     context: ToolContext
-        QAChat's services.
+        KíLín's services.
     tool: str
         Name of the calling tool, for summaries and progress.
     categories: bool, optional
@@ -605,7 +605,7 @@ def _ask_terms(context: ToolContext, text: str, categories: bool) -> str:
     Parameters
     ----------
     context: ToolContext
-        QAChat's services (``ask_router``).
+        KíLín's services (``ask_router``).
     text: str
         The user's words the terms must come from.
     categories: bool

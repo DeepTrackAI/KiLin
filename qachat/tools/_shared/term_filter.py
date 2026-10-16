@@ -48,7 +48,7 @@ Module Structure
 
 Examples
 --------
->>> from qachat.tools._shared.term_filter import term_hits, term_label
+>>> from kilin.tools._shared.term_filter import term_hits, term_label
 >>> terms, hits = term_hits(request.question, context, passages)
 >>> label, note = term_label(terms, hits)
 
@@ -63,9 +63,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final
 
-from qachat.chunking import Chunk
-from qachat.tools._contract import ToolContext
-from qachat.tools._shared.terms import (
+from kilin.chunking import Chunk
+from kilin.tools._contract import ToolContext
+from kilin.tools._shared.terms import (
     term_pattern,
     terms_prompt,
     validated_terms,
@@ -95,7 +95,7 @@ def term_hits(
     question: str
         The question.
     context: ToolContext
-        QAChat's services (``ask_router``).
+        KíLín's services (``ask_router``).
     passages: Sequence[Chunk]
         The passages in scope, in reading order.
 

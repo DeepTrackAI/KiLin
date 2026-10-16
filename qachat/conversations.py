@@ -9,7 +9,7 @@ not duplicate the parent's complete trace-event history.
 Files use only the canonical grouped conversation-session record through
 the shared internal conversation-format contract. Writes use unique
 atomically replaced temporary files. A stable companion-file lock excludes
-concurrent QAChat writers across processes. The in-memory registry and
+concurrent KíLín writers across processes. The in-memory registry and
 filesystem are not updated as one transaction.
 Conversation files can contain full questions, answers, and source excerpts.
 
@@ -46,8 +46,8 @@ used by these operations; they are not added to the package-level API.
 
 Examples
 --------
->>> import qachat.conversations
->>> store = qachat.conversations.ConversationStore("/path/to/workspace")
+>>> import kilin.conversations
+>>> store = kilin.conversations.ConversationStore("/path/to/workspace")
 >>> active = store.ensure()
 >>> path = store.state_path(active)
 
@@ -65,12 +65,12 @@ from pathlib import Path
 import re
 from uuid import uuid4
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.conversation_ownership import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
 )
-from qachat.conversation_format import (
+from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
     new_conversation_session,

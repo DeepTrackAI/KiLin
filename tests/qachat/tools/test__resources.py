@@ -17,11 +17,11 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.project import initialize_project
-from qachat.project_layout import plan_project_layout
-from qachat.project_type import project_type
-from qachat.tools._registry import TOOL_REGISTRY
-from qachat.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
+from kilin.project import initialize_project
+from kilin.project_layout import plan_project_layout
+from kilin.project_type import project_type
+from kilin.tools._registry import TOOL_REGISTRY
+from kilin.tools.generate_paper_summary import SHIPPED_TEMPLATES_DIR
 
 
 class TestToolResources(unittest.TestCase):
@@ -41,7 +41,7 @@ class TestToolResources(unittest.TestCase):
                 declaration = TOOL_REGISTRY[use.name].workspace_resources
                 if declaration is None:
                     continue
-                package = Path(files(f"qachat.tools.{use.name}")).resolve()
+                package = Path(files(f"kilin.tools.{use.name}")).resolve()
                 for asset in declaration(use.settings):
                     with self.subTest(type=kind, tool=use.name):
                         self.assertTrue(asset.source.is_file())

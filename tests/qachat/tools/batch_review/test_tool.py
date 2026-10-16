@@ -16,8 +16,8 @@ import json
 from pathlib import Path
 import unittest
 
-from qachat.tools import batch_review as tool
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools import batch_review as tool
+from kilin.tools._registry import TOOL_REGISTRY
 
 
 class TestBatchReview(unittest.TestCase):

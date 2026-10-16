@@ -34,14 +34,14 @@ Module Structure
 
 - ``read_repository_files``
 
-    Read files selected by qachat.repository.scan_repository.
+    Read files selected by kilin.repository.scan_repository.
 
 Examples
 --------
->>> import qachat
->>> report = qachat.scan_repository("/path/to/repository")
->>> files = qachat.read_repository_files(report)
->>> units = qachat.extract_source_units(files)
+>>> import kilin
+>>> report = kilin.scan_repository("/path/to/repository")
+>>> files = kilin.read_repository_files(report)
+>>> units = kilin.extract_source_units(files)
 
 """
 

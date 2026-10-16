@@ -16,9 +16,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from qachat.project import initialize_project
-from qachat.repository import scan_repository
-from qachat.workspace import (
+from kilin.project import initialize_project
+from kilin.repository import scan_repository
+from kilin.workspace import (
     include_explicit_imports,
     prepare_sources_workspace,
     remove_workspace_sources,
@@ -93,7 +93,7 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         self.assertIn(".env.local", expanded["selected_files"])
 
     def test_remove_direct_file_updates_manifest_not_original(self) -> None:
-        """Removing a source copy does not delete its source outside QAChat."""
+        """Removing a source copy does not delete its source outside KíLín."""
 
         original = self._file("note.md")
         project = prepare_sources_workspace(

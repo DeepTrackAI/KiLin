@@ -12,7 +12,7 @@ resources declared by the tools selected by its project type.
 ``prepare_project_workspace`` mirrors selected files from one original
 repository into a managed workspace and compares source manifests to update
 that copy. This is distinct from the cumulative multi-source copying API in
-``qachat.workspace``. Neither API provides process or filesystem sandboxing.
+``kilin.workspace``. Neither API provides process or filesystem sandboxing.
 Configuration helpers validate settings through the INI reader before writing
 the revised profile.
 
@@ -57,7 +57,7 @@ Module Structure
 
 - ``QAProject``
 
-    Resolved paths and settings for one QAChat project.
+    Resolved paths and settings for one KíLín project.
 
 - ``initialize_project``
 
@@ -69,7 +69,7 @@ Module Structure
 
 - ``prepare_project_workspace``
 
-    Mirror one source folder into a managed QAChat workspace.
+    Mirror one source folder into a managed KíLín workspace.
 
 - ``default_project_profile``
 
@@ -86,14 +86,14 @@ Examples
 --------
 Open an existing workspace:
 
->>> import qachat
->>> project = qachat.open_project("/path/to/workspace")
+>>> import kilin
+>>> project = kilin.open_project("/path/to/workspace")
 
 Access submodule-only configuration helpers through their actual namespace:
 
->>> import qachat.project
->>> profile = qachat.project.default_project_profile(
-...     qachat.PROJECT_KIND_CODE
+>>> import kilin.project
+>>> profile = kilin.project.default_project_profile(
+...     kilin.PROJECT_KIND_CODE
 ... )
 
 """
@@ -113,45 +113,45 @@ import re
 import shutil
 from typing import Final, Iterator, TypeAlias, cast
 
-from qachat.atomic_writes import atomic_write_text
-from qachat.defaults import (
+from kilin.atomic_writes import atomic_write_text
+from kilin.defaults import (
     load_defaults_section,
     require_default_bool,
     require_default_int,
     require_default_nonnegative_int,
     require_default_number,
 )
-from qachat.model_defaults import (
+from kilin.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from qachat.project_type import load_project_types
-from qachat.project_layout import (
+from kilin.project_type import load_project_types
+from kilin.project_layout import (
     ensure_project_folders,
     install_project_resources,
     plan_project_layout,
 )
-from qachat.query_formats import (
+from kilin.query_formats import (
     QUERY_FORMAT_CHOICES,
     QUERY_FORMAT_QWEN3,
     QueryFormat,
 )
-from qachat.repository import (
+from kilin.repository import (
     build_repository_manifest,
     compare_repository_manifests,
     normalize_extensions,
     scan_repository,
 )
-from qachat.runtime import (
+from kilin.runtime import (
     BACKEND_AUTO,
     BACKEND_CHOICES,
     BACKEND_MLX,
     Backend,
     SelectedBackend,
 )
-from qachat.trace_logging import NullTraceLogger, TraceSink
+from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "PROJECT_KIND_CODE",
@@ -167,7 +167,7 @@ __all__ = [
 ]
 
 # Project types, their default files, and their instructions come from
-# qachat/project_types/; "code" and "literature" are always present.
+# kilin/project_types/; "code" and "literature" are always present.
 ProjectKind: TypeAlias = str
 PROJECT_KIND_CODE: Final[ProjectKind] = "code"
 PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
@@ -179,7 +179,7 @@ def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
     Parameters
     ----------
     types: Mapping[str, object]
-        Project types loaded from ``qachat/project_types/``, in file order.
+        Project types loaded from ``kilin/project_types/``, in file order.
 
     Returns
     -------
@@ -200,7 +200,7 @@ def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
     ]
     if missing:
         raise ValueError(
-            "qachat/project_types/ must keep the built-in types: "
+            "kilin/project_types/ must keep the built-in types: "
             f"{', '.join(missing)}."
         )
 
@@ -490,7 +490,7 @@ class ProjectProfile:
     extensions: tuple[str, ...]
         File extensions included during scanning.
     max_file_bytes: int
-        Largest source file read by QAChat.
+        Largest source file read by KíLín.
     backend: "auto" | "mlx" | "torch"
         Preferred calculation backend.
     allow_download: bool
@@ -529,7 +529,7 @@ class ProjectProfile:
     extensions: tuple[str, ...]
         File extensions included during scanning.
     max_file_bytes: int
-        Largest source file read by QAChat.
+        Largest source file read by KíLín.
     backend: "auto" | "mlx" | "torch"
         Preferred calculation backend.
     allow_download: bool
@@ -637,7 +637,7 @@ class ProjectProfile:
 
 @dataclass(frozen=True, slots=True)
 class QAProject:
-    """Resolved paths and settings for one QAChat project.
+    """Resolved paths and settings for one KíLín project.
 
     Parameters
     ----------
@@ -967,7 +967,7 @@ def prepare_project_workspace(
     kind: ProjectKind,
     workspace_root: str | Path,
 ) -> QAProject:
-    """Mirror one source folder into a managed QAChat workspace.
+    """Mirror one source folder into a managed KíLín workspace.
 
     The original source is never modified. A normal workspace is named
     ``project_<source-name>`` and contains the copied source folder beside
@@ -988,7 +988,7 @@ def prepare_project_workspace(
     kind: ProjectKind
         Type of source material in the project.
     workspace_root: str | pathlib.Path
-        QAChat sandbox folder that contains managed project workspaces.
+        KíLín sandbox folder that contains managed project workspaces.
 
     Returns
     -------
@@ -1009,7 +1009,7 @@ def prepare_project_workspace(
     Notes
     -----
     This mirrors one original repository using its selected-source manifest. It
-    is not the cumulative multi-source API in qachat.workspace. The current
+    is not the cumulative multi-source API in kilin.workspace. The current
     implementation requires complete source and snapshot scans and verifies
     copied content on each reopen. This adds disk I/O proportional to selected
     source size. Reopening and synchronization are not atomic across snapshot
@@ -1228,7 +1228,7 @@ def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
         and collision_metadata.get("source_directory") != str(source)
     ):
         raise ValueError(
-            "Could not choose a unique QAChat workspace for this source."
+            "Could not choose a unique KíLín workspace for this source."
         )
     return collision_root
 

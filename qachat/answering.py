@@ -1,8 +1,8 @@
 """Route questions by intent and select conversation history.
 
-QAChat has one machine state for now, ``answering``. Within it, a router
+KíLín has one machine state for now, ``answering``. Within it, a router
 model classifies each question into one of the current project type's
-intents (see ``qachat/project_types/``). The configuration, not the
+intents (see ``kilin/project_types/``). The configuration, not the
 router, then decides the intent's instructions, which earlier turns are
 included, and whether evidence is searched, reused, or skipped.
 
@@ -48,7 +48,7 @@ Key Features
 
     The router and history heuristic limits, short-question word count,
     reference-detection pattern, and common-word vocabulary come from the
-    ``ANSWERING`` section of ``qachat_defaults.json`` at import time.
+    ``ANSWERING`` section of ``kilin_defaults.json`` at import time.
     See ``docs/package_defaults.md`` for every setting and its meaning.
 
 Module Structure
@@ -119,7 +119,7 @@ terms; they are not part of the public API.
 
 Examples
 --------
->>> from qachat.answering import RouteDecision, select_history
+>>> from kilin.answering import RouteDecision, select_history
 >>> decision = RouteDecision(
 ...     "question_answering", standalone=False, related_turn_ids=(2,)
 ... )
@@ -136,14 +136,14 @@ import json
 import re
 from typing import Final, Literal, Protocol, TypeAlias
 
-from qachat.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
-from qachat.defaults import (
+from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
+from kilin.defaults import (
     load_defaults_section,
     require_default_int,
     require_default_lowercase_words,
     require_default_pattern,
 )
-from qachat.project_type import (
+from kilin.project_type import (
     HISTORY_POLICY_NONE,
     HISTORY_POLICY_RECENT,
     RETRIEVAL_MODE_NONE,
@@ -151,7 +151,7 @@ from qachat.project_type import (
     HistoryPolicy,
     ProjectType,
 )
-from qachat.tools._registry import TOOL_REGISTRY
+from kilin.tools._registry import TOOL_REGISTRY
 
 __all__ = [
     "HISTORY_CITATION_MARKER",
@@ -171,7 +171,7 @@ __all__ = [
     "turn_representation",
 ]
 
-# The operational state that decides QAChat's execution flow. Only
+# The operational state that decides KíLín's execution flow. Only
 # answering exists; later states (for example agentic workflows) would be
 # added here, and no state transitions exist yet.
 MachineState: TypeAlias = Literal["answering"]
@@ -179,7 +179,7 @@ MACHINE_STATE_ANSWERING: Final[MachineState] = "answering"
 MACHINE_STATE_CHOICES: Final[tuple[MachineState, ...]] = (
     MACHINE_STATE_ANSWERING,
 )
-# Import-time configuration is shared with the rest of QAChat core.
+# Import-time configuration is shared with the rest of KíLín core.
 _ANSWERING_DEFAULTS = load_defaults_section("ANSWERING")
 
 # The router may point at only a few earlier turns.
@@ -545,7 +545,7 @@ def _router_prompt(
         else "none"
     )
     system = (
-        "You route questions for QAChat, which answers from a "
+        "You route questions for KíLín, which answers from a "
         f"{project.display_name.lower()}: {project.description} You never "
         "answer questions. You reply with one line of JSON only."
     )
