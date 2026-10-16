@@ -28,7 +28,9 @@ from kilin.tools._shared.claims import (
     VERDICT_UNCLEAR,
     Claim,
     claim_passages,
+    judge_support,
     parse_verdict,
+    support_prompt,
     verification_prompt,
     verify_claim,
 )
@@ -262,6 +264,49 @@ class TestVerifyClaim(unittest.TestCase):
         self.assertEqual(failed.verdict, VERDICT_FAILED)
         self.assertIn("out of memory", failed.comment)
         empty = verify_claim(CLAIM, (), broken, 200)
+        self.assertEqual(empty.verdict, VERDICT_NOT_FOUND)
+
+
+class TestSupport(unittest.TestCase):
+    """A statement judged against a work it does not cite yet."""
+
+    def test_prompt_asks_for_the_source(self) -> None:
+        system, prompt = support_prompt(
+            "Running extends lifespan.", Path("cited.md"), PASSAGES
+        )
+        self.assertIn("cited as the source", system)
+        self.assertIn('"Running extends lifespan."', prompt)
+        self.assertIn("cited.md", prompt)
+        self.assertIn("Passage 2:\nMethods were standard.", prompt)
+        self.assertIn("the original source is elsewhere", prompt)
+        self.assertIn("VERDICT:", prompt)
+
+    def test_judged_and_checked_like_a_claim(self) -> None:
+        support = judge_support(
+            "Running extends lifespan in mice.", Path("cited.md"), PASSAGES,
+            lambda system, prompt, tokens: (
+                "VERDICT: partly supported\nQUOTE: Mice that ran daily "
+                "lived 20% longer than sedentary mice.\nCOMMENT: Mice only."
+            ),
+            200,
+        )
+        self.assertEqual(support.verdict, VERDICT_PARTLY)
+        self.assertIs(support.quote_chunk, PASSAGES[0])
+        self.assertEqual(support.cited, Path("cited.md"))
+        self.assertEqual(support.passages, PASSAGES)
+        invented = judge_support(
+            "Running extends lifespan.", Path("cited.md"), PASSAGES,
+            lambda system, prompt, tokens: (
+                "VERDICT: contradicted\nQUOTE: Running shortens the life "
+                "of every mammal.\nCOMMENT: No."
+            ),
+            200,
+        )
+        self.assertEqual(invented.verdict, VERDICT_NOT_SUPPORTED)
+        self.assertIsNone(invented.quote_chunk)
+        empty = judge_support(
+            "Running extends lifespan.", Path("cited.md"), (), None, 200
+        )
         self.assertEqual(empty.verdict, VERDICT_NOT_FOUND)
 
 
