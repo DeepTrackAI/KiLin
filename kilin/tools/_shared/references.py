@@ -39,6 +39,10 @@ Module Structure
 
     The caller's thresholds for finding and splitting entries.
 
+- ``reference_body``
+
+    Return the paper's passages before its reference list.
+
 - ``reference_list``
 
     Return the paper's reference list, found by its heading.
@@ -69,7 +73,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Final
 
@@ -77,6 +81,7 @@ from kilin.chunking import Chunk
 
 __all__ = [
     "ReferenceLayout",
+    "reference_body",
     "reference_entries",
     "reference_list",
 ]
@@ -91,13 +96,15 @@ _REFERENCES_HEADING: Final[re.Pattern[str]] = re.compile(
 _ENTRY_START: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+(\S.*)$"
 )
-# The end of an entry: "(2019).", "2019.", "2023;24(9):557–74.", a PMID, or
-# a DOI. Two-column PDFs print the numbers apart from the entries, so ends
+# The end of an entry: "(2019).", "2019.", "2023;24(9):557–74.", a year
+# followed by pages ("1995; 289–300.", "2016, 160422."), a PMID, or a DOI.
+# Two-column PDFs print the numbers apart from the entries, so ends
 # separate entries more reliably than numbers.
 _ENTRY_END: Final[re.Pattern[str]] = re.compile(
     r"(?:\((?:19|20)\d\d[a-z]?\)\.?"
     r"|\b(?:19|20)\d\d[a-z]?\."
     r"|\d+(?:\(\d+\))?:\s*[\w–-]+\."
+    r"|\b(?:19|20)\d\d[a-z]?[;,]\s*[\w–-]+\."
     r"|PMID:\s*\d+"
     r"|doi\.org/\S+[0-9A-Za-z])\s*$"
 )
@@ -158,6 +165,49 @@ class ReferenceLayout:
     running_line_repeats: int
     running_line_words: int
     entry_min_words: int
+
+
+def reference_body(passages: Sequence[Chunk]) -> tuple[Chunk, ...]:
+    """Return the paper's passages before its reference list.
+
+    In-text citations are looked for here, so the reference list's own
+    numbers are not mistaken for citations.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+
+    Returns
+    -------
+    tuple[Chunk, ...]
+        The passages before the last "References" (or "Bibliography",
+        "Literature cited", "Works cited") heading; the passage holding the
+        heading is cut just before it. Every passage when there is no
+        heading. Text after the reference list (figure legends printed at
+        the end, for example) is not included.
+
+    """
+
+    for index in range(len(passages) - 1, -1, -1):
+        headings = list(_REFERENCES_HEADING.finditer(passages[index].text))
+        if not headings:
+            continue
+
+        start = headings[-1].start()
+        kept = passages[index].text[:start]
+        body = tuple(passages[:index])
+        if kept.strip():
+            body += (
+                replace(
+                    passages[index],
+                    text=kept,
+                    end_line=passages[index].start_line + kept.count("\n"),
+                ),
+            )
+        return body
+
+    return tuple(passages)
 
 
 def reference_list(
