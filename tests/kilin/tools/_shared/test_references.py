@@ -18,6 +18,7 @@ import unittest
 
 from kilin.tools._shared.references import (
     ReferenceLayout,
+    reference_body,
     reference_entries,
     reference_list,
 )
@@ -90,6 +91,32 @@ class TestReferenceList(unittest.TestCase):
         self.assertEqual(cut, "x" * 9)
 
 
+class TestReferenceBody(unittest.TestCase):
+    """Return the text before the reference list."""
+
+    def test_cut_before_the_last_heading(self) -> None:
+        passages = (
+            chunk("a", "Introduction\nCells grow [1].\n"),
+            chunk("b", "Results hold [2].\nReferences\n1. Smith\n", line=3),
+            chunk("c", "2. Lee\n", line=6),
+        )
+        body = reference_body(passages)
+        self.assertEqual(len(body), 2)
+        self.assertEqual(body[1].text, "Results hold [2].\n")
+        self.assertEqual((body[1].start_line, body[1].end_line), (3, 4))
+
+    def test_heading_at_passage_start_drops_it(self) -> None:
+        passages = (
+            chunk("a", "Text [1].\n"),
+            chunk("b", "References\n1. Smith\n", line=2),
+        )
+        self.assertEqual(reference_body(passages), passages[:1])
+
+    def test_no_heading_keeps_everything(self) -> None:
+        passages = (chunk("a", "Text only.\n"),)
+        self.assertEqual(reference_body(passages), passages)
+
+
 class TestReferenceEntries(unittest.TestCase):
     """Split the reference list into the entries it prints."""
 
@@ -142,6 +169,22 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertEqual(len(reference_entries(passages, strict)), 5)
         long_only = replace(LAYOUT, entry_min_words=50)
         self.assertEqual(reference_entries(passages, long_only), [])
+
+    def test_year_and_pages_end_an_entry(self) -> None:
+        # Two-column layout: the lone numbers force splitting at entry
+        # ends, and "2016, 160422." or "1995; 289–300." end an entry.
+        text = (
+            "References\n1.\n2.\n3.\n"
+            "Ji GJ, Yu Y. Decreased network efficiency in epilepsy.\n"
+            "Radiology 2016, 160422.\n"
+            "Liu Y, Liang M. Disrupted small-world networks in\n"
+            "schizophrenia. Brain 2008, 131, 945–961. PMID: 18299296\n"
+            "Benjamini Y, Hochberg Y. Controlling the false discovery\n"
+            "rate. J Royal Stat Soc 1995; 289–300.\n"
+        )
+        entries = reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual(len(entries), 3)
+        self.assertTrue(entries[1].startswith("Liu Y"))
 
     def test_layout_is_immutable(self) -> None:
         with self.assertRaises(FrozenInstanceError):

@@ -165,7 +165,8 @@ silently overwriting an edited one. See
 
 `tools/_shared/` currently groups document selection, note-taking/citations,
 prior-turn matching, mention and term scanning, sentence splitting,
-reference-list extraction and matching to project files, planning,
+reference-list extraction and matching to project files, in-text citation
+finding, planning,
 path disambiguation, safe output-file access and source statistics. These
 modules are private implementation helpers. Prefer them when semantics match,
 but do not silently move a tool's policy into a shared service unless
