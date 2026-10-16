@@ -1,4 +1,9 @@
-# KíLín
+<h1>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/lockup-horizontal-dark.svg">
+    <img src="assets/brand/lockup-horizontal-light.svg" alt="KíLín" width="300">
+  </picture>
+</h1>
 
 KíLín runs locally to answer questions about your code and literature,
 with citations to your files and customizable project types, intents, and tools.
