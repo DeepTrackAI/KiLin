@@ -52,6 +52,13 @@ uses the global README to define its settings.
 
 ## `REFERENCES` — reference extraction
 
+The reference list is split into entries by the shared, model-free
+extractor in `kilin/tools/_shared/references.py`. This tool owns the
+thresholds: the first five keys below are passed to it as
+`REFERENCE_LAYOUT`, so other tools using the extractor keep their own
+values. `DEFAULT_REFERENCE_ITEMS` and `COMMON_WORDS` are used only by this
+tool, when choosing entries for a report.
+
 | Key | Default | Meaning and validation |
 | --- | --- | --- |
 | `REFERENCE_CHARACTERS` | 40000 | Maximum characters considered after the references heading; positive integer. |
