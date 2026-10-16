@@ -72,7 +72,7 @@ class TestBrandIdentity(unittest.TestCase):
         violations = [
             str(path.relative_to(ROOT))
             for path in files
-            if FORMER_NAME.search(path.as_posix().encode())
+            if FORMER_NAME.search(path.relative_to(ROOT).as_posix().encode())
             or FORMER_NAME.search(path.read_bytes())
         ]
         self.assertEqual(violations, [])
