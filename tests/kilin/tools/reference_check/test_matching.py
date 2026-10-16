@@ -3,7 +3,7 @@
 Check the three matching routes (DOI, trusted title, first page), the
 first-author check that separates other versions of a work, and the
 statuses reported for missing and unreadable entries, independently of
-any registered tool's configuration.
+the tool's configuration.
 
 """
 
@@ -20,7 +20,7 @@ import unittest
 
 from pypdf import PdfWriter
 
-from kilin.tools._shared.reference_matching import (
+from kilin.tools.reference_check._matching import (
     MATCH_FOUND,
     MATCH_MISSING,
     MATCH_PROBABLE,

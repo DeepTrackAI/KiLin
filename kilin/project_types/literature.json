@@ -92,6 +92,19 @@
         "answer_tokens": 500
       }
     },
+    "reference_check": {
+      "description": "Check one paper's references against the project's files: which cited papers are in the project and which are missing, and where each reference is cited in the paper's text ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'are all the references of that paper in the folder?', 'where does the Lee paper cite each reference?'). Asks which paper when none is named. Not for what a paper says about a topic (question_answering) or a summary of one paper (paper_overview).",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "reference_check",
+        "max_listed": 20
+      }
+    },
     "research_briefing": {
       "description": "Generate a structured research briefing for a single scientific paper, emphasizing the research question, key findings, strength of evidence, limitations, and implications. Examples: \"write a research briefing for patil25\", \"prepare a research briefing of the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
       "history": {
@@ -334,6 +347,7 @@
     "Turn any paper into a Nature research briefing",
     "Summarize what the papers say about …",
     "Give me a short summary of …",
+    "Check the references of …",
     "Which datasets does each paper use?",
     "Compare how the papers approach …",
     "What are the limitations of …?",

@@ -1,8 +1,9 @@
 """Match a paper's reference entries to the files of a project.
 
-A citation checker must know which cited works are in the project, and
-which file each one is. Reference entries rarely carry a DOI (Nature and
-Vancouver styles print none), so entries are matched mainly by words:
+Private to ``reference_check``. The checker must know which cited works
+are in the project, and which file each one is. Reference entries rarely
+carry a DOI (Nature and Vancouver styles print none), so entries are
+matched mainly by words:
 
 1. **DOI**: the file's DOI, printed on its first page, appears in the
    entry. This settles the match.
@@ -21,9 +22,8 @@ spaces, accents or punctuation, because PDF text often letter-spaces them
 ("L u d v i gS t o r m").
 
 Everything here is deterministic and model-free; nothing is invented, and
-every decision records its reason. The thresholds are not owned here: each
-caller passes ``MatchRules`` built from its own validated
-``defaults.json``.
+every decision records its reason. The thresholds come from the tool's
+validated ``defaults.json`` as ``MatchRules``.
 
 Key Features
 ------------
@@ -65,7 +65,7 @@ Module Structure
 Examples
 --------
 >>> from pathlib import Path
->>> from kilin.tools._shared.reference_matching import (
+>>> from kilin.tools.reference_check._matching import (
 ...     MatchRules,
 ...     PaperIdentity,
 ...     match_reference,
@@ -142,7 +142,7 @@ _SURNAME_WORDS: Final[int] = 3
 class MatchRules:
     """The caller's thresholds and vocabulary for matching.
 
-    Each tool builds one from its own validated ``defaults.json``; this
+    The tool builds one from its validated ``defaults.json``; this
     module has no defaults of its own.
 
     Attributes

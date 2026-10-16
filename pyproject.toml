@@ -56,6 +56,7 @@ include = ["kilin*"]
 "kilin.tools.find_fact" = ["README.md", "defaults.json"]
 "kilin.tools.find_passages" = ["README.md", "defaults.json"]
 "kilin.tools.paper_overview" = ["README.md", "defaults.json"]
+"kilin.tools.reference_check" = ["README.md", "defaults.json"]
 "kilin.tools.show_source" = ["README.md", "defaults.json"]
 "kilin.tools.generate_paper_summary" = [
     "README.md",

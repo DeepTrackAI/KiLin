@@ -1,16 +1,16 @@
 """Find a paper's numbered in-text citations and their citing sentences.
 
-A citation checker needs, for each cited reference, the sentence that
-cites it. This module finds numbered citation markers in the paper's body
-(the passages before its reference list) and maps each to reference
-numbers. Two styles are supported:
+Private to ``reference_check``. The checker needs, for each cited
+reference, the sentence that cites it. This module finds numbered
+citation markers in the paper's body (the passages before its reference
+list) and maps each to reference numbers. Two styles are supported:
 
 1. **Brackets**: ``[3]``, ``[3,4]``, ``[1–4]``, ``[2, 5–7]``. Brackets are
    unambiguous, so only numbers outside 1–``max_range`` are rejected.
 2. **Superscripts** (Nature, Science, many medical journals): extracted
-   text glues them to the word (``polygenic15``) or leaves a space
-   (``practices 1,8–14.``) or to a number (``BRAPH 2.087`` for 2.0 and 87,
-   ``BRAPH 288`` for 2 and 88), where they look like ordinary numbers
+   text glues them to the word (``polygenic15``) or to a number
+   (``BRAPH 2.087`` for 2.0 and 87, ``Braph288`` for 2 and 88), or leaves
+   a space (``practices 1,8–14.``), where they look like ordinary numbers
    (``in 3 groups``). A text candidate is therefore kept only when the PDF
    prints those digits smaller than the rest of their line
    (``superscript_runs``), right after the same characters. Author and
@@ -27,9 +27,8 @@ the caller must check that the list was split correctly: numbers cited
 beyond the list's length are reported, and usually mean entries were
 merged.
 
-Everything here is deterministic and model-free. The thresholds are not
-owned here: each caller passes ``CitationRules`` built from its own
-validated ``defaults.json``.
+Everything here is deterministic and model-free. The thresholds come from
+the tool's validated ``defaults.json`` as ``CitationRules``.
 
 Key Features
 ------------
@@ -68,7 +67,7 @@ Module Structure
 
 Examples
 --------
->>> from kilin.tools._shared.citations import cited_numbers
+>>> from kilin.tools.reference_check._citations import cited_numbers
 >>> cited_numbers("2, 5–7", max_range=50)
 (2, 5, 6, 7)
 
@@ -146,13 +145,14 @@ Superscripts = Mapping[str, tuple[str, ...]]
 class CitationRules:
     """The caller's thresholds and vocabulary for finding citations.
 
-    Each tool builds one from its own validated ``defaults.json``; this
+    The tool builds one from its validated ``defaults.json``; this
     module has no defaults of its own.
 
     Attributes
     ----------
     bracket_markers_min: int
-        Fewest bracketed markers for the paper to use brackets.
+        Fewest bracketed markers for a PDF with superscripts to use
+        brackets; without superscripts, one is enough.
     superscript_ratio: float
         A glyph smaller than this share of its line's median letter size
         is a superscript (0-1).
@@ -358,8 +358,9 @@ def find_citations(
     -------
     CitationScan
         Bracketed markers when there are at least
-        ``rules.bracket_markers_min`` of them; otherwise font-confirmed
-        superscripts; otherwise style ``none`` with no citations.
+        ``rules.bracket_markers_min`` of them, or any when there are no
+        superscripts to look for; otherwise font-confirmed superscripts;
+        otherwise style ``none`` with no citations.
 
     """
 
@@ -369,7 +370,9 @@ def find_citations(
         for sentence in sentences
         for match in _BRACKET.finditer(sentence.text)
     ]
-    if len(brackets) >= rules.bracket_markers_min:
+    if len(brackets) >= rules.bracket_markers_min or (
+        brackets and not superscripts
+    ):
         style, found = STYLE_BRACKETS, brackets
     elif superscripts:
         style, found = STYLE_SUPERSCRIPT, []
