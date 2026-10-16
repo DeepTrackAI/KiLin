@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import unittest
 
 from kilin.tools._shared.sentences import Sentence
-from kilin.tools.reference_check._verification import (
+from kilin.tools._shared.claims import (
     VERDICT_BACKGROUND,
     VERDICT_CONTRADICTED,
     VERDICT_FAILED,
