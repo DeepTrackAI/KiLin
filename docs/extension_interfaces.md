@@ -137,6 +137,7 @@ callback, so document the default policy and cost.
 | `find_fact` | Find one fact or a complete set across a document/corpus. | [README](../kilin/tools/find_fact/README.md) |
 | `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
+| `reference_check` | Check a paper's references against the project's files and find their citations. | [README](../kilin/tools/reference_check/README.md) |
 | `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
 | `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 
@@ -165,8 +166,7 @@ silently overwriting an edited one. See
 
 `tools/_shared/` currently groups document selection, note-taking/citations,
 prior-turn matching, mention and term scanning, sentence splitting,
-reference-list extraction and matching to project files, in-text citation
-finding, planning,
+reference-list extraction, planning,
 path disambiguation, safe output-file access and source statistics. These
 modules are private implementation helpers. Prefer them when semantics match,
 but do not silently move a tool's policy into a shared service unless

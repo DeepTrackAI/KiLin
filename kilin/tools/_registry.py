@@ -36,8 +36,8 @@ Module Structure
 - ``TOOL_PROJECT_INVENTORY``, ``TOOL_SCAN_AND_LIST``,
   ``TOOL_BATCH_CLASSIFY``, ``TOOL_BATCH_REVIEW``, ``TOOL_FILTER_RESULTS``,
   ``TOOL_FIND_FACT``, ``TOOL_FIND_PASSAGES``,
-  ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PAPER_OVERVIEW``, and
-  ``TOOL_SHOW_SOURCE``
+  ``TOOL_GENERATE_PAPER_SUMMARY``, ``TOOL_PAPER_OVERVIEW``,
+  ``TOOL_REFERENCE_CHECK``, and ``TOOL_SHOW_SOURCE``
 
     Canonical string values of the registered tool names.
 
@@ -93,6 +93,7 @@ from kilin.tools import (
     generate_paper_summary,
     paper_overview,
     project_inventory,
+    reference_check,
     scan_and_list,
     show_source,
 )
@@ -109,6 +110,7 @@ __all__ = [
     "TOOL_GENERATE_PAPER_SUMMARY",
     "TOOL_PAPER_OVERVIEW",
     "TOOL_PROJECT_INVENTORY",
+    "TOOL_REFERENCE_CHECK",
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
     "TOOL_SHOW_SOURCE",
@@ -130,6 +132,7 @@ ToolName: TypeAlias = Literal[
     "find_passages",
     "generate_paper_summary",
     "paper_overview",
+    "reference_check",
     "show_source",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
@@ -141,6 +144,7 @@ TOOL_FIND_FACT: Final[ToolName] = "find_fact"
 TOOL_FIND_PASSAGES: Final[ToolName] = "find_passages"
 TOOL_GENERATE_PAPER_SUMMARY: Final[ToolName] = "generate_paper_summary"
 TOOL_PAPER_OVERVIEW: Final[ToolName] = "paper_overview"
+TOOL_REFERENCE_CHECK: Final[ToolName] = "reference_check"
 TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
@@ -152,6 +156,7 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_FIND_PASSAGES,
     TOOL_GENERATE_PAPER_SUMMARY,
     TOOL_PAPER_OVERVIEW,
+    TOOL_REFERENCE_CHECK,
     TOOL_SHOW_SOURCE,
 )
 
@@ -261,6 +266,14 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "unclear.",
         paper_overview.parse_settings,
         paper_overview.run,
+    ),
+    TOOL_REFERENCE_CHECK: Tool(
+        TOOL_REFERENCE_CHECK,
+        "Check one paper's reference list against the project's files and "
+        "find where each reference is cited; save the full report to "
+        "outputs/.",
+        reference_check.parse_settings,
+        reference_check.run,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,

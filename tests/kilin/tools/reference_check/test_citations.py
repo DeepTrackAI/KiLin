@@ -3,7 +3,7 @@
 Check bracketed and superscript markers, the font confirmation of
 superscripts, the rejection of author, affiliation and exponent markers,
 and the diagnostics for uncited and out-of-list numbers, independently of
-any registered tool's configuration.
+the tool's configuration.
 
 """
 
@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 import unittest
 
-from kilin.tools._shared.citations import (
+from kilin.tools.reference_check._citations import (
     STYLE_BRACKETS,
     STYLE_NONE,
     STYLE_SUPERSCRIPT,
@@ -74,6 +74,21 @@ class TestBrackets(unittest.TestCase):
         )
         self.assertEqual(scan.uncited, (3, 6))
         self.assertEqual(scan.beyond_list, (7,))
+
+    def test_few_brackets_without_superscripts(self) -> None:
+        # Fewer than bracket_markers_min, but nothing else to look for.
+        rules = CitationRules(
+            bracket_markers_min=5, superscript_ratio=0.85,
+            signature_characters=8, max_range=50,
+            unit_words=frozenset({"cm"}), byline_share=0.5,
+        )
+        passages = (chunk("a", "Only one citation here [2].\n"),)
+        scan = find_citations(passages, 3, None, rules)
+        self.assertEqual(scan.style, STYLE_BRACKETS)
+        self.assertEqual([c.numbers for c in scan.citations], [(2,)])
+        # With superscripts in the PDF, one bracket is not enough.
+        scan = find_citations(passages, 3, {"7": ("other",)}, rules)
+        self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
 
     def test_no_style_without_brackets_or_pdf(self) -> None:
         passages = (chunk("a", "Cells grow in 3 groups of 12 samples.\n"),)

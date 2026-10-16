@@ -47,7 +47,7 @@ remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
 to the tool as a callback. The tool does not import the GUI, and it always
 saves Markdown even without a PDF backend. Other tools can add private
 modules as needed.
-All ten built-in registered tools use packages, not flat `.py` modules.
+All eleven built-in registered tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
 KíLín is a prerelease package.
 

@@ -1,0 +1,38 @@
+{
+  "SETTINGS": {
+    "MAX_LISTED": 20
+  },
+  "REFERENCES": {
+    "REFERENCE_CHARACTERS": 100000,
+    "NUMBERED_ENTRIES_MIN": 5,
+    "RUNNING_LINE_REPEATS": 3,
+    "RUNNING_LINE_WORDS": 12,
+    "ENTRY_MIN_WORDS": 5
+  },
+  "MATCHING": {
+    "FIRST_CHARACTERS": 1500,
+    "TITLE_WORDS_MIN": 3,
+    "TITLE_ON_PAGE": 0.6,
+    "TITLE_FOUND": 0.8,
+    "TITLE_PROBABLE": 0.5,
+    "PAGE_FOUND": 0.85,
+    "PAGE_PROBABLE": 0.65,
+    "ENTRY_WORDS_MIN": 4,
+    "COMMON_WORDS": [
+      "this", "that", "with", "from", "paper", "their", "study",
+      "using", "based", "analysis", "journal", "letters", "review",
+      "proceedings", "conference", "international", "press"
+    ]
+  },
+  "CITATIONS": {
+    "BRACKET_MARKERS_MIN": 5,
+    "SUPERSCRIPT_RATIO": 0.85,
+    "SIGNATURE_CHARACTERS": 8,
+    "MAX_RANGE": 50,
+    "UNIT_WORDS": [
+      "cm", "mm", "nm", "um", "μm", "m", "s", "ms", "kg", "g", "log",
+      "ln", "exp", "e", "x"
+    ],
+    "BYLINE_SHARE": 0.5
+  }
+}
