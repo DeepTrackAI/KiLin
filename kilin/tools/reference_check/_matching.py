@@ -6,7 +6,9 @@ carry a DOI (Nature and Vancouver styles print none), so entries are
 matched mainly by words:
 
 1. **DOI**: the file's DOI, printed on its first page, appears in the
-   entry. This settles the match.
+   entry. This settles the match. Likewise the **journal citation**: the
+   entry's year and article or page number are printed on the file's
+   first page with its first author (for entries without a title).
 2. **Title**: when the file's PDF metadata title is trustworthy (enough
    distinctive words, most of them printed on the first page, so not
    "Microsoft Word - draft.docx"), the share of its words that the entry
@@ -62,6 +64,10 @@ Module Structure
 
     Match entries to files, with a status and a reason.
 
+- ``settle_duplicates``
+
+    Keep one found reference per file.
+
 Examples
 --------
 >>> from pathlib import Path
@@ -91,7 +97,7 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 from typing import Final
@@ -110,6 +116,7 @@ __all__ = [
     "first_author",
     "match_reference",
     "match_references",
+    "settle_duplicates",
     "paper_identity",
 ]
 
@@ -123,6 +130,21 @@ MATCH_UNREADABLE: Final[str] = "unreadable"
 _DOI: Final[re.Pattern[str]] = re.compile(
     r"\b(10\.\d{4,9}/[^\s\"<>]+)", flags=re.I
 )
+# A publisher cover sheet's list of other papers ("You may also like" ...
+# "This content was downloaded from IP address ..."), removed from the
+# first page so those papers do not match it; without the closing line,
+# the rest of the page is removed.
+_COVER_BOX: Final[re.Pattern[str]] = re.compile(
+    r"(?:you may also like|related content|recent citations|related "
+    r"articles)(?:.*?this content was downloaded from[^\n]*|.*)",
+    flags=re.I | re.S,
+)
+# How much text a cover box spans at most, in characters.
+_COVER_CHARACTERS: Final[int] = 3000
+# A year, and an article or page number (four or more digits), for
+# matching an entry by its journal citation.
+_YEAR: Final[re.Pattern[str]] = re.compile(r"\b(?:19|20)\d\d\b")
+_ARTICLE_NUMBER: Final[re.Pattern[str]] = re.compile(r"\b\d{4,}\b")
 # Fewest characters of a DOI (without punctuation) to compare it safely.
 _DOI_MIN_CHARACTERS: Final[int] = 10
 # Distinctive words: four letters or more, after accents are removed.
@@ -165,7 +187,8 @@ class MatchRules:
     page_probable: float
         Lower share that makes the file ``probable`` (0-1).
     entry_words_min: int
-        Fewest distinctive words of an entry; shorter ones are
+        Fewest distinctive words of an entry for its words to be compared;
+        shorter ones match only by DOI or journal citation, else are
         ``unreadable``.
     common_words: frozenset[str]
         Lowercase words that do not tell works apart ("journal").
@@ -266,7 +289,9 @@ def paper_identity(
     Returns
     -------
     PaperIdentity
-        The metadata title only when it has at least
+        The first page leaves out a publisher's list of other papers ("You
+        may also like ... This content was downloaded from ..."). The
+        metadata title only when it has at least
         ``rules.title_words_min`` distinctive words and at least
         ``rules.title_on_page`` of them are printed on the first page;
         otherwise an empty title. Unreadable metadata gives an empty title
@@ -275,6 +300,8 @@ def paper_identity(
     """
 
     first_page = "\n".join(chunk.text for chunk in passages)
+    start = first_page[: rules.first_characters + _COVER_CHARACTERS]
+    first_page = _COVER_BOX.sub(" ", start, count=1)
     first_page = first_page[: rules.first_characters]
     title, authors = _metadata(file)
 
@@ -409,6 +436,57 @@ def match_references(
     ]
 
 
+def settle_duplicates(
+    matches: Sequence[ReferenceMatch],
+) -> tuple[ReferenceMatch, ...]:
+    """Keep one found reference per file.
+
+    Two references are rarely the same file: when several are found in
+    one file, the best match keeps it and the others become probable.
+
+    Parameters
+    ----------
+    matches: Sequence[ReferenceMatch]
+        One match per reference entry, in order.
+
+    Returns
+    -------
+    tuple[ReferenceMatch, ...]
+        The matches, in order; for each file found by several entries,
+        the one with the highest score (a DOI first, then the earliest)
+        stays found, and the others are probable with the reason "another
+        reference matches this file better (12)".
+
+    """
+
+    best: dict[Path, ReferenceMatch] = {}
+    for match in matches:
+        if match.status != MATCH_FOUND or match.path is None:
+            continue
+        kept = best.get(match.path)
+        if kept is None or (match.reason == "DOI", match.score) > (
+            kept.reason == "DOI", kept.score
+        ):
+            best[match.path] = match
+
+    settled: list[ReferenceMatch] = []
+    for match in matches:
+        kept = best.get(match.path) if match.path is not None else None
+        if match.status == MATCH_FOUND and kept is not None and (
+            kept is not match
+        ):
+            match = replace(
+                match,
+                status=MATCH_PROBABLE,
+                reason=(
+                    f"{match.reason}; another reference matches this file "
+                    f"better ({kept.position})"
+                ),
+            )
+        settled.append(match)
+    return tuple(settled)
+
+
 def _candidate(
     entry: str,
     words: set[str],
@@ -443,6 +521,15 @@ def _candidate(
     author: bool | None = None
     if surname:
         author = _flat(surname) in _flat(paper.authors + paper.first_page)
+
+    if author and _same_citation(entry, paper.first_page):
+        return MATCH_FOUND, 1.0, "journal citation and first author", (
+            paper.path
+        )
+
+    if len(words) < rules.entry_words_min:
+        # Too few words to compare: only a DOI or citation matches.
+        return None
 
     if paper.title:
         title = set(_words(paper.title, rules))
@@ -480,6 +567,37 @@ def _candidate(
         )
 
     return None
+
+
+def _same_citation(entry: str, first_page: str) -> bool:
+    """Return whether a file's first page prints an entry's citation.
+
+    Entries in some styles have no title ("Muñoz-Gil G et al 2020 New J.
+    Phys. 22 013010"), but first pages print the paper's own citation.
+
+    Parameters
+    ----------
+    entry: str
+        A reference entry.
+    first_page: str
+        A file's first page.
+
+    Returns
+    -------
+    bool
+        True when the entry's year and its article or page number (four
+        or more digits, not a year) are both printed on the first page as
+        whole numbers.
+
+    """
+
+    years = set(_YEAR.findall(entry))
+    numbers = [
+        number for number in _ARTICLE_NUMBER.findall(entry)
+        if not _YEAR.fullmatch(number)
+    ]
+    printed = set(re.findall(r"\d+", first_page))
+    return bool(years & printed) and any(n in printed for n in numbers)
 
 
 def _metadata(file: Path | None) -> tuple[str, str]:

@@ -22,9 +22,10 @@ Module Structure
 
     The registry entry points for this tool.
 
-- ``check_references``, ``report_markdown`` and ``chat_answer``
+- ``check_references``, ``report_claims``, ``report_markdown`` and
+  ``chat_answer``
 
-    The model-free check and its two write-ups.
+    The rule-based check, its claims, and its two write-ups.
 
 Examples
 --------
@@ -40,6 +41,7 @@ from kilin.tools.reference_check.tool import (
     chat_answer,
     check_references,
     parse_settings,
+    report_claims,
     report_markdown,
     run,
 )
@@ -50,6 +52,7 @@ __all__ = [
     "chat_answer",
     "check_references",
     "parse_settings",
+    "report_claims",
     "report_markdown",
     "run",
 ]

@@ -24,6 +24,9 @@ from kilin.tools import reference_check as tool
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_REFERENCE_CHECK, TOOL_REGISTRY
 from kilin.tools.reference_check import _configuration as config
+from kilin.tools._shared.sentences import Sentence
+from kilin.tools.reference_check._citations import Citation
+from kilin.tools.reference_check.tool import _cited_for
 from tests.kilin.tools._shared._support import chunk
 
 PAPER = """Introduction
@@ -92,7 +95,10 @@ class TestReferenceCheckPackage(unittest.TestCase):
         )
 
     def test_invalid_project_type_settings(self) -> None:
-        for values in ({"max_listed": 0}, {"unknown": 1}):
+        for values in (
+            {"max_listed": 0}, {"unknown": 1}, {"verify": "yes"},
+            {"passages": 0}, {"confirmation": "sometimes"},
+        ):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
                     tool.parse_settings(values, "example")
@@ -118,21 +124,38 @@ class TestReferenceCheckRun(unittest.TestCase):
     def tearDown(self) -> None:
         self.folder.cleanup()
 
-    def _run(self, chosen: object) -> tuple[object, SimpleNamespace]:
+    def _run(
+        self, chosen: object, choice: str = "continue", **settings: object
+    ) -> tuple[object, SimpleNamespace]:
+        def ask_model(system: str, prompt: str, tokens: int) -> str:
+            # Reference [2] is quoted from its file; [3] is called
+            # contradicted without a quote.
+            if "reference [2]" in prompt:
+                return (
+                    "VERDICT: partly supported\nQUOTE: Mite Mijalkov, Ehsan "
+                    "Kakaei, Joana B. Pereira\nCOMMENT: Names the authors."
+                )
+            return "VERDICT: contradicted\nQUOTE: NONE\nCOMMENT: Disagrees."
+
         context = SimpleNamespace(
             project_root=self.root, chunks=self.chunks,
             progress=Mock(), done=Mock(), choose=None,
+            rank=lambda text: [SimpleNamespace(chunk=c) for c in self.chunks],
+            ask_model=Mock(side_effect=ask_model),
+            confirm=Mock(return_value=choice),
+            trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
         )
         request = ToolRequest(
             "check the references of paper.md",
             "check the references of paper.md",
         )
+        values = {"max_listed": 1, "confirmation": "always", **settings}
         with patch(
             "kilin.tools.reference_check.tool.choose_document",
             return_value=chosen,
         ):
             return tool.run(
-                tool.ReferenceCheckSettings(max_listed=1), request, context
+                tool.ReferenceCheckSettings(**values), request, context
             ), context
 
     def test_report_and_answer(self) -> None:
@@ -146,23 +169,129 @@ class TestReferenceCheckRun(unittest.TestCase):
         )
         self.assertEqual(summary["citation_style"], "brackets")
         self.assertEqual(summary["uncited"], [5])
-        self.assertIn("[2] Mijalkov", result.answer)
-        self.assertIn("→ braph.md", result.answer)
+        self.assertIn("**2.** Mijalkov", result.answer)
+        self.assertIn("→ `braph.md`", result.answer)
         self.assertIn("another version", result.answer)
         # One missing reference is listed, the others counted.
         self.assertIn("… and 2 more", result.answer)
-        self.assertIn("Never cited in the text: [5]", result.answer)
+        self.assertIn("Never cited in the text: 5", result.answer)
+        self.assertNotIn("[2]", result.answer)
         context.done.assert_called_once()
 
         report = (self.root / summary["report"]).read_text()
         self.assertTrue(report.startswith("# Reference check: paper.md"))
-        section = report[report.index("### [2]"):report.index("### [3]")]
+        section = report[report.index("### 2."):report.index("### 3.")]
         self.assertIn(
-            "braph.md (found: first page and first author)", section
+            "`braph.md` (found: first page and first author)", section
         )
-        self.assertIn("Software such as BRAPH implements", section)
-        self.assertIn("We followed the protocol of [2].", section)
+        self.assertIn(
+            "Software such as BRAPH implements these measures **⁽²,³⁾**.",
+            section,
+        )
+        self.assertIn("We followed the protocol of **⁽²⁾**.", section)
         self.assertIn("not found in the text", report)
+
+    def test_claims_are_checked_after_confirmation(self) -> None:
+        result, context = self._run((Path("paper.md"), "named", False))
+        context.confirm.assert_called_once()
+        # [2] is cited twice, [3] once: three claims, one call each.
+        self.assertEqual(context.ask_model.call_count, 3)
+        self.assertEqual(result.summary["claims_checked"], 3)
+        self.assertEqual(
+            result.summary["verdicts"],
+            {"partly supported": 2, "not supported": 1},
+        )
+        # The unconfirmed contradiction is listed first, weakened.
+        self.assertIn(
+            "**1. Not supported** · reference 3 → `braph2.md`", result.answer
+        )
+        self.assertIn("2 partly supported · 1 not supported", result.answer)
+        self.assertIn("Judged contradicted", result.answer)
+        self.assertEqual(len(result.evidence), 0)  # max_listed hides [2].
+        report = (self.root / result.summary["report"]).read_text()
+        self.assertIn("## Claims checked against the cited papers", report)
+        self.assertIn(
+            "**Verdict:** partly supported — Names the authors.", report
+        )
+        events = [c.args[0] for c in context.trace.emit.call_args_list]
+        self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_quoted_passages_are_evidence(self) -> None:
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), max_listed=5
+        )
+        self.assertEqual(len(result.evidence), 1)
+        self.assertEqual(result.evidence[0]["path"], Path("braph.md"))
+        self.assertIn(
+            "*The cited paper says:* “Mite Mijalkov, Ehsan Kakaei, Joana B. "
+            "Pereira” [1]",
+            result.answer,
+        )
+
+    def test_cancel_or_disable_verification(self) -> None:
+        result, context = self._run(
+            (Path("paper.md"), "named", False), choice="cancel"
+        )
+        context.ask_model.assert_not_called()
+        self.assertIn("were not checked (cancelled)", result.answer)
+        result, context = self._run(
+            (Path("paper.md"), "named", False), verify=False
+        )
+        context.confirm.assert_not_called()
+        context.ask_model.assert_not_called()
+        self.assertNotIn("Claims checked", result.answer)
+
+    def test_quick_version_checks_the_first_claims(self) -> None:
+        result, context = self._run(
+            (Path("paper.md"), "named", False), choice="quick",
+            quick_claims=1,
+        )
+        self.assertEqual(context.ask_model.call_count, 1)
+        self.assertIn("2 of 3 claims were not checked (the quick version)",
+                      result.answer)
+
+    def test_model_sees_markers_and_what_is_cited(self) -> None:
+        self.chunks[0] = chunk("p1", PAPER.replace(
+            "Software such as\nBRAPH implements these measures [2, 3].",
+            "All teams tracked particles using an established tracking "
+            "method [2, 3] and then analysed them.",
+        ), path="paper.md")
+        _, context = self._run((Path("paper.md"), "named", False))
+        self.assertIn("tracking method", self.chunks[0].text)
+        prompt = next(
+            call.args[1] for call in context.ask_model.call_args_list
+            if "citing reference [2]" in call.args[1]
+        )
+        self.assertIn(
+            'Reference [2] is cited for: "an established tracking method"',
+            prompt,
+        )
+        self.assertIn("It follows this sentence:", prompt)
+
+    def test_attribution_is_judged_as_the_whole_sentence(self) -> None:
+        sentence = Sentence(
+            Path("p.md"), 1,
+            "Estimating it is hard, as already observed in the challenge "
+            "[2].",
+            chunk("s", "x"),
+        )
+        start = sentence.text.index("[2]")
+        citation = Citation((2,), "2", sentence, start, start + 3)
+        self.assertEqual(_cited_for(sentence, [citation], 2), "")
+
+    def test_answer_has_no_bracketed_numbers(self) -> None:
+        self.chunks[1] = chunk(
+            "b1", BRAPH + "Earlier toolboxes [20, 21] exist.\n",
+            path="braph.md",
+        )
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), max_listed=5
+        )
+        answer = result.answer.replace("[1]", "")
+        self.assertNotRegex(answer, r"\[\d")
+        self.assertNotIn("\\[", answer)
+        self.assertIn("**3 claims checked:** 2 partly supported · 1 not "
+                      "supported", result.answer)
 
     def test_cancelled_choice(self) -> None:
         result, context = self._run("Name the paper to check.")

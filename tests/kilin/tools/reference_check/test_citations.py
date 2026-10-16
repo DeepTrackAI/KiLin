@@ -19,6 +19,7 @@ import unittest
 from kilin.tools.reference_check._citations import (
     STYLE_BRACKETS,
     STYLE_NONE,
+    STYLE_PARENTHESES,
     STYLE_SUPERSCRIPT,
     CitationRules,
     cited_numbers,
@@ -90,6 +91,32 @@ class TestBrackets(unittest.TestCase):
         scan = find_citations(passages, 3, {"7": ("other",)}, rules)
         self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
 
+    def test_parenthesized_citations(self) -> None:
+        passages = (chunk(
+            "a",
+            "Single molecules move in cells (1). Motion is anomalous "
+            "(6,7), as shown (15,30–32). The MSD is 4Dt (2). See "
+            "Equation (3) and Eqs. (4) and (5). The steps are: (1) "
+            "detection, then linking. Earlier work (8), and later.\n",
+        ),)
+        scan = find_citations(passages, 40, None, RULES)
+        self.assertEqual(scan.style, STYLE_PARENTHESES)
+        self.assertEqual(
+            [c.numbers for c in scan.citations],
+            [(1,), (6, 7), (15, 30, 31, 32), (2,), (8,)],
+        )
+
+    def test_parentheses_lose_to_superscripts(self) -> None:
+        # A superscript paper numbers its equations in parentheses.
+        passages = (chunk(
+            "a",
+            "Diffusion is anomalous in cells12,13,14. It is described by "
+            "Equation (1), by the model (2), and in the methods (3).\n",
+        ),)
+        scan = find_citations(passages, 40, {"121314": ("cells",)}, RULES)
+        self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
+        self.assertEqual([c.numbers for c in scan.citations], [(12, 13, 14)])
+
     def test_no_style_without_brackets_or_pdf(self) -> None:
         passages = (chunk("a", "Cells grow in 3 groups of 12 samples.\n"),)
         scan = find_citations(passages, 3, None, RULES)
@@ -133,9 +160,44 @@ class TestSuperscripts(unittest.TestCase):
         ),)
         # The PDF prints 87 small after "BRAPH 2.0", and 5 after "10" (a
         # power); "6.87" and "105" are not printed as citations.
-        superscripts = {"87": ("braph20",), "5": ("countsof10",)}
+        superscripts = {"87": ("braph2.0",), "5": ("countsof10",)}
         scan = find_citations(passages, 90, superscripts, RULES)
         self.assertEqual([c.numbers for c in scan.citations], [(87,)])
+
+    def test_greek_letters_symbols_and_written_references(self) -> None:
+        passages = (chunk(
+            "a",
+            "Values depend on the anomalous exponent α64. The exponent "
+            "relates as H = α/212,67. Together with Ref. 50, these agree. "
+            "A grant, Ref. 001-P-00038, paid for it.\n",
+        ),)
+        superscripts = {"64": ("xponentα",), "1267": ("h=α/2",)}
+        scan = find_citations(passages, 70, superscripts, RULES)
+        self.assertEqual(
+            [c.numbers for c in scan.citations], [(64,), (12, 67), (50,)]
+        )
+        written = scan.citations[2]
+        self.assertEqual(
+            written.sentence.text[written.start:written.end], "Ref. 50"
+        )
+
+    def test_superscript_after_a_symbol(self) -> None:
+        passages = (chunk(
+            "a", "One method based on UNet3+86,87 outperformed others.\n"
+        ),)
+        scan = find_citations(passages, 90, {"8687": ("unet3+",)}, RULES)
+        self.assertEqual([c.numbers for c in scan.citations], [(86, 87)])
+
+    def test_exponents_and_subscripts_in_formulas(self) -> None:
+        passages = (chunk(
+            "a",
+            "The latent vector follows N (µi, σ2 i) in the encoder. "
+            "The variance is log(σ2) for every pixel of the image. "
+            "ðsÞ = 1 2\n",
+        ),)
+        superscripts = {"2": ("(µi,σ", "log(σ", "=1"), "1": ("ðsÞ=",)}
+        scan = find_citations(passages, 70, superscripts, RULES)
+        self.assertEqual(scan.citations, ())
 
     def test_shorter_pdf_context_at_line_start(self) -> None:
         # The PDF line started at "ples", the text has "samples".
