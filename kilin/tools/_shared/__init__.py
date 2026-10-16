@@ -2,7 +2,8 @@
 
 These modules implement document selection, saved-output handling,
 planning, list presentation, mention scanning, source-path
-disambiguation, sentence splitting, and term filtering. They are internal
+disambiguation, sentence splitting, reference lists, claim checking, and
+term filtering. They are internal
 services, not executable tools or externally configurable plugins.
 
 Key Features
@@ -28,6 +29,10 @@ Module Structure
   ``sentences``, and ``earlier_turns``
 
     Shared source and follow-up algorithms.
+
+- ``references`` and ``claims``
+
+    A paper's reference list, and whether a paper supports a sentence.
 
 Examples
 --------

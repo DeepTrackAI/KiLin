@@ -14,7 +14,7 @@ paper) and the other files of the project (the cited works). The tool:
    each appears in, and reports references never cited and citations of
    numbers beyond the list (usually a sign the list was split wrongly).
 5. Checks each *claim* (a citing sentence and one cited work that is in
-   the project) with the answering model (``_verification``): the cited
+   the project) with the answering model (``_shared.claims``): the cited
    file's most related passages, a verdict, the passage sentence it rests
    on (checked to be in the passages), and a critical comment. The plan is
    shown first, and the user can run all claims, a few, or none.
@@ -147,7 +147,7 @@ from kilin.tools.reference_check._matching import (
     paper_identity,
     settle_duplicates,
 )
-from kilin.tools.reference_check._verification import (
+from kilin.tools._shared.claims import (
     VERDICTS,
     Claim,
     Verdict,

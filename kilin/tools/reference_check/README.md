@@ -27,7 +27,7 @@ For "check the references of the Smith paper", the tool:
    raised position (exponents in formulas and subscripts are left out).
    It reports references never cited and numbers cited beyond the list.
 5. Checks each claim (a citing sentence and one cited work that is in the
-   project) with the answering model (`_verification.py`). The model reads
+   project) with the answering model (`_shared/claims.py`). The model reads
    the cited file's passages most related to the sentence and to what
    the reference is cited for (and the sentence before it), and answers with a verdict (supported, partly
    supported, not supported, contradicted, background, not found), the

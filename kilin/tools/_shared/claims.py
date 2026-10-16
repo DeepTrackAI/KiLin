@@ -1,7 +1,7 @@
 """Judge whether a cited work supports the sentence that cites it.
 
-Private to ``reference_check``. For each sentence that cites a reference
-whose file is in the project (a *claim*), the cited file's passages most
+Shared by the tools that weigh a sentence against a paper. For a sentence
+and one paper in the project (a *claim*), the paper's passages most
 related to the sentence are given to the answering model, which returns a
 verdict, the passage sentence it rests on, and a short critical comment:
 
@@ -65,7 +65,7 @@ Module Structure
 
 Examples
 --------
->>> from kilin.tools.reference_check._verification import parse_verdict
+>>> from kilin.tools._shared.claims import parse_verdict
 >>> parse_verdict("VERDICT: not found\\nQUOTE: NONE\\nCOMMENT: Off topic.", ())
 ('not found', '', None, 'Off topic.')
 
