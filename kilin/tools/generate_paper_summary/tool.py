@@ -85,13 +85,10 @@ Module Structure
 
     Return the start of a paper, where title and authors are printed.
 
-- ``reference_list``
+- ``REFERENCE_LAYOUT``
 
-    Return the paper's reference list, found by its heading.
-
-- ``reference_entries``
-
-    Split the paper's reference list into entries, as printed.
+    This tool's thresholds for the shared reference-entry extractor
+    (``kilin.tools._shared.references``).
 
 - ``headline_prompt``
 
@@ -140,7 +137,6 @@ Examples
 
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -158,6 +154,10 @@ from kilin.tools._shared.document_notes import (
     take_notes,
 )
 from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._shared.references import (
+    ReferenceLayout,
+    reference_entries,
+)
 from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -234,6 +234,7 @@ from kilin.tools.generate_paper_summary._report_template import (
 )
 
 __all__ = [
+    "REFERENCE_LAYOUT",
     "SummarySettings",
     "choose_paper",
     "choose_template",
@@ -243,8 +244,6 @@ __all__ = [
     "paper_citation",
     "parse_settings",
     "workspace_resources",
-    "reference_entries",
-    "reference_list",
     "references_prompt",
     "run",
     "section_prompt",
@@ -269,51 +268,14 @@ _BEGINNING_PASSAGES: Final[int] = BEGINNING_PASSAGES
 _BEGINNING_CHARACTERS: Final[int] = BEGINNING_CHARACTERS
 _ORGANISATION_WORDS: Final[frozenset[str]] = ORGANISATION_WORDS
 
-# The heading that starts a reference list; the last one in the paper wins.
-_REFERENCES_HEADING = re.compile(
-    r"^\s*#*\s*(references|bibliography|literature cited|works cited)"
-    r"\s*:?\s*$",
-    flags=re.I | re.M,
+# Thresholds of the shared reference-entry extractor, from defaults.json.
+REFERENCE_LAYOUT: Final[ReferenceLayout] = ReferenceLayout(
+    max_characters=REFERENCE_CHARACTERS,
+    numbered_entries_min=NUMBERED_ENTRIES_MIN,
+    running_line_repeats=RUNNING_LINE_REPEATS,
+    running_line_words=RUNNING_LINE_WORDS,
+    entry_min_words=ENTRY_MIN_WORDS,
 )
-# Most characters read after the heading; longer lists are cut.
-_REFERENCE_CHARACTERS: Final[int] = REFERENCE_CHARACTERS
-# A numbered reference entry: "12. Smith, J. ...", "[12] Smith ...".
-_ENTRY_START = re.compile(r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})[.)])\s+(\S.*)$")
-# Fewest numbered lines for entries to be split at their numbers.
-_NUMBERED_ENTRIES_MIN: Final[int] = NUMBERED_ENTRIES_MIN
-# The end of an entry: "(2019).", "2019.", "2023;24(9):557–74.", a PMID, or
-# a DOI. Two-column PDFs print the numbers apart from the entries, so ends
-# separate entries more reliably than numbers.
-_ENTRY_END = re.compile(
-    r"(?:\((?:19|20)\d\d[a-z]?\)\.?"
-    r"|\b(?:19|20)\d\d[a-z]?\."
-    r"|\d+(?:\(\d+\))?:\s*[\w–-]+\."
-    r"|PMID:\s*\d+"
-    r"|doi\.org/\S+[0-9A-Za-z])\s*$"
-)
-# A number printed alone ("2.", "[2]") in a column of its own.
-_LONE_NUMBER = re.compile(r"^\s*(?:\[\d{1,3}\]|\d{1,3}\.)\s*$")
-# Running heads and footers: "PLOS ONE | https://...", "12 / 25".
-_FURNITURE = re.compile(r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$")
-# Headings after the reference list, where it ends: alone on the line, or
-# followed by text ("Acknowledgements This work ..."). Not "Methods", which
-# starts journal names ("Nat\nMethods 18, ...").
-_AFTER_REFERENCES = re.compile(
-    r"^\s*#*\s*(acknowledge?ments?|author contributions|funding|competing "
-    r"interests|additional information|supplementary information|data "
-    r"availability|code availability|appendix)\s*(?::|$|\s+[A-Z][a-z])",
-    flags=re.I,
-)
-# A line that always continues the entry before it (its DOI or PMID).
-_CONTINUATION = re.compile(r"^\s*(?:https?://|doi\b|pmid\b|pmcid\b)", re.I)
-# Page numbers between entries ("12", "Page 12") are skipped.
-_PAGE_LINE = re.compile(r"^\s*(?:page\s*)?\d{1,4}\s*$", flags=re.I)
-# A short line repeated this often in a paper is a running head or footer
-# ("J. Smith et al.", "Journal Name 35 (2026) 102791").
-_RUNNING_LINE_REPEATS: Final[int] = RUNNING_LINE_REPEATS
-_RUNNING_LINE_WORDS: Final[int] = RUNNING_LINE_WORDS
-# Entries shorter than this are page furniture, not references.
-_ENTRY_MIN_WORDS: Final[int] = ENTRY_MIN_WORDS
 # Item range of a references section that has no item limit of its own.
 _DEFAULT_REFERENCE_ITEMS: Final[tuple[int, int]] = DEFAULT_REFERENCE_ITEMS
 # Vocabulary used to identify distinctive reference terms.
@@ -765,110 +727,6 @@ def paper_beginning(passages: tuple[Chunk, ...]) -> str:
     ]
 
 
-def reference_list(passages: tuple[Chunk, ...]) -> str:
-    """Return the paper's reference list, found by its heading.
-
-    Parameters
-    ----------
-    passages: tuple[Chunk, ...]
-        The paper's passages, in order.
-
-    Returns
-    -------
-    str
-        Text after the last "References" (or "Bibliography", "Literature
-        cited", "Works cited") heading, 40,000 characters at most; empty
-        when there is none.
-
-    """
-
-    text = "\n".join(chunk.text for chunk in passages)
-    headings = list(_REFERENCES_HEADING.finditer(text))
-    if not headings:
-        return ""
-
-    start = headings[-1].end()
-    return text[start : start + _REFERENCE_CHARACTERS].strip()
-
-
-def reference_entries(passages: tuple[Chunk, ...]) -> list[str]:
-    """Split the paper's reference list into entries, as printed.
-
-    Parameters
-    ----------
-    passages: tuple[Chunk, ...]
-        The paper's passages, in order.
-
-    Returns
-    -------
-    list[str]
-        One string per entry, without the paper's own number, with lines
-        joined (and words hyphenated across lines rejoined). When five or
-        more lines start with a number ("12. ...", "[12] ...") and no
-        number stands alone, a new entry starts at each number; otherwise
-        (as two-column PDFs print them) also after a line that ends an
-        entry (a year, volume and pages, a PMID, or a DOI), unless the next
-        line is a DOI or PMID. Lone numbers, page numbers, running heads
-        and footers (short lines repeated three or more times in the
-        paper), and entries of fewer than five words are dropped; the list
-        stops at a following heading such as "Acknowledgements". Empty
-        when the paper has no reference list.
-
-    """
-
-    lines = reference_list(passages).splitlines()
-
-    # Running heads and footers repeat across pages; drop them first.
-    repeats = Counter(
-        " ".join(line.split())
-        for chunk in passages
-        for line in chunk.text.splitlines()
-        if 0 < len(line.split()) <= _RUNNING_LINE_WORDS
-    )
-    lines = [
-        line for line in lines
-        if repeats[" ".join(line.split())] < _RUNNING_LINE_REPEATS
-    ]
-
-    numbered = sum(bool(_ENTRY_START.match(line)) for line in lines)
-    by_number = numbered >= _NUMBERED_ENTRIES_MIN and not any(
-        _LONE_NUMBER.match(line) for line in lines
-    )
-
-    entries: list[list[str]] = []
-    complete = True
-    for line in lines:
-        if _AFTER_REFERENCES.match(line):
-            break
-
-        if (
-            not line.strip()
-            or _PAGE_LINE.match(line)
-            or _LONE_NUMBER.match(line)
-            or _FURNITURE.search(line)
-        ):
-            continue
-
-        match = _ENTRY_START.match(line)
-        text = (match.group(3) if match else line).strip()
-        if not entries or match or (
-            not by_number and complete and not _CONTINUATION.match(text)
-        ):
-            entries.append([text])
-        else:
-            entries[-1].append(text)
-        complete = bool(_ENTRY_END.search(text))
-
-    cleaned: list[str] = []
-    for entry_lines in entries:
-        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(entry_lines))
-        joined = " ".join(joined.split())
-        if len(joined.split()) >= _ENTRY_MIN_WORDS:
-            cleaned.append(joined)
-
-    return cleaned
-
-
 def _distinctive(text: str) -> list[str]:
     """Return the words of four or more letters that tell texts apart.
 
@@ -1037,7 +895,8 @@ def references_prompt(
     notes: list[tuple[int, list[str]]]
         Part numbers and note lines, for what the paper is about.
     entries: list[str]
-        The paper's reference entries, from ``reference_entries``.
+        The paper's reference entries, from the shared
+        ``reference_entries``.
 
     Returns
     -------
@@ -1369,7 +1228,7 @@ def run(
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
     headline, fixes = _write_headline(template, path.name, notes, context)
-    entries = reference_entries(passages)
+    entries = reference_entries(passages, REFERENCE_LAYOUT)
     written: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
@@ -1658,7 +1517,8 @@ def _fill_references(
     notes: list[tuple[int, list[str]]]
         Part numbers and note lines.
     entries: list[str]
-        The paper's reference entries, from ``reference_entries``.
+        The paper's reference entries, from the shared
+        ``reference_entries``.
     context: ToolContext
         KíLín's services.
 

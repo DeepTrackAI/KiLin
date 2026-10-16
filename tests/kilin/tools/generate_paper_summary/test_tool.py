@@ -22,7 +22,9 @@ from unittest.mock import Mock, patch
 from kilin.project_type import project_type
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_GENERATE_PAPER_SUMMARY, TOOL_REGISTRY
+from kilin.tools._shared.references import ReferenceLayout
 from kilin.tools.generate_paper_summary import (
+    REFERENCE_LAYOUT,
     SHIPPED_TEMPLATES_DIR,
     SummarySettings,
     check_report,
@@ -180,6 +182,22 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(config.REPLY_TOKENS_PER_SECOND, 25.0)
         self.assertEqual(config.REPLY_SHARE, 0.6)
         self.assertIn("consortium", config.ORGANISATION_WORDS)
+
+    def test_reference_layout_comes_from_tool_defaults(self) -> None:
+        """Pass this tool's thresholds to the shared extractor.
+
+        """
+
+        self.assertEqual(
+            REFERENCE_LAYOUT,
+            ReferenceLayout(
+                max_characters=config.REFERENCE_CHARACTERS,
+                numbered_entries_min=config.NUMBERED_ENTRIES_MIN,
+                running_line_repeats=config.RUNNING_LINE_REPEATS,
+                running_line_words=config.RUNNING_LINE_WORDS,
+                entry_min_words=config.ENTRY_MIN_WORDS,
+            ),
+        )
         self.assertIn("paper", config.COMMON_WORDS)
 
     def test_shipped_resources_belong_to_the_tool_package(self) -> None:
