@@ -7,15 +7,20 @@ list) and maps each to reference numbers. Two styles are supported:
 
 1. **Brackets**: ``[3]``, ``[3,4]``, ``[1–4]``, ``[2, 5–7]``. Brackets are
    unambiguous, so only numbers outside 1–``max_range`` are rejected.
+   Parentheses (``(3)``, ``(15,30–32)``, Cell Press and PNAS) are used
+   the same way when a paper has more of them than brackets; a number
+   shortly after an equation sign is an equation number, not a citation.
 2. **Superscripts** (Nature, Science, many medical journals): extracted
    text glues them to the word (``polygenic15``) or to a number
    (``BRAPH 2.087`` for 2.0 and 87, ``Braph288`` for 2 and 88), or leaves
    a space (``practices 1,8–14.``), where they look like ordinary numbers
    (``in 3 groups``). A text candidate is therefore kept only when the PDF
    prints those digits smaller than the rest of their line
-   (``superscript_runs``), right after the same characters. Author and
-   affiliation markers (after a capitalized name) and unit exponents
-   (``cm⁻¹``) are rejected.
+   (``superscript_runs``), right after the same characters. Markers in
+   author lists and affiliations, unit exponents (``cm⁻¹``) and powers of
+   ten are rejected.
+3. **Written out** in any style: ``Ref. 50``, ``refs. 12,13``. These need
+   no confirmation.
 
 Author-year citations ("Smith et al., 2020") are not recognised; a paper
 using them has style ``none``. Numbering is not assumed to follow first
@@ -89,6 +94,7 @@ from kilin.tools._shared.sentences import Sentence, split_sentences
 __all__ = [
     "STYLE_BRACKETS",
     "STYLE_NONE",
+    "STYLE_PARENTHESES",
     "STYLE_SUPERSCRIPT",
     "Citation",
     "CitationRules",
@@ -100,6 +106,7 @@ __all__ = [
 ]
 
 STYLE_BRACKETS: Final[str] = "brackets"
+STYLE_PARENTHESES: Final[str] = "parentheses"
 STYLE_SUPERSCRIPT: Final[str] = "superscript"
 STYLE_NONE: Final[str] = "none"
 
@@ -107,17 +114,65 @@ STYLE_NONE: Final[str] = "none"
 _NUMBERS: Final[str] = r"\d{1,3}(?:\s*[,–-]\s*\d{1,3})*"
 # A bracketed citation: "[3]", "[1–4]", "[2, 5–7]".
 _BRACKET: Final[re.Pattern[str]] = re.compile(rf"\[(?P<n>{_NUMBERS})\]")
-# A superscript glued to the word or bracket before it, optionally after
-# punctuation: "polygenic15", "MDD93", "regions)70", "stress.12". The PDF's
-# glyph sizes, not this pattern, rule out "COVID19".
+# A parenthesized citation (Cell Press, PNAS): "(3)", "(6,7)", "(15,30–32)".
+_PARENTHESIS: Final[re.Pattern[str]] = re.compile(rf"\((?P<n>{_NUMBERS})\)")
+# Characters shortly before a parenthesized number that make it an
+# equation number ("= 2Dt (1)"), not a citation.
+_EQUATION: Final[re.Pattern[str]] = re.compile(r"[=<>≈∝∑∫±×]")
+# How far back an equation sign makes a parenthesized number an equation
+# number, in characters.
+_EQUATION_REACH: Final[int] = 40
+# A superscript glued to the word, bracket or symbol before it, optionally
+# after punctuation: "polygenic15", "MDD93", "regions)70", "stress.12",
+# "UNet3+86". The PDF's glyph sizes, not this pattern, rule out "COVID19".
 _GLUED: Final[re.Pattern[str]] = re.compile(
-    r"[A-Za-z)\]][.,;:]?(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)(?=[\s.,;:)]|$)"
+    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
+    r"(?=[\s.,;:)]|$)"
 )
-# A superscript after a space: "practices 1,8–14.", "petioles 5,14,15 by".
+# A superscript after a space: "practices 1,8–14.", "petioles 5,14,15 by",
+# and after a symbol or number ("α/2 12,67" for "α/2¹²,⁶⁷").
 _SPACED: Final[re.Pattern[str]] = re.compile(
-    r"[A-Za-z)][.,;:]? (?P<n>\d{1,3}(?:,\d{1,3}|[–-]\d{1,3})*)"
+    r"\S[.,;:]? (?P<n>\d{1,3}(?:,\d{1,3}|[–-]\d{1,3})*)"
     r"(?=[.,;:]?(?:\s|$))"
 )
+# A citation written out: "with Ref. 50", "see refs. 12,13" or "Refs. 4–6".
+# Unambiguous in any style, so it needs no confirmation from the PDF.
+_REF_WORD: Final[re.Pattern[str]] = re.compile(
+    rf"\b[Rr]efs?\.\s?(?!0)(?P<n>{_NUMBERS})\b(?![-–/]?[A-Za-z0-9])"
+)
+# Glyphs a PDF cannot map to text ("(cid:12)"), which extracted text drops.
+_UNMAPPED: Final[re.Pattern[str]] = re.compile(r"\(cid:\d+\)")
+# A single Latin letter: a variable ("t2", "H1"), or a stamp ("v 2").
+_LATIN_LETTER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]")
+# The word before a superscript inside an open parenthesis ("log(σ2)"), or
+# ending with a short parenthesized argument ("f(0)2", "ð0Þ2" in PDFs that
+# encode parentheses as ð and Þ): the digits are an exponent. "(VAE)30" is
+# a citation.
+_MATH_WORD: Final[re.Pattern[str]] = re.compile(
+    r"[(ð][^)Þ]*$|[(ð][^)Þ\s]{1,2}[)Þ]$"
+)
+# A Greek letter variable after a math sign ("N(µ, σ2)", "− µ2"): the
+# digits are an exponent; "exponent α64" is a citation.
+_GREEK_VARIABLE: Final[re.Pattern[str]] = re.compile(
+    r"[−+=(,×·/ð]\s*[\u0370-\u03ff\u00b5]$"
+)
+# Words before a parenthesized number that make it an equation or a step,
+# not a citation: "Equation (1)", "Eqs. (1) and (2)", "step (3)".
+_NOT_CITED: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:equations?|eqs?\.|steps?)\s*(?:\(\d+\)\s*(?:,|and|or)\s*)*$",
+    flags=re.I,
+)
+# Glyphs of equations, including those some PDFs use for "(", ")" and "="
+# (ð, Þ, ¼).
+_MATH_GLYPH: Final[re.Pattern[str]] = re.compile(r"[=¼ðÞ∑∫δΨ|∣±×∝≈<>]")
+# Share of a sentence's tokens that are single characters or hold an
+# equation glyph above which the "sentence" is an equation ("ðsÞ = 1 2",
+# "j2H2 t2 j2H1"), whose superscripts are exponents. Prose, even with a
+# formula, and tables of methods stay below it.
+_MATH_SHARE: Final[float] = 0.3
+# A superscript's glyphs sit at least this share of the line's letter size
+# above the line's baseline; subscripts ("t₂") sit below it.
+_RAISE: Final[float] = 0.15
 # A superscript glued to a number: "BRAPH 2.0⁸⁷" is extracted as "2.087"
 # and "BRAPH 2⁸⁸" as "288". Every split after a digit is a candidate
 # (overlapping, so "288" gives "88" and "8"); the PDF decides, because
@@ -188,15 +243,22 @@ class Citation:
     numbers: tuple[int, ...]
         The cited reference numbers, in the marker's order.
     marker: str
-        The marker as printed ("2, 5–7").
+        The marker's numbers as printed ("2, 5–7").
     sentence: Sentence
         The sentence it appears in.
+    start: int
+        Where the marker starts in the sentence's text: at "[" for a
+        bracketed marker, at "R" for "Ref. 50", else at its first digit.
+    end: int
+        Where the marker ends in the sentence's text.
 
     """
 
     numbers: tuple[int, ...]
     marker: str
     sentence: Sentence
+    start: int = 0
+    end: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +268,7 @@ class CitationScan:
     Attributes
     ----------
     style: str
-        ``brackets``, ``superscript``, or ``none``.
+        ``brackets``, ``parentheses``, ``superscript``, or ``none``.
     citations: tuple[Citation, ...]
         In reading order.
     uncited: tuple[int, ...]
@@ -272,10 +334,11 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
     Returns
     -------
     Superscripts
-        For each run of small digits, commas and dashes (separators
-        dropped), the letters and digits printed before it on its line
-        (at most ``signature_characters``, lowercase, earlier superscript
-        digits included). Lines without
+        For each run of small, raised digits, commas and dashes
+        (separators dropped; lowered subscripts are not runs), the text
+        printed before it on its line without spaces (at most
+        ``signature_characters``, lowercase, earlier superscript digits
+        included). Lines without
         letters are skipped. Empty when ``pdfminer.six`` cannot read the
         file.
 
@@ -303,19 +366,25 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
                 if not isinstance(line, LTTextLine):
                     continue
                 letters = [
-                    glyph.size for glyph in line
+                    glyph for glyph in line
                     if isinstance(glyph, LTChar) and glyph.get_text().isalpha()
                 ]
                 if not letters:
                     continue
 
-                small = rules.superscript_ratio * statistics.median(letters)
+                size = statistics.median(glyph.size for glyph in letters)
+                small = rules.superscript_ratio * size
+                base = statistics.median(
+                    glyph.y0 for glyph in letters if glyph.size >= small
+                ) if any(glyph.size >= small for glyph in letters) else None
+                raised = None if base is None else base + _RAISE * size
                 before, run = "", ""
                 for glyph in [*line, None]:
                     text = glyph.get_text() if glyph is not None else ""
                     if (
                         isinstance(glyph, LTChar)
                         and glyph.size < small
+                        and (raised is None or glyph.y0 >= raised)
                         and _RUN_CHARACTER.fullmatch(text)
                     ):
                         run += text
@@ -357,44 +426,71 @@ def find_citations(
     Returns
     -------
     CitationScan
-        Bracketed markers when there are at least
-        ``rules.bracket_markers_min`` of them, or any when there are no
-        superscripts to look for; otherwise font-confirmed superscripts;
-        otherwise style ``none`` with no citations.
+        Bracketed (or, when they are more, parenthesized) markers when
+        there are at least ``rules.bracket_markers_min`` of them, or any
+        when there are no superscripts to look for; otherwise
+        font-confirmed superscripts; otherwise style ``none`` with no
+        citations. Written-out citations ("Ref. 50") count in every style.
 
     """
 
     sentences = split_sentences(passages, min_words=1)
-    brackets = [
-        (sentence, match)
-        for sentence in sentences
-        for match in _BRACKET.finditer(sentence.text)
-    ]
-    if len(brackets) >= rules.bracket_markers_min or (
-        brackets and not superscripts
+    brackets = sum(len(_BRACKET.findall(s.text)) for s in sentences)
+    parentheses = sum(
+        _parenthesized(s.text, match)
+        for s in sentences
+        for match in _PARENTHESIS.finditer(s.text)
+    )
+    superscript_found = (
+        _superscripts(sentences, superscripts, rules) if superscripts else []
+    )
+    enclosed = max(brackets, parentheses)
+    if brackets < parentheses and superscript_found:
+        # Superscript papers also number equations and steps in
+        # parentheses: the style citing more references wins.
+        cited = {
+            number
+            for sentence in sentences
+            for match in _PARENTHESIS.finditer(sentence.text)
+            if _parenthesized(sentence.text, match)
+            for number in cited_numbers(match.group("n"), rules.max_range)
+            or ()
+            if number <= entry_count
+        }
+        raised = {
+            number
+            for _, match in superscript_found
+            for number in cited_numbers(match.group("n"), rules.max_range)
+            or ()
+        }
+        if len(raised) >= len(cited):
+            enclosed = 0
+    if enclosed >= rules.bracket_markers_min or (
+        enclosed and not superscripts
     ):
-        style, found = STYLE_BRACKETS, brackets
-    elif superscripts:
-        style, found = STYLE_SUPERSCRIPT, []
-        previous = ""
+        style, pattern = (
+            (STYLE_BRACKETS, _BRACKET) if brackets >= parentheses
+            else (STYLE_PARENTHESES, _PARENTHESIS)
+        )
+        found = []
         for sentence in sentences:
-            if _byline(sentence.text, rules):
-                previous = sentence.text
-                continue
-            # Markers of every pattern, in their order in the sentence.
-            matches = sorted(
-                (
-                    match
-                    for pattern in (_GLUED, _SPACED, _AFTER_DIGIT)
-                    for match in pattern.finditer(sentence.text)
-                    if _confirmed(
-                        sentence.text, match, superscripts, rules, previous
-                    )
-                ),
-                key=lambda match: match.start("n"),
+            found.extend(
+                (sentence, match)
+                for match in sorted(
+                    (
+                        *(
+                            match
+                            for match in pattern.finditer(sentence.text)
+                            if pattern is _BRACKET
+                            or _parenthesized(sentence.text, match)
+                        ),
+                        *_REF_WORD.finditer(sentence.text),
+                    ),
+                    key=lambda match: match.start(),
+                )
             )
-            found.extend((sentence, match) for match in matches)
-            previous = sentence.text
+    elif superscripts:
+        style, found = STYLE_SUPERSCRIPT, superscript_found
     else:
         return CitationScan(
             STYLE_NONE, (), tuple(range(1, entry_count + 1)), ()
@@ -404,12 +500,24 @@ def find_citations(
     for sentence, match in found:
         numbers = cited_numbers(match.group("n"), rules.max_range)
         if not numbers or (
-            # Far beyond the list, a small number is an exponent ("2^256").
-            style == STYLE_SUPERSCRIPT
+            # Far beyond the list, a number is an exponent ("2^256") or a
+            # count ("(405)"), not a citation.
+            style != STYLE_BRACKETS
             and max(numbers) > entry_count + rules.max_range
         ):
             continue
-        citations.append(Citation(numbers, match.group("n"), sentence))
+        # Brackets and "Ref." are shown whole; a superscript is its digits.
+        start = (
+            match.start() if match.re in (_BRACKET, _PARENTHESIS, _REF_WORD)
+            else match.start("n")
+        )
+        end = (
+            match.end() if match.re in (_BRACKET, _PARENTHESIS)
+            else match.end("n")
+        )
+        citations.append(
+            Citation(numbers, match.group("n"), sentence, start, end)
+        )
 
     cited = {number for citation in citations for number in citation.numbers}
     return CitationScan(
@@ -421,6 +529,60 @@ def find_citations(
         ),
         beyond_list=tuple(sorted(n for n in cited if n > entry_count)),
     )
+
+
+def _superscripts(
+    sentences: Sequence[Sentence],
+    superscripts: Superscripts,
+    rules: CitationRules,
+) -> list[tuple[Sentence, re.Match[str]]]:
+    """Return the font-confirmed superscript and written-out citations.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        The paper's body, in sentences.
+    superscripts: Superscripts
+        The PDF's superscripts.
+    rules: CitationRules
+        The caller's thresholds.
+
+    Returns
+    -------
+    list[tuple[Sentence, re.Match[str]]]
+        In reading order. Superscripts in author lists, affiliations and
+        equations are skipped; a written-out "Ref. 50" needs no
+        confirmation, and its number is not also taken as a superscript.
+
+    """
+
+    found: list[tuple[Sentence, re.Match[str]]] = []
+    previous = ""
+    for sentence in sentences:
+        written = list(_REF_WORD.finditer(sentence.text))
+        if _byline(sentence.text, rules) or _equation(sentence.text):
+            found.extend((sentence, match) for match in written)
+            previous = sentence.text
+            continue
+        taken = {match.start("n") for match in written}
+        matches = sorted(
+            (
+                *written,
+                *(
+                    match
+                    for pattern in (_GLUED, _SPACED, _AFTER_DIGIT)
+                    for match in pattern.finditer(sentence.text)
+                    if match.start("n") not in taken
+                    and _confirmed(
+                        sentence.text, match, superscripts, rules, previous
+                    )
+                ),
+            ),
+            key=lambda match: match.start("n"),
+        )
+        found.extend((sentence, match) for match in matches)
+        previous = sentence.text
+    return found
 
 
 def _confirmed(
@@ -449,8 +611,11 @@ def _confirmed(
     Returns
     -------
     bool
-        False after a single letter ("v 2"), a unit word, or the number
-        10 (a power: "1×10⁸", "10⁵"); otherwise
+        False after a single Latin letter ("v 2", "t2"), a unit word, the
+        number 10 (a power: "1×10⁸", "10⁵"), inside parentheses opened in
+        the same word or after a short argument ("log(σ²)", "f(0)²"), or
+        after a Greek variable following a math sign ("N(µ, σ²)");
+        otherwise
         whether the PDF prints these digits as a superscript after the
         same characters. A PDF line can start just before a superscript,
         so the shorter of the two contexts must end the longer one, and
@@ -465,8 +630,11 @@ def _confirmed(
     words = before.split()
     word = words[-1].rstrip(".,;:") if words else ""
     if (
-        len(word) < 2
+        not word
+        or _LATIN_LETTER.fullmatch(word)
         or word.casefold() in rules.unit_words
+        or _MATH_WORD.search(word)
+        or _GREEK_VARIABLE.search(before.rstrip())
     ):
         return False
 
@@ -477,6 +645,62 @@ def _confirmed(
         and (context.endswith(printed) or printed.endswith(context))
         for printed in superscripts.get(digits, ())
     )
+
+
+def _parenthesized(text: str, match: re.Match[str]) -> bool:
+    """Return whether a parenthesized number is a citation.
+
+    Parameters
+    ----------
+    text: str
+        The sentence.
+    match: re.Match[str]
+        A ``_PARENTHESIS`` match in it.
+
+    Returns
+    -------
+    bool
+        False for an equation or step number: an equation sign ("=",
+        "≈", "∑", ...) within ``_EQUATION_REACH`` characters before it, or
+        "Equation", "Eq.", "step" (or "and" in "Eqs. (1) and (2)") right
+        before it, or a numbered list item: "(1)" starting the sentence or
+        following a colon or semicolon, and followed by a word ("(1) video
+        frames"; "(8), and" is a citation).
+
+    """
+
+    before = text[max(0, match.start() - _EQUATION_REACH): match.start()]
+    stripped = before.rstrip()
+    listed = (not stripped or stripped[-1] in ":;") and bool(
+        re.match(r"\s+[^\W\d_]", text[match.end():])
+    )
+    return not (
+        _EQUATION.search(before) or _NOT_CITED.search(before) or listed
+    )
+
+
+def _equation(text: str) -> bool:
+    """Return whether a "sentence" is mostly an equation.
+
+    Parameters
+    ----------
+    text: str
+        The sentence.
+
+    Returns
+    -------
+    bool
+        True when at least ``_MATH_SHARE`` of its space-separated tokens
+        are single characters or hold an equation glyph ("ðsÞ = 1 2").
+
+    """
+
+    tokens = text.split()
+    math = sum(
+        len(token) == 1 or bool(_MATH_GLYPH.search(token))
+        for token in tokens
+    )
+    return bool(tokens) and math >= _MATH_SHARE * len(tokens)
 
 
 def _byline(text: str, rules: CitationRules) -> bool:
@@ -508,7 +732,7 @@ def _byline(text: str, rules: CitationRules) -> bool:
 
 
 def _flat(text: str) -> str:
-    """Return lowercase letters and digits only.
+    """Return text without spaces, for comparing contexts.
 
     Parameters
     ----------
@@ -518,9 +742,10 @@ def _flat(text: str) -> str:
     Returns
     -------
     str
-        Without spaces, punctuation or symbols, so the PDF's glyph text
-        and the extracted text compare.
+        Lowercase, without whitespace and unmapped glyphs, so the PDF's
+        glyph text and the extracted text compare; symbols are kept
+        ("H = α/2" gives "h=α/2"), so a short line start still has context.
 
     """
 
-    return re.sub(r"[^0-9a-z]", "", text.casefold())
+    return re.sub(r"\s+", "", _UNMAPPED.sub("", text.casefold()))

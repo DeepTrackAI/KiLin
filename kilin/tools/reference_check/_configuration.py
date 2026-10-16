@@ -15,9 +15,13 @@ Key Features
 Module Structure
 ----------------
 
-- ``DEFAULT_MAX_LISTED``
+- ``DEFAULT_*``
 
-    Validated project-type setting.
+    Validated project-type settings.
+
+- ``PROMPT_TOKENS_PER_SECOND`` and the other estimates
+
+    Planning assumptions for the time a claim check takes.
 
 - ``REFERENCE_LAYOUT``, ``MATCH_RULES`` and ``CITATION_RULES``
 
@@ -43,23 +47,42 @@ from kilin.tools._defaults import (
     require_keys,
     require_number,
     require_section,
+    require_string,
     require_words,
 )
+from kilin.tools._shared.planning import CONFIRMATION_CHOICES
 from kilin.tools._shared.references import ReferenceLayout
 from kilin.tools.reference_check._citations import CitationRules
 from kilin.tools.reference_check._matching import MatchRules
 
 __all__ = [
+    "CALL_SECONDS",
     "CITATION_RULES",
+    "DEFAULT_ANSWER_TOKENS",
+    "DEFAULT_CONFIRMATION",
+    "DEFAULT_LARGE_BATCHES",
     "DEFAULT_MAX_LISTED",
+    "DEFAULT_MAX_MODEL_CALLS",
+    "DEFAULT_PASSAGES",
+    "DEFAULT_PASSAGE_TOKENS",
+    "DEFAULT_QUICK_CLAIMS",
+    "DEFAULT_VERIFY",
     "MATCH_RULES",
+    "PROMPT_OVERHEAD_TOKENS",
+    "PROMPT_TOKENS_PER_SECOND",
     "REFERENCE_LAYOUT",
+    "REPLY_SHARE",
+    "REPLY_TOKENS_PER_SECOND",
 ]
 
 _TOOL = "reference_check"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
-    "SETTINGS": {"MAX_LISTED"},
+    "SETTINGS": {
+        "MAX_LISTED", "VERIFY", "PASSAGES", "PASSAGE_TOKENS",
+        "ANSWER_TOKENS", "MAX_MODEL_CALLS", "QUICK_CLAIMS", "CONFIRMATION",
+        "LARGE_BATCHES",
+    },
     "REFERENCES": {
         "REFERENCE_CHARACTERS", "NUMBERED_ENTRIES_MIN",
         "RUNNING_LINE_REPEATS", "RUNNING_LINE_WORDS", "ENTRY_MIN_WORDS",
@@ -73,6 +96,10 @@ _GROUPS = {
         "BRACKET_MARKERS_MIN", "SUPERSCRIPT_RATIO", "SIGNATURE_CHARACTERS",
         "MAX_RANGE", "UNIT_WORDS", "BYLINE_SHARE",
     },
+    "ESTIMATES": {
+        "PROMPT_TOKENS_PER_SECOND", "REPLY_TOKENS_PER_SECOND",
+        "CALL_SECONDS", "PROMPT_OVERHEAD_TOKENS", "REPLY_SHARE",
+    },
 }
 require_keys(_DEFAULTS, set(_GROUPS), _TOOL)
 for _group, _keys in _GROUPS.items():
@@ -84,9 +111,53 @@ _SETTINGS = require_section(_DEFAULTS, "SETTINGS", _TOOL)
 _REFERENCES = require_section(_DEFAULTS, "REFERENCES", _TOOL)
 _MATCHING = require_section(_DEFAULTS, "MATCHING", _TOOL)
 _CITATIONS = require_section(_DEFAULTS, "CITATIONS", _TOOL)
+_ESTIMATES = require_section(_DEFAULTS, "ESTIMATES", _TOOL)
+_WHERE = f"{_TOOL}.SETTINGS"
 
 DEFAULT_MAX_LISTED: Final[int] = require_int(
-    _SETTINGS, "MAX_LISTED", f"{_TOOL}.SETTINGS", 1, 1000
+    _SETTINGS, "MAX_LISTED", _WHERE, 1, 1000
+)
+if not isinstance(_SETTINGS["VERIFY"], bool):
+    raise ValueError(f"{_WHERE}.VERIFY must be true or false.")
+DEFAULT_VERIFY: Final[bool] = _SETTINGS["VERIFY"]
+DEFAULT_PASSAGES: Final[int] = require_int(
+    _SETTINGS, "PASSAGES", _WHERE, 1, 20
+)
+DEFAULT_PASSAGE_TOKENS: Final[int] = require_int(
+    _SETTINGS, "PASSAGE_TOKENS", _WHERE, 300, 16000
+)
+DEFAULT_ANSWER_TOKENS: Final[int] = require_int(
+    _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 1000
+)
+DEFAULT_MAX_MODEL_CALLS: Final[int] = require_int(
+    _SETTINGS, "MAX_MODEL_CALLS", _WHERE, 1, 1000
+)
+DEFAULT_QUICK_CLAIMS: Final[int] = require_int(
+    _SETTINGS, "QUICK_CLAIMS", _WHERE, 1, 100
+)
+DEFAULT_CONFIRMATION: Final[str] = require_string(
+    _SETTINGS, "CONFIRMATION", _WHERE
+)
+if DEFAULT_CONFIRMATION not in CONFIRMATION_CHOICES:
+    raise ValueError(f"{_WHERE}.CONFIRMATION is not a supported policy.")
+DEFAULT_LARGE_BATCHES: Final[int] = require_int(
+    _SETTINGS, "LARGE_BATCHES", _WHERE, 0, 1000
+)
+
+PROMPT_TOKENS_PER_SECOND: Final[float] = require_number(
+    _ESTIMATES, "PROMPT_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
+)
+REPLY_TOKENS_PER_SECOND: Final[float] = require_number(
+    _ESTIMATES, "REPLY_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
+)
+CALL_SECONDS: Final[float] = require_number(
+    _ESTIMATES, "CALL_SECONDS", "ESTIMATES", 0.0, 1e9
+)
+PROMPT_OVERHEAD_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "PROMPT_OVERHEAD_TOKENS", "ESTIMATES", 0, 100000
+)
+REPLY_SHARE: Final[float] = require_number(
+    _ESTIMATES, "REPLY_SHARE", "ESTIMATES", 0.0, 1.0
 )
 
 REFERENCE_LAYOUT: Final[ReferenceLayout] = ReferenceLayout(

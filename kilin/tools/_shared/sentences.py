@@ -35,8 +35,17 @@ from typing import Final
 
 from kilin.chunking import Chunk
 
+# Abbreviations that end with a period but not a sentence ("see Ref. 50",
+# "in Fig. 3", "Eq. 2"): no split after them.
+_ABBREVIATIONS: Final[tuple[str, ...]] = (
+    "Ref", "ref", "Refs", "refs", "Fig", "fig", "Figs", "figs", "Eq", "eq",
+    "Eqs", "eqs", "Sec", "Secs", "No", "Nos", "Tab", "Vol", "ca", "cf",
+    "vs", "approx",
+)
 _SENTENCE_END: Final[re.Pattern[str]] = re.compile(
-    r"(?<=[.!?])\s+(?=[A-Z0-9\"'(\[])|\n\s*\n"
+    r"(?<=[.!?])"
+    + "".join(rf"(?<!\b{word}\.)" for word in _ABBREVIATIONS)
+    + r"\s+(?=[A-Z0-9\"'(\[])|\n\s*\n"
 )
 _FRAGMENT: Final[re.Pattern[str]] = re.compile(r"^\s*[a-z]")
 
@@ -85,7 +94,8 @@ def split_sentences(
     Returns
     -------
     list[Sentence]
-        Sentences of at least four words. A sentence that overlapping
+        Sentences of at least four words, not split after abbreviations
+        such as "Ref.", "Fig." or "Eq.". A sentence that overlapping
         passages share is kept once, from its first passage; the broken
         start of a passage that begins inside a sentence is left out.
 

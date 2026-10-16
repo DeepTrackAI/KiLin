@@ -31,6 +31,7 @@ from kilin.tools.reference_check._matching import (
     match_reference,
     match_references,
     paper_identity,
+    settle_duplicates,
 )
 from tests.kilin.tools._shared._support import chunk
 
@@ -176,6 +177,39 @@ class TestMatchReference(unittest.TestCase):
         self.assertEqual(match.status, MATCH_FOUND)
         self.assertEqual(len(match.alternatives), 1)
 
+    def test_journal_citation_without_title(self) -> None:
+        njp = PaperIdentity(
+            path=Path("njp.pdf"), title="", authors="", doi="",
+            first_page="To cite this article: Gorka Muñoz-Gil et al 2020 "
+            "New J. Phys. 22 013010 Single trajectory characterization",
+        )
+        match = match_reference(
+            "Muñoz-Gil G, Garcia-March M A, Manzo C and Lewenstein M 2020 "
+            "New J. Phys. 22 013010",
+            13, (njp,), RULES,
+        )
+        self.assertEqual(match.status, MATCH_FOUND)
+        self.assertEqual(match.reason, "journal citation and first author")
+        other = match_reference(
+            "Muñoz-Gil G et al 2021 Phys. Rev. 99 024567", 14, (njp,), RULES
+        )
+        self.assertNotEqual(other.status, MATCH_FOUND)
+
+    def test_one_found_reference_per_file(self) -> None:
+        matches = match_references(
+            ["Mijalkov, M. et al. BRAPH: A graph theory software for the "
+             "analysis of brain connectivity. PLoS ONE (2017).",
+             "Mijalkov M, Kakaei E. BRAPH: a graph theory software for "
+             "the analysis of brain connectivity. https://doi.org/10.1371/"
+             "journal.pone.0178798"],
+            PAPERS, RULES,
+        )
+        settled = settle_duplicates(matches)
+        self.assertEqual(
+            [m.status for m in settled], [MATCH_PROBABLE, MATCH_FOUND]
+        )
+        self.assertIn("matches this file better (2)", settled[0].reason)
+
     def test_entries_keep_their_positions(self) -> None:
         matches = match_references(
             ["Nat. Commun. 8 (2017).",
@@ -222,6 +256,20 @@ class TestPaperIdentity(unittest.TestCase):
                 Path("paper.pdf"), passages, file, RULES
             )
         self.assertEqual(identity.title, "")
+
+    def test_cover_sheet_box_is_left_out(self) -> None:
+        passages = (chunk(
+            "a",
+            "PAPER Extreme learning machine for anomalous diffusion To cite "
+            "this article: Carlo Manzo 2021 You may also like "
+            "Characterization of anomalous diffusion statistics powered by "
+            "deep learning (CONDOR) Alessia Gentili and Giorgio Volpe This "
+            "content was downloaded from IP address 1.2.3.4 on 08/07/2026\n"
+            "Extreme learning machine for anomalous diffusion Carlo Manzo\n",
+        ),)
+        identity = paper_identity(Path("elm.pdf"), passages, None, RULES)
+        self.assertNotIn("Gentili", identity.first_page)
+        self.assertIn("Carlo Manzo\n", identity.first_page)
 
     def test_no_file_uses_text_only(self) -> None:
         passages = (chunk("a", "Some first page text\n"),)
