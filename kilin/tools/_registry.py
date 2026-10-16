@@ -96,6 +96,7 @@ from kilin.tools import (
     reference_check,
     scan_and_list,
     show_source,
+    suggest_reference,
 )
 from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
 from kilin.workspace_resources import WorkspaceResource
@@ -114,6 +115,7 @@ __all__ = [
     "TOOL_REGISTRY",
     "TOOL_SCAN_AND_LIST",
     "TOOL_SHOW_SOURCE",
+    "TOOL_SUGGEST_REFERENCE",
     "Tool",
     "ToolName",
     "ToolUse",
@@ -134,6 +136,7 @@ ToolName: TypeAlias = Literal[
     "paper_overview",
     "reference_check",
     "show_source",
+    "suggest_reference",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
@@ -146,6 +149,7 @@ TOOL_GENERATE_PAPER_SUMMARY: Final[ToolName] = "generate_paper_summary"
 TOOL_PAPER_OVERVIEW: Final[ToolName] = "paper_overview"
 TOOL_REFERENCE_CHECK: Final[ToolName] = "reference_check"
 TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
+TOOL_SUGGEST_REFERENCE: Final[ToolName] = "suggest_reference"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
@@ -158,6 +162,7 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PAPER_OVERVIEW,
     TOOL_REFERENCE_CHECK,
     TOOL_SHOW_SOURCE,
+    TOOL_SUGGEST_REFERENCE,
 )
 
 
@@ -274,6 +279,13 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "the cited paper; save the full report to outputs/.",
         reference_check.parse_settings,
         reference_check.run,
+    ),
+    TOOL_SUGGEST_REFERENCE: Tool(
+        TOOL_SUGGEST_REFERENCE,
+        "Find the papers in the project that could be cited for a "
+        "statement, judging each with a quote from its own passages.",
+        suggest_reference.parse_settings,
+        suggest_reference.run,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,

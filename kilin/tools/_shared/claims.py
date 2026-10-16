@@ -63,6 +63,11 @@ Module Structure
 
     Judge one claim with the answering model.
 
+- ``Support``, ``support_prompt`` and ``judge_support``
+
+    The same judgement for a statement and a work it does not cite yet,
+    for suggesting references.
+
 Examples
 --------
 >>> from kilin.tools._shared.claims import parse_verdict
@@ -95,9 +100,12 @@ __all__ = [
     "VERDICT_SUPPORTED",
     "VERDICT_UNCLEAR",
     "Claim",
+    "Support",
     "Verdict",
     "claim_passages",
+    "judge_support",
     "parse_verdict",
+    "support_prompt",
     "verification_prompt",
     "verify_claim",
 ]
@@ -220,6 +228,39 @@ class Verdict:
     """
 
     claim: Claim
+    verdict: str
+    quote: str
+    quote_chunk: Chunk | None
+    comment: str
+    passages: tuple[Chunk, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class Support:
+    """How far one work supports a statement it does not yet cite.
+
+    Attributes
+    ----------
+    statement: str
+        The statement, as the user wrote it.
+    cited: pathlib.Path
+        The work's file.
+    verdict: str
+        One of ``VERDICTS``.
+    quote: str
+        The passage sentence the verdict rests on, in the passage's own
+        words; empty when none.
+    quote_chunk: Chunk | None
+        The passage holding the quote.
+    comment: str
+        The model's comment, with any note Python added.
+    passages: tuple[Chunk, ...]
+        The passages the model read.
+
+    """
+
+    statement: str
+    cited: Path
     verdict: str
     quote: str
     quote_chunk: Chunk | None
@@ -373,6 +414,72 @@ COMMENT: <one or two sentences explaining the verdict critically>"""
     return system, user
 
 
+def support_prompt(
+    statement: str, cited: Path, passages: Sequence[Chunk]
+) -> tuple[str, str]:
+    """Return the prompts that judge whether a work could be cited.
+
+    Parameters
+    ----------
+    statement: str
+        A sentence that needs a reference.
+    cited: pathlib.Path
+        The candidate work's file.
+    passages: Sequence[Chunk]
+        The work's passages to judge it from.
+
+    Returns
+    -------
+    tuple[str, str]
+        System prompt and user prompt, asking for the same three lines as
+        ``verification_prompt``.
+
+    """
+
+    system = (
+        "You judge whether a scientific work could be cited as the source "
+        "of a sentence. Judge only from the passages given, never from "
+        "what you know. Be strict and fair, and copy quotes exactly."
+    )
+    listed_passages = "\n\n".join(
+        f"Passage {index}:\n{chunk.text.strip()}"
+        for index, chunk in enumerate(passages, start=1)
+    )
+    user = f"""A writer needs a reference for this sentence:
+
+"{statement}"
+
+Passages of a candidate work ({cited.name}), the parts most related to
+the sentence:
+
+{listed_passages}
+
+Could this work be cited for the sentence? Choose one verdict:
+- supported: the passages state what the sentence says.
+- partly supported: they state part of it, or something weaker, narrower,
+  or under other conditions (another species, dataset, method or number).
+- not supported: they discuss the topic but do not state it.
+- contradicted: they state the opposite or a clearly different result.
+- background: the sentence names a method, tool, dataset, challenge or
+  topic, and the work is about that, without stating the sentence's claim.
+- not found: the passages are not about the sentence's topic.
+
+Two rules:
+- Judge what the work itself states. When the passages only repeat the
+  claim citing other work for it ("as shown in [12]"), answer partly
+  supported and say in the comment that the original source is elsewhere.
+- Words of opinion in the sentence ("popular", "recent", "first") need
+  not be stated by the work.
+
+Answer in exactly three lines:
+VERDICT: <supported, partly supported, not supported, contradicted,
+background, or not found>
+QUOTE: <the one sentence of the passages that best supports or contradicts
+the sentence, copied exactly, or NONE>
+COMMENT: <one or two sentences explaining the verdict critically>"""
+    return system, user
+
+
 def parse_verdict(
     reply: str, passages: Sequence[Chunk]
 ) -> tuple[str, str, Chunk | None, str]:
@@ -466,23 +573,90 @@ def verify_claim(
 
     """
 
-    if not passages:
-        return Verdict(
-            claim, VERDICT_NOT_FOUND, "", None,
-            "The cited file has no indexed text.", (),
-        )
-
-    system, prompt = verification_prompt(claim, passages)
-    try:
-        reply = ask_model(system, prompt, answer_tokens)
-    except Exception as error:  # A failed claim is reported, not fatal.
-        return Verdict(
-            claim, VERDICT_FAILED, "", None, f"Model error: {error}",
-            tuple(passages),
-        )
-
-    verdict, quote, chunk, comment = parse_verdict(reply, passages)
+    verdict, quote, chunk, comment = _judge(
+        verification_prompt(claim, passages) if passages else ("", ""),
+        passages, ask_model, answer_tokens,
+    )
     return Verdict(claim, verdict, quote, chunk, comment, tuple(passages))
+
+
+def judge_support(
+    statement: str,
+    cited: Path,
+    passages: Sequence[Chunk],
+    ask_model: Callable[[str, str, int], str],
+    answer_tokens: int,
+) -> Support:
+    """Judge whether one work supports a statement, with the model.
+
+    Parameters
+    ----------
+    statement: str
+        A sentence that needs a reference.
+    cited: pathlib.Path
+        The candidate work's file.
+    passages: Sequence[Chunk]
+        The work's passages to judge it from.
+    ask_model: Callable[[str, str, int], str]
+        The answering model (``ToolContext.ask_model``).
+    answer_tokens: int
+        Longest answer, in tokens.
+
+    Returns
+    -------
+    Support
+        Checked as ``verify_claim`` checks a claim: ``not found`` without
+        passages, ``failed`` when the call raises, quotes confirmed in the
+        passages.
+
+    """
+
+    verdict, quote, chunk, comment = _judge(
+        support_prompt(statement, cited, passages) if passages else ("", ""),
+        passages, ask_model, answer_tokens,
+    )
+    return Support(
+        statement, cited, verdict, quote, chunk, comment, tuple(passages)
+    )
+
+
+def _judge(
+    prompts: tuple[str, str],
+    passages: Sequence[Chunk],
+    ask_model: Callable[[str, str, int], str],
+    answer_tokens: int,
+) -> tuple[str, str, Chunk | None, str]:
+    """Ask the model for a verdict and check its answer.
+
+    Parameters
+    ----------
+    prompts: tuple[str, str]
+        System prompt and user prompt.
+    passages: Sequence[Chunk]
+        The passages the prompt shows; none means no model call.
+    ask_model: Callable[[str, str, int], str]
+        The answering model.
+    answer_tokens: int
+        Longest answer, in tokens.
+
+    Returns
+    -------
+    tuple[str, str, Chunk | None, str]
+        Verdict, quote, the passage holding it, and comment, as
+        ``parse_verdict`` returns them; ``not found`` without passages and
+        ``failed`` when the model call raises.
+
+    """
+
+    if not passages:
+        return (
+            VERDICT_NOT_FOUND, "", None, "The cited file has no indexed text."
+        )
+    try:
+        reply = ask_model(prompts[0], prompts[1], answer_tokens)
+    except Exception as error:  # A failed call is reported, not fatal.
+        return VERDICT_FAILED, "", None, f"Model error: {error}"
+    return parse_verdict(reply, passages)
 
 
 def _passage_with(

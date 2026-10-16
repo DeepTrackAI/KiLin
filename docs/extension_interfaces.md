@@ -138,6 +138,7 @@ callback, so document the default policy and cost.
 | `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
 | `reference_check` | Check a paper's references against the project's files, find their citations, and judge each claim against the cited paper. | [README](../kilin/tools/reference_check/README.md) |
+| `suggest_reference` | Find the papers in the project that could be cited for a statement, each with a checked quote. | [README](../kilin/tools/suggest_reference/README.md) |
 | `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
 | `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 
