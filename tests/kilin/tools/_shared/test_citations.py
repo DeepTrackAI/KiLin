@@ -110,6 +110,18 @@ class TestSuperscripts(unittest.TestCase):
             ["15", "12,14,16", "17,18", "72"],
         )
 
+    def test_version_numbers_but_not_powers(self) -> None:
+        passages = (chunk(
+            "a",
+            "Networks were built with BRAPH 2.087 for all subjects. "
+            "Values of 6.87 and counts of 105 cells per well.\n",
+        ),)
+        # The PDF prints 87 small after "BRAPH 2.0", and 5 after "10" (a
+        # power); "6.87" and "105" are not printed as citations.
+        superscripts = {"87": ("braph20",), "5": ("countsof10",)}
+        scan = find_citations(passages, 90, superscripts, RULES)
+        self.assertEqual([c.numbers for c in scan.citations], [(87,)])
+
     def test_shorter_pdf_context_at_line_start(self) -> None:
         # The PDF line started at "ples", the text has "samples".
         passages = (chunk("a", "Measured in many samples 19,24,25.\n"),)

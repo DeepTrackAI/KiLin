@@ -8,8 +8,12 @@ in one place, so tools do not import one another to reuse them.
 The rules are deterministic and model-free. They read the text after the
 paper's last "References" heading and split it at entry numbers, or (for
 two-column PDFs, which print the numbers apart from the entries) at the
-ends of entries. Every entry is the paper's own text; an unusual layout
-can still split or join entries wrongly.
+ends of entries; numbers printed alone are given back to their entries.
+Indexed passages overlap, so their shared lines are read once. Extracted
+PDF text can interleave the two columns of a reference list, so when the
+caller passes the PDF, its pages are read again in column order. Every
+entry is the paper's own text; an unusual layout can still split or join
+entries wrongly.
 
 The numeric thresholds are not owned here: each caller passes a
 ``ReferenceLayout`` built from its own validated ``defaults.json``.
@@ -39,6 +43,10 @@ Module Structure
 
     The caller's thresholds for finding and splitting entries.
 
+- ``ReferenceEntry``
+
+    One entry, with its printed (or inferred) reference number.
+
 - ``reference_body``
 
     Return the paper's passages before its reference list.
@@ -47,9 +55,18 @@ Module Structure
 
     Return the paper's reference list, found by its heading.
 
-- ``reference_entries``
+- ``reference_entries`` and ``numbered_reference_entries``
 
-    Split the paper's reference list into entries, as printed.
+    Split the paper's reference list into entries, as printed, with or
+    without their reference numbers.
+
+- ``joined_text``
+
+    Join passages without repeating the lines they overlap on.
+
+- ``pdf_text``
+
+    Read a PDF's pages in column order.
 
 Examples
 --------
@@ -74,13 +91,19 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from functools import lru_cache
+from pathlib import Path
 import re
 from typing import Final
 
 from kilin.chunking import Chunk
 
 __all__ = [
+    "ReferenceEntry",
     "ReferenceLayout",
+    "joined_text",
+    "numbered_reference_entries",
+    "pdf_text",
     "reference_body",
     "reference_entries",
     "reference_list",
@@ -110,8 +133,11 @@ _ENTRY_END: Final[re.Pattern[str]] = re.compile(
 )
 # A number printed alone ("2.", "[2]") in a column of its own.
 _LONE_NUMBER: Final[re.Pattern[str]] = re.compile(
-    r"^\s*(?:\[\d{1,3}\]|\d{1,3}\.)\s*$"
+    r"^\s*(?:\[(\d{1,3})\]|(\d{1,3})\.)\s*$"
 )
+# Share of a page's text lines starting in its right half that makes it a
+# two-column page.
+_RIGHT_COLUMN_SHARE: Final[float] = 0.25
 # Running heads and footers: "PLOS ONE | https://...", "12 / 25".
 _FURNITURE: Final[re.Pattern[str]] = re.compile(
     r"\|\s*https?://|\b\d+\s*/\s*\d+\s*$"
@@ -124,6 +150,11 @@ _AFTER_REFERENCES: Final[re.Pattern[str]] = re.compile(
     r"interests|additional information|supplementary information|data "
     r"availability|code availability|appendix)\s*(?::|$|\s+[A-Z][a-z])",
     flags=re.I,
+)
+# A line ending inside a URL or DOI ("https://doi.org/10.1016/j.x.2013."),
+# which continues on the next line even when it looks like an entry end.
+_BROKEN_URL: Final[re.Pattern[str]] = re.compile(
+    r"(?:https?://|doi\.\s*org/|\b10\.\d{4,9}/)\S*[./_-]\s*$"
 )
 # A line that always continues the entry before it (its DOI or PMID).
 _CONTINUATION: Final[re.Pattern[str]] = re.compile(
@@ -165,6 +196,27 @@ class ReferenceLayout:
     running_line_repeats: int
     running_line_words: int
     entry_min_words: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReferenceEntry:
+    """One entry of a paper's reference list.
+
+    Attributes
+    ----------
+    number: int
+        The entry's reference number: as printed, or (when ``printed`` is
+        False) the number after the previous entry's.
+    text: str
+        The entry as printed, without its number.
+    printed: bool
+        Whether the paper prints the number with this entry.
+
+    """
+
+    number: int
+    text: str
+    printed: bool
 
 
 def reference_body(passages: Sequence[Chunk]) -> tuple[Chunk, ...]:
@@ -211,7 +263,9 @@ def reference_body(passages: Sequence[Chunk]) -> tuple[Chunk, ...]:
 
 
 def reference_list(
-    passages: Sequence[Chunk], layout: ReferenceLayout
+    passages: Sequence[Chunk],
+    layout: ReferenceLayout,
+    file: Path | None = None,
 ) -> str:
     """Return the paper's reference list, found by its heading.
 
@@ -221,17 +275,24 @@ def reference_list(
         The paper's passages, in order.
     layout: ReferenceLayout
         The caller's thresholds; ``max_characters`` limits the list.
+    file: pathlib.Path | None, optional
+        The paper on disk. For a PDF, the list is read again from the
+        page layout in column order (``pdf_text``), because extracted text
+        can interleave the columns of a two-column list. Defaults to
+        ``None``: the passages' text.
 
     Returns
     -------
     str
         Text after the last "References" (or "Bibliography", "Literature
         cited", "Works cited") heading, ``layout.max_characters`` at most;
-        empty when there is none.
+        empty when there is none. Lines that overlapping passages repeat
+        are included once. The passages are used when the PDF cannot be
+        read or has no such heading.
 
     """
 
-    text = "\n".join(chunk.text for chunk in passages)
+    text = _source_text(passages, file)
     headings = list(_REFERENCES_HEADING.finditer(text))
     if not headings:
         return ""
@@ -241,7 +302,9 @@ def reference_list(
 
 
 def reference_entries(
-    passages: Sequence[Chunk], layout: ReferenceLayout
+    passages: Sequence[Chunk],
+    layout: ReferenceLayout,
+    file: Path | None = None,
 ) -> list[str]:
     """Split the paper's reference list into entries, as printed.
 
@@ -251,32 +314,68 @@ def reference_entries(
         The paper's passages, in order.
     layout: ReferenceLayout
         The caller's thresholds for splitting and filtering entries.
+    file: pathlib.Path | None, optional
+        The paper on disk, for a PDF's column order (``reference_list``).
+        Defaults to ``None``.
 
     Returns
     -------
     list[str]
-        One string per entry, without the paper's own number, with lines
-        joined (and words hyphenated across lines rejoined). When at least
-        ``layout.numbered_entries_min`` lines start with a number
-        ("12. ...", "[12] ...") and no number stands alone, a new entry
-        starts at each number; otherwise (as two-column PDFs print them)
-        also after a line that ends an entry (a year, volume and pages, a
-        PMID, or a DOI), unless the next line is a DOI or PMID. Lone
-        numbers, page numbers, running heads and footers (short lines
-        repeated ``layout.running_line_repeats`` or more times in the
-        paper), and entries of fewer than ``layout.entry_min_words`` words
-        are dropped; the list stops at a following heading such as
-        "Acknowledgements". Empty when the paper has no reference list.
+        The texts of ``numbered_reference_entries``, in order.
 
     """
 
-    lines = reference_list(passages, layout).splitlines()
+    return [
+        entry.text
+        for entry in numbered_reference_entries(passages, layout, file)
+    ]
 
-    # Running heads and footers repeat across pages; drop them first.
+
+def numbered_reference_entries(
+    passages: Sequence[Chunk],
+    layout: ReferenceLayout,
+    file: Path | None = None,
+) -> list[ReferenceEntry]:
+    """Split the paper's reference list into numbered entries.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+    layout: ReferenceLayout
+        The caller's thresholds for splitting and filtering entries.
+    file: pathlib.Path | None, optional
+        The paper on disk, for a PDF's column order (``reference_list``).
+        Defaults to ``None``.
+
+    Returns
+    -------
+    list[ReferenceEntry]
+        One entry per reference, without the paper's own number, with
+        lines joined (and words hyphenated across lines rejoined). When at
+        least ``layout.numbered_entries_min`` lines start with a number
+        ("12. ...", "[12] ...") and no number stands alone, a new entry
+        starts at each number; otherwise (as two-column PDFs print them)
+        also after a line that ends an entry (a year, volume and pages, a
+        PMID, or a DOI), unless the next line is a DOI or PMID. Numbers
+        printed alone ("6.", "7.") are given, in order, to the entries
+        that start without one. Page numbers, running heads and footers
+        (short lines repeated ``layout.running_line_repeats`` or more times
+        in the paper), and entries of fewer than ``layout.entry_min_words``
+        words are dropped; the list stops at a following heading such as
+        "Acknowledgements". An entry without a printed number takes the
+        number after the previous entry's (``printed`` is then False).
+        Empty when the paper has no reference list.
+
+    """
+
+    lines = reference_list(passages, layout, file).splitlines()
+
+    # Running heads and footers repeat across pages; drop them first. They
+    # are counted in the text the list was read from.
     repeats = Counter(
         " ".join(line.split())
-        for chunk in passages
-        for line in chunk.text.splitlines()
+        for line in _source_text(passages, file).splitlines()
         if 0 < len(line.split()) <= layout.running_line_words
     )
     lines = [
@@ -289,35 +388,219 @@ def reference_entries(
         _LONE_NUMBER.match(line) for line in lines
     )
 
-    entries: list[list[str]] = []
+    # The list in order: entries (printed number or None, lines) and the
+    # numbers printed alone, which belong to entries without a number.
+    sequence: list[tuple[int | None, list[str]] | int] = []
     complete = True
     for line in lines:
         if _AFTER_REFERENCES.match(line):
             break
 
+        if lone_number := _LONE_NUMBER.match(line):
+            sequence.append(int(lone_number.group(1) or lone_number.group(2)))
+            continue
+
         if (
             not line.strip()
             or _PAGE_LINE.match(line)
-            or _LONE_NUMBER.match(line)
             or _FURNITURE.search(line)
         ):
             continue
 
         match = _ENTRY_START.match(line)
         text = (match.group(3) if match else line).strip()
+        entries = [item for item in sequence if isinstance(item, tuple)]
         if not entries or match or (
             not by_number and complete and not _CONTINUATION.match(text)
         ):
-            entries.append([text])
+            number = int(match.group(1) or match.group(2)) if match else None
+            sequence.append((number, [text]))
         else:
-            entries[-1].append(text)
-        complete = bool(_ENTRY_END.search(text))
+            entries[-1][1].append(text)
+        complete = bool(_ENTRY_END.search(text)) and not _BROKEN_URL.search(
+            text
+        )
 
-    cleaned: list[str] = []
-    for entry_lines in entries:
-        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(entry_lines))
+    # Short fragments are dropped before lone numbers are paired, so they
+    # cannot take a number.
+    kept: list[tuple[int | None, str] | int] = []
+    for item in sequence:
+        if isinstance(item, int):
+            kept.append(item)
+            continue
+        joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(item[1]))
         joined = " ".join(joined.split())
         if len(joined.split()) >= layout.entry_min_words:
-            cleaned.append(joined)
+            kept.append((item[0], joined))
+
+    numbers: dict[int, int] = {}
+    unnumbered: list[int] = []  # Entries waiting for a lone number.
+    lone: list[int] = []  # Lone numbers waiting for an entry.
+    for index, item in enumerate(kept):
+        if isinstance(item, int):
+            lone.append(item)
+        elif item[0] is None:
+            unnumbered.append(index)
+        while unnumbered and lone:
+            numbers[unnumbered.pop(0)] = lone.pop(0)
+
+    cleaned: list[ReferenceEntry] = []
+    previous = 0
+    for index, item in enumerate(kept):
+        if isinstance(item, int):
+            continue
+        number = item[0] if item[0] is not None else numbers.get(index)
+        previous = number if number is not None else previous + 1
+        cleaned.append(ReferenceEntry(previous, item[1], number is not None))
 
     return cleaned
+
+
+def _source_text(passages: Sequence[Chunk], file: Path | None) -> str:
+    """Return the text a reference list is read from.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        The paper's passages, in order.
+    file: pathlib.Path | None
+        The paper on disk, or None.
+
+    Returns
+    -------
+    str
+        The PDF's column-ordered text when it has a references heading;
+        otherwise the passages joined without repeated lines.
+
+    """
+
+    if file is not None:
+        text = pdf_text(file)
+        if _REFERENCES_HEADING.search(text):
+            return text
+
+    return joined_text(passages)
+
+
+def joined_text(passages: Sequence[Chunk]) -> str:
+    """Return the passages' text with overlapping lines included once.
+
+    Indexed passages of the same page overlap by whole lines; joining them
+    as they are repeats those lines.
+
+    Parameters
+    ----------
+    passages: Sequence[Chunk]
+        Passages in file and line order.
+
+    Returns
+    -------
+    str
+        The passages joined by newlines. When a passage starts on a line
+        the previous passage of the same file and section already covers,
+        and its first lines repeat the end of that passage exactly, those
+        lines are left out.
+
+    """
+
+    parts: list[str] = []
+    previous: Chunk | None = None
+    for chunk in passages:
+        text = chunk.text
+        if (
+            previous is not None
+            and chunk.path == previous.path
+            and chunk.section == previous.section
+            and chunk.start_line <= previous.end_line
+        ):
+            shared = previous.end_line - chunk.start_line + 1
+            lines = text.splitlines(keepends=True)
+            if previous.text.splitlines()[-shared:] == [
+                line.rstrip("\r\n") for line in lines[:shared]
+            ]:
+                text = "".join(lines[shared:])
+        parts.append(text)
+        previous = chunk
+
+    return "\n".join(parts)
+
+
+def pdf_text(file: Path) -> str:
+    """Return a PDF's text with each page read in column order.
+
+    ``pdfminer.six`` orders text boxes in a way that can interleave the
+    two columns of a page (reference 1-4, then 23-28, then 5 ...). Here
+    each page's text lines are read top to bottom: on a two-column page
+    (at least ``_RIGHT_COLUMN_SHARE`` of its lines start in the right
+    half), first the left column (lines starting in the left half,
+    including full-width ones), then the right column; other pages keep
+    ``pdfminer.six``'s order.
+
+    Parameters
+    ----------
+    file: pathlib.Path
+        A file on disk.
+
+    Returns
+    -------
+    str
+        Pages separated by form feeds, lines by newlines; empty for files
+        that are not PDFs and PDFs ``pdfminer.six`` cannot read.
+
+    """
+
+    if file.suffix.lower() != ".pdf" or not file.is_file():
+        return ""
+
+    status = file.stat()
+    return _pdf_text(str(file), status.st_mtime_ns, status.st_size)
+
+
+@lru_cache(maxsize=8)
+def _pdf_text(file: str, modified: int, size: int) -> str:
+    """Return a PDF's column-ordered text, cached per file version.
+
+    Parameters
+    ----------
+    file: str
+        The PDF on disk.
+    modified: int
+        Its modification time in nanoseconds, so an edited file is read
+        again.
+    size: int
+        Its size in bytes, for the same reason.
+
+    Returns
+    -------
+    str
+        As ``pdf_text``.
+
+    """
+
+    del modified, size  # Part of the cache key only.
+    try:
+        from pdfminer.high_level import extract_pages
+        from pdfminer.layout import LAParams, LTTextContainer, LTTextLine
+
+        pages = list(extract_pages(file, laparams=LAParams()))
+    except Exception:  # Unreadable PDF: the caller uses the passages.
+        return ""
+
+    texts: list[str] = []
+    for page in pages:
+        lines = [
+            line
+            for box in page
+            if isinstance(box, LTTextContainer)
+            for line in box
+            if isinstance(line, LTTextLine)
+        ]
+        middle = page.width / 2
+        right = sum(line.x0 >= middle for line in lines)
+        if lines and right >= _RIGHT_COLUMN_SHARE * len(lines):
+            lines.sort(key=lambda line: (line.x0 >= middle, -line.y1))
+        texts.append(
+            "\n".join(line.get_text().rstrip("\r\n") for line in lines)
+        )
+
+    return "\f".join(texts)

@@ -1228,7 +1228,10 @@ def run(
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
     headline, fixes = _write_headline(template, path.name, notes, context)
-    entries = reference_entries(passages, REFERENCE_LAYOUT)
+    # The PDF on disk lets the shared extractor read two columns in order.
+    entries = reference_entries(
+        passages, REFERENCE_LAYOUT, _paper_file(path, context)
+    )
     written: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
@@ -1695,7 +1698,7 @@ def _write_pdf(
 
 
 def _paper_file(path: Path, context: ToolContext) -> Path | None:
-    """Return the paper on disk, for its PDF metadata.
+    """Return the paper on disk, for its PDF metadata and page layout.
 
     Parameters
     ----------

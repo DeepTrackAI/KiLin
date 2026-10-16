@@ -9,7 +9,8 @@ numbers. Two styles are supported:
    unambiguous, so only numbers outside 1–``max_range`` are rejected.
 2. **Superscripts** (Nature, Science, many medical journals): extracted
    text glues them to the word (``polygenic15``) or leaves a space
-   (``practices 1,8–14.``), where they look like ordinary numbers
+   (``practices 1,8–14.``) or to a number (``BRAPH 2.087`` for 2.0 and 87,
+   ``BRAPH 288`` for 2 and 88), where they look like ordinary numbers
    (``in 3 groups``). A text candidate is therefore kept only when the PDF
    prints those digits smaller than the rest of their line
    (``superscript_runs``), right after the same characters. Author and
@@ -118,6 +119,19 @@ _SPACED: Final[re.Pattern[str]] = re.compile(
     r"[A-Za-z)][.,;:]? (?P<n>\d{1,3}(?:,\d{1,3}|[–-]\d{1,3})*)"
     r"(?=[.,;:]?(?:\s|$))"
 )
+# A superscript glued to a number: "BRAPH 2.0⁸⁷" is extracted as "2.087"
+# and "BRAPH 2⁸⁸" as "288". Every split after a digit is a candidate
+# (overlapping, so "288" gives "88" and "8"); the PDF decides, because
+# only digits it prints small after the same characters count, and "6.87"
+# or "288" printed in full size never are.
+_AFTER_DIGIT: Final[re.Pattern[str]] = re.compile(
+    r"(?<=\d)(?=(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)(?:[\s.,;:)]|$))"
+)
+# "10" ending a number ("1×10", "of 10"): digits glued to it are a power.
+_POWER_OF_TEN: Final[re.Pattern[str]] = re.compile(r"(?<![\d.])10$")
+# Fewest letters and digits of context that must agree between the PDF
+# and the text; a superscript at the start of a PDF line has none.
+_CONTEXT_MIN: Final[int] = 3
 # A capitalized word ("Patil", "Nam-Hai", "Gothenburg"), for bylines.
 _CAPITALIZED: Final[re.Pattern[str]] = re.compile(r"[A-Z][^\sA-Z]*[a-z]")
 # Digits the PDF prints small that are part of a superscript run.
@@ -260,7 +274,8 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
     Superscripts
         For each run of small digits, commas and dashes (separators
         dropped), the letters and digits printed before it on its line
-        (at most ``signature_characters``, lowercase). Lines without
+        (at most ``signature_characters``, lowercase, earlier superscript
+        digits included). Lines without
         letters are skipped. Empty when ``pdfminer.six`` cannot read the
         file.
 
@@ -311,8 +326,10 @@ def superscript_runs(file: Path, rules: CitationRules) -> Superscripts:
                         runs[digits].append(
                             _flat(before)[-rules.signature_characters:]
                         )
+                    # Extracted text keeps superscript digits, so the
+                    # context of the next run does too.
+                    before += run + text
                     run = ""
-                    before += text
 
     return {digits: tuple(found) for digits, found in runs.items()}
 
@@ -356,20 +373,25 @@ def find_citations(
         style, found = STYLE_BRACKETS, brackets
     elif superscripts:
         style, found = STYLE_SUPERSCRIPT, []
+        previous = ""
         for sentence in sentences:
-            # Glued and spaced markers, in their order in the sentence.
             if _byline(sentence.text, rules):
+                previous = sentence.text
                 continue
+            # Markers of every pattern, in their order in the sentence.
             matches = sorted(
                 (
                     match
-                    for pattern in (_GLUED, _SPACED)
+                    for pattern in (_GLUED, _SPACED, _AFTER_DIGIT)
                     for match in pattern.finditer(sentence.text)
-                    if _confirmed(sentence.text, match, superscripts, rules)
+                    if _confirmed(
+                        sentence.text, match, superscripts, rules, previous
+                    )
                 ),
                 key=lambda match: match.start("n"),
             )
             found.extend((sentence, match) for match in matches)
+            previous = sentence.text
     else:
         return CitationScan(
             STYLE_NONE, (), tuple(range(1, entry_count + 1)), ()
@@ -403,6 +425,7 @@ def _confirmed(
     match: re.Match[str],
     superscripts: Superscripts,
     rules: CitationRules,
+    previous: str = "",
 ) -> bool:
     """Return whether a text candidate is a superscript citation.
 
@@ -416,32 +439,39 @@ def _confirmed(
         The PDF's superscripts.
     rules: CitationRules
         For ``unit_words`` and ``signature_characters``.
+    previous: str, optional
+        The sentence before, whose end completes a short context (a
+        sentence split at "Fig." leaves "5A)51,52."). Defaults to ``""``.
 
     Returns
     -------
     bool
-        False after a single letter ("v 2"), a unit word, or a digit;
-        otherwise
+        False after a single letter ("v 2"), a unit word, or the number
+        10 (a power: "1×10⁸", "10⁵"); otherwise
         whether the PDF prints these digits as a superscript after the
         same characters. A PDF line can start just before a superscript,
-        so the shorter of the two contexts must end the longer one.
+        so the shorter of the two contexts must end the longer one, and
+        both must have at least ``_CONTEXT_MIN`` characters.
 
     """
 
     before = text[: match.start("n")]
+    if _POWER_OF_TEN.search(before):
+        return False
+
     words = before.split()
     word = words[-1].rstrip(".,;:") if words else ""
     if (
         len(word) < 2
         or word.casefold() in rules.unit_words
-        or word[-1:].isdigit()
     ):
         return False
 
-    context = _flat(before)[-rules.signature_characters:]
+    context = _flat(f"{previous} {before}")[-rules.signature_characters:]
     digits = re.sub(r"\D", "", match.group("n"))
-    return any(
-        context.endswith(printed) or printed.endswith(context)
+    return len(context) >= _CONTEXT_MIN and any(
+        len(printed) >= _CONTEXT_MIN
+        and (context.endswith(printed) or printed.endswith(context))
         for printed in superscripts.get(digits, ())
     )
 

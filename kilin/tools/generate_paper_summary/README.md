@@ -56,7 +56,9 @@ The reference list is split into entries by the shared, model-free
 extractor in `kilin/tools/_shared/references.py`. This tool owns the
 thresholds: the first five keys below are passed to it as
 `REFERENCE_LAYOUT`, so other tools using the extractor keep their own
-values. `DEFAULT_REFERENCE_ITEMS` and `COMMON_WORDS` are used only by this
+values. The tool passes the paper's file, so a PDF's reference list is
+read again in column order (two-column lists are otherwise interleaved)
+and the lines that indexed passages overlap on are read once. `DEFAULT_REFERENCE_ITEMS` and `COMMON_WORDS` are used only by this
 tool, when choosing entries for a report.
 
 | Key | Default | Meaning and validation |
