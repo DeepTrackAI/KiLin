@@ -22,10 +22,10 @@ For "check the references of the Smith paper", the tool:
    published file), **missing**, or **unreadable** (too short to identify).
 4. Finds numbered in-text citations (`_citations.py`): bracketed (`[3]`,
    `[2, 5–7]`) or parenthesized (`(6,7)`, not equation or step numbers)
-   in any file, written out (`Ref. 50`, `refs. 12,13`), and superscripts
-   in PDFs, confirmed by the printed font size and raised position
-   (exponents in formulas and subscripts are left out). It reports
-   references never cited and numbers cited beyond the list.
+   in any file, written out (`Ref. 50`, `refs. 12,13`, `refs 8,19,20`),
+   and superscripts in PDFs, confirmed by the printed font size and
+   raised position (exponents in formulas and subscripts are left out).
+   It reports references never cited and numbers cited beyond the list.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_verification.py`). The model reads
    the cited file's passages most related to the sentence and to what
@@ -135,8 +135,9 @@ Thresholds for finding in-text citations (`CitationRules`).
   superscript compared between the PDF and the text. Allowed range: 3–100.
 - `MAX_RANGE` (default `50`): Longest range a marker may span ("1–4" spans
   3). Allowed range: 1–1000.
-- `UNIT_WORDS` (default 15 words): Lowercase words after which digits are
-  exponents, not citations (`cm`, `log`, ...); distinct lowercase words.
+- `UNIT_WORDS` (default 15 words): Lowercase words after which a single
+  digit is an exponent, not a citation (`cm2`, but `nm23` is cited);
+  distinct lowercase words.
 - `BYLINE_SHARE` (default `0.5`): Share of capitalized words above which a
   sentence is an author list or affiliations, whose superscripts are not
   citations. Allowed range: 0–1.

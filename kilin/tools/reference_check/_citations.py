@@ -19,8 +19,8 @@ list) and maps each to reference numbers. Two styles are supported:
    (``superscript_runs``), right after the same characters. Markers in
    author lists and affiliations, unit exponents (``cm⁻¹``) and powers of
    ten are rejected.
-3. **Written out** in any style: ``Ref. 50``, ``refs. 12,13``. These need
-   no confirmation.
+3. **Written out** in any style: ``Ref. 50``, ``refs. 12,13``, ``refs 8,19``.
+   These need no confirmation.
 
 Author-year citations ("Smith et al., 2020") are not recognised; a paper
 using them has style ``none``. Numbering is not assumed to follow first
@@ -122,23 +122,28 @@ _EQUATION: Final[re.Pattern[str]] = re.compile(r"[=<>≈∝∑∫±×]")
 # How far back an equation sign makes a parenthesized number an equation
 # number, in characters.
 _EQUATION_REACH: Final[int] = 40
+# What may follow a superscript: a space, punctuation, a closing bracket
+# or quote, or a dash ("networks11–14—to").
+_AFTER: Final[str] = r"[\s.,;:)\]!?—–”’\"']"
 # A superscript glued to the word, bracket or symbol before it, optionally
 # after punctuation: "polygenic15", "MDD93", "regions)70", "stress.12",
 # "UNet3+86". The PDF's glyph sizes, not this pattern, rule out "COVID19".
 _GLUED: Final[re.Pattern[str]] = re.compile(
     r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
-    r"(?=[\s.,;:)]|$)"
+    rf"(?={_AFTER}|$)"
 )
 # A superscript after a space: "practices 1,8–14.", "petioles 5,14,15 by",
 # and after a symbol or number ("α/2 12,67" for "α/2¹²,⁶⁷").
 _SPACED: Final[re.Pattern[str]] = re.compile(
     r"\S[.,;:]? (?P<n>\d{1,3}(?:,\d{1,3}|[–-]\d{1,3})*)"
-    r"(?=[.,;:]?(?:\s|$))"
+    r"(?=[.,;:]?(?:[\s—]|$))"
 )
-# A citation written out: "with Ref. 50", "see refs. 12,13" or "Refs. 4–6".
-# Unambiguous in any style, so it needs no confirmation from the PDF.
+# A citation written out: "with Ref. 50", "see refs. 12,13", "Refs. 4–6",
+# or Nature's "refs 8,19,20" without a full stop. Unambiguous in any style,
+# so it needs no confirmation from the PDF.
 _REF_WORD: Final[re.Pattern[str]] = re.compile(
-    rf"\b[Rr]efs?\.\s?(?!0)(?P<n>{_NUMBERS})\b(?![-–/]?[A-Za-z0-9])"
+    rf"\b[Rr]efs?(?:\.\s?|\s)(?!0)(?P<n>{_NUMBERS})\b"
+    r"(?![-–/]?[A-Za-z0-9])"
 )
 # Glyphs a PDF cannot map to text ("(cid:12)"), which extracted text drops.
 _UNMAPPED: Final[re.Pattern[str]] = re.compile(r"\(cid:\d+\)")
@@ -179,8 +184,12 @@ _RAISE: Final[float] = 0.15
 # only digits it prints small after the same characters count, and "6.87"
 # or "288" printed in full size never are.
 _AFTER_DIGIT: Final[re.Pattern[str]] = re.compile(
-    r"(?<=\d)(?=(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)(?:[\s.,;:)]|$))"
+    r"(?<=\d)(?=(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
+    rf"(?:{_AFTER}|$))"
 )
+# The exponent of a unit is one digit ("cm2", "nm3"); "nm23" after a unit
+# is a citation.
+_EXPONENT: Final[re.Pattern[str]] = re.compile(r"\d")
 # "10" ending a number ("1×10", "of 10"): digits glued to it are a power.
 _POWER_OF_TEN: Final[re.Pattern[str]] = re.compile(r"(?<![\d.])10$")
 # Fewest letters and digits of context that must agree between the PDF
@@ -611,7 +620,8 @@ def _confirmed(
     Returns
     -------
     bool
-        False after a single Latin letter ("v 2", "t2"), a unit word, the
+        False after a single Latin letter ("v 2", "t2"), a one-digit
+        number after a unit word ("cm²"; "nm²³" is a citation), the
         number 10 (a power: "1×10⁸", "10⁵"), inside parentheses opened in
         the same word or after a short argument ("log(σ²)", "f(0)²"), or
         after a Greek variable following a math sign ("N(µ, σ²)");
@@ -632,7 +642,10 @@ def _confirmed(
     if (
         not word
         or _LATIN_LETTER.fullmatch(word)
-        or word.casefold() in rules.unit_words
+        or (
+            word.casefold() in rules.unit_words
+            and _EXPONENT.fullmatch(match.group("n"))
+        )
         or _MATH_WORD.search(word)
         or _GREEK_VARIABLE.search(before.rstrip())
     ):
