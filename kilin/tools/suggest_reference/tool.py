@@ -99,6 +99,7 @@ from kilin.tools._shared.claims import (
     VERDICT_FAILED,
     VERDICT_NOT_FOUND,
     VERDICT_NOT_SUPPORTED,
+    VERDICT_NO_TEXT,
     VERDICT_PARTLY,
     VERDICT_SUPPORTED,
     VERDICT_UNCLEAR,
@@ -106,6 +107,7 @@ from kilin.tools._shared.claims import (
     Support,
     claim_passages,
     judge_support,
+    verdict_label,
 )
 from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
@@ -135,7 +137,7 @@ _ORDER: Final[dict[str, int]] = {
     verdict: index
     for index, verdict in enumerate((
         *_SUGGESTED, VERDICT_CONTRADICTED, VERDICT_NOT_SUPPORTED,
-        VERDICT_NOT_FOUND, VERDICT_UNCLEAR, VERDICT_FAILED,
+        VERDICT_NOT_FOUND, VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
     ))
 }
 # Text in quotation marks: the statement, when the user quotes it.
@@ -377,7 +379,8 @@ def chat_answer(
             "be cited for it:**"
         )
         for index, support in enumerate(suggested, start=1):
-            lines += ["", f"{index}. **{support.verdict.capitalize()}** · "
+            label = verdict_label(support.verdict).capitalize()
+            lines += ["", f"{index}. **{label}** · "
                       f"`{support.cited.as_posix()}`"]
             if support.quote and support.quote_chunk is not None:
                 evidence.append(support.quote_chunk)
@@ -396,7 +399,8 @@ def chat_answer(
 
     if others:
         listed = ", ".join(
-            f"`{s.cited.as_posix()}` ({s.verdict})" for s in others
+            f"`{s.cited.as_posix()}` ({verdict_label(s.verdict)})"
+            for s in others
         )
         lines += ["", f"Also checked: {listed}."]
     if note:

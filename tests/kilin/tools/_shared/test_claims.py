@@ -23,6 +23,7 @@ from kilin.tools._shared.claims import (
     VERDICT_FAILED,
     VERDICT_NOT_FOUND,
     VERDICT_NOT_SUPPORTED,
+    VERDICT_NO_TEXT,
     VERDICT_PARTLY,
     VERDICT_SUPPORTED,
     VERDICT_UNCLEAR,
@@ -31,6 +32,7 @@ from kilin.tools._shared.claims import (
     judge_support,
     parse_verdict,
     support_prompt,
+    verdict_label,
     verification_prompt,
     verify_claim,
 )
@@ -264,7 +266,7 @@ class TestVerifyClaim(unittest.TestCase):
         self.assertEqual(failed.verdict, VERDICT_FAILED)
         self.assertIn("out of memory", failed.comment)
         empty = verify_claim(CLAIM, (), broken, 200)
-        self.assertEqual(empty.verdict, VERDICT_NOT_FOUND)
+        self.assertEqual(empty.verdict, VERDICT_NO_TEXT)
 
 
 class TestSupport(unittest.TestCase):
@@ -307,8 +309,19 @@ class TestSupport(unittest.TestCase):
         empty = judge_support(
             "Running extends lifespan.", Path("cited.md"), (), None, 200
         )
-        self.assertEqual(empty.verdict, VERDICT_NOT_FOUND)
+        self.assertEqual(empty.verdict, VERDICT_NO_TEXT)
 
+
+
+class TestVerdictLabel(unittest.TestCase):
+    """The words shown for a verdict."""
+
+    def test_labels(self) -> None:
+        self.assertEqual(
+            verdict_label(VERDICT_NOT_FOUND), "no matching passage"
+        )
+        self.assertEqual(verdict_label(VERDICT_NO_TEXT), "no text")
+        self.assertEqual(verdict_label(VERDICT_SUPPORTED), "supported")
 
 if __name__ == "__main__":
     unittest.main()
