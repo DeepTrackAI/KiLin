@@ -125,7 +125,7 @@ serialization policy.
 
 ## GitHub Actions and Python compatibility
 
-QAChat currently supports **Python 3.12** as declared in `pyproject.toml`.
+KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
 The `uv.lock` file is scoped to the same interpreter range. CI is divided
 into three independent workflows under `.github/workflows/`:
 

@@ -111,8 +111,8 @@ jobs:
       - name: Test Qt PDF adapter in a dedicated process
         run: >-
           uv run --no-sync python -m pytest -q
-          tests/qachat/gui/test__report_pdf.py
+          tests/kilin/gui/test__report_pdf.py
       - name: Test GUI protocol separately
         run: >-
           uv run --no-sync python -m pytest -q
-          tests/qachat/gui/test__protocol.py
+          tests/kilin/gui/test__protocol.py

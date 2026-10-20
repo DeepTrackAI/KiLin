@@ -24,7 +24,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCS = ROOT / "docs"
 SVG_NS = "{http://www.w3.org/2000/svg}"
 LINK_PATTERN = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
-MODULE_PATTERN = re.compile(r"\| \[`(qachat/[^`]+\.py)`\]\(")
+# Paths in HTML inside Markdown: the README logo's <img src> and srcset.
+HTML_PATTERN = re.compile(r"\b(?:src|srcset|href)=\"([^\"]+)\"")
+MODULE_PATTERN = re.compile(r"\| \[`(kilin/[^`]+\.py)`\]\(")
 
 
 class TestDocumentationAssets(unittest.TestCase):
@@ -33,10 +35,17 @@ class TestDocumentationAssets(unittest.TestCase):
     def test_markdown_targets_exist(self) -> None:
         """Resolve local paths without requiring a network connection."""
 
+        documents = [
+            ROOT / "README.md",
+            *sorted(DOCS.glob("*.md")),
+            *sorted((ROOT / "kilin").rglob("README.md")),
+        ]
         errors: list[str] = []
-        for document in sorted(DOCS.glob("*.md")):
-            for target in LINK_PATTERN.findall(
-                document.read_text(encoding="utf-8")
+        for document in documents:
+            text = document.read_text(encoding="utf-8")
+            for target in (
+                *LINK_PATTERN.findall(text),
+                *HTML_PATTERN.findall(text),
             ):
                 if target.startswith(("https://", "http://", "mailto:")):
                     continue
@@ -44,7 +53,8 @@ class TestDocumentationAssets(unittest.TestCase):
                 if not path:
                     continue
                 if not (document.parent / path).exists():
-                    errors.append(f"{document.name}: {target}")
+                    name = document.relative_to(ROOT).as_posix()
+                    errors.append(f"{name}: {target}")
         self.assertEqual(errors, [], "Invalid local Markdown targets")
 
     def test_svg_figures_are_valid_and_documented(self) -> None:
@@ -76,7 +86,7 @@ class TestDocumentationAssets(unittest.TestCase):
 
         expected = {
             path.relative_to(ROOT).as_posix()
-            for path in (ROOT / "qachat").rglob("*.py")
+            for path in (ROOT / "kilin").rglob("*.py")
         }
         inventory = MODULE_PATTERN.findall(
             (DOCS / "module_map.md").read_text(encoding="utf-8")

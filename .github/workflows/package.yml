@@ -23,16 +23,16 @@ jobs:
         run: uv build
       - name: Install wheel in a separate environment
         run: |
-          uv venv --python 3.12 "$RUNNER_TEMP/qachat-wheel-env"
-          uv pip install --python "$RUNNER_TEMP/qachat-wheel-env/bin/python" dist/*.whl
+          uv venv --python 3.12 "$RUNNER_TEMP/kilin-wheel-env"
+          uv pip install --python "$RUNNER_TEMP/kilin-wheel-env/bin/python" dist/*.whl
       - name: Verify installed imports, resources and CLI
         working-directory: ${{ runner.temp }}
         run: >-
-          "$RUNNER_TEMP/qachat-wheel-env/bin/python" -I
+          "$RUNNER_TEMP/kilin-wheel-env/bin/python" -I
           "$GITHUB_WORKSPACE/tests/setup/check_installed_wheel.py"
       - name: Upload distributions for review
         uses: actions/upload-artifact@v4
         with:
-          name: qachat-distributions
+          name: kilin-distributions
           path: dist/*
           if-no-files-found: error
