@@ -179,7 +179,9 @@ class TestSuggestReferenceRun(unittest.TestCase):
         # Bracketed numbers from the model are not evidence links.
         self.assertIn("States it (2).", answer)
         self.assertIn("citing (12)", answer)
-        self.assertIn("Also checked: `other.md` (not found).", answer)
+        self.assertIn(
+            "Also checked: `other.md` (no matching passage).", answer
+        )
         self.assertIn(
             "Not checked, as they contain the statement word for word "
             "(your draft, or the paper it comes from): `draft.md`.",

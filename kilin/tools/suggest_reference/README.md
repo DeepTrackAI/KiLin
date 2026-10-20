@@ -22,7 +22,10 @@ cells", the tool:
 3. Judges each paper with the answering model (`_shared/claims.py`): its
    `PASSAGES` passages most related to the statement, and a verdict
    (supported, partly supported, background, not supported, contradicted,
-   not found), the passage sentence it rests on, and a critical comment.
+   or no matching passage, when none of the passages read is about the
+   statement), the passage sentence it rests on, and a critical comment.
+   A file without searchable text is reported as no text, without a model
+   call.
    The model is told that a paper repeating the claim with a citation is
    not its source: it answers partly supported and says the original is
    elsewhere. Python checks the answer: a quote not found in the passages

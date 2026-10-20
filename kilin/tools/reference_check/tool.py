@@ -152,6 +152,7 @@ from kilin.tools._shared.claims import (
     Claim,
     Verdict,
     claim_passages,
+    verdict_label,
     verify_claim,
 )
 
@@ -171,7 +172,7 @@ __all__ = [
 _ORDER: Final[dict[str, int]] = {
     verdict: index for index, verdict in enumerate(
         ("contradicted", "not supported", "partly supported", "not found",
-         "unclear", "failed", "supported", "background")
+         "unclear", "failed", "no text", "supported", "background")
     )
 }
 # Digits and separators as superscripts, to show citation markers as
@@ -1040,7 +1041,7 @@ def _verdict_table(report: ReferenceReport) -> list[str]:
     lines = []
     if report.verdicts:
         listed = " · ".join(
-            f"{counts[verdict]} {verdict}"
+            f"{counts[verdict]} {verdict_label(verdict)}"
             for verdict in VERDICTS if counts[verdict]
         )
         claims = "claim" if len(report.verdicts) == 1 else "claims"
@@ -1110,7 +1111,8 @@ def _claim_block(
 
     claim = verdict.claim
     lines = [
-        f"**{index}. {verdict.verdict.capitalize()}** · reference "
+        f"**{index}. {verdict_label(verdict.verdict).capitalize()}** · "
+        "reference "
         f"{claim.number} → `{claim.cited.name}`",
         f"> {_display(report, claim.sentence, claim.number)}",
         f"> — {report.paper.name}, {_where(claim.sentence)}",
@@ -1142,7 +1144,7 @@ def _judgement(verdict: Verdict) -> list[str]:
 
     """
 
-    line = f"**Verdict:** {verdict.verdict}"
+    line = f"**Verdict:** {verdict_label(verdict.verdict)}"
     if verdict.comment:
         line += f" — {_comment(verdict.comment)}"
     lines = [line]

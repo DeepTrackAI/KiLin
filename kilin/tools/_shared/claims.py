@@ -13,8 +13,9 @@ verdict, the passage sentence it rests on, and a short critical comment:
 - **contradicted**: they state the opposite or a different result;
 - **background**: the sentence only names the reference as the source of a
   method, tool, dataset or topic, and the passages are about that;
-- **not found**: the passages are not about the sentence (the relevant
-  part of the paper may not have been retrieved).
+- **not found**, shown as "no matching passage": the passages are not
+  about the sentence (the relevant part of the paper may not have been
+  retrieved).
 
 The model can be wrong, so its answer is checked in Python: the quote must
 be found in the passages it was given (its words in order; citation
@@ -23,8 +24,10 @@ passage's own words, or it is dropped and the comment says what the model
 quoted; and a reference is called **contradicted** only with a confirmed
 quote, otherwise **not supported**.
 An answer that names no verdict is **unclear**; a failed model call is
-**failed**. Only a sample of each cited paper is read, so "not found"
-means "not found in the passages read", not "absent from the paper".
+**failed**; a file without searchable text is **no text**, with no model
+call. Only a sample of each cited paper is read, so "no matching passage"
+means none of the passages read is about the sentence, not that the paper
+has none.
 
 Key Features
 ------------
@@ -43,9 +46,9 @@ Key Features
 Module Structure
 ----------------
 
-- ``VERDICTS`` and the ``VERDICT_*`` values
+- ``VERDICTS``, the ``VERDICT_*`` values and ``verdict_label``
 
-    The possible verdicts.
+    The possible verdicts, and the words shown for them.
 
 - ``Claim`` and ``Verdict``
 
@@ -95,6 +98,7 @@ __all__ = [
     "VERDICT_CONTRADICTED",
     "VERDICT_FAILED",
     "VERDICT_NOT_FOUND",
+    "VERDICT_NO_TEXT",
     "VERDICT_NOT_SUPPORTED",
     "VERDICT_PARTLY",
     "VERDICT_SUPPORTED",
@@ -106,6 +110,7 @@ __all__ = [
     "judge_support",
     "parse_verdict",
     "support_prompt",
+    "verdict_label",
     "verification_prompt",
     "verify_claim",
 ]
@@ -118,7 +123,8 @@ VERDICT_BACKGROUND: Final[str] = "background"
 VERDICT_NOT_FOUND: Final[str] = "not found"
 VERDICT_UNCLEAR: Final[str] = "unclear"
 VERDICT_FAILED: Final[str] = "failed"
-#: Every verdict, from the model's six to the two Python assigns.
+VERDICT_NO_TEXT: Final[str] = "no text"
+#: Every verdict, from the model's six to the three Python assigns.
 VERDICTS: Final[tuple[str, ...]] = (
     VERDICT_SUPPORTED,
     VERDICT_PARTLY,
@@ -128,7 +134,13 @@ VERDICTS: Final[tuple[str, ...]] = (
     VERDICT_NOT_FOUND,
     VERDICT_UNCLEAR,
     VERDICT_FAILED,
+    VERDICT_NO_TEXT,
 )
+# What people read for a verdict, where it differs from its name: "not
+# found" only means that the passages read are not about the sentence.
+_LABELS: Final[dict[str, str]] = {
+    VERDICT_NOT_FOUND: "no matching passage",
+}
 # The verdicts the model may give, longest first so "not supported" is not
 # read as "supported".
 _MODEL_VERDICTS: Final[tuple[str, ...]] = tuple(
@@ -266,6 +278,26 @@ class Support:
     quote_chunk: Chunk | None
     comment: str
     passages: tuple[Chunk, ...] = ()
+
+
+def verdict_label(verdict: str) -> str:
+    """Return the words shown for a verdict.
+
+    Parameters
+    ----------
+    verdict: str
+        One of ``VERDICTS``.
+
+    Returns
+    -------
+    str
+        "no matching passage" for ``not found`` (none of the passages
+        read is about the sentence; the rest of the paper may be);
+        otherwise the verdict itself.
+
+    """
+
+    return _LABELS.get(verdict, verdict)
 
 
 def claim_passages(
@@ -568,7 +600,7 @@ def verify_claim(
     Returns
     -------
     Verdict
-        ``not found`` without passages (no model call); ``failed`` when
+        ``no text`` without passages (no model call); ``failed`` when
         the model call raises; otherwise the checked answer.
 
     """
@@ -605,7 +637,7 @@ def judge_support(
     Returns
     -------
     Support
-        Checked as ``verify_claim`` checks a claim: ``not found`` without
+        Checked as ``verify_claim`` checks a claim: ``no text`` without
         passages, ``failed`` when the call raises, quotes confirmed in the
         passages.
 
@@ -643,14 +675,14 @@ def _judge(
     -------
     tuple[str, str, Chunk | None, str]
         Verdict, quote, the passage holding it, and comment, as
-        ``parse_verdict`` returns them; ``not found`` without passages and
+        ``parse_verdict`` returns them; ``no text`` without passages and
         ``failed`` when the model call raises.
 
     """
 
     if not passages:
         return (
-            VERDICT_NOT_FOUND, "", None, "The cited file has no indexed text."
+            VERDICT_NO_TEXT, "", None, "The file has no searchable text."
         )
     try:
         reply = ask_model(prompts[0], prompts[1], answer_tokens)

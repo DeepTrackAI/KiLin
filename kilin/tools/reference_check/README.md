@@ -29,12 +29,14 @@ For "check the references of the Smith paper", the tool:
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
    the cited file's passages most related to the sentence and to what
-   the reference is cited for (and the sentence before it), and answers with a verdict (supported, partly
-   supported, not supported, contradicted, background, not found), the
-   passage sentence it rests on, and a critical comment. Python checks the
-   answer: a quote not found in the passages is dropped, and a reference
-   is called contradicted only with a confirmed quote, otherwise not
-   supported. The plan is shown first; the user can check all claims, the
+   the reference is cited for (and the sentence before it), and answers
+   with a verdict (supported, partly supported, not supported,
+   contradicted, background, or no matching passage), the passage
+   sentence it rests on, and a critical comment. A cited file without
+   searchable text is reported as no text, without a model call. Python
+   checks the answer: a quote not found in the passages is dropped, and a
+   reference is called contradicted only with a confirmed quote, otherwise
+   not supported. The plan is shown first; the user can check all claims, the
    first few, or none.
 6. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
@@ -48,8 +50,9 @@ For "check the references of the Smith paper", the tool:
 Limits: author-year citations ("Smith et al., 2020") are not recognised;
 superscripts are recognised only in PDFs; an unusual layout can still split
 or join reference entries. A claim is judged from a few passages of the
-cited work, not all of it, so "not found" means not found in the passages
-read; and the model's verdicts can be wrong, so they are pointers for the
+cited work, not all of it, so "no matching passage" means none of the
+passages read is about the sentence, not that the paper has none; and the
+model's verdicts can be wrong, so they are pointers for the
 reader to check, with the quote and the place to look.
 
 Its `defaults.json` is independent of `kilin_defaults.json`.
