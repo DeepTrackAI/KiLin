@@ -139,6 +139,9 @@ All workflows run on pull requests and pushes to `main` or `master`; they
 can also be launched manually. The test matrix has `fail-fast: false`, so
 one platform failure does not cancel the other configurations. A Node.js
 runtime is installed for the JavaScript checks in the base test suite.
+A newer push to a pull request cancels that pull request's runs still in
+progress; pushes to `main` are never cancelled, so each keeps a complete
+result.
 
 **Python 3.13, 3.14 and 3.15 are experimental**, each tested on Ubuntu,
 macOS and Windows. These nine jobs use `pip --ignore-requires-python` to
