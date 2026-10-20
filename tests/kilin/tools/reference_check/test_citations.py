@@ -33,7 +33,7 @@ RULES = CitationRules(
     superscript_ratio=0.85,
     signature_characters=8,
     max_range=50,
-    unit_words=frozenset({"cm", "log"}),
+    unit_words=frozenset({"cm", "log", "nm"}),
     byline_share=0.5,
 )
 PAPERS = Path(__file__).resolve().parents[4] / "example_repos" / (
@@ -220,6 +220,29 @@ class TestSuperscripts(unittest.TestCase):
         brackets = (chunk("a", "One [1]. Two [2]. Twelve [12].\n"),)
         self.assertEqual(
             find_citations(brackets, 10, None, RULES).beyond_list, (12,)
+        )
+
+    def test_nature_style_references_units_and_dashes(self) -> None:
+        # From three Nature Communications papers: "refs" without a full
+        # stop, a citation after a unit, and an em dash after a range.
+        passages = (chunk(
+            "a",
+            "The layers number at most three (refs 8,19,20). It turns "
+            "for angles above 13 degrees (refs 19,21). Films transmit 97% "
+            "at a wavelength above 500 nm23. Here we use reservoir "
+            "computing10—a framework that reproduces biological "
+            "networks11–14—to study aging. Areas of 4 cm2 were used.\n",
+        ),)
+        superscripts = {
+            "23": ("500nm",),
+            "10": ("omputing",),
+            "1114": ("networks",),
+            "2": ("4cm",),
+        }
+        scan = find_citations(passages, 40, superscripts, RULES)
+        self.assertEqual(
+            [c.numbers for c in scan.citations],
+            [(8, 19, 20), (19, 21), (23,), (10,), (11, 12, 13, 14)],
         )
 
     @unittest.skipUnless(
