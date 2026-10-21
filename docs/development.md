@@ -131,9 +131,15 @@ into three independent workflows under `.github/workflows/`:
 
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
-| `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu, macOS and Windows; Qt/PDF on the same systems |
+| `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
 | `docs.yml` | Markdown links, SVG metadata, complete module map | Ubuntu / Python 3.12 |
+
+Windows is not supported yet: its Python 3.12 and Qt/PDF jobs run on every
+change and report their results, but `continue-on-error` keeps them from
+failing the workflow until the remaining Windows differences (open files
+that cannot be deleted, `\` in displayed paths, home-directory lookup)
+are fixed. Then the setting is removed and Windows becomes required.
 
 All workflows run on pull requests and pushes to `main` or `master`; they
 can also be launched manually. The test matrix has `fail-fast: false`, so

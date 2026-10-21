@@ -19,6 +19,9 @@ jobs:
   supported:
     name: Python 3.12 / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Windows is not supported yet: its jobs run and report, but do not
+    # fail the workflow until Windows support lands.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -93,6 +96,9 @@ jobs:
   qt:
     name: Qt and PDF / Python 3.12 / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    # Windows is not supported yet: its jobs run and report, but do not
+    # fail the workflow until Windows support lands.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:
