@@ -17,6 +17,7 @@ from pathlib import Path
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import time
 import unittest
 from unittest.mock import patch
 
@@ -35,6 +36,28 @@ with ConversationFileLock(sys.argv[1]):
     print('LOCKED', flush=True)
     sys.stdin.readline()
 """
+
+
+def _acquire_when_released(
+    path: Path, timeout: float = 10.0
+) -> ConversationFileLock:
+    """Acquire a lock that a terminated process is about to drop.
+
+    Windows releases a killed process's byte-range locks shortly after the
+    process exits, not at the moment ``wait`` returns, so retry briefly.
+
+    """
+
+    deadline = time.monotonic() + timeout
+    while True:
+        lock = ConversationFileLock(path)
+        try:
+            lock.acquire()
+            return lock
+        except ConversationLockedError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 class TestConversationFileLock(unittest.TestCase):
@@ -223,8 +246,11 @@ with ConversationFileLock(sys.argv[1]) as owner:
                 ConversationFileLock(self.path).acquire()
             process.kill()
             process.wait(timeout=10)
-            with ConversationFileLock(self.path) as recovered:
+            recovered = _acquire_when_released(self.path)
+            try:
                 self.assertTrue(recovered.holds(self.path))
+            finally:
+                recovered.release()
         finally:
             if process.poll() is None:
                 process.kill()
