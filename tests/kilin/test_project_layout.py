@@ -156,9 +156,13 @@ class TestProjectLayout(unittest.TestCase):
         custom.write_text("# User template\n", encoding="utf-8")
         open_project(root)
         initialize_project(root, "literature")
-        self.assertEqual(edited.read_text(), "# Edited by the user\n")
+        self.assertEqual(
+            edited.read_text(encoding="utf-8"), "# Edited by the user\n"
+        )
         self.assertFalse(deleted.exists())
-        self.assertEqual(custom.read_text(), "# User template\n")
+        self.assertEqual(
+            custom.read_text(encoding="utf-8"), "# User template\n"
+        )
         with self.assertRaises(ValueError):
             choose_template(
                 "write a report", root / "templates", "technical_summary"
@@ -209,7 +213,7 @@ class TestProjectLayout(unittest.TestCase):
         modified = workspace.root / "templates/research_briefing.md"
         modified.write_text("# Custom\n", encoding="utf-8")
         prepare_project_workspace(original, "literature", sandbox)
-        self.assertEqual(modified.read_text(), "# Custom\n")
+        self.assertEqual(modified.read_text(encoding="utf-8"), "# Custom\n")
 
     def test_user_provided_project_type_template_needs_no_package(
         self,
@@ -243,9 +247,9 @@ class TestProjectLayout(unittest.TestCase):
         project = configure_project(
             root, {"extensions": [".py", ".ini", ".json"]}
         )
-        (root / "analysis.py").write_text("x = 1\n")
-        (root / "sources.json").write_text("{}\n")
-        (root / "source_snapshot.json").write_text("{}\n")
+        (root / "analysis.py").write_text("x = 1\n", encoding="utf-8")
+        (root / "sources.json").write_text("{}\n", encoding="utf-8")
+        (root / "source_snapshot.json").write_text("{}\n", encoding="utf-8")
         report = scan_repository(
             project.source,
             extensions=project.profile.extensions,
@@ -257,8 +261,8 @@ class TestProjectLayout(unittest.TestCase):
 
         external = self.root / "external"
         external.mkdir()
-        (external / "profile.ini").write_text("[external]\n")
-        (external / "sources.json").write_text("{}\n")
+        (external / "profile.ini").write_text("[external]\n", encoding="utf-8")
+        (external / "sources.json").write_text("{}\n", encoding="utf-8")
         external_report = scan_repository(
             external, extensions=[".ini", ".json"]
         )
@@ -329,7 +333,7 @@ class TestProjectLayout(unittest.TestCase):
         template = root / "templates/research_briefing.md"
         template.write_text("# Custom\n", encoding="utf-8")
         initialize_project(root, "literature")
-        self.assertEqual(template.read_text(), "# Custom\n")
+        self.assertEqual(template.read_text(encoding="utf-8"), "# Custom\n")
         self.assertEqual(
             len(list((root / "templates").glob("*.md"))), 4
         )
@@ -457,7 +461,7 @@ class TestProjectLayout(unittest.TestCase):
         ),))
         with self.assertRaisesRegex(ValueError, "link"):
             install_project_resources(root, layout)
-        self.assertEqual(outside.read_text(), "unchanged")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "unchanged")
 
     def test_linked_core_folder_is_rejected(self) -> None:
         """Core folders never follow symbolic links on reopening."""
@@ -491,7 +495,9 @@ class TestProjectLayout(unittest.TestCase):
         )
         ensure_project_folders(root)
         self.assertTrue((root / "outputs").is_dir())
-        self.assertEqual((unrelated / "user.md").read_text(), "# User\n")
+        self.assertEqual(
+            (unrelated / "user.md").read_text(encoding="utf-8"), "# User\n"
+        )
         self.assertTrue(generated.is_file())
         self.assertFalse((root / "outputs/user.md").exists())
 

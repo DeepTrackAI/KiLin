@@ -39,8 +39,10 @@ class TestFilterResults(unittest.TestCase):
         """
 
         package = Path(tool.__file__).parent
-        data = json.loads((package / "defaults.json").read_text())
-        readme = (package / "README.md").read_text()
+        data = json.loads(
+            (package / "defaults.json").read_text(encoding="utf-8")
+        )
+        readme = (package / "README.md").read_text(encoding="utf-8")
         for section, values in data.items():
             with self.subTest(section=section):
                 self.assertIn("`" + section + "`", readme)
@@ -73,7 +75,6 @@ class TestFilterResults(unittest.TestCase):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
                     tool.parse_settings(values, "example")
-
 
     def test_no_earlier_list_returns_actionable_result(self) -> None:
         """Return a message rather than invoke a language model.

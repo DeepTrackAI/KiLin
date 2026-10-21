@@ -72,7 +72,9 @@ class TestReferencePreview(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             source = Path(temporary).resolve()
             file = source / "notes.md"
-            file.write_text("before\nmemory\ncapacity\nafter\n")
+            file.write_text(
+                "before\nmemory\ncapacity\nafter\n", encoding="utf-8"
+            )
             evidence = Evidence(
                 1,
                 Path("notes.md"),

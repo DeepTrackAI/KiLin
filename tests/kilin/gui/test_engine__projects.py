@@ -9,7 +9,6 @@ Use real project and conversation files with a fake RAG session.
 # pylint: disable=C0103:invalid-name
 
 
-
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
@@ -45,7 +44,7 @@ class FakeSession:
         self.turns = [
             Turn(**turn)
             for turn in conversation_state(
-                json.loads(conversation_path.read_text())
+                json.loads(conversation_path.read_text(encoding="utf-8"))
             ).get("turns", [])
         ]
         self.index_status = "rebuilt"
@@ -93,21 +92,21 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         source = self.root / "original.txt"
-        source.write_text("Original source text.")
+        source.write_text("Original source text.", encoding="utf-8")
         self.project = prepare_sources_workspace(
             [source], "literature", self.root / "project"
         )
         store = ConversationStore(self.project.root)
         self.active = store.ensure()
         self.history_path = store.state_path(self.active)
-        payload = json.loads(self.history_path.read_text())
+        payload = json.loads(self.history_path.read_text(encoding="utf-8"))
         conversation_state(payload)["turns"] = [
             {
                 "question": "Original question",
                 "answer": "Original answer.",
             }
         ]
-        self.history_path.write_text(json.dumps(payload))
+        self.history_path.write_text(json.dumps(payload), encoding="utf-8")
         # Ensure the selected chat is not the most recently created one.
         store.create()
         store.select(self.active.conversation_id)
@@ -179,10 +178,10 @@ class TestEngineProjectRecovery(unittest.TestCase):
     def test_add_file_and_folder_preserves_sources_and_chat(self):
         """Add new sources without reloading the active chat."""
         file = self.root / "new.txt"
-        file.write_text("New source text.")
+        file.write_text("New source text.", encoding="utf-8")
         folder = self.root / "papers"
         folder.mkdir()
-        (folder / "paper.md").write_text("# New paper")
+        (folder / "paper.md").write_text("# New paper", encoding="utf-8")
         old_session = self.engine.session
         self.engine.add_project_sources([str(file), str(folder)])
         # The models stay loaded; only the indexes are updated.
@@ -192,10 +191,13 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.assertTrue({"new.txt", "paper.md"} <= indexed, indexed)
         self.assert_chat_preserved(self.project.root)
         sources = self.project.root / "sources"
-        self.assertEqual((sources / "new.txt").read_text(), "New source text.")
+        self.assertEqual(
+            (sources / "new.txt").read_text(encoding="utf-8"),
+            "New source text.",
+        )
         self.assertTrue((sources / "papers" / "paper.md").is_file())
         self.assertTrue((sources / "original.txt").is_file())
-        self.assertEqual(file.read_text(), "New source text.")
+        self.assertEqual(file.read_text(encoding="utf-8"), "New source text.")
         self.assertEqual(self.events[-1]["event"], "opened")
 
     def test_failed_import_restores_usable_chat(self):

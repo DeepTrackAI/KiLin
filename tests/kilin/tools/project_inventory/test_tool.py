@@ -39,8 +39,10 @@ class TestProjectInventory(unittest.TestCase):
         """
 
         package = Path(tool.__file__).parent
-        data = json.loads((package / "defaults.json").read_text())
-        readme = (package / "README.md").read_text()
+        data = json.loads(
+            (package / "defaults.json").read_text(encoding="utf-8")
+        )
+        readme = (package / "README.md").read_text(encoding="utf-8")
         for section, values in data.items():
             with self.subTest(section=section):
                 self.assertIn("`" + section + "`", readme)
@@ -73,7 +75,6 @@ class TestProjectInventory(unittest.TestCase):
             with self.subTest(values=values):
                 with self.assertRaises(ValueError):
                     tool.parse_settings(values, "example")
-
 
     def test_type_recognition_and_inventory_without_a_model(self) -> None:
         """Count files from core metadata without invoking a model.

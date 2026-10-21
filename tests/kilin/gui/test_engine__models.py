@@ -32,7 +32,7 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         source = self.root / "one.txt"
-        source.write_text("Original document about memory.")
+        source.write_text("Original document about memory.", encoding="utf-8")
         user_preferences = patch.dict(
             "os.environ",
             {"KILIN_DEFAULTS_FILE": str(self.root / "preferences.json")},
@@ -124,7 +124,9 @@ class TestEngineModelTransitions(unittest.TestCase):
 
     def trace_text(self):
         """Return the active trace text for assertions."""
-        return self.engine.active_trace.readable_path.read_text()
+        return self.engine.active_trace.readable_path.read_text(
+            encoding="utf-8"
+        )
 
     def test_chat_change_does_not_reindex_and_is_traced(self):
         """Switch the chat model without recalculating embeddings."""
@@ -182,7 +184,9 @@ class TestEngineModelTransitions(unittest.TestCase):
     def test_failed_model_load_keeps_profile_and_session(self):
         """Keep the original session and profile after a failed switch."""
         self.request["chat_model"] = "example/new-chat"
-        original_profile = (self.project.root / "profile.ini").read_text()
+        original_profile = (self.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
         with patch.object(
             self.engine.session,
             "use_chat_model",
@@ -191,7 +195,8 @@ class TestEngineModelTransitions(unittest.TestCase):
             self.engine.apply_model_settings(self.request)
         self.assertEqual(self.events[-1]["event"], "error")
         self.assertEqual(
-            (self.project.root / "profile.ini").read_text(), original_profile
+            (self.project.root / "profile.ini").read_text(encoding="utf-8"),
+            original_profile,
         )
         self.assertIsNotNone(self.engine.session)
 
@@ -199,10 +204,12 @@ class TestEngineModelTransitions(unittest.TestCase):
         """Preserve an existing snapshot when the original file changes."""
         first = self.engine.session.indexes
         new_file = self.root / "new.txt"
-        new_file.write_text("Added document about feature elimination.")
+        new_file.write_text(
+            "Added document about feature elimination.", encoding="utf-8"
+        )
         self.engine.add_project_sources([str(new_file)])
         self.assertEqual(self.events[-1]["event"], "opened")
-        self.assertEqual(self.embedded, [new_file.read_text()])
+        self.assertEqual(self.embedded, [new_file.read_text(encoding="utf-8")])
         self.assertNotIn("Original document about memory.", self.counted)
         original_vector = dict(
             zip(
@@ -219,11 +226,13 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.assertIn("workspace_source_copied", self.trace_text())
         self.assertIn("index_incremental_plan", self.trace_text())
         self.embedded.clear()
-        new_file.write_text("Updated document about feature elimination.")
+        new_file.write_text(
+            "Updated document about feature elimination.", encoding="utf-8"
+        )
         self.engine.add_project_sources([str(new_file)])
         self.assertEqual(self.embedded, [])
         self.assertEqual(
-            (self.project.source / "new.txt").read_text(),
+            (self.project.source / "new.txt").read_text(encoding="utf-8"),
             "Added document about feature elimination.",
         )
         (self.project.source / "new.txt").unlink()
@@ -248,14 +257,18 @@ class TestEngineModelTransitions(unittest.TestCase):
             return original(report, **options)
 
         new_file = self.root / "new.txt"
-        new_file.write_text("Added document about feature elimination.")
+        new_file.write_text(
+            "Added document about feature elimination.", encoding="utf-8"
+        )
         with patch.object(rag, "read_repository_files", counting):
             self.engine.add_project_sources([str(new_file)])
             # The unchanged file's text comes from the cache.
             self.assertEqual(reads[-1], ["new.txt"])
             # Same name, other content: read again and indexed again.
             copy = self.project.source / "one.txt"
-            copy.write_text("Rewritten document about attention.")
+            copy.write_text(
+                "Rewritten document about attention.", encoding="utf-8"
+            )
             self.engine.resume_project(str(self.project.root))
             self.assertEqual(reads[-1], ["one.txt"])
         texts = " ".join(chunk.text for chunk in self.engine.session.chunks)
@@ -265,7 +278,9 @@ class TestEngineModelTransitions(unittest.TestCase):
     def test_remove_source_deletes_copy_and_reindexes(self):
         """Delete only managed source copies and refresh the index."""
         new_file = self.root / "new.txt"
-        new_file.write_text("Added document about feature elimination.")
+        new_file.write_text(
+            "Added document about feature elimination.", encoding="utf-8"
+        )
         self.engine.add_project_sources([str(new_file)])
         copy = self.project.source / "new.txt"
         self.assertTrue(copy.is_file())

@@ -765,9 +765,11 @@ class TestTracePersistence(unittest.TestCase):
             ["mode"],
             "standard",
         )
-        self.assertIn("custom_earlier", self.path.read_text())
-        self.assertIn("llm_call_output_tokens", self.path.read_text())
-        self.assertIn("123", self.path.read_text())
+        self.assertIn("custom_earlier", self.path.read_text(encoding="utf-8"))
+        self.assertIn(
+            "llm_call_output_tokens", self.path.read_text(encoding="utf-8")
+        )
+        self.assertIn("123", self.path.read_text(encoding="utf-8"))
 
     def test_reopen_advances_from_highest_number_with_gaps(self) -> None:
         """Use the highest saved turn and operation number, not their count."""
@@ -861,13 +863,17 @@ class TestTraceWriteFailures(unittest.TestCase):
 
     def _logger(self, policy: str) -> TraceLogger:
         """Return a logger whose future writes can be mocked."""
-        return TraceLogger(
+        logger = TraceLogger(
             TraceConfig(
                 enabled=True, output_path=self.path,
                 failure_policy=policy,
             ),
             default_directory=self.root,
         )
+        # Release its lock before the folder is removed (Windows cannot
+        # delete an open file).
+        self.addCleanup(logger.close)
+        return logger
 
     def test_warn_policy_disables_later_event_writes(self) -> None:
         """Warn once without replacing the last valid trace JSON."""

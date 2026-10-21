@@ -164,6 +164,7 @@ class TestConversationLifecycle(unittest.TestCase):
 
     def test_switch_rejects_mismatched_sink_without_mutating_session(self):
         trace = _logger(self.path)
+        self.addCleanup(trace.close)
         session = _session(self.root, trace)
         other = self.root / "logs" / "conversation_other.json"
         before = self.path.read_bytes()
@@ -198,8 +199,10 @@ class TestConversationLifecycle(unittest.TestCase):
         self.assertIsNone(session._checkpoint_id)
         self.assertEqual(conversation_state(_read(self.path)), {})
         self.assertEqual(_group(self.path).get("turns", {}), {})
-        self.assertNotIn("Old question", self.path.read_text())
-        self.assertIn("project_prepared", self.path.read_text())
+        self.assertNotIn("Old question", self.path.read_text(encoding="utf-8"))
+        self.assertIn(
+            "project_prepared", self.path.read_text(encoding="utf-8")
+        )
         session.chat_session.reset.assert_called_once_with()
         for model in models:
             model.close.assert_not_called()
@@ -207,6 +210,7 @@ class TestConversationLifecycle(unittest.TestCase):
         # Ownership is exclusive: release the reset logger before reopening.
         trace.close()
         reopened = _logger(self.path)
+        self.addCleanup(reopened.close)
         session.switch_conversation(self.path, trace=reopened)
         self.assertEqual(session.turns, [])
         self.assertIsNone(session._checkpoint_id)
@@ -222,7 +226,7 @@ class TestConversationLifecycle(unittest.TestCase):
         session.conversation_path.write_text(json.dumps({
             "sessions": {CONVERSATION_SESSION_KEY:
                          new_conversation_session()},
-        }))
+        }), encoding="utf-8")
         session.turns = [object()]
         archived = session.reset()
         self.assertTrue(archived.is_file())
@@ -301,7 +305,7 @@ class TestTraceReopening(unittest.TestCase):
         payload = _read(self.path)
         turns = payload["sessions"][CONVERSATION_SESSION_KEY]["turns"]
         turns["turn_0009"] = turns.pop("turn_0001")
-        self.path.write_text(json.dumps(payload))
+        self.path.write_text(json.dumps(payload), encoding="utf-8")
 
         trace = _logger(self.path)
         trace.emit("turn.started", component="rag", turn_id="next")
@@ -326,7 +330,6 @@ class TestTraceReopening(unittest.TestCase):
         self.assertEqual(list(group["turns"]), ["turn_0001"])
         self.assertEqual(list(group["operations"]), ["01_conversation_reset"])
         self.assertEqual(group["turns"]["turn_0001"]["turn_id"], "new")
-
 
 
 class TestCanonicalTracePersistence(unittest.TestCase):
@@ -626,7 +629,9 @@ class TestConversationTraceSelection(unittest.TestCase):
         session.conversation_path.write_text("legacy", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "closed"):
             session.reset()
-        self.assertEqual(session.conversation_path.read_text(), "legacy")
+        self.assertEqual(
+            session.conversation_path.read_text(encoding="utf-8"), "legacy"
+        )
 
     def test_grouped_state_survives_trace_restart(self):
         trace = _logger(self.path)

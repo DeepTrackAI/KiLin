@@ -25,6 +25,7 @@ kilin/                # Python core and optional gui/ package
 
 tests/kilin/          # Mirrored core + gui/ + tool tests
 assets/                # Maintenance/benchmark notebooks and helpers
+.github/workflows/     # CI tests, package and documentation validation
 tutorials/             # Progressive notebooks, some SVG examples
 docs/                  # Architecture and reference documentation
 sandbox/               # Local development workspaces; export empty
@@ -123,6 +124,83 @@ On macOS, a temporary path under `/var/` can canonically resolve to
 is intended, and compare literal spellings only when testing path
 serialization policy.
 
+## GitHub Actions and Python compatibility
+
+KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
+The `uv.lock` file is scoped to the same interpreter range. CI is divided
+into three independent workflows under `.github/workflows/`:
+
+| Workflow | Validation | Required checks |
+| --- | --- | --- |
+| `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
+| `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
+| `docs.yml` | Markdown links, SVG metadata, complete module map | Ubuntu / Python 3.12 |
+
+Windows is a target platform, but support is not fully verified yet.
+Its Python 3.12 and Qt/PDF jobs run on every change and report their
+results, but `continue-on-error` keeps them non-blocking until the
+remaining Windows differences (open-file deletion, home-directory lookup,
+and native Qt/PDF behavior) are checked or corrected. Windows then becomes
+a required platform.
+
+All workflows run on pull requests and pushes to `main` or `master`; they
+can also be launched manually. The test matrix has `fail-fast: false`, so
+one platform failure does not cancel the other configurations. A Node.js
+runtime is installed for the JavaScript checks in the base test suite.
+A newer push to a pull request cancels that pull request's runs still in
+progress; pushes to `main` are never cancelled, so each keeps a complete
+result.
+
+**Python 3.13 and 3.14 are experimental**, each tested on Ubuntu, macOS
+and Windows. These six jobs use `pip --ignore-requires-python` to
+probe the current pinned core dependencies without changing the supported
+range or `uv.lock`. They require binary distributions rather than building
+native dependencies from source. They do not use the Python 3.12 lock file
+and are non-blocking, but installation failures, skips and test failures
+remain visible in each GitHub Actions job and its summary. Passing such a
+probe does not establish support for optional MLX, PyTorch or Qt backends.
+Python 3.15 can enter the experimental matrix once the pinned core
+dependencies install reproducibly from binary distributions on all three
+platforms; its optional backends require separate validation.
+
+To promote a newer Python version, first verify core and optional backend
+compatibility, update the package metadata and dependency constraints where
+justified, regenerate the lock file for the new range, and make that
+version's matrix jobs required. Do not conceal incompatibilities through
+unconditional skips or unreviewed dependency upgrades.
+
+The Qt job installs the `gui` extra on Python 3.12 and executes the PDF
+adapter and GUI protocol tests in distinct processes. The optional native
+WebEngine smoke test stays opt-in; CI does not create a browser session or
+download language-model weights. `HF_HUB_OFFLINE=1` prevents unintended
+Hub access during core and GUI tests.
+
+The distribution job builds both wheel and source distributions, installs
+the wheel into a separate environment, then runs
+`tests/setup/check_installed_wheel.py` with `python -I` from outside the
+checkout. This checks the installed import path, console entry point and
+packaged resources. The documentation job runs
+`tests.setup.test__documentation_assets`, which is also discovered by the
+two standard test runners. The package workflow uploads build artifacts
+for review but never publishes them to a package index.
+
+On a developer machine with Python 3.12 and the locked core dependencies,
+use these equivalent commands:
+
+```sh
+uv sync --locked --no-dev --python 3.12
+uv pip install --python .venv "pytest>=8,<11"
+uv run --no-sync python -m pytest -q
+uv run --no-sync python -m tests
+python -m unittest tests.setup.test__documentation_assets -v
+uv build
+```
+
+The CI service provides the macOS and Windows environments; a local Linux
+run cannot establish compatibility on those platforms. Failures in
+experimental Python environments should be assessed as dependency or
+runtime incompatibilities before expanding the supported range.
+
 ## Focused test map
 
 | Changed subsystem | Focused tests (representative) |
@@ -158,8 +236,8 @@ ZIP with repository paths and a deletion manifest if necessary.
 A source export is not a user-data backup. It should exclude `.DS_Store`,
 `__MACOSX`, AppleDouble files, caches, model weights, `sandbox/` contents,
 `.env` secrets, generated build files and unselected top-level entries. The
-`clean_repository.ipynb` notebook has explicit top-level selection controls;
-export should not overwrite an existing ZIP without explicit intervention.
+`clean_repository.ipynb` notebook includes Git-tracked `.github/`
+workflows in its default top-level selection; export should not overwrite an existing ZIP without explicit intervention.
 
 ## Pull-request verification procedure
 

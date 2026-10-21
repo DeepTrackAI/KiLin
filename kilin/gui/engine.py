@@ -1254,7 +1254,9 @@ class ChatEngine:
                 old_backend = self.session.backend
                 old_levels = read_effort_levels(root, self.session.backend)
                 old_router = read_router_model(root, self.session.backend)
-                profile_text = (root / "profile.ini").read_text()
+                profile_text = (root / "profile.ini").read_text(
+                    encoding="utf-8"
+                )
                 conversation_id = self.active_conversation.conversation_id
             self.active_trace.emit(
                 "gui.models.change.requested",
@@ -1405,7 +1407,9 @@ class ChatEngine:
         except Exception as error:
             if root is not None and (changed_profile or changed_runtime):
                 try:
-                    (root / "profile.ini").write_text(profile_text)
+                    (root / "profile.ini").write_text(
+                        profile_text, encoding="utf-8"
+                    )
                     write_effort_levels(root, old_backend, old_levels)
                     write_router_model(root, old_backend, old_router)
                     if old_depth is not None:
