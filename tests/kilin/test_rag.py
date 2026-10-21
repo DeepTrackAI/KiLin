@@ -284,6 +284,22 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertNotIn("cell=3", prompt)
         self.assertNotIn("Short.", rag._answer_prompt("Q", evidence, 3))
 
+    def test_answer_prompt_normalizes_foreign_platform_paths(self) -> None:
+        """Display evidence paths with forward slashes on every host."""
+
+        cases = (
+            ("src/module.py", "src/module.py"),
+            (r"src\module.py", "src/module.py"),
+            (r"C:\repo\src\module.py", "C:/repo/src/module.py"),
+            (r"\\server\share\module.py", "//server/share/module.py"),
+        )
+        for raw, expected in cases:
+            with self.subTest(path=raw):
+                evidence = (replace(_evidence(), path=Path(raw)),)
+                prompt = rag._answer_prompt("Q", evidence)
+                self.assertIn(f"[1] {expected}:1-3 (func)", prompt)
+                self.assertNotIn("\\", prompt)
+
     def test_document_helpers_retain_selected_source_order(self) -> None:
         """Preserve document order and metadata when preparing evidence."""
         chunks = (

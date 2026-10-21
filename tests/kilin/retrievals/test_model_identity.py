@@ -99,6 +99,28 @@ class TestMutableModelIdentity(unittest.TestCase):
         self.assertEqual(weights.stat().st_mtime_ns, stat.st_mtime_ns)
         self.assertNotEqual(self._identity(), before)
 
+    def test_force_verify_with_preserved_size_and_mtime(self) -> None:
+        """Rehash modified weights even when common stat fields match.
+
+        This check applies on Windows without relying on ``st_ctime``
+        detecting a same-size rewrite. The default metadata cache remains
+        unchanged; callers can explicitly request full content checking.
+
+        """
+
+        weights = self.root / "weights.safetensors"
+        before = self._identity()
+        stat = weights.stat()
+        weights.write_bytes(b"BBB")
+        os.utime(weights, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        self.assertEqual(weights.stat().st_size, stat.st_size)
+        self.assertEqual(weights.stat().st_mtime_ns, stat.st_mtime_ns)
+        checked = identity.embedding_model_identity(
+            str(self.root), self.root, force_verify=True,
+        )
+        self.assertNotEqual(checked, before)
+        self.assertEqual(self._identity(), checked)
+
     def test_tokenizer_change_invalidates_identity(self) -> None:
         """Tokenizer changes must invalidate document/query comparability.
 

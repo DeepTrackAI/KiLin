@@ -1161,6 +1161,25 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(representation["sources"], ["file2.py:fit"])
         self.assertEqual(representation["summary"], "Fit trains the model.")
 
+    def test_representation_handles_foreign_platform_paths(self) -> None:
+        """Read POSIX and Windows evidence labels on every host platform."""
+
+        for raw in (
+            "src/module.py",
+            r"src\module.py",
+            r"C:\repo\src\module.py",
+            r"\\server\share\src\module.py",
+        ):
+            with self.subTest(path=raw):
+                turn = _turn("Q", "Answer [1].", (1,))
+                turn.evidence = (
+                    Evidence(1, Path(raw), 1, 2, "fit", "text"),
+                )
+                representation = answering.turn_representation(turn, 1)
+                self.assertEqual(
+                    representation["sources"], ["module.py:fit"]
+                )
+
     def test_representation_without_citations_lists_all_sources(self) -> None:
         """List all distinct evidence labels if no citation was used."""
 

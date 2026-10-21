@@ -25,6 +25,7 @@ kilin/                # Python core and optional gui/ package
 
 tests/kilin/          # Mirrored core + gui/ + tool tests
 assets/                # Maintenance/benchmark notebooks and helpers
+.github/workflows/     # CI tests, package and documentation validation
 tutorials/             # Progressive notebooks, some SVG examples
 docs/                  # Architecture and reference documentation
 sandbox/               # Local development workspaces; export empty
@@ -135,11 +136,12 @@ into three independent workflows under `.github/workflows/`:
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
 | `docs.yml` | Markdown links, SVG metadata, complete module map | Ubuntu / Python 3.12 |
 
-Windows is not supported yet: its Python 3.12 and Qt/PDF jobs run on every
-change and report their results, but `continue-on-error` keeps them from
-failing the workflow until the remaining Windows differences (open files
-that cannot be deleted, `\` in displayed paths, home-directory lookup)
-are fixed. Then the setting is removed and Windows becomes required.
+Windows is a target platform, but support is not fully verified yet.
+Its Python 3.12 and Qt/PDF jobs run on every change and report their
+results, but `continue-on-error` keeps them non-blocking until the
+remaining Windows differences (open-file deletion, home-directory lookup,
+and native Qt/PDF behavior) are checked or corrected. Windows then becomes
+a required platform.
 
 All workflows run on pull requests and pushes to `main` or `master`; they
 can also be launched manually. The test matrix has `fail-fast: false`, so
@@ -157,8 +159,9 @@ native dependencies from source. They do not use the Python 3.12 lock file
 and are non-blocking, but installation failures, skips and test failures
 remain visible in each GitHub Actions job and its summary. Passing such a
 probe does not establish support for optional MLX, PyTorch or Qt backends.
-Python 3.15 will be added once its dependencies publish binary
-distributions for it (PyYAML had none when 3.15 was released).
+Python 3.15 can enter the experimental matrix once the pinned core
+dependencies install reproducibly from binary distributions on all three
+platforms; its optional backends require separate validation.
 
 To promote a newer Python version, first verify core and optional backend
 compatibility, update the package metadata and dependency constraints where
@@ -233,8 +236,8 @@ ZIP with repository paths and a deletion manifest if necessary.
 A source export is not a user-data backup. It should exclude `.DS_Store`,
 `__MACOSX`, AppleDouble files, caches, model weights, `sandbox/` contents,
 `.env` secrets, generated build files and unselected top-level entries. The
-`clean_repository.ipynb` notebook has explicit top-level selection controls;
-export should not overwrite an existing ZIP without explicit intervention.
+`clean_repository.ipynb` notebook includes Git-tracked `.github/`
+workflows in its default top-level selection; export should not overwrite an existing ZIP without explicit intervention.
 
 ## Pull-request verification procedure
 
