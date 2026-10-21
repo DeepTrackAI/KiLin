@@ -53,6 +53,16 @@ Key Features
 
     List every sentence in scope about a topic, copied word for word.
 
+- **reference_check**
+
+    Match a paper's references to project files, locate its in-text
+    citations, and assess citing claims against the cited papers.
+
+- **suggest_reference**
+
+    Suggest papers for a statement from model-assessed passages,
+    including confirmed quotations when available.
+
 - **paper_overview**
 
     Summarize one paper in the chat, asking which paper when it is

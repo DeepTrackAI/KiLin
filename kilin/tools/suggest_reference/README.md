@@ -2,10 +2,10 @@
 
 This package owns the `suggest_reference` registered tool. Given a
 statement the user wants to cite, it finds the papers in the project that
-could be cited for it, and shows for each the sentence of the paper that
-backs it. Finding the candidate papers calls no language model; judging
-each one uses the answering model, with the same checks as
-`reference_check`.
+could be cited for it, and reports each model assessment with a
+confirmed quotation when available. Finding the candidate papers
+calls no language model; judging each one uses the answering model,
+with the same checks as `reference_check`.
 
 For "suggest a reference for: anomalous diffusion is common in living
 cells", the tool:
@@ -33,14 +33,15 @@ cells", the tool:
    quote. The plan is shown first when it has more than `LARGE_BATCHES`
    papers.
 4. Answers with the papers that could be cited (supported, partly
-   supported, background), best first, each with its confirmed quote as
-   evidence and the comment, then lists the other papers checked.
+   supported, background), best first, each with its comment and any
+   confirmed quotation as evidence, then lists the other papers checked.
 
 Limits: only the project's files are searched, so a paper that is not in
 the folder cannot be suggested (the answer says so when none supports the
 statement); each paper is judged from a few passages, not all of it; and
 the model's verdicts can be wrong, so they are pointers for the reader to
-check, with the quote and the place to look.
+check. A positive verdict may have no confirmed quotation; the
+comment and any available quotation help the reader assess it.
 
 Its `defaults.json` is independent of `kilin_defaults.json`.
 Project-type tool settings override the keys in `SETTINGS`. Other sections
