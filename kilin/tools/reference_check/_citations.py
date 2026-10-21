@@ -96,6 +96,7 @@ __all__ = [
     "STYLE_NONE",
     "STYLE_PARENTHESES",
     "STYLE_SUPERSCRIPT",
+    "STYLE_WRITTEN",
     "Citation",
     "CitationRules",
     "CitationScan",
@@ -108,6 +109,7 @@ __all__ = [
 STYLE_BRACKETS: Final[str] = "brackets"
 STYLE_PARENTHESES: Final[str] = "parentheses"
 STYLE_SUPERSCRIPT: Final[str] = "superscript"
+STYLE_WRITTEN: Final[str] = "written"
 STYLE_NONE: Final[str] = "none"
 
 # A list of numbers and ranges: "3", "3,4", "1–4", "2, 5–7".
@@ -277,7 +279,8 @@ class CitationScan:
     Attributes
     ----------
     style: str
-        ``brackets``, ``parentheses``, ``superscript``, or ``none``.
+        ``brackets``, ``parentheses``, ``superscript``, ``written``,
+        or ``none``.
     citations: tuple[Citation, ...]
         In reading order.
     uncited: tuple[int, ...]
@@ -438,8 +441,9 @@ def find_citations(
         Bracketed (or, when they are more, parenthesized) markers when
         there are at least ``rules.bracket_markers_min`` of them, or any
         when there are no superscripts to look for; otherwise
-        font-confirmed superscripts; otherwise style ``none`` with no
-        citations. Written-out citations ("Ref. 50") count in every style.
+        font-confirmed superscripts; otherwise written-out citations
+        ("Ref. 50") with style ``written``; otherwise style ``none``.
+        Written-out citations also count in the other styles.
 
     """
 
@@ -499,11 +503,23 @@ def find_citations(
                 )
             )
     elif superscripts:
-        style, found = STYLE_SUPERSCRIPT, superscript_found
-    else:
-        return CitationScan(
-            STYLE_NONE, (), tuple(range(1, entry_count + 1)), ()
+        found = superscript_found
+        style = (
+            STYLE_WRITTEN
+            if found and all(match.re is _REF_WORD for _, match in found)
+            else STYLE_SUPERSCRIPT
         )
+    else:
+        found = [
+            (sentence, match)
+            for sentence in sentences
+            for match in _REF_WORD.finditer(sentence.text)
+        ]
+        if not found:
+            return CitationScan(
+                STYLE_NONE, (), tuple(range(1, entry_count + 1)), ()
+            )
+        style = STYLE_WRITTEN
 
     citations: list[Citation] = []
     for sentence, match in found:

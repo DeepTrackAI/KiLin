@@ -1,8 +1,8 @@
 """Unit tests for finding numbered in-text citations.
 
-Check bracketed and superscript markers, the font confirmation of
-superscripts, the rejection of author, affiliation and exponent markers,
-and the diagnostics for uncited and out-of-list numbers, independently of
+Check bracketed, written-out and superscript markers, font confirmation
+of superscripts, rejection of author, affiliation and exponent markers,
+and diagnostics for uncited and out-of-list numbers, independently of
 the tool's configuration.
 
 """
@@ -21,6 +21,7 @@ from kilin.tools.reference_check._citations import (
     STYLE_NONE,
     STYLE_PARENTHESES,
     STYLE_SUPERSCRIPT,
+    STYLE_WRITTEN,
     CitationRules,
     cited_numbers,
     find_citations,
@@ -36,8 +37,9 @@ RULES = CitationRules(
     unit_words=frozenset({"cm", "log", "nm"}),
     byline_share=0.5,
 )
-PAPERS = Path(__file__).resolve().parents[4] / "example_repos" / (
-    "literature_repo/papers"
+PDF_FIXTURES = (
+    Path(__file__).resolve().parents[2]
+    / "sources/extensions/fixtures"
 )
 
 
@@ -116,6 +118,42 @@ class TestBrackets(unittest.TestCase):
         scan = find_citations(passages, 40, {"121314": ("cells",)}, RULES)
         self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
         self.assertEqual([c.numbers for c in scan.citations], [(12, 13, 14)])
+
+    def test_written_references_without_other_citation_styles(self) -> None:
+        passages = (chunk(
+            "a",
+            "Earlier work in Ref. 2 established this. Another method "
+            "follows refs. 3,4 and refs 6–7. The grant was Ref. "
+            "001-P-00038, not a citation.\n",
+        ),)
+        scan = find_citations(passages, 6, None, RULES)
+        self.assertEqual(scan.style, STYLE_WRITTEN)
+        self.assertEqual(
+            [citation.numbers for citation in scan.citations],
+            [(2,), (3, 4), (6, 7)],
+        )
+        self.assertEqual(scan.uncited, (1, 5))
+        self.assertEqual(scan.beyond_list, (7,))
+        self.assertEqual(
+            [
+                citation.sentence.text[citation.start:citation.end]
+                for citation in scan.citations
+            ],
+            ["Ref. 2", "refs. 3,4", "refs 6–7"],
+        )
+
+    def test_written_references_with_unrelated_pdf_superscripts(self) -> None:
+        passages = (chunk(
+            "a", "These results follow Ref. 2 and refs. 3,4.\n"
+        ),)
+        scan = find_citations(
+            passages, 5, {"99": ("unrelated",)}, RULES
+        )
+        self.assertEqual(scan.style, STYLE_WRITTEN)
+        self.assertEqual(
+            [citation.numbers for citation in scan.citations],
+            [(2,), (3, 4)],
+        )
 
     def test_no_style_without_brackets_or_pdf(self) -> None:
         passages = (chunk("a", "Cells grow in 3 groups of 12 samples.\n"),)
@@ -245,11 +283,10 @@ class TestSuperscripts(unittest.TestCase):
             [(8, 19, 20), (19, 21), (23,), (10,), (11, 12, 13, 14)],
         )
 
-    @unittest.skipUnless(
-        (PAPERS / "patil25deep.pdf").is_file(), "example paper missing"
-    )
     def test_real_pdf_superscripts(self) -> None:
-        runs = superscript_runs(PAPERS / "patil25deep.pdf", RULES)
+        runs = superscript_runs(
+            PDF_FIXTURES / "patil25deep.pdf", RULES
+        )
         # "...real-time monitoring of plants in modern agricultural
         # practices 1,8–14." prints the marker in superscript.
         self.assertIn("1814", runs)

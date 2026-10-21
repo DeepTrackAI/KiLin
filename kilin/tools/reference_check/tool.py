@@ -131,6 +131,7 @@ from kilin.tools.reference_check._citations import (
     STYLE_BRACKETS,
     STYLE_NONE,
     STYLE_PARENTHESES,
+    STYLE_WRITTEN,
     Citation,
     CitationScan,
     find_citations,
@@ -924,6 +925,7 @@ def _overview(report: ReferenceReport) -> str:
         style = {
             STYLE_BRACKETS: "bracketed",
             STYLE_PARENTHESES: "parenthesized",
+            STYLE_WRITTEN: "written-out",
         }.get(report.scan.style, "superscript")
         cited = (
             f"{len(report.scan.citations)} {style} citations in the text "

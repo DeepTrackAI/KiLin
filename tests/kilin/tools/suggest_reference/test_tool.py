@@ -53,8 +53,10 @@ class TestSuggestReferencePackage(unittest.TestCase):
 
     def test_packaged_defaults_are_documented(self) -> None:
         package = Path(tool.__file__).parent
-        data = json.loads((package / "defaults.json").read_text())
-        readme = (package / "README.md").read_text()
+        data = json.loads(
+            (package / "defaults.json").read_text(encoding="utf-8")
+        )
+        readme = (package / "README.md").read_text(encoding="utf-8")
         for section, values in data.items():
             with self.subTest(section=section):
                 self.assertIn(f"`{section}`", readme)

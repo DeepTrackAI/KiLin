@@ -71,8 +71,10 @@ class TestReferenceCheckPackage(unittest.TestCase):
 
     def test_packaged_defaults_are_documented(self) -> None:
         package = Path(tool.__file__).parent
-        data = json.loads((package / "defaults.json").read_text())
-        readme = (package / "README.md").read_text()
+        data = json.loads(
+            (package / "defaults.json").read_text(encoding="utf-8")
+        )
+        readme = (package / "README.md").read_text(encoding="utf-8")
         for section, values in data.items():
             with self.subTest(section=section):
                 self.assertIn(f"`{section}`", readme)
@@ -178,7 +180,7 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertNotIn("[2]", result.answer)
         context.done.assert_called_once()
 
-        report = (self.root / summary["report"]).read_text()
+        report = (self.root / summary["report"]).read_text(encoding="utf-8")
         self.assertTrue(report.startswith("# Reference check: paper.md"))
         section = report[report.index("### 2."):report.index("### 3.")]
         self.assertIn(
@@ -208,13 +210,30 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertIn("2 partly supported · 1 not supported", result.answer)
         self.assertIn("Judged contradicted", result.answer)
         self.assertEqual(len(result.evidence), 0)  # max_listed hides [2].
-        report = (self.root / result.summary["report"]).read_text()
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
         self.assertIn("## Claims checked against the cited papers", report)
         self.assertIn(
             "**Verdict:** partly supported — Names the authors.", report
         )
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_written_only_citations_are_reported(self) -> None:
+        paper = (
+            PAPER.replace("[1]", "Ref. 1")
+            .replace("[2, 3]", "refs. 2,3")
+            .replace("[4]", "Ref. 4")
+            .replace("[2]", "Ref. 2")
+        )
+        self.chunks[0] = chunk("p1", paper, path="paper.md")
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), verify=False
+        )
+        self.assertEqual(result.summary["citation_style"], "written")
+        self.assertEqual(result.summary["uncited"], [5])
+        self.assertIn("written-out citations", result.answer)
 
     def test_quoted_passages_are_evidence(self) -> None:
         result, _ = self._run(

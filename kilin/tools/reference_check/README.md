@@ -5,8 +5,8 @@ paper's reference list against the other files of the project and finds
 where each reference is cited in the paper's text. Finding the references,
 their files and their citations calls no language model: those results are
 deterministic and state their reasons. Checking whether each citing
-sentence is supported by the cited work uses the answering model, after the
-user confirms the plan.
+sentence is supported by the cited work uses the answering model. A plan
+is shown for confirmation when required by the confirmation policy.
 
 For "check the references of the Smith paper", the tool:
 
@@ -25,6 +25,7 @@ For "check the references of the Smith paper", the tool:
    in any file, written out (`Ref. 50`, `refs. 12,13`, `refs 8,19,20`),
    and superscripts in PDFs, confirmed by the printed font size and
    raised position (exponents in formulas and subscripts are left out).
+   Papers using only written-out numbered references are recognized.
    It reports references never cited and numbers cited beyond the list.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
@@ -36,8 +37,8 @@ For "check the references of the Smith paper", the tool:
    searchable text is reported as no text, without a model call. Python
    checks the answer: a quote not found in the passages is dropped, and a
    reference is called contradicted only with a confirmed quote, otherwise
-   not supported. The plan is shown first; the user can check all claims, the
-   first few, or none.
+   not supported. The plan is traced, and the user can choose all
+   claims, the first few, or none when confirmation is requested.
 6. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
    chat with the counts, the found, probable and missing references, the
