@@ -24,6 +24,8 @@ from kilin.sources.sources import (
 )
 from tests.kilin.sources._support import fixture_path
 
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
+
 try:
     from kilin.sources.extensions import sources_pdf
 except ModuleNotFoundError as error:
@@ -50,8 +52,9 @@ class TestPdfIntegration(unittest.TestCase):
         )
         units = sources_pdf.extract_source_units(file)
         self.assertEqual(len(units), 2)
-        self.assertEqual([unit.section for unit in units],
-                         ["Page 1", "Page 2"])
+        self.assertEqual(
+            [unit.section for unit in units], ["Page 1", "Page 2"]
+        )
         self.assertIn("KíLín fixture page one.", units[0].text)
         self.assertIn("KíLín fixture page two.", units[1].text)
         self.assertEqual(
@@ -75,15 +78,16 @@ class TestPdfIntegration(unittest.TestCase):
         self.assertEqual(report["selected_files"], ["papers/sample.pdf"])
         self.assertEqual(len(files), 1)
         self.assertEqual(len(units), 2)
-        self.assertEqual([unit.section for unit in units],
-                         ["Page 1", "Page 2"])
+        self.assertEqual(
+            [unit.section for unit in units], ["Page 1", "Page 2"]
+        )
 
     def test_scientific_pdf_spacing_regression(self) -> None:
         """Check the historical DIVA spacing issue using a committed PDF."""
 
         relative = Path("papers/patil25deep.pdf")
         file = sources_pdf.read_source_file(
-            fixture_path("patil25deep.pdf"), relative
+            PAPER_FIXTURES / "patil25deep.pdf", relative
         )
         self.assertIn("we introduce DIVA", " ".join(file.text.split()))
         self.assertNotIn("DIV A ", file.text)

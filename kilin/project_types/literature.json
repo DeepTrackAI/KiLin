@@ -92,6 +92,31 @@
         "answer_tokens": 500
       }
     },
+    "reference_check": {
+      "description": "Check one paper's references against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Asks which paper when none is named. Not for what a paper says about a topic (question_answering) or a summary of one paper (paper_overview).",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "reference_check",
+        "max_listed": 20
+      }
+    },
+    "suggest_reference": {
+      "description": "Find papers in the project that could be cited for a statement or sentence the user writes ('suggest a reference for: anomalous diffusion is common in living cells', 'which paper supports the claim that tracking fails at high density?', 'what can I cite for this sentence: ...', 'find a citation for ...'). Not for checking the references a paper already cites (reference_check), and not for what the papers say about a topic (question_answering).",
+      "history": {
+        "policy": "none"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "suggest_reference"
+      }
+    },
     "research_briefing": {
       "description": "Generate a structured research briefing for a single scientific paper, emphasizing the research question, key findings, strength of evidence, limitations, and implications. Examples: \"write a research briefing for patil25\", \"prepare a research briefing of the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
       "history": {
@@ -334,6 +359,7 @@
     "Turn any paper into a Nature research briefing",
     "Summarize what the papers say about …",
     "Give me a short summary of …",
+    "Check the references of …",
     "Which datasets does each paper use?",
     "Compare how the papers approach …",
     "What are the limitations of …?",

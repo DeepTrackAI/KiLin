@@ -66,6 +66,7 @@ from kilin.tools.generate_paper_summary._report_template import (
     template_names,
 )
 from kilin.tools.generate_paper_summary.tool import (
+    REFERENCE_LAYOUT,
     SummarySettings,
     choose_paper,
     choose_template,
@@ -74,8 +75,6 @@ from kilin.tools.generate_paper_summary.tool import (
     paper_beginning,
     paper_citation,
     parse_settings,
-    reference_entries,
-    reference_list,
     references_prompt,
     run,
     section_prompt,
@@ -85,6 +84,7 @@ from kilin.tools.generate_paper_summary.tool import (
 
 __all__ = [
     "LIMIT_TOLERANCE",
+    "REFERENCE_LAYOUT",
     "SECTION_SOURCE_CHOICES",
     "SECTION_SOURCE_CITATION",
     "SECTION_SOURCE_NOTES",
@@ -107,8 +107,6 @@ __all__ = [
     "paper_citation",
     "parse_settings",
     "parse_template",
-    "reference_entries",
-    "reference_list",
     "references_prompt",
     "run",
     "section_problem",
