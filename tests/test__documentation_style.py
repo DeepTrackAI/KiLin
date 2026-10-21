@@ -119,7 +119,9 @@ class TestDocumentationStyle(unittest.TestCase):
 
         failures = []
         for file in source_files(*PYTHON_DIRECTORIES):
-            for number, line in enumerate(file.read_text().splitlines(), 1):
+            for number, line in enumerate(
+                file.read_text(encoding="utf-8").splitlines(), 1
+            ):
                 if len(line) > 79:
                     failures.append(
                         f"{file.relative_to(ROOT)}:{number}: {len(line)}"
@@ -131,7 +133,7 @@ class TestDocumentationStyle(unittest.TestCase):
 
         failures = []
         for file in source_files(*SOURCE_DIRECTORIES):
-            lines = file.read_text().splitlines()
+            lines = file.read_text(encoding="utf-8").splitlines()
             for node in definitions(ast.parse("\n".join(lines))):
                 name = getattr(node, "name", "<module>")
                 docstring = ast.get_docstring(node)
@@ -151,7 +153,7 @@ class TestDocumentationStyle(unittest.TestCase):
 
         failures = []
         for file in source_files(*SOURCE_DIRECTORIES):
-            tree = ast.parse(file.read_text())
+            tree = ast.parse(file.read_text(encoding="utf-8"))
             for node in definitions(tree):
                 if not isinstance(
                     node, (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -184,7 +186,10 @@ class TestDocumentationStyle(unittest.TestCase):
 
         failures = []
         for file in source_files(ROOT / "kilin"):
-            docstring = ast.get_docstring(ast.parse(file.read_text())) or ""
+            docstring = (
+                ast.get_docstring(ast.parse(file.read_text(encoding="utf-8")))
+                or ""
+            )
             for title in DOCSTRING_SECTIONS:
                 heading = f"\n{title}\n{'-' * len(title)}\n"
                 if heading not in f"\n{docstring}":
@@ -201,7 +206,9 @@ class TestDocumentationStyle(unittest.TestCase):
         )
         failures = []
         for file in sorted((ROOT / "tests").rglob("test_*.py")):
-            first_lines = "\n".join(file.read_text().splitlines()[:24])
+            first_lines = "\n".join(
+                file.read_text(encoding="utf-8").splitlines()[:24]
+            )
             if any(item not in first_lines for item in directives):
                 failures.append(str(file.relative_to(ROOT)))
         self.assertEqual(failures, [])
@@ -229,7 +236,7 @@ class TestDocumentationStyle(unittest.TestCase):
         """Describe named JavaScript functions and their parameters."""
 
         file = ROOT / "kilin" / "gui" / "web" / "app.js"
-        lines = file.read_text().splitlines()
+        lines = file.read_text(encoding="utf-8").splitlines()
         failures = []
         for index, line in enumerate(lines):
             match = JAVASCRIPT_FUNCTION.match(line)

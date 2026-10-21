@@ -765,9 +765,11 @@ class TestTracePersistence(unittest.TestCase):
             ["mode"],
             "standard",
         )
-        self.assertIn("custom_earlier", self.path.read_text())
-        self.assertIn("llm_call_output_tokens", self.path.read_text())
-        self.assertIn("123", self.path.read_text())
+        self.assertIn("custom_earlier", self.path.read_text(encoding="utf-8"))
+        self.assertIn(
+            "llm_call_output_tokens", self.path.read_text(encoding="utf-8")
+        )
+        self.assertIn("123", self.path.read_text(encoding="utf-8"))
 
     def test_reopen_advances_from_highest_number_with_gaps(self) -> None:
         """Use the highest saved turn and operation number, not their count."""

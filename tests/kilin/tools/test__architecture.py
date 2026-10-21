@@ -37,8 +37,10 @@ class TestToolPackageArchitecture(unittest.TestCase):
                 self.assertTrue((folder / "tool.py").is_file())
                 self.assertTrue((folder / "_configuration.py").is_file())
                 self.assertFalse((_ROOT / f"{name}.py").exists())
-                data = json.loads((folder / "defaults.json").read_text())
-                readme = (folder / "README.md").read_text()
+                data = json.loads(
+                    (folder / "defaults.json").read_text(encoding="utf-8")
+                )
+                readme = (folder / "README.md").read_text(encoding="utf-8")
                 self.assertIn("SETTINGS", data)
                 for section, values in data.items():
                     self.assertIn(f"`{section}`", readme)
@@ -54,7 +56,7 @@ class TestToolPackageArchitecture(unittest.TestCase):
         for name in sorted(_REGISTERED):
             for file in (_ROOT / name).rglob("*.py"):
                 with self.subTest(tool=name, module=file.name):
-                    tree = ast.parse(file.read_text())
+                    tree = ast.parse(file.read_text(encoding="utf-8"))
                     for node in ast.walk(tree):
                         imported = ""
                         if isinstance(node, ast.ImportFrom):
@@ -74,7 +76,7 @@ class TestToolPackageArchitecture(unittest.TestCase):
 
         for file in (_ROOT / "_shared").glob("*.py"):
             with self.subTest(module=file.name):
-                tree = ast.parse(file.read_text())
+                tree = ast.parse(file.read_text(encoding="utf-8"))
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom):
                         imported = node.module or ""

@@ -46,7 +46,7 @@ class TestEngineWorkflow(unittest.TestCase):
         """Provide real profile values without loading model weights."""
 
         source = self.root / "source.py"
-        source.write_text("def example():\n    return 1\n")
+        source.write_text("def example():\n    return 1\n", encoding="utf-8")
         project = prepare_sources_workspace(
             [source], "code", self.root / "project"
         )
@@ -252,7 +252,9 @@ class TestEngineWorkflow(unittest.TestCase):
         # The last chat's replacement may reuse a timestamped filename;
         # its identity and content must still be entirely new.
         if path.exists():
-            self.assertNotIn("Keep this historical trace", path.read_text())
+            self.assertNotIn(
+                "Keep this historical trace", path.read_text(encoding="utf-8")
+            )
         archived = list((path.parent / "deleted").glob("*.json"))
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0].read_bytes(), before)

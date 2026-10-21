@@ -445,7 +445,6 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
                          {"count": 0, "results": []})
 
 
-
 @contextmanager
 def _search_patches():
     """Replace search channels while preserving the real RAG coordinator."""
@@ -1795,7 +1794,9 @@ class TestRAGConversationPersistence(unittest.TestCase):
         session._save_conversation(trace_turn_id="turn-1")
         first = session._checkpoint_id
         self.assertTrue(first.startswith("checkpoint_"))
-        payload = json.loads(session.conversation_path.read_text())
+        payload = json.loads(
+            session.conversation_path.read_text(encoding="utf-8")
+        )
         saved = rag.conversation_state(payload)
         self.assertEqual(saved["checkpoint_id"], first)
         self.assertEqual(saved["checkpoint"]["turn_count"], 1)
@@ -1807,7 +1808,9 @@ class TestRAGConversationPersistence(unittest.TestCase):
                          ["system", "user", "assistant"])
         session.turns.append(_turn("Second", "Answer"))
         session._save_conversation()
-        payload = json.loads(session.conversation_path.read_text())
+        payload = json.loads(
+            session.conversation_path.read_text(encoding="utf-8")
+        )
         saved = rag.conversation_state(payload)
         self.assertEqual(saved["checkpoint"]["parent_checkpoint_id"],
                          first)
@@ -1847,7 +1850,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.assertEqual(session.conversation_path.read_bytes(), before)
         session._save_conversation(pending_turn=pending)
         state = rag.conversation_state(
-            json.loads(session.conversation_path.read_text())
+            json.loads(session.conversation_path.read_text(encoding="utf-8"))
         )
         self.assertEqual(len(session.turns), 2)
         self.assertEqual(state["checkpoint"]["parent_checkpoint_id"], first)
@@ -1862,7 +1865,9 @@ class TestRAGConversationPersistence(unittest.TestCase):
             "turns": [rag._turn_to_data(_turn())],
             "checkpoint_id": "checkpoint_previous",
         })}}
-        session.conversation_path.write_text(json.dumps(data))
+        session.conversation_path.write_text(
+            json.dumps(data), encoding="utf-8"
+        )
         messages, turns, checkpoint = session._load_conversation()
         self.assertEqual(messages[0]["content"], "Saved system prompt")
         self.assertEqual([message["role"] for message in messages],
@@ -1873,25 +1878,31 @@ class TestRAGConversationPersistence(unittest.TestCase):
     def test_load_conversation_rejects_corrupt_records(self) -> None:
         """Reject corrupt and obsolete conversation representations."""
         session = self.session
-        session.conversation_path.write_text("not JSON")
+        session.conversation_path.write_text("not JSON", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._load_conversation()
         corrupt = {"sessions": {CONVERSATION_SESSION_KEY:
                                  new_conversation_session({
             "turns": [{"timestamp": "x", "evidence": "bad"}],
         })}}
-        session.conversation_path.write_text(json.dumps(corrupt))
+        session.conversation_path.write_text(
+            json.dumps(corrupt), encoding="utf-8"
+        )
         with self.assertRaises(ValueError):
             session._load_conversation()
         obsolete = {"sessions": {CONVERSATION_SESSION_KEY:
                                   new_conversation_session({
             "turns": [], "chat_messages": [{"role": "user"}],
         })}}
-        session.conversation_path.write_text(json.dumps(obsolete))
+        session.conversation_path.write_text(
+            json.dumps(obsolete), encoding="utf-8"
+        )
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._load_conversation()
         for record in ({"conversation": {"turns": []}}, [], None):
-            session.conversation_path.write_text(json.dumps(record))
+            session.conversation_path.write_text(
+                json.dumps(record), encoding="utf-8"
+            )
             with self.subTest(record=record):
                 with self.assertRaisesRegex(ValueError, "invalid"):
                     session._load_conversation()
@@ -1904,7 +1915,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
                          new_conversation_session({
                 "turns": [], "checkpoint_id": 100,
             })},
-        }))
+        }), encoding="utf-8")
         self.assertIsNone(session._load_conversation()[2])
 
     def test_save_preserves_existing_unrelated_sessions(self) -> None:
@@ -1912,9 +1923,11 @@ class TestRAGConversationPersistence(unittest.TestCase):
         session = self.session
         session.conversation_path.write_text(json.dumps({
             "sessions": {"custom": {"title": "Keep"}},
-        }))
+        }), encoding="utf-8")
         session._save_conversation()
-        payload = json.loads(session.conversation_path.read_text())
+        payload = json.loads(
+            session.conversation_path.read_text(encoding="utf-8")
+        )
         self.assertEqual(payload["sessions"]["custom"],
                          {"title": "Keep"})
 
@@ -1923,7 +1936,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         session = self.session
         session.conversation_path.write_text(json.dumps({
             "conversation": {"turns": [{"question": "Do not replace"}]},
-        }))
+        }), encoding="utf-8")
         before = session.conversation_path.read_bytes()
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._save_conversation()
@@ -1938,7 +1951,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         bad_group["conversation"] = {"turns": [{"question": "Old"}]}
         session.conversation_path.write_text(json.dumps({
             "sessions": {CONVERSATION_SESSION_KEY: bad_group},
-        }))
+        }), encoding="utf-8")
         before = session.conversation_path.read_bytes()
         with self.assertRaisesRegex(ValueError, "invalid"):
             session._save_conversation()
@@ -1949,7 +1962,9 @@ class TestRAGConversationPersistence(unittest.TestCase):
         path = self.root / "payload.json"
         rag._write_json(path, {"a": 1})
         rag._write_json(path, {"a": 2})
-        self.assertEqual(json.loads(path.read_text()), {"a": 2})
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8")), {"a": 2}
+        )
         self.assertFalse((self.root / "payload.json.tmp").exists())
 
     def test_resolve_conversation_path_validation(self) -> None:
@@ -1978,7 +1993,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         """Allocate distinct conversation names when none are specified."""
         session = self.session
         first = session._resolve_conversation_path(None)
-        first.write_text("{}")
+        first.write_text("{}", encoding="utf-8")
         second = session._resolve_conversation_path(None)
         self.assertNotEqual(first, second)
         self.assertTrue(second.name.startswith("conversation_"))
@@ -2000,10 +2015,10 @@ class TestRAGConversationPersistence(unittest.TestCase):
         """Archive an existing conversation without destroying its file."""
         session = self.session
         self.assertIsNone(session._archive_conversation())
-        session.conversation_path.write_text("original")
+        session.conversation_path.write_text("original", encoding="utf-8")
         archive = session._archive_conversation()
         self.assertTrue(archive.is_file())
-        self.assertEqual(archive.read_text(), "original")
+        self.assertEqual(archive.read_text(encoding="utf-8"), "original")
         self.assertFalse(session.conversation_path.exists())
         self.assertTrue(archive.name.startswith("conversation_"))
 
@@ -2013,7 +2028,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
         session.trace = MagicMock()
         session.turns = [_turn()]
         session._checkpoint_id = "old-checkpoint"
-        session.conversation_path.write_text("old")
+        session.conversation_path.write_text("old", encoding="utf-8")
         previous_chat = session.chat_session
         archived = session.reset()
         self.assertTrue(archived.exists())
@@ -2044,7 +2059,7 @@ class TestRAGConversationPersistence(unittest.TestCase):
                 "turns": [rag._turn_to_data(earlier)],
                 "checkpoint_id": "restored",
             })},
-        }))
+        }), encoding="utf-8")
         old_chat = session.chat_session
         turns = session.switch_conversation(target, trace=NullTraceLogger())
         self.assertEqual(turns, [earlier])
@@ -2157,11 +2172,11 @@ class TestRAGConversationPersistence(unittest.TestCase):
             "bad": {"sha256": 1, "text": "source"},
             "missing": {"sha256": "hash"},
             "null": None,
-        }))
+        }), encoding="utf-8")
         self.assertEqual(list(rag._read_text_cache(indexes)), ["good"])
-        cache.write_text("not JSON")
+        cache.write_text("not JSON", encoding="utf-8")
         self.assertEqual(rag._read_text_cache(indexes), {})
-        cache.write_text("[]")
+        cache.write_text("[]", encoding="utf-8")
         self.assertEqual(rag._read_text_cache(indexes), {})
 
 
@@ -2178,8 +2193,8 @@ class TestRAGSourcePreparation(unittest.TestCase):
         self.session.project.indexes.mkdir()
         self.first = self.session.project.source / "a.py"
         self.second = self.session.project.source / "b.py"
-        self.first.write_text("def foo():\n    return 1\n")
-        self.second.write_text("def bar():\n    return 2\n")
+        self.first.write_text("def foo():\n    return 1\n", encoding="utf-8")
+        self.second.write_text("def bar():\n    return 2\n", encoding="utf-8")
         self.embedding = SimpleNamespace(
             count_tokens=lambda text: len(text.split())
         )
@@ -2225,7 +2240,9 @@ class TestRAGSourcePreparation(unittest.TestCase):
         saved = {Path("a.py"): [
             value for value in chunks if value.path == Path("a.py")
         ]}
-        self.second.write_text("def bar():\n    return 999\n")
+        self.second.write_text(
+            "def bar():\n    return 999\n", encoding="utf-8"
+        )
         with patch.object(
             rag, "read_repository_files", wraps=rag.read_repository_files
         ) as reader, patch.object(
@@ -2316,7 +2333,7 @@ class TestRAGSourceInventory(unittest.TestCase):
                 "b.py": {"size_bytes": 0},
                 "c.py": {},
             },
-        }))
+        }), encoding="utf-8")
         self.assertEqual(self.session._source_files(), {
             Path("a.py"): 123, Path("b.py"): 0, Path("c.py"): 0,
         })
@@ -2332,7 +2349,7 @@ class TestRAGSourceInventory(unittest.TestCase):
         for value in ("bad JSON", "{}", '{"files": []}',
                       '{"files": {"a": {"size_bytes": "oops"}}}'):
             with self.subTest(value=value):
-                manifest.write_text(value)
+                manifest.write_text(value, encoding="utf-8")
                 self.assertEqual(self.session._source_files(), {})
 
 
@@ -2551,7 +2568,6 @@ class TestRAGSessionConstruction(unittest.TestCase):
         mocks.chat.assert_not_called()
 
 
-
 class TestRAGIndexMetadataRecovery(unittest.TestCase):
     """Check recovery from malformed manifest and metadata files."""
 
@@ -2602,43 +2618,47 @@ class TestRAGIndexMetadataRecovery(unittest.TestCase):
 
     def test_invalid_manifest_json_triggers_clean_rebuild(self) -> None:
         """Rebuild indexes when the saved manifest is malformed."""
-        self.manifest.write_text("invalid JSON")
+        self.manifest.write_text("invalid JSON", encoding="utf-8")
         with self._index_patches() as mocks:
             _, _, status, _ = self.session._prepare_retrieval(
                 self.embedding
             )
         self.assertEqual(status, "rebuilt")
         self.assertIsNone(mocks.compare.call_args.args[0])
-        self.assertIsInstance(json.loads(self.manifest.read_text()), dict)
+        self.assertIsInstance(
+            json.loads(self.manifest.read_text(encoding="utf-8")), dict
+        )
 
     def test_nonmapping_manifest_is_treated_as_missing(self) -> None:
         """Treat a non-object manifest as unavailable metadata."""
-        self.manifest.write_text("[]")
+        self.manifest.write_text("[]", encoding="utf-8")
         with self._index_patches() as mocks:
             self.session._prepare_retrieval(self.embedding)
         self.assertIsNone(mocks.compare.call_args.args[0])
 
     def test_invalid_settings_json_triggers_clean_rebuild(self) -> None:
         """Rebuild indexes after invalid stored settings JSON."""
-        self.settings.write_text("invalid JSON")
+        self.settings.write_text("invalid JSON", encoding="utf-8")
         with self._index_patches():
             _, _, status, _ = self.session._prepare_retrieval(
                 self.embedding
             )
         self.assertEqual(status, "rebuilt")
         self.assertIn("embedding_model_identity",
-                      json.loads(self.settings.read_text()))
+                      json.loads(self.settings.read_text(encoding="utf-8")))
 
     def test_nonmapping_settings_are_replaced(self) -> None:
         """Replace saved settings that are not object mappings."""
-        self.settings.write_text("[]")
+        self.settings.write_text("[]", encoding="utf-8")
         with self._index_patches():
             self.session._prepare_retrieval(self.embedding)
-        self.assertIsInstance(json.loads(self.settings.read_text()), dict)
+        self.assertIsInstance(
+            json.loads(self.settings.read_text(encoding="utf-8")), dict
+        )
 
     def test_invalid_saved_manifest_is_compared_against_none(self) -> None:
         """Ignore malformed prior manifests during change comparison."""
-        self.manifest.write_text('{"files": {}}')
+        self.manifest.write_text('{"files": {}}', encoding="utf-8")
         with self._index_patches() as mocks:
             mocks.compare.side_effect = [
                 ValueError("bad manifest"), dict(self.changes)
@@ -2697,7 +2717,7 @@ class TestRAGAdditionalBranches(unittest.TestCase):
         with TemporaryDirectory() as directory:
             session = _session(Path(directory))
             session.conversation_path.parent.mkdir(parents=True)
-            session.conversation_path.write_text("[]")
+            session.conversation_path.write_text("[]", encoding="utf-8")
             before = session.conversation_path.read_bytes()
             with self.assertRaisesRegex(ValueError, "invalid"):
                 session._save_conversation()
@@ -2744,7 +2764,6 @@ class TestRAGAdditionalBranches(unittest.TestCase):
             trace.close.assert_not_called()
 
 
-
 class TestRAGDefensiveFallbacks(unittest.TestCase):
     """Exercise guards for invalid cached vectors and changed source sets."""
 
@@ -2766,10 +2785,11 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
             "embedding_model_identity": "model-hash",
         }
         (self.session.project.indexes / "settings.json").write_text(
-            json.dumps(metadata)
+            json.dumps(metadata), encoding="utf-8"
         )
         (self.session.project.indexes / "source_manifest.json").write_text(
-            json.dumps({"selected_files": ["a.py"], "files": {}})
+            json.dumps({"selected_files": ["a.py"], "files": {}}),
+            encoding="utf-8",
         )
 
     @contextmanager

@@ -54,7 +54,9 @@ class TestGUIPaths(unittest.TestCase):
         module.write_text("", encoding="utf-8")
         (checkout / "kilin/gui/engine.py").touch()
         (checkout / "tests/kilin").mkdir(parents=True)
-        (checkout / "pyproject.toml").write_text("[project]\n")
+        (checkout / "pyproject.toml").write_text(
+            "[project]\n", encoding="utf-8"
+        )
         with patch.object(_paths, "__file__", str(module)):
             self.assertEqual(
                 _paths.default_workspace_directory(), checkout / "sandbox"

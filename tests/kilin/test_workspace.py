@@ -209,7 +209,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         before = (self.destination / "sources.json").read_bytes()
         reopened = self._prepare([])
         self.assertEqual(reopened, open_project(self.destination))
-        self.assertEqual(copy.read_text(), "local = True\n")
+        self.assertEqual(copy.read_text(encoding="utf-8"), "local = True\n")
         self.assertEqual(
             (self.destination / "sources.json").read_bytes(), before
         )
@@ -259,7 +259,9 @@ class TestWorkspaceInitialization(WorkspaceFixture):
                         [self._file("code.py")],
                         destination=destination,
                     )
-                self.assertEqual(extra_path.read_text(), "keep")
+                self.assertEqual(
+                    extra_path.read_text(encoding="utf-8"), "keep"
+                )
 
     def test_trace_preparation_rejects_symlinked_logs(self) -> None:
         """Do not adopt a workspace whose trace location redirects outside."""
@@ -291,7 +293,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         marker.write_text("mine", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "empty folder"):
             self._prepare([self._file("code.py")])
-        self.assertEqual(marker.read_text(), "mine")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "mine")
         self.assertFalse((self.destination / "profile.ini").exists())
 
     def test_existing_workspace_path_must_be_directory(self) -> None:
@@ -544,7 +546,7 @@ class TestWorkspaceSelections(WorkspaceFixture):
             [original], settings={"max_file_bytes": 5}
         )
         self.assertEqual(
-            (project.source / "CODE.PY").read_text(), "abcde"
+            (project.source / "CODE.PY").read_text(encoding="utf-8"), "abcde"
         )
 
     def test_settings_can_select_additional_literal_extensions(
@@ -647,11 +649,13 @@ class TestSnapshotBehavior(WorkspaceFixture):
         project = self._prepare([original])
         original.write_text("new = 2\n", encoding="utf-8")
         self.assertEqual(
-            (project.source / "code.py").read_text(), "old = 1\n"
+            (project.source / "code.py").read_text(encoding="utf-8"),
+            "old = 1\n",
         )
         self._prepare([])
         self.assertEqual(
-            (project.source / "code.py").read_text(), "old = 1\n"
+            (project.source / "code.py").read_text(encoding="utf-8"),
+            "old = 1\n",
         )
 
     def test_deleted_original_does_not_delete_snapshot(self) -> None:
@@ -672,9 +676,12 @@ class TestSnapshotBehavior(WorkspaceFixture):
         (project.source / "code.py").write_text(
             "local = True\n", encoding="utf-8"
         )
-        self.assertEqual(original.read_text(), "original = True\n")
         self.assertEqual(
-            (project.source / "code.py").read_text(), "local = True\n"
+            original.read_text(encoding="utf-8"), "original = True\n"
+        )
+        self.assertEqual(
+            (project.source / "code.py").read_text(encoding="utf-8"),
+            "local = True\n",
         )
 
     def test_reimport_preserves_existing_snapshot_by_default(self) -> None:
@@ -685,7 +692,8 @@ class TestSnapshotBehavior(WorkspaceFixture):
         original.write_text("new = 2\n", encoding="utf-8")
         self._prepare([original])
         self.assertEqual(
-            (project.source / "code.py").read_text(), "old = 1\n"
+            (project.source / "code.py").read_text(encoding="utf-8"),
+            "old = 1\n",
         )
         self.assertEqual(self._records()[0]["files"], ["code.py"])
 
@@ -734,7 +742,7 @@ class TestSnapshotBehavior(WorkspaceFixture):
         matches = list((project.source).glob("methods-*/scan.m"))
         self.assertEqual(len(matches), 1)
         self.assertEqual(len(list(project.source.iterdir())), 3)
-        self.assertEqual(note.read_text(), "# Notes\n")
+        self.assertEqual(note.read_text(encoding="utf-8"), "# Notes\n")
         self.assertEqual(len(self._records()), 3)
         self._prepare([])
         self.assertEqual(len(self._records()), 3)
@@ -748,10 +756,12 @@ class TestSnapshotBehavior(WorkspaceFixture):
         digest = sha256(str(second).encode()).hexdigest()[:8]
         renamed = f"model-{digest}.py"
         self.assertEqual(
-            (project.source / "model.py").read_text(), "origin = 1\n"
+            (project.source / "model.py").read_text(encoding="utf-8"),
+            "origin = 1\n",
         )
         self.assertEqual(
-            (project.source / renamed).read_text(), "origin = 2\n"
+            (project.source / renamed).read_text(encoding="utf-8"),
+            "origin = 2\n",
         )
         self.assertEqual(
             [record["name"] for record in self._records()],
@@ -780,7 +790,9 @@ class TestSnapshotBehavior(WorkspaceFixture):
         self._prepare([second], replace_existing=True)
         self.assertEqual(self._records()[1]["name"], existing)
         self.assertEqual(
-            (self.destination / "sources" / str(existing)).read_text(),
+            (self.destination / "sources" / str(existing)).read_text(
+                encoding="utf-8"
+            ),
             "updated = 3\n",
         )
 
@@ -821,7 +833,7 @@ class TestSnapshotBehavior(WorkspaceFixture):
         snapshot.write_text("local = 10\n", encoding="utf-8")
         original.write_text("original = 2\n", encoding="utf-8")
         self._prepare([original])
-        self.assertEqual(snapshot.read_text(), "local = 10\n")
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), "local = 10\n")
 
     def test_explicit_replacement_overwrites_locally_edited_file(
         self,
@@ -834,9 +846,13 @@ class TestSnapshotBehavior(WorkspaceFixture):
         snapshot.write_text("local = 10\n", encoding="utf-8")
         original.write_text("external = 2\n", encoding="utf-8")
         self._prepare([original], replace_existing=True)
-        self.assertEqual(snapshot.read_text(), "external = 2\n")
+        self.assertEqual(
+            snapshot.read_text(encoding="utf-8"), "external = 2\n"
+        )
         self.assertEqual(self._records()[0]["files"], ["code.py"])
-        self.assertEqual(original.read_text(), "external = 2\n")
+        self.assertEqual(
+            original.read_text(encoding="utf-8"), "external = 2\n"
+        )
 
     def test_reimport_preserves_existing_file_modification_time(
         self,
@@ -850,7 +866,7 @@ class TestSnapshotBehavior(WorkspaceFixture):
         os.utime(snapshot, ns=(1_000_000_000, 2_000_000_000))
         original.write_text("original = 3\n", encoding="utf-8")
         self._prepare([original])
-        self.assertEqual(snapshot.read_text(), "local = 2\n")
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), "local = 2\n")
         self.assertEqual(snapshot.stat().st_mtime_ns, 2_000_000_000)
 
     def test_reimport_repairs_missing_snapshot_without_replacing_other(
@@ -870,9 +886,12 @@ class TestSnapshotBehavior(WorkspaceFixture):
         first.write_text("first = 3\n", encoding="utf-8")
         second.write_text("second = 3\n", encoding="utf-8")
         self._prepare([folder])
-        self.assertEqual((snapshot / "first.py").read_text(), "first = 3\n")
         self.assertEqual(
-            (snapshot / "second.py").read_text(), "second_local = 2\n"
+            (snapshot / "first.py").read_text(encoding="utf-8"), "first = 3\n"
+        )
+        self.assertEqual(
+            (snapshot / "second.py").read_text(encoding="utf-8"),
+            "second_local = 2\n",
         )
         self.assertEqual(
             sorted(self._records()[0]["files"]),
@@ -891,8 +910,13 @@ class TestSnapshotBehavior(WorkspaceFixture):
         existing.write_text("value = 2\n", encoding="utf-8")
         self._file("research/new.py", "new = 3\n")
         self._prepare([folder])
-        self.assertEqual((snapshot / "existing.py").read_text(), "value = 1\n")
-        self.assertEqual((snapshot / "new.py").read_text(), "new = 3\n")
+        self.assertEqual(
+            (snapshot / "existing.py").read_text(encoding="utf-8"),
+            "value = 1\n",
+        )
+        self.assertEqual(
+            (snapshot / "new.py").read_text(encoding="utf-8"), "new = 3\n"
+        )
         self.assertEqual(
             self._records()[0]["files"], ["existing.py", "new.py"]
         )
@@ -914,8 +938,13 @@ class TestSnapshotBehavior(WorkspaceFixture):
             replace_existing=True,
         )
         snapshot = project.source / "research"
-        self.assertEqual((snapshot / "first.py").read_text(), "first = 2\n")
-        self.assertEqual((snapshot / "second.py").read_text(), "second = 1\n")
+        self.assertEqual(
+            (snapshot / "first.py").read_text(encoding="utf-8"), "first = 2\n"
+        )
+        self.assertEqual(
+            (snapshot / "second.py").read_text(encoding="utf-8"),
+            "second = 1\n",
+        )
         self.assertEqual(
             self._records()[0]["files"], ["first.py", "second.py"]
         )
@@ -930,7 +959,9 @@ class TestSnapshotBehavior(WorkspaceFixture):
         snapshot.write_text("local = True\n", encoding="utf-8")
         original.write_text("value = 2\n", encoding="utf-8")
         self._prepare([folder])
-        self.assertEqual(snapshot.read_text(), "local = True\n")
+        self.assertEqual(
+            snapshot.read_text(encoding="utf-8"), "local = True\n"
+        )
 
     def test_invalid_replacement_flag_rejected_without_changes(self) -> None:
         """Only explicit Boolean replacement decisions are accepted."""
@@ -954,10 +985,12 @@ class TestSnapshotBehavior(WorkspaceFixture):
         local.write_text("local = True\n", encoding="utf-8")
         self._file("research/new.py", "external = True\n")
         self._prepare([folder])
-        self.assertEqual(local.read_text(), "local = True\n")
+        self.assertEqual(local.read_text(encoding="utf-8"), "local = True\n")
         self.assertEqual(self._records()[0]["files"], ["first.py"])
         self._prepare([folder], replace_existing=True)
-        self.assertEqual(local.read_text(), "external = True\n")
+        self.assertEqual(
+            local.read_text(encoding="utf-8"), "external = True\n"
+        )
         self.assertEqual(self._records()[0]["files"], ["first.py", "new.py"])
 
     def test_preserved_file_does_not_invoke_copy(self) -> None:
@@ -1046,7 +1079,6 @@ class TestSnapshotBehavior(WorkspaceFixture):
                 [folder],
                 selected_files={wrong_key: ["selected.py"]},
             )
-
 
     def test_partial_selection_mapping_does_not_copy_anything(
         self,
@@ -1211,7 +1243,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
         generated.write_text("result = 2\n", encoding="utf-8")
         project = self._prepare([generated])
         self.assertEqual(
-            (project.source / "result.py").read_text(),
+            (project.source / "result.py").read_text(encoding="utf-8"),
             "result = 2\n",
         )
 
@@ -1325,7 +1357,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
         copy.symlink_to(target)
         with self.assertRaisesRegex(ValueError, "symbolic link"):
             self._prepare([original])
-        self.assertEqual(target.read_text(), "protected")
+        self.assertEqual(target.read_text(encoding="utf-8"), "protected")
 
     def test_existing_destination_parent_symlink_is_rejected(
         self,
@@ -1421,7 +1453,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
         ):
             with self.assertRaisesRegex(OSError, "write failed"):
                 self._prepare([original], replace_existing=True)
-        self.assertEqual(snapshot.read_text(), "initial = 1\n")
+        self.assertEqual(snapshot.read_text(encoding="utf-8"), "initial = 1\n")
         self.assertFalse(list(snapshot.parent.glob(".code.py.*.tmp")))
 
     def test_failed_copy_temporary_creation_keeps_old_snapshot(
@@ -1440,7 +1472,8 @@ class TestWorkspaceValidation(WorkspaceFixture):
             with self.assertRaisesRegex(OSError, "no temporary file"):
                 self._prepare([original], replace_existing=True)
         self.assertEqual(
-            (project.source / "code.py").read_text(), "initial = 1\n"
+            (project.source / "code.py").read_text(encoding="utf-8"),
+            "initial = 1\n",
         )
 
     def test_temporary_copy_symlink_must_not_modify_external_file(
@@ -1454,7 +1487,7 @@ class TestWorkspaceValidation(WorkspaceFixture):
         temporary = self.destination / "sources/code.py.tmp"
         temporary.symlink_to(outside)
         self._prepare([original], replace_existing=True)
-        self.assertEqual(outside.read_text(), "PROTECTED\n")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "PROTECTED\n")
         self.assertFalse(
             (self.destination / "sources/code.py").is_symlink()
         )
@@ -1536,7 +1569,9 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         self._prepare([original])
         digest = sha256(str(original).encode()).hexdigest()[:8]
         name = f"existing-{digest}.py"
-        self.assertEqual(untracked.read_text(), "keep = True\n")
+        self.assertEqual(
+            untracked.read_text(encoding="utf-8"), "keep = True\n"
+        )
         self.assertTrue((untracked.parent / name).exists())
 
     def test_hashed_collision_is_rejected(self) -> None:
@@ -1555,7 +1590,7 @@ class TestWorkspaceProvenance(WorkspaceFixture):
 
         self._prepare([self._file("code.py")])
         self.assertFalse((self.destination / "sources.json.tmp").exists())
-        raw = (self.destination / "sources.json").read_text()
+        raw = (self.destination / "sources.json").read_text(encoding="utf-8")
         self.assertTrue(raw.endswith("\n"))
         self.assertEqual(json.loads(raw)["version"], 1)
 
@@ -1607,7 +1642,7 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         protected = self._file("outside/marker.txt", "PROTECTED\n")
         (self.destination / "sources.json.tmp").symlink_to(protected)
         self._prepare([second])
-        self.assertEqual(protected.read_text(), "PROTECTED\n")
+        self.assertEqual(protected.read_text(encoding="utf-8"), "PROTECTED\n")
 
     def test_duplicate_stored_names_must_be_rejected(self) -> None:
         """Two originals cannot legitimately own the same copied filename."""
@@ -1621,7 +1656,6 @@ class TestWorkspaceProvenance(WorkspaceFixture):
         ])
         with self.assertRaisesRegex(ValueError, "duplicate|conflict"):
             self._prepare([second])
-
 
     def test_duplicate_stored_originals_must_be_rejected(self) -> None:
         """One source cannot acquire two different destination names."""

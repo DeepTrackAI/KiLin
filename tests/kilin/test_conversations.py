@@ -252,9 +252,13 @@ class TestStoreDiscovery(ConversationStoreFixture):
     def test_scan_skips_invalid_paths_and_json(self):
         valid = self._candidate("conversation_valid.json")
         (self.store.root / "conversation_folder.json").mkdir()
-        (self.store.root / "conversation_bad.json").write_text("{")
-        (self.store.root / "conversation_list.json").write_text("[]")
-        (self.store.root / "unrelated.json").write_text("{")
+        (self.store.root / "conversation_bad.json").write_text(
+            "{", encoding="utf-8"
+        )
+        (self.store.root / "conversation_list.json").write_text(
+            "[]", encoding="utf-8"
+        )
+        (self.store.root / "unrelated.json").write_text("{", encoding="utf-8")
         (self.store.root / "conversation_missing.json").write_text(
             json.dumps({"sessions": {}}), encoding="utf-8"
         )
@@ -274,7 +278,7 @@ class TestStoreDiscovery(ConversationStoreFixture):
             "parent_conversation_id": None, "origin_checkpoint_id": None,
             "created_at_utc": "2026-10-10T00:00:00Z",
             "updated_at_utc": "2026-10-10T00:00:00Z",
-        }}))
+        }}), encoding="utf-8")
         self.store.root.mkdir(parents=True)
         link = self.store.root / "conversation_link.json"
         try:
@@ -336,7 +340,6 @@ class TestStoreDiscovery(ConversationStoreFixture):
         self._candidate("conversation_bad.json", updated_at_utc=None)
         selected = self.store.ensure()
         self.assertEqual(selected.conversation_id, "conversation_good")
-
 
     def test_metadata_validator_rejects_invalid_identifiers(self):
         invalid = (
@@ -593,7 +596,9 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
             )
             existing.write_text("do not replace", encoding="utf-8")
             item = self.store.create()
-        self.assertEqual(existing.read_text(), "do not replace")
+        self.assertEqual(
+            existing.read_text(encoding="utf-8"), "do not replace"
+        )
         self.assertEqual(self.store.state_path(item).name,
                          "conversation_2026-10-12T12-00-00_2.json")
 
@@ -616,7 +621,7 @@ class TestStoreSelectionAndCreation(ConversationStoreFixture):
             self.skipTest(f"Symbolic links unavailable: {error}")
         with patch.object(self.store, "_new_path", return_value=path):
             self.store.create()
-        self.assertEqual(target.read_text(), "Do not change")
+        self.assertEqual(target.read_text(encoding="utf-8"), "Do not change")
         self.assertTrue(temporary.is_symlink())
         self.assertTrue(path.is_file())
         self.assertEqual(
@@ -640,7 +645,9 @@ class TestStoreBranching(ConversationStoreFixture):
         session = payload["sessions"][CONVERSATION_SESSION_KEY]
         session["turns"] = {"turn_0001": {"title": "Parent event"}}
         session["operations"] = {"01_action": {"name": "Parent action"}}
-        self.store.state_path(parent).write_text(json.dumps(payload))
+        self.store.state_path(parent).write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
         branch = self.store.create(branch_from=parent.conversation_id)
         self.assertEqual(branch.parent_conversation_id,
                          parent.conversation_id)
@@ -845,12 +852,12 @@ class TestStoreMetadata(ConversationStoreFixture):
         with self.assertRaisesRegex(ValueError, "invalid"):
             self.store.touch(item.conversation_id)
         self.assertEqual(self.store.active(), item)
-        self.assertEqual(path.read_text(), "not json")
+        self.assertEqual(path.read_text(encoding="utf-8"), "not json")
 
     def test_touch_rejects_invalid_state_container(self):
         item = self.store.create()
         path = self.store.state_path(item)
-        path.write_text(json.dumps({"sessions": []}))
+        path.write_text(json.dumps({"sessions": []}), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "invalid"):
             self.store.touch(item.conversation_id)
         self.assertEqual(self.store.active(), item)
@@ -905,7 +912,9 @@ class TestStoreEmptyState(ConversationStoreFixture):
         data = self._saved(self.store.state_path(item))
         state = data["sessions"][CONVERSATION_SESSION_KEY]["resume_state"]
         state.pop("turns", None)
-        self.store.state_path(item).write_text(json.dumps(data))
+        self.store.state_path(item).write_text(
+            json.dumps(data), encoding="utf-8"
+        )
         self.assertTrue(self.store.is_empty(item.conversation_id))
 
     def test_saved_turns_are_not_empty(self):
@@ -985,7 +994,9 @@ class TestStoreArchiving(ConversationStoreFixture):
         existing = folder / path.name
         existing.write_text("original archive", encoding="utf-8")
         active, archived = self.store.archive(item.conversation_id)
-        self.assertEqual(existing.read_text(), "original archive")
+        self.assertEqual(
+            existing.read_text(encoding="utf-8"), "original archive"
+        )
         self.assertEqual(archived.name,
                          f"{path.stem}_2{path.suffix}")
         self.assertTrue(archived.exists())
@@ -997,8 +1008,8 @@ class TestStoreArchiving(ConversationStoreFixture):
         path = self.store.state_path(item)
         folder = self.store.root / "deleted"
         folder.mkdir()
-        (folder / path.name).write_text("1")
-        (folder / f"{path.stem}_2.json").write_text("2")
+        (folder / path.name).write_text("1", encoding="utf-8")
+        (folder / f"{path.stem}_2.json").write_text("2", encoding="utf-8")
         _, archived = self.store.archive(item.conversation_id)
         self.assertEqual(archived.name, f"{path.stem}_3.json")
 
@@ -1063,8 +1074,10 @@ class TestConversationJsonHelpers(ConversationStoreFixture):
         data = {"title": "Göteborg", "saved": [1, 2]}
         module._write_json(path, data)
         self.assertEqual(self._saved(path), data)
-        self.assertIn('  "title": "Göteborg"', path.read_text())
-        self.assertTrue(path.read_text().endswith("\n"))
+        self.assertIn(
+            '  "title": "Göteborg"', path.read_text(encoding="utf-8")
+        )
+        self.assertTrue(path.read_text(encoding="utf-8").endswith("\n"))
         self.assertFalse((path.parent / "nested.json.tmp").exists())
 
     def test_write_json_replaces_existing_data(self):

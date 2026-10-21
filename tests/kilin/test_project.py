@@ -258,7 +258,7 @@ class TestProjectInitialization(ProjectFixture):
                 self.assertTrue(result.indexes.is_dir())
                 self.assertTrue(result.logs.is_dir())
                 self.assertEqual(
-                    (directory / "keep.txt").read_text(),
+                    (directory / "keep.txt").read_text(encoding="utf-8"),
                     "keep this content",
                 )
 
@@ -773,7 +773,8 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertEqual(result.profile.kind, "code")
         self.assertEqual(result.profile.source, self.source.name)
         self.assertEqual(
-            (result.source / self.file).read_text(), "first version\n"
+            (result.source / self.file).read_text(encoding="utf-8"),
+            "first version\n",
         )
         self.assertFalse(
             (result.source / "ignore.unselected_ext").exists()
@@ -782,10 +783,10 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertTrue(result.logs.is_dir())
         self.assertTrue((result.root / "source_snapshot.json").is_file())
         manifest = json.loads(
-            (result.root / "source_snapshot.json").read_text()
+            (result.root / "source_snapshot.json").read_text(encoding="utf-8")
         )
         self.assertEqual(manifest["source_directory"], str(self.source))
-        self.assertEqual((self.source / self.file).read_text(),
+        self.assertEqual((self.source / self.file).read_text(encoding="utf-8"),
                          "first version\n")
 
     def test_reopen_unchanged_workspace_preserves_identical_copy(self) -> None:
@@ -797,7 +798,9 @@ class TestProjectWorkspace(ProjectFixture):
         second = self._prepare()
         self.assertEqual(first.root, second.root)
         self.assertEqual(snapshot.stat().st_ino, before.st_ino)
-        self.assertEqual(snapshot.read_text(), "first version\n")
+        self.assertEqual(
+            snapshot.read_text(encoding="utf-8"), "first version\n"
+        )
 
     def test_added_modified_and_removed_files_are_synchronized(self) -> None:
         """Reflect all source changes while leaving originals intact."""
@@ -809,11 +812,12 @@ class TestProjectWorkspace(ProjectFixture):
         second = self._prepare()
         self.assertEqual(second.root, first.root)
         self.assertEqual(
-            (second.source / self.file).read_text(),
+            (second.source / self.file).read_text(encoding="utf-8"),
             "modified first version\n",
         )
         self.assertEqual(
-            (second.source / extra).read_text(), "added version\n"
+            (second.source / extra).read_text(encoding="utf-8"),
+            "added version\n",
         )
         (self.source / self.file).unlink()
         third = self._prepare()
@@ -837,11 +841,15 @@ class TestProjectWorkspace(ProjectFixture):
 
         first = self._prepare()
         self._write(first.source, "stale.txt", "stale\n")
-        (first.root / "source_snapshot.json").write_text("{broken")
+        (first.root / "source_snapshot.json").write_text(
+            "{broken", encoding="utf-8"
+        )
         refreshed = self._prepare()
         self.assertFalse((refreshed.source / "stale.txt").exists())
-        self.assertEqual((refreshed.source / self.file).read_text(),
-                         "first version\n")
+        self.assertEqual(
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
+            "first version\n",
+        )
 
     def test_stale_manifest_structure_rebuilds_snapshot(self) -> None:
         """Recover from a readable but structurally invalid manifest."""
@@ -854,7 +862,8 @@ class TestProjectWorkspace(ProjectFixture):
         )
         result = self._prepare()
         self.assertEqual(
-            (result.source / self.file).read_text(), "first version\n"
+            (result.source / self.file).read_text(encoding="utf-8"),
+            "first version\n",
         )
 
     def test_collision_of_identical_source_basenames(self) -> None:
@@ -959,7 +968,7 @@ class TestProjectWorkspace(ProjectFixture):
         )
         refreshed = self._prepare()
         self.assertEqual(
-            (refreshed.source / self.file).read_text(),
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
         )
 
@@ -998,7 +1007,7 @@ class TestProjectWorkspace(ProjectFixture):
         (first.source / self.file).unlink()
         refreshed = self._prepare()
         self.assertEqual(
-            (refreshed.source / self.file).read_text(),
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
         )
 
@@ -1011,7 +1020,7 @@ class TestProjectWorkspace(ProjectFixture):
         )
         refreshed = self._prepare()
         self.assertEqual(
-            (refreshed.source / self.file).read_text(),
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
         )
 
@@ -1038,11 +1047,11 @@ class TestProjectWorkspace(ProjectFixture):
         self._write(self.source, new, "new original\n")
         refreshed = self._prepare()
         self.assertEqual(
-            (refreshed.source / self.file).read_text(),
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
         )
         self.assertEqual(
-            (refreshed.source / new).read_text(),
+            (refreshed.source / new).read_text(encoding="utf-8"),
             "new original\n",
         )
 
@@ -1060,10 +1069,10 @@ class TestProjectWorkspace(ProjectFixture):
         refreshed = self._prepare()
         self.assertFalse((refreshed.source / self.file).is_symlink())
         self.assertEqual(
-            (refreshed.source / self.file).read_text(),
+            (refreshed.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
         )
-        self.assertEqual(untouched.read_text(), "outside\n")
+        self.assertEqual(untouched.read_text(encoding="utf-8"), "outside\n")
 
     def test_snapshot_incomplete_integrity_scan_is_not_accepted(
         self,
@@ -1177,7 +1186,9 @@ class TestWorkspaceHelpers(ProjectFixture):
 
         path = self.root / "nested" / "manifest.json"
         project._write_json(path, {"b": 2, "a": 1})
-        self.assertEqual(path.read_text(), '{\n  "a": 1,\n  "b": 2\n}\n')
+        self.assertEqual(
+            path.read_text(encoding="utf-8"), '{\n  "a": 1,\n  "b": 2\n}\n'
+        )
         self.assertFalse(path.with_suffix(".json.tmp").exists())
         project._write_json(path, {"different": True})
         self.assertEqual(project._read_json_if_possible(path),

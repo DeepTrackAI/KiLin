@@ -38,7 +38,7 @@ class TestProjectTransaction(unittest.TestCase):
         workspace = self.root / "workspace"
         workspace.mkdir()
         keep = workspace / "keep.txt"
-        keep.write_text("user-owned\n")
+        keep.write_text("user-owned\n", encoding="utf-8")
         with patch(
             "kilin.project.install_project_resources",
             side_effect=OSError("disk full"),
@@ -46,7 +46,7 @@ class TestProjectTransaction(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "disk full"):
                 initialize_project(workspace, "literature")
         self.assertFalse((workspace / "profile.ini").exists())
-        self.assertEqual(keep.read_text(), "user-owned\n")
+        self.assertEqual(keep.read_text(encoding="utf-8"), "user-owned\n")
         self.assertFalse((workspace / "templates").exists())
         project = initialize_project(workspace, "literature")
         self.assertTrue((project.root / "profile.ini").is_file())
@@ -81,7 +81,7 @@ class TestProjectTransaction(unittest.TestCase):
         workspace = self.root / "workspace"
         workspace.mkdir()
         keep = workspace / "original.md"
-        keep.write_text("manual\n")
+        keep.write_text("manual\n", encoding="utf-8")
         with patch(
             "kilin.project.atomic_write_text",
             side_effect=OSError("cannot commit"),
@@ -89,7 +89,7 @@ class TestProjectTransaction(unittest.TestCase):
             with self.assertRaisesRegex(OSError, "cannot commit"):
                 initialize_project(workspace, "literature")
         self.assertFalse((workspace / "profile.ini").exists())
-        self.assertEqual(keep.read_text(), "manual\n")
+        self.assertEqual(keep.read_text(encoding="utf-8"), "manual\n")
         self.assertFalse((workspace / "templates").exists())
 
     def test_profile_is_committed_after_resources_are_ready(self) -> None:
@@ -137,7 +137,7 @@ class TestProjectTransaction(unittest.TestCase):
 
         origin = self.root / "repository"
         origin.mkdir()
-        (origin / "code.py").write_text("number = 2\n")
+        (origin / "code.py").write_text("number = 2\n", encoding="utf-8")
         sandbox = self.root / "sandbox"
         with patch(
             "kilin.project.shutil.copy2", side_effect=OSError("copy fail")
