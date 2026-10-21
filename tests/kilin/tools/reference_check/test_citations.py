@@ -261,8 +261,8 @@ class TestSuperscripts(unittest.TestCase):
         passages = (
             chunk(
                 "a",
-                "Mite Mijalkov1, Ludvig Storm2, Anna Canal-Garcia1, Hang Zhao2. "
-                "The hash has spaces256 of keys.\n",
+                "Mite Mijalkov1, Ludvig Storm2, Anna Canal-Garcia1, "
+                "Hang Zhao2. The hash has spaces256 of keys.\n",
             ),
         )
         superscripts = {
