@@ -8,7 +8,11 @@ A persistent manifest caches per-file SHA-256 digests outside the model
 folder. When file metadata is unchanged, the digest can be reused without
 rereading the file. This is a metadata-based optimization, not a guarantee
 against changes that preserve all observed metadata. Set ``force_verify``
-to rehash every file when stronger verification is required.
+to rehash every file when stronger verification is required. On Windows,
+``st_ctime`` is the creation time rather than the change time, so a file
+rewritten in place with its size and modification time restored keeps its
+cached digest; any ordinary replacement changes the modification time and
+is detected.
 
 The identity is intended for index compatibility, not
 authentication.

@@ -80,6 +80,11 @@ class TestMutableModelIdentity(unittest.TestCase):
             (other / file.name).write_bytes(file.read_bytes())
         self.assertEqual(baseline, self._identity(other))
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "Windows has no change time: a rewrite restoring size and mtime "
+        "is not detectable without rehashing",
+    )
     def test_weight_change_with_preserved_size_and_mtime(self) -> None:
         """Detect modified model weights even with identical stat fields.
 

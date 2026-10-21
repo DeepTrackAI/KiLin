@@ -1780,6 +1780,19 @@ class TestRAGConversationPersistence(unittest.TestCase):
         self.root = Path(temporary.name)
         self.session = _session(self.root)
         self.session.conversation_path.parent.mkdir(parents=True)
+        self.addCleanup(self._release_conversation)
+
+    def _release_conversation(self) -> None:
+        """Release a conversation lock a switch acquired, before cleanup.
+
+        Windows cannot delete the temporary folder while a lock file is
+        open.
+
+        """
+
+        ownership = getattr(self.session, "_conversation_ownership", None)
+        if ownership is not None:
+            ownership.release()
 
     def test_absent_conversation_has_empty_state(self) -> None:
         """Treat a missing conversation file as a new conversation."""
@@ -2421,6 +2434,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
                 self.root, progress_callback=progress.append,
                 router_model="custom-router",
             )
+        self.addCleanup(session.close)
         self.assertEqual(session.index_status, "rebuilt")
         self.assertEqual(len(session.chunks), 1)
         self.assertIs(session.indexes, sentinel.indexes)
@@ -2450,6 +2464,7 @@ class TestRAGSessionConstruction(unittest.TestCase):
             restored=(history, [previous], "checkpoint")
         ) as mocks:
             session = rag.RAGSession(self.root)
+        self.addCleanup(session.close)
         self.assertEqual(session.turns, [previous])
         self.assertEqual(session._checkpoint_id, "checkpoint")
         mocks.chat.return_value.restore_history.assert_called_once_with(

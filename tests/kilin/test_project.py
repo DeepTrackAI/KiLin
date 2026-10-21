@@ -1136,7 +1136,8 @@ class TestProjectWorkspace(ProjectFixture):
     ) -> None:
         """Generate a nonempty workspace name for punctuation source IDs."""
 
-        source = self._folder("...")
+        # Not "...": Windows drops trailing dots from folder names.
+        source = self._folder("!!!")
         self._write(source, f"example{self.suffix}", "source")
         result = project.prepare_project_workspace(
             source, "code", self.sandbox

@@ -863,13 +863,17 @@ class TestTraceWriteFailures(unittest.TestCase):
 
     def _logger(self, policy: str) -> TraceLogger:
         """Return a logger whose future writes can be mocked."""
-        return TraceLogger(
+        logger = TraceLogger(
             TraceConfig(
                 enabled=True, output_path=self.path,
                 failure_policy=policy,
             ),
             default_directory=self.root,
         )
+        # Release its lock before the folder is removed (Windows cannot
+        # delete an open file).
+        self.addCleanup(logger.close)
+        return logger
 
     def test_warn_policy_disables_later_event_writes(self) -> None:
         """Warn once without replacing the last valid trace JSON."""

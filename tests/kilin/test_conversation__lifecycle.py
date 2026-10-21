@@ -164,6 +164,7 @@ class TestConversationLifecycle(unittest.TestCase):
 
     def test_switch_rejects_mismatched_sink_without_mutating_session(self):
         trace = _logger(self.path)
+        self.addCleanup(trace.close)
         session = _session(self.root, trace)
         other = self.root / "logs" / "conversation_other.json"
         before = self.path.read_bytes()
@@ -209,6 +210,7 @@ class TestConversationLifecycle(unittest.TestCase):
         # Ownership is exclusive: release the reset logger before reopening.
         trace.close()
         reopened = _logger(self.path)
+        self.addCleanup(reopened.close)
         session.switch_conversation(self.path, trace=reopened)
         self.assertEqual(session.turns, [])
         self.assertIsNone(session._checkpoint_id)

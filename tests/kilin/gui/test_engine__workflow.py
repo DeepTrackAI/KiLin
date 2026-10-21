@@ -163,7 +163,10 @@ class TestEngineWorkflow(unittest.TestCase):
         prepare.assert_called_once_with(
             [str(source)],
             "literature",
-            str(Path("/project/sandbox") / f"literature_repo-{digest}"),
+            str(
+                Path("/project/sandbox").resolve()
+                / f"literature_repo-{digest}"
+            ),
         )
 
     def test_evidence_count_is_passed_for_one_question(self) -> None:
