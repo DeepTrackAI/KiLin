@@ -133,6 +133,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 import json
+from pathlib import PureWindowsPath
 import re
 from typing import Final, Literal, Protocol, TypeAlias
 
@@ -412,7 +413,8 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
     for item in getattr(turn, "evidence", ()) or ():
         if cited and getattr(item, "citation", None) not in cited:
             continue
-        name = str(getattr(item, "path", "")).split("/")[-1]
+        # Evidence paths can originate on a different operating system.
+        name = PureWindowsPath(str(getattr(item, "path", ""))).name
         symbol = getattr(item, "symbol", None)
         label = f"{name}:{symbol}" if symbol else name
         if label and label not in sources:

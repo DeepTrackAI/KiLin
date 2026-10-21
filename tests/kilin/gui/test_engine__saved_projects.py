@@ -33,7 +33,8 @@ class TestEngineSavedProjects(unittest.TestCase):
                 (folder / "sources").mkdir(parents=True)
                 profile = folder / "profile.ini"
                 profile.write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n"
+                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    encoding="utf-8",
                 )
                 os.utime(profile, (100 + index, 100 + index))
             (sandbox / "unrelated").mkdir()
@@ -59,7 +60,8 @@ class TestEngineSavedProjects(unittest.TestCase):
                 folder = sandbox / name
                 (folder / "sources").mkdir(parents=True)
                 (folder / "profile.ini").write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n"
+                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    encoding="utf-8",
                 )
             events: list[dict[str, object]] = []
             engine = ChatEngine(sandbox, events.append)
@@ -87,7 +89,8 @@ class TestEngineSavedProjects(unittest.TestCase):
                 (folder / "sources").mkdir(parents=True)
                 profile = folder / "profile.ini"
                 profile.write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n"
+                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    encoding="utf-8",
                 )
                 os.utime(profile, (100 + index, 100 + index))
             events: list[dict[str, object]] = []
@@ -109,7 +112,8 @@ class TestEngineSavedProjects(unittest.TestCase):
             custom = root / "my-project"
             (custom / "sources").mkdir(parents=True)
             (custom / "profile.ini").write_text(
-                "[project]\nkind = literature\nsource = sources\n"
+                "[project]\nkind = literature\nsource = sources\n",
+                encoding="utf-8",
             )
             events: list[dict[str, object]] = []
             engine = ChatEngine(root / "sandbox", events.append)

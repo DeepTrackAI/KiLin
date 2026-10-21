@@ -359,7 +359,9 @@ class TestGUIEnvironment(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory) / "checkout"
             root.mkdir()
-            (root / "pyproject.toml").write_text("[project]\n")
+            (root / "pyproject.toml").write_text(
+                "[project]\n", encoding="utf-8"
+            )
             fake_cli_path = root / "kilin" / "cli.py"
 
             for backend, missing, extra in cases:
@@ -424,7 +426,9 @@ class TestGUIEnvironment(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory) / "checkout"
             root.mkdir()
-            (root / "pyproject.toml").write_text("[project]\n")
+            (root / "pyproject.toml").write_text(
+                "[project]\n", encoding="utf-8"
+            )
             error = subprocess.CalledProcessError(9, ["uv", "sync"])
             with (
                 patch.object(cli, "__file__", str(root / "kilin/cli.py")),

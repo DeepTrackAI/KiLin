@@ -69,7 +69,7 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         """
 
         return json.loads(
-            (self.destination / "sources.json").read_text()
+            (self.destination / "sources.json").read_text(encoding="utf-8")
         )["sources"]
 
     def test_explicit_suffix_and_protected_file_are_imported(self) -> None:
@@ -110,8 +110,8 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
 
         source = self.root / "repository"
         (source / "sub").mkdir(parents=True)
-        (source / "sub/a.py").write_text("a = 1\n")
-        (source / "sub/b.py").write_text("b = 2\n")
+        (source / "sub/a.py").write_text("a = 1\n", encoding="utf-8")
+        (source / "sub/b.py").write_text("b = 2\n", encoding="utf-8")
         project = prepare_sources_workspace(
             [source], "code", self.destination
         )
@@ -160,7 +160,7 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         external = self.root / "external"
         external.mkdir()
         original = external / "analysis.py"
-        original.write_text("number = 1\n")
+        original.write_text("number = 1\n", encoding="utf-8")
         project = initialize_project(external, "code")
         with self.assertRaisesRegex(ValueError, "managed sources"):
             remove_workspace_sources(project, ["sources/analysis.py"])

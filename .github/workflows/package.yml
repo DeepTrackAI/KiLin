@@ -1,0 +1,44 @@
+name: Distribution package
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # A newer push replaces a pull request's run; every push to main keeps
+  # its own complete result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  wheel:
+    name: Build and inspect installed distribution / Python 3.12
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Build wheel and source distribution
+        run: uv build
+      - name: Install wheel in a separate environment
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/kilin-wheel-env"
+          uv pip install --python "$RUNNER_TEMP/kilin-wheel-env/bin/python" dist/*.whl
+      - name: Verify installed imports, resources and CLI
+        working-directory: ${{ runner.temp }}
+        run: >-
+          "$RUNNER_TEMP/kilin-wheel-env/bin/python" -I
+          "$GITHUB_WORKSPACE/tests/setup/check_installed_wheel.py"
+      - name: Upload distributions for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: kilin-distributions
+          path: dist/*
+          if-no-files-found: error

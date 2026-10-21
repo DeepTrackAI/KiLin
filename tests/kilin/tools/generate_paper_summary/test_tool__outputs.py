@@ -65,7 +65,7 @@ class TestReportOutputs(unittest.TestCase):
             '# Report\n', self.report, self.template, self.context
         )
         self.assertEqual(result, (None, None))
-        self.assertEqual(self.report.read_text(), '# Report\n')
+        self.assertEqual(self.report.read_text(encoding="utf-8"), '# Report\n')
         self.assertEqual(list(self.outputs.iterdir()), [self.report])
         self.writer.assert_not_called()
         self.context.trace.emit.assert_not_called()
@@ -100,7 +100,7 @@ class TestReportOutputs(unittest.TestCase):
             data={'file': 'outputs/report.pdf', 'pages': 1},
             turn_id='example-turn',
         )
-        self.assertEqual(self.report.read_text(), '# Report\n')
+        self.assertEqual(self.report.read_text(encoding="utf-8"), '# Report\n')
 
     def test_existing_pdf_is_not_overwritten(self) -> None:
         """Choose another output name when the PDF already exists.
@@ -117,7 +117,7 @@ class TestReportOutputs(unittest.TestCase):
         self.assertNotEqual(
             self.writer.call_args.args[1], old_pdf
         )
-        self.assertEqual(old_pdf.read_text(), 'existing pdf')
+        self.assertEqual(old_pdf.read_text(encoding="utf-8"), 'existing pdf')
         self.assertEqual(
             (self.root / pdf).read_bytes(), b'%PDF-1.4\nexample\n'
         )
@@ -170,7 +170,7 @@ class TestReportOutputs(unittest.TestCase):
         )
         self.assertEqual(pdf, Path('outputs/report.pdf'))
         self.assertIn('needed 3 pages', note)
-        self.assertEqual(self.report.read_text(), '# Report\n')
+        self.assertEqual(self.report.read_text(encoding="utf-8"), '# Report\n')
 
     def test_renderer_error_preserves_saved_markdown(self) -> None:
         """Surface PDF failures without losing the primary artifact.

@@ -560,11 +560,15 @@ class TestModelSource(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "model").mkdir()
-            with patch.dict(os.environ, {"HOME": str(root)}):
+            # Windows finds "~" through USERPROFILE, not HOME.
+            home = {"HOME": str(root), "USERPROFILE": str(root)}
+            with patch.dict(os.environ, home):
                 resolved = embeddings._model_source(
                     "~/model", allow_download=False, revision=None
                 )
-            self.assertEqual(resolved, str(root / "model"))
+            self.assertEqual(
+                Path(resolved).resolve(), (root / "model").resolve()
+            )
 
     def test_offline_remote_model_uses_cached_snapshot(self) -> None:
         """Forward the revision when downloads are forbidden."""
@@ -580,7 +584,7 @@ class TestModelSource(unittest.TestCase):
             resolved = embeddings._model_source(
                 "group/model", allow_download=False, revision="commit-1"
             )
-        self.assertEqual(resolved, "/cache/snapshot")
+        self.assertEqual(Path(resolved), Path("/cache/snapshot"))
         cached.assert_called_once_with("group/model", revision="commit-1")
         download.assert_not_called()
 

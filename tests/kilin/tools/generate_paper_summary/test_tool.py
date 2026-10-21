@@ -144,8 +144,10 @@ class TestGeneratePaperSummary(unittest.TestCase):
         """
 
         folder = SHIPPED_TEMPLATES_DIR.parent
-        data = json.loads((folder / "defaults.json").read_text())
-        readme = (folder / "README.md").read_text()
+        data = json.loads(
+            (folder / "defaults.json").read_text(encoding="utf-8")
+        )
+        readme = (folder / "README.md").read_text(encoding="utf-8")
         for name, group in data.items():
             with self.subTest(section=name):
                 self.assertIn(f"`{name}`", readme)
@@ -256,7 +258,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         """
 
         format_text = "# Sample\n\n## Findings (max 100 words)\nWrite.\n"
-        (self.folder / "sample.md").write_text(format_text)
+        (self.folder / "sample.md").write_text(format_text, encoding="utf-8")
         chosen = choose_template("Make a sample report", self.folder,
                                  "research_briefing")
         self.assertEqual(chosen.name, "sample")

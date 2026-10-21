@@ -220,6 +220,11 @@ class TestRAGIndexProvenance(unittest.TestCase):
         self.assertEqual(second.calls, [])
         digest.assert_not_called()
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "Windows has no change time: a rewrite restoring size and mtime "
+        "is not detectable without rehashing",
+    )
     def test_local_weight_replacement_forces_complete_rebuild(self) -> None:
         """Replacing weights at the same path invalidates every old vector.
 

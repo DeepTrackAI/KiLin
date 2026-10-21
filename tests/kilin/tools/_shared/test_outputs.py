@@ -51,11 +51,12 @@ class TestSharedOutputs(unittest.TestCase):
             root = Path(temporary)
             target = root / "target"
             target.mkdir()
-            (target / "manual.md").write_text("# Manual\n")
+            (target / "manual.md").write_text("# Manual\n", encoding="utf-8")
             self.assertEqual(output_folder(root), root / "outputs")
             self.assertTrue((root / "outputs").is_dir())
             self.assertEqual(
-                (target / "manual.md").read_text(), "# Manual\n"
+                (target / "manual.md").read_text(encoding="utf-8"),
+                "# Manual\n",
             )
             self.assertFalse((root / "outputs/manual.md").exists())
 
@@ -108,9 +109,15 @@ class TestOutputFilePublication(unittest.TestCase):
                 Path("outputs/report-3.md"),
             ),
         )
-        self.assertEqual((self.root / first).read_text(), "first")
-        self.assertEqual((self.root / second).read_text(), "second")
-        self.assertEqual((self.root / third).read_text(), "third")
+        self.assertEqual(
+            (self.root / first).read_text(encoding="utf-8"), "first"
+        )
+        self.assertEqual(
+            (self.root / second).read_text(encoding="utf-8"), "second"
+        )
+        self.assertEqual(
+            (self.root / third).read_text(encoding="utf-8"), "third"
+        )
         self.assertEqual(
             sorted(path.name for path in self.folder.iterdir()),
             ["report-2.md", "report-3.md", "report.md"],
@@ -155,8 +162,10 @@ class TestOutputFilePublication(unittest.TestCase):
 
         saved = save_output_file(self.root, "report.md", "new")
         self.assertEqual(saved, Path("outputs/report-3.md"))
-        self.assertEqual((self.root / saved).read_text(), "new")
-        self.assertEqual(existing.read_text(), "protected")
+        self.assertEqual(
+            (self.root / saved).read_text(encoding="utf-8"), "new"
+        )
+        self.assertEqual(existing.read_text(encoding="utf-8"), "protected")
         self.assertFalse(dangling.exists())
         self.assertTrue(link.is_symlink())
         self.assertTrue(missing_link.is_symlink())
@@ -188,9 +197,12 @@ class TestOutputFilePublication(unittest.TestCase):
 
         self.assertEqual(saved, Path("outputs/report-2.md"))
         self.assertEqual(
-            (self.folder / "report.md").read_text(), "other writer"
+            (self.folder / "report.md").read_text(encoding="utf-8"),
+            "other writer",
         )
-        self.assertEqual((self.root / saved).read_text(), "new")
+        self.assertEqual(
+            (self.root / saved).read_text(encoding="utf-8"), "new"
+        )
 
     def test_concurrent_writers_receive_unique_names(self) -> None:
         """The output directory never loses a concurrent writer's data.
@@ -215,7 +227,7 @@ class TestOutputFilePublication(unittest.TestCase):
             | {f"report-{index}.md" for index in range(2, 13)},
         )
         self.assertEqual(
-            {(self.root / path).read_text() for path in paths},
+            {(self.root / path).read_text(encoding="utf-8") for path in paths},
             set(data),
         )
         self.assertFalse(
@@ -254,7 +266,7 @@ class TestOutputFilePublication(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "regular"):
             publish_output_file(self.root, "report.md", linked)
         self.assertFalse((self.folder / "report.md").exists())
-        self.assertEqual(outside.read_text(), "protected")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "protected")
 
     def test_exclusive_copy_when_hard_links_are_unavailable(self) -> None:
         """The fallback preserves existing outputs without hard links.
@@ -270,8 +282,10 @@ class TestOutputFilePublication(unittest.TestCase):
             saved = save_output_file(self.root, "report.md", "new")
 
         self.assertEqual(saved, Path("outputs/report-2.md"))
-        self.assertEqual(first.read_text(), "protected")
-        self.assertEqual((self.root / saved).read_text(), "new")
+        self.assertEqual(first.read_text(encoding="utf-8"), "protected")
+        self.assertEqual(
+            (self.root / saved).read_text(encoding="utf-8"), "new"
+        )
         self.assertEqual(len(list(self.folder.iterdir())), 2)
 
     def test_failed_copy_does_not_leave_partial_output(self) -> None:

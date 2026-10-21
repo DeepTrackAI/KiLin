@@ -139,7 +139,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from math import isfinite
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import platform
 import re
 import sys
@@ -4443,7 +4443,11 @@ def _answer_prompt(
         return question
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
-        location = f"{item.path}:{item.start_line}-{item.end_line}"
+        # Render evidence from either host with POSIX separators.
+        location = (
+            f"{PureWindowsPath(str(item.path)).as_posix()}:"
+            f"{item.start_line}-{item.end_line}"
+        )
         symbol = f" ({item.symbol})" if item.symbol else ""
         sections.append(f"[{item.citation}] {location}{symbol}\n{item.text}")
     sections.append(

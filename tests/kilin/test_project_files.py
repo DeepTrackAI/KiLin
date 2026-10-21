@@ -49,7 +49,9 @@ class TestProjectFiles(unittest.TestCase):
                 )
                 self.assertEqual(paths, [f"{folder}/report.md"])
                 target = self.project.root / paths[0]
-                self.assertEqual(target.read_text(), "# Original\n")
+                self.assertEqual(
+                    target.read_text(encoding="utf-8"), "# Original\n"
+                )
                 self.assertEqual(
                     remove_project_files(self.project, paths), paths
                 )
@@ -73,7 +75,8 @@ class TestProjectFiles(unittest.TestCase):
         )
         self.assertEqual(replaced, first)
         self.assertEqual(
-            (self.project.root / first[0]).read_text(), "# Changed\n"
+            (self.project.root / first[0]).read_text(encoding="utf-8"),
+            "# Changed\n",
         )
         self.assertTrue((self.project.root / second[0]).exists())
 
@@ -92,7 +95,8 @@ class TestProjectFiles(unittest.TestCase):
                     path,
                 )
                 self.assertEqual(
-                    (self.project.root / path).read_text(), "Replaced\n"
+                    (self.project.root / path).read_text(encoding="utf-8"),
+                    "Replaced\n",
                 )
 
     def test_folder_addition_and_deletion(self) -> None:
@@ -101,7 +105,9 @@ class TestProjectFiles(unittest.TestCase):
         source = self.root / "custom"
         source.mkdir()
         (source / "nested").mkdir()
-        (source / "nested/example.md").write_text("Example\n")
+        (source / "nested/example.md").write_text(
+            "Example\n", encoding="utf-8"
+        )
         paths = add_project_files(self.project, "templates", [source])
         self.assertEqual(paths, ["templates/custom"])
         self.assertIn(
@@ -137,7 +143,7 @@ class TestProjectFiles(unittest.TestCase):
         """A link cannot redirect a deletion outside a project."""
 
         outside = self.root / "outside.txt"
-        outside.write_text("safe\n")
+        outside.write_text("safe\n", encoding="utf-8")
         linked = self.project.root / "outputs/link.txt"
         linked.symlink_to(outside)
         with self.assertRaisesRegex(ValueError, "link"):
@@ -146,7 +152,7 @@ class TestProjectFiles(unittest.TestCase):
             replace_project_file(
                 self.project, "outputs/link.txt", self.original
             )
-        self.assertEqual(outside.read_text(), "safe\n")
+        self.assertEqual(outside.read_text(encoding="utf-8"), "safe\n")
 
     def test_all_removal_paths_are_checked_before_deleting(self) -> None:
         """Invalid second paths do not delete a valid first file."""
