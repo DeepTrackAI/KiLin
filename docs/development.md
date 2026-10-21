@@ -149,14 +149,16 @@ A newer push to a pull request cancels that pull request's runs still in
 progress; pushes to `main` are never cancelled, so each keeps a complete
 result.
 
-**Python 3.13, 3.14 and 3.15 are experimental**, each tested on Ubuntu,
-macOS and Windows. These nine jobs use `pip --ignore-requires-python` to
+**Python 3.13 and 3.14 are experimental**, each tested on Ubuntu, macOS
+and Windows. These six jobs use `pip --ignore-requires-python` to
 probe the current pinned core dependencies without changing the supported
 range or `uv.lock`. They require binary distributions rather than building
 native dependencies from source. They do not use the Python 3.12 lock file
 and are non-blocking, but installation failures, skips and test failures
 remain visible in each GitHub Actions job and its summary. Passing such a
 probe does not establish support for optional MLX, PyTorch or Qt backends.
+Python 3.15 will be added once its dependencies publish binary
+distributions for it (PyYAML had none when 3.15 was released).
 
 To promote a newer Python version, first verify core and optional backend
 compatibility, update the package metadata and dependency constraints where

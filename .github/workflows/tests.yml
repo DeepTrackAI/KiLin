@@ -58,7 +58,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.13", "3.14", "3.15"]
+        # Python 3.15 returns once its dependencies publish wheels (PyYAML
+        # had none at its release).
+        python-version: ["3.13", "3.14"]
     env:
       HF_HUB_OFFLINE: "1"
       HF_HUB_DISABLE_TELEMETRY: "1"
