@@ -37,10 +37,7 @@ RULES = CitationRules(
     unit_words=frozenset({"cm", "log", "nm"}),
     byline_share=0.5,
 )
-PDF_FIXTURES = (
-    Path(__file__).resolve().parents[2]
-    / "sources/extensions/fixtures"
-)
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 
 class TestCitedNumbers(unittest.TestCase):
@@ -62,11 +59,13 @@ class TestBrackets(unittest.TestCase):
     """Bracketed markers need no confirmation."""
 
     def test_bracket_citations_and_diagnostics(self) -> None:
-        passages = (chunk(
-            "a",
-            "Brains are networks [1]. Graphs measure them [2, 4–5].\n"
-            "A later study disagrees [7].\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Brains are networks [1]. Graphs measure them [2, 4–5].\n"
+                "A later study disagrees [7].\n",
+            ),
+        )
         scan = find_citations(passages, 6, None, RULES)
         self.assertEqual(scan.style, STYLE_BRACKETS)
         self.assertEqual(
@@ -81,9 +80,12 @@ class TestBrackets(unittest.TestCase):
     def test_few_brackets_without_superscripts(self) -> None:
         # Fewer than bracket_markers_min, but nothing else to look for.
         rules = CitationRules(
-            bracket_markers_min=5, superscript_ratio=0.85,
-            signature_characters=8, max_range=50,
-            unit_words=frozenset({"cm"}), byline_share=0.5,
+            bracket_markers_min=5,
+            superscript_ratio=0.85,
+            signature_characters=8,
+            max_range=50,
+            unit_words=frozenset({"cm"}),
+            byline_share=0.5,
         )
         passages = (chunk("a", "Only one citation here [2].\n"),)
         scan = find_citations(passages, 3, None, rules)
@@ -94,13 +96,15 @@ class TestBrackets(unittest.TestCase):
         self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
 
     def test_parenthesized_citations(self) -> None:
-        passages = (chunk(
-            "a",
-            "Single molecules move in cells (1). Motion is anomalous "
-            "(6,7), as shown (15,30–32). The MSD is 4Dt (2). See "
-            "Equation (3) and Eqs. (4) and (5). The steps are: (1) "
-            "detection, then linking. Earlier work (8), and later.\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Single molecules move in cells (1). Motion is anomalous "
+                "(6,7), as shown (15,30–32). The MSD is 4Dt (2). See "
+                "Equation (3) and Eqs. (4) and (5). The steps are: (1) "
+                "detection, then linking. Earlier work (8), and later.\n",
+            ),
+        )
         scan = find_citations(passages, 40, None, RULES)
         self.assertEqual(scan.style, STYLE_PARENTHESES)
         self.assertEqual(
@@ -110,22 +114,26 @@ class TestBrackets(unittest.TestCase):
 
     def test_parentheses_lose_to_superscripts(self) -> None:
         # A superscript paper numbers its equations in parentheses.
-        passages = (chunk(
-            "a",
-            "Diffusion is anomalous in cells12,13,14. It is described by "
-            "Equation (1), by the model (2), and in the methods (3).\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Diffusion is anomalous in cells12,13,14. It is described by "
+                "Equation (1), by the model (2), and in the methods (3).\n",
+            ),
+        )
         scan = find_citations(passages, 40, {"121314": ("cells",)}, RULES)
         self.assertEqual(scan.style, STYLE_SUPERSCRIPT)
         self.assertEqual([c.numbers for c in scan.citations], [(12, 13, 14)])
 
     def test_written_references_without_other_citation_styles(self) -> None:
-        passages = (chunk(
-            "a",
-            "Earlier work in Ref. 2 established this. Another method "
-            "follows refs. 3,4 and refs 6–7. The grant was Ref. "
-            "001-P-00038, not a citation.\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Earlier work in Ref. 2 established this. Another method "
+                "follows refs. 3,4 and refs 6–7. The grant was Ref. "
+                "001-P-00038, not a citation.\n",
+            ),
+        )
         scan = find_citations(passages, 6, None, RULES)
         self.assertEqual(scan.style, STYLE_WRITTEN)
         self.assertEqual(
@@ -136,19 +144,17 @@ class TestBrackets(unittest.TestCase):
         self.assertEqual(scan.beyond_list, (7,))
         self.assertEqual(
             [
-                citation.sentence.text[citation.start:citation.end]
+                citation.sentence.text[citation.start : citation.end]
                 for citation in scan.citations
             ],
             ["Ref. 2", "refs. 3,4", "refs 6–7"],
         )
 
     def test_written_references_with_unrelated_pdf_superscripts(self) -> None:
-        passages = (chunk(
-            "a", "These results follow Ref. 2 and refs. 3,4.\n"
-        ),)
-        scan = find_citations(
-            passages, 5, {"99": ("unrelated",)}, RULES
+        passages = (
+            chunk("a", "These results follow Ref. 2 and refs. 3,4.\n"),
         )
+        scan = find_citations(passages, 5, {"99": ("unrelated",)}, RULES)
         self.assertEqual(scan.style, STYLE_WRITTEN)
         self.assertEqual(
             [citation.numbers for citation in scan.citations],
@@ -191,11 +197,13 @@ class TestSuperscripts(unittest.TestCase):
         )
 
     def test_version_numbers_but_not_powers(self) -> None:
-        passages = (chunk(
-            "a",
-            "Networks were built with BRAPH 2.087 for all subjects. "
-            "Values of 6.87 and counts of 105 cells per well.\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Networks were built with BRAPH 2.087 for all subjects. "
+                "Values of 6.87 and counts of 105 cells per well.\n",
+            ),
+        )
         # The PDF prints 87 small after "BRAPH 2.0", and 5 after "10" (a
         # power); "6.87" and "105" are not printed as citations.
         superscripts = {"87": ("braph2.0",), "5": ("countsof10",)}
@@ -203,12 +211,14 @@ class TestSuperscripts(unittest.TestCase):
         self.assertEqual([c.numbers for c in scan.citations], [(87,)])
 
     def test_greek_letters_symbols_and_written_references(self) -> None:
-        passages = (chunk(
-            "a",
-            "Values depend on the anomalous exponent α64. The exponent "
-            "relates as H = α/212,67. Together with Ref. 50, these agree. "
-            "A grant, Ref. 001-P-00038, paid for it.\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "Values depend on the anomalous exponent α64. The exponent "
+                "relates as H = α/212,67. Together with Ref. 50, these agree. "
+                "A grant, Ref. 001-P-00038, paid for it.\n",
+            ),
+        )
         superscripts = {"64": ("xponentα",), "1267": ("h=α/2",)}
         scan = find_citations(passages, 70, superscripts, RULES)
         self.assertEqual(
@@ -216,23 +226,27 @@ class TestSuperscripts(unittest.TestCase):
         )
         written = scan.citations[2]
         self.assertEqual(
-            written.sentence.text[written.start:written.end], "Ref. 50"
+            written.sentence.text[written.start : written.end], "Ref. 50"
         )
 
     def test_superscript_after_a_symbol(self) -> None:
-        passages = (chunk(
-            "a", "One method based on UNet3+86,87 outperformed others.\n"
-        ),)
+        passages = (
+            chunk(
+                "a", "One method based on UNet3+86,87 outperformed others.\n"
+            ),
+        )
         scan = find_citations(passages, 90, {"8687": ("unet3+",)}, RULES)
         self.assertEqual([c.numbers for c in scan.citations], [(86, 87)])
 
     def test_exponents_and_subscripts_in_formulas(self) -> None:
-        passages = (chunk(
-            "a",
-            "The latent vector follows N (µi, σ2 i) in the encoder. "
-            "The variance is log(σ2) for every pixel of the image. "
-            "ðsÞ = 1 2\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "The latent vector follows N (µi, σ2 i) in the encoder. "
+                "The variance is log(σ2) for every pixel of the image. "
+                "ðsÞ = 1 2\n",
+            ),
+        )
         superscripts = {"2": ("(µi,σ", "log(σ", "=1"), "1": ("ðsÞ=",)}
         scan = find_citations(passages, 70, superscripts, RULES)
         self.assertEqual(scan.citations, ())
@@ -244,13 +258,18 @@ class TestSuperscripts(unittest.TestCase):
         self.assertEqual([c.numbers for c in scan.citations], [(19, 24, 25)])
 
     def test_bylines_and_exponents_are_not_citations(self) -> None:
-        passages = (chunk(
-            "a",
-            "Mite Mijalkov1, Ludvig Storm2, Anna Canal-Garcia1, Hang Zhao2. "
-            "The hash has spaces256 of keys.\n",
-        ),)
-        superscripts = {"1": ("mijalkov", "garcia"), "2": ("storm", "zhao"),
-                        "256": ("spaces",)}
+        passages = (
+            chunk(
+                "a",
+                "Mite Mijalkov1, Ludvig Storm2, Anna Canal-Garcia1, Hang Zhao2. "
+                "The hash has spaces256 of keys.\n",
+            ),
+        )
+        superscripts = {
+            "1": ("mijalkov", "garcia"),
+            "2": ("storm", "zhao"),
+            "256": ("spaces",),
+        }
         # Ten references: 256 is far beyond the list, so an exponent.
         scan = find_citations(passages, 10, superscripts, RULES)
         self.assertEqual(scan.citations, ())
@@ -263,14 +282,16 @@ class TestSuperscripts(unittest.TestCase):
     def test_nature_style_references_units_and_dashes(self) -> None:
         # From three Nature Communications papers: "refs" without a full
         # stop, a citation after a unit, and an em dash after a range.
-        passages = (chunk(
-            "a",
-            "The layers number at most three (refs 8,19,20). It turns "
-            "for angles above 13 degrees (refs 19,21). Films transmit 97% "
-            "at a wavelength above 500 nm23. Here we use reservoir "
-            "computing10—a framework that reproduces biological "
-            "networks11–14—to study aging. Areas of 4 cm2 were used.\n",
-        ),)
+        passages = (
+            chunk(
+                "a",
+                "The layers number at most three (refs 8,19,20). It turns "
+                "for angles above 13 degrees (refs 19,21). Films transmit 97% "
+                "at a wavelength above 500 nm23. Here we use reservoir "
+                "computing10—a framework that reproduces biological "
+                "networks11–14—to study aging. Areas of 4 cm2 were used.\n",
+            ),
+        )
         superscripts = {
             "23": ("500nm",),
             "10": ("omputing",),
@@ -284,9 +305,7 @@ class TestSuperscripts(unittest.TestCase):
         )
 
     def test_real_pdf_superscripts(self) -> None:
-        runs = superscript_runs(
-            PDF_FIXTURES / "patil25deep.pdf", RULES
-        )
+        runs = superscript_runs(PAPER_FIXTURES / "patil25deep.pdf", RULES)
         # "...real-time monitoring of plants in modern agricultural
         # practices 1,8–14." prints the marker in superscript.
         self.assertIn("1814", runs)

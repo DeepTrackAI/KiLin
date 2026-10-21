@@ -36,9 +36,7 @@ LAYOUT = ReferenceLayout(
     entry_min_words=5,
 )
 
-PAPERS = Path(__file__).resolve().parents[4] / "example_repos" / (
-    "literature_repo/papers"
-)
+PAPER_FIXTURES = Path(__file__).resolve().parents[3] / "fixtures"
 
 NUMBERED = """Introduction
 Some text cites earlier work [1].
@@ -82,8 +80,11 @@ class TestReferenceList(unittest.TestCase):
 
     def test_heading_variants(self) -> None:
         for heading in (
-            "References", "REFERENCES:", "# Literature cited",
-            "Works Cited", "Bibliography",
+            "References",
+            "REFERENCES:",
+            "# Literature cited",
+            "Works Cited",
+            "Bibliography",
         ):
             with self.subTest(heading=heading):
                 passages = (chunk("a", f"{heading}\nEntry text.\n"),)
@@ -214,8 +215,12 @@ class TestReferenceEntries(unittest.TestCase):
         entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
         self.assertEqual(
             [(e.number, e.text.split()[0], e.printed) for e in entries],
-            [(4, "Meunier", True), (6, "van", True), (7, "Tijms", True),
-             (8, "Baggio", True)],
+            [
+                (4, "Meunier", True),
+                (6, "van", True),
+                (7, "Tijms", True),
+                (8, "Baggio", True),
+            ],
         )
         self.assertIn("2013. 07.003 PMID", entries[0].text)
 
@@ -254,12 +259,8 @@ class TestReferenceEntries(unittest.TestCase):
 class TestPdfText(unittest.TestCase):
     """Read PDF pages in column order."""
 
-    @unittest.skipUnless(
-        (PAPERS / "mijalkov25computational.pdf").is_file(),
-        "example paper missing",
-    )
     def test_two_column_reference_list_in_order(self) -> None:
-        file = PAPERS / "mijalkov25computational.pdf"
+        file = PAPER_FIXTURES / "mijalkov25computational.pdf"
         text = pdf_text(file)
         self.assertIn("\f", text)
         # Extracted text interleaves references 1-4 and 23-28; read in
@@ -268,6 +269,23 @@ class TestPdfText(unittest.TestCase):
         self.assertEqual([e.number for e in entries], list(range(1, 97)))
         self.assertTrue(all(e.printed for e in entries))
         self.assertTrue(entries[26].text.startswith("LeCun, Y."))
+
+    def test_other_committed_pdf_reference_lists(self) -> None:
+        papers = (
+            ("mijalkov17braph.pdf", 56, "Sporns O."),
+            ("tiunn26braph2.pdf", 25, "Seguin C"),
+        )
+        for name, count, first_author in papers:
+            with self.subTest(name=name):
+                entries = numbered_reference_entries(
+                    (), LAYOUT, PAPER_FIXTURES / name
+                )
+                self.assertEqual(
+                    [entry.number for entry in entries],
+                    list(range(1, count + 1)),
+                )
+                self.assertTrue(all(entry.printed for entry in entries))
+                self.assertTrue(entries[0].text.startswith(first_author))
 
     def test_other_files_use_the_passages(self) -> None:
         self.assertEqual(pdf_text(Path("notes.md")), "")
