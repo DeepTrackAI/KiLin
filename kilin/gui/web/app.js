@@ -115,6 +115,8 @@ let messageAttachments = [];
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = {};
+// Saved projects last listed, shown again once the types' names arrive.
+let savedProjects = [];
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
   welcome_prompts: ["What would you like to explore in these sources?"],
@@ -129,6 +131,7 @@ const genericEmptyChat = {
 function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.kind, item]));
+  if (savedProjects.length) renderSavedProjects(savedProjects);
   const select = byId("kind");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
@@ -244,6 +247,7 @@ function applyAppearance(value) {
  * @param projects Saved projects ordered by recent use.
  */
 function renderSavedProjects(projects) {
+  savedProjects = projects;
   const host = byId("saved-projects");
   host.replaceChildren();
   if (projects.length) {
@@ -261,7 +265,8 @@ function renderSavedProjects(projects) {
       name.textContent = `Resume ${project.name}`;
       const kind = document.createElement("span");
       kind.className = "saved-project-kind";
-      kind.textContent = project.kind === "code" ? "Code" : "Literature";
+      // The type's own name, or its ID until the types have arrived.
+      kind.textContent = projectTypes[project.kind]?.label || project.kind;
       button.append(name, kind);
       button.title = `Resume ${project.kind} project from ${project.project}`;
       button.addEventListener("click", () => {
