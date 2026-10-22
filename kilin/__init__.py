@@ -38,6 +38,21 @@ Examples
 
 """
 
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+try:
+    __version__ = _distribution_version("kilin")
+except _PackageNotFoundError:
+    # Uninstalled source checkouts use the same version from pyproject.toml.
+    from pathlib import Path as _Path
+    import tomllib as _tomllib
+
+    with (_Path(__file__).resolve().parents[1] / "pyproject.toml").open(
+        "rb"
+    ) as _stream:
+        __version__ = _tomllib.load(_stream)["project"]["version"]
+
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
@@ -221,6 +236,7 @@ from .project_files import (
 from .workspace import prepare_sources_workspace, remove_workspace_sources
 
 __all__ = [
+    "__version__",
     "ANSWER_PHASE_CHOICES",
     "ANSWER_PHASE_COMPLETED",
     "ANSWER_PHASE_EVIDENCE_READY",

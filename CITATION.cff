@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use KíLín in research, please cite this software."
+type: software
+title: "KíLín"
+authors:
+  - given-names: "Io̍k-uí"
+    family-names: "Tiunn"
+  - given-names: "Joana B."
+    family-names: "Pereira"
+  - given-names: "Carlo"
+    family-names: "Manzo"
+  - given-names: "Giovanni"
+    family-names: "Volpe"
+version: "0.1.0"

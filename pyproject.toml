@@ -1,7 +1,14 @@
 [project]
 name = "kilin"
 version = "0.1.0"
+authors = [
+    {name = "Io̍k-uí Tiunn"},
+    {name = "Joana B. Pereira"},
+    {name = "Carlo Manzo"},
+    {name = "Giovanni Volpe"},
+]
 description = "Local, provider-independent question-answering application"
+readme = "README.md"
 requires-python = ">=3.12,<3.13"
 # Packages required regardless of the selected LLM backend.
 dependencies = [
