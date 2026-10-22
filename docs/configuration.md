@@ -35,7 +35,9 @@ A new project's `type_id` selects a validated `ProjectType`; the core then
 constructs and validates a `ProjectProfile` using `PROJECT_PROFILE` defaults
 and the type's source defaults. `initialize_project()` installs declared
 tool resources and commits the new `profile.ini` **last**. It must not
-rewrite an existing profile when the packaged defaults change.
+rewrite an existing profile when the packaged defaults change. All creation
+APIs reject explicit occupied destinations; default naming allocates a new
+folder. Neither settings overrides nor matching project types authorize reuse.
 `open_project()` validates the saved profile and the resolved source path;
 it does not opportunistically copy/replace templates based on a new
 version of a tool. These invariants are detailed in
@@ -135,7 +137,7 @@ Recreate development workspaces that use the previous profile schema;
 do not expect old index or trace metadata to match the new contracts.
 The unrelated `kind` fields on source entities and chunks are unchanged.
 
-### Existing-folder source convention
+### New-project source convention
 
 `source_directory` is an optional project-type JSON string with default
 `"sources"`. It must be a nonempty relative POSIX directory path: no
@@ -146,13 +148,12 @@ managed `indexes`, `logs`, `outputs`, and `templates` folders cannot be
 selected as a source convention. Nested relative paths are allowed.
 
 The standard code definition specifies `"repository"`; literature specifies
-`"documents"`. This setting affects only `initialize_project()` when adopting
-an existing directory. A saved profile's explicit `source` takes precedence.
-For a new profile, an existing `sources/` wins over the configured folder;
-if neither exists, the project root is used. The convention does not create
-example files. Managed multi-source workspaces always use `sources/`,
-including when created with no sources. Their layout is not overridden by
-this discovery convention.
+`"documents"`. `initialize_project()` creates this subdirectory inside a
+nonexistent or empty destination. It no longer adopts nonempty source folders
+or reopens saved projects. `open_project()` reads a saved profile's explicit
+`source` unchanged and performs no filesystem writes. The convention creates
+no example files. Managed multi-source workspaces always use `sources/`,
+including when created empty; their layout is independent of this setting.
 
 ## GUI defaults and writable preferences
 

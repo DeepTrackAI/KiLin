@@ -32,40 +32,72 @@ folders and the project-owned metadata files `profile.ini`, `sources.json`,
 and `source_snapshot.json`; ordinary external source directories and files
 with these names are not globally excluded.
 
-Source layout depends on which core API creates the workspace:
+## Creation, opening, and explicit updates
 
-- `kilin.initialize_project(path, type_id)` uses an existing folder; it selects
-  an existing `sources/`, the type's configured `source_directory`, or
-  the project root, in that order, when no saved profile exists. An existing
-  profile's explicit source always wins.
-- `kilin.prepare_sources_workspace(...)` creates or reuses a cumulative
-  `sources/` tree and records imported source provenance in `sources.json`.
-- `kilin.prepare_project_workspace(...)` mirrors one original source
-  directory inside a managed workspace, preserving its directory name and
-  recording `source_snapshot.json`.
+**Creating a new project never reuses an existing project or a nonempty
+folder.** This rule is enforced in the core, independently of the GUI.
 
-Empty managed projects are supported without placeholder sources:
+| Operation | Contract |
+| --- | --- |
+| `kilin.initialize_project(path, type_id)` | Create in a nonexistent or empty directory; create the type's configured `source_directory` subfolder. |
+| `kilin.prepare_sources_workspace(...)` | Create a new managed `sources/` tree and record imports in `sources.json`. Never resume a saved workspace. |
+| `kilin.open_project(path)` | Read and validate a saved profile and source path without changing files or creating missing folders. |
+| `kilin.add_project_sources(path, source_paths, ...)` | Explicit cumulative import using the saved profile. Preserve existing snapshots unless `replace_existing=True` is requested. |
+| `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror and record `source_snapshot.json`. |
+| `kilin.synchronize_project_workspace(source, path)` | Explicitly synchronize that saved mirror. May replace local snapshot edits or remove copies deleted from the original. |
+| `kilin.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
+
+An explicit occupied project raises `kilin.ProjectAlreadyExistsError`, a
+subclass of `kilin.WorkspaceOccupiedError`. Other nonempty destinations,
+partial initialization, linked roots, and in-progress creation are rejected.
+Even malformed `profile.ini` entries count as an existing project. Creating
+inside another project's directory is also rejected. There is no creation
+option that overrides these safeguards. A single-source mirror also rejects
+source basenames that would alias managed state, such as `logs`, `indexes`,
+`profile.ini`, or the creation marker. Import such folders with the cumulative
+`sources/` API instead; their basenames are safe beneath that managed root.
+
+For automatic multi-source naming, omit `workspace_directory` and supply
+`workspace_root`. The core derives a base name from the first source's safe
+stem and eight-character path hash, then tries `-2`, `-3`, and subsequent
+free names. Every existing entry is occupied, including empty folders and
+symbolic links. Single-source mirrors use `project_<source-name>` and the
+same numbered-sibling allocation. The final name is reserved exclusively;
+`default_workspace_path()` merely suggests the base and is not a reservation.
 
 ```python
 import kilin
 
+first = kilin.prepare_sources_workspace(
+    ["/path/to/source"], kilin.PROJECT_TYPE_IDS[0],
+    workspace_root="/path/to/projects",
+)
+second = kilin.prepare_sources_workspace(
+    ["/path/to/source"], kilin.PROJECT_TYPE_IDS[0],
+    workspace_root="/path/to/projects",
+)
+assert first.root != second.root
+```
+
+Empty managed projects require an explicit destination and contain no
+placeholder sources or dummy indexes:
+
+```python
 project = kilin.prepare_sources_workspace(
     [], kilin.PROJECT_TYPE_IDS[0], "/path/to/new_workspace"
 )
-project = kilin.prepare_sources_workspace(
-    ["/path/to/notes.txt"], project.profile.type_id, project.root
+project = kilin.add_project_sources(
+    project.root, ["/path/to/notes.txt"]
 )
 ```
 
-An explicit workspace location is required when there are no sources.
-Creation installs the normal profile, directories and selected tool
-resources; `sources/` starts empty. `sources.json` is written when sources
-are first imported. Later imports remain cumulative and respect saved
-profile overrides. The GUI follows the same core path, without an implicit
-example repository. Model loading remains a separate session concern.
-
-The different source layouts are intentional. All three APIs use the same
-core initializer for `profile.ini`, shared directories, and resources.
+Creation installs the normal profile, directories, and selected resources.
+`sources.json` is written when sources are first imported. Later imports
+respect the saved profile and never modify it implicitly. Existing source
+folders are copied into a new destination rather than adopted in place.
+Previously saved root-as-source or external-source profiles remain readable;
+opening them does not reinterpret their source layout. Model loading is a
+separate session operation.
 
 ## Initial project creation
 
@@ -83,8 +115,8 @@ resolved by silent precedence. Planning does not write files.
 For new projects, the core first validates the profile contents and resource
 plan, creates required directories, installs **only the resources in the
 plan**, and prepares the selected source snapshots and provenance. The
-`profile.ini` file is then written atomically as the final initialization
-step. No tool-specific resource selection occurs in the GUI.
+`profile.ini` file is then published atomically, without replacement, as the
+final initialization step. No tool-specific resource selection occurs in the GUI.
 
 With the current bundled project types:
 
@@ -99,15 +131,16 @@ because the project initializer hard-codes their names.
 
 ## Existing projects and user ownership
 
-`kilin.open_project()` validates the existing profile and source path and
-ensures the four core directories exist. It **does not reinstall templates**.
-Likewise, calling `initialize_project()` on a directory with an existing
-profile does not install resources again. As a result:
+`kilin.open_project()` validates the existing profile and source path without
+writing anything. It **does not reinstall templates or recreate folders**.
+Calling a creation API on that directory raises an ownership error instead
+of implicitly reopening it. As a result:
 
 - Edits and new user-created templates remain untouched on reopening.
 - Templates deliberately deleted by a user stay deleted.
-- Existing projects with no `templates/` receive an **empty** folder; no
-  bundled resources are copied implicitly.
+- Missing folders remain missing on read-only opening. Explicitly call
+  `kilin.project_layout.ensure_project_folders(root)` to restore empty core
+  folders, and `install_project_resources()` to repair selected resources.
 - Existing, unrelated template files are never removed simply because they
   are not mentioned by the current project type.
 - A missing selected template causes the report tool to report an error
@@ -198,14 +231,25 @@ the file operations and reports their results.
 
 ## Failure behavior and limitations
 
-An invalid or conflicting resource plan fails before creating a new profile.
-The first initialization of a project is committed by writing `profile.ini`
-**last**, using a temporary file and atomic replacement. If directory,
-template, source-copy, or final profile writing fails, KíLín attempts to
-remove only entries created by that initialization attempt. Existing user
-files are preserved. A process termination can still leave uncommitted
-files on disk; without `profile.ini` they do not constitute an initialized
-project. Such conflicting paths are not silently removed.
+An invalid profile or resource plan fails before reservation. The core uses
+exclusive filesystem creation to claim a `.kilin-creating` marker and holds
+it throughout initialization. Competing processes cannot initialize the same
+workspace. An explicit destination is checked again after the marker is
+claimed, not just before it. The marker is removed only by its owner.
+
+The profile is published **last** using a same-directory temporary file and
+an exclusive hard link. Publication never replaces an existing profile,
+including one that unexpectedly appears during initialization. Filesystems
+that cannot provide this operation fail closed, without an overwrite fallback.
+This is atomic visibility, not a guarantee against power loss.
+
+On failure, the journal rolls back resources created by this attempt; it does
+not recursively delete arbitrary contents. A pre-existing empty destination
+is retained. A root created by this attempt is removed only if empty; shared
+parent directories are not removed. Unexpected unrelated files are preserved.
+A process termination may leave the marker and partial resources on disk.
+Such a directory remains occupied and requires deliberate inspection/recovery;
+creation never guesses that a marker is stale or silently clears the folder.
 
 After a project is established, cumulative source additions and later source
 synchronization are deliberately **not** all-or-nothing transactions.
@@ -213,9 +257,21 @@ Successful earlier imports remain when a later import fails, and provenance
 is updated after each successful imported source. Removal likewise updates
 provenance to reflect what remains after a partial failure.
 
-These operations are not a filesystem security sandbox and do not defend
-against concurrent writers changing paths during an operation. No model is
-loaded by initializing folders or managing project-owned files.
+Exclusive creation coordinates cooperating creators, not arbitrary hostile
+processes that change files or links while an operation is running. Source
+updates are not serialized by the creation marker. These APIs are not a
+filesystem security sandbox. No model is loaded by initializing folders or
+managing project-owned files.
 
 The GUI reads the core file inventory. Empty directories are represented
 with a trailing `/` rather than invented by the frontend.
+
+## Prerelease API change
+
+Old calls that used preparation as an implicit reopen must now choose an
+operation explicitly. Replace repeated cumulative preparation with
+`add_project_sources(existing_path, sources)`, and repeated mirror preparation
+with `synchronize_project_workspace(original, existing_path)`. Use
+`open_project(existing_path)` for read-only opening. No compatibility switch
+reintroduces implicit reuse. Existing project files and schemas need no
+migration for this creation-safety change.

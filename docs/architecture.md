@@ -61,10 +61,12 @@ architecture tables are explanatory, not an alternate API specification.
 1. **Select sources.** The scanner previews a directory with packaged and
    caller-supplied filters. Explicit individual-file imports have separate
    eligibility rules and must not be inferred from directory preview alone.
-2. **Create workspace.** `initialize_project` validates a project type,
-   profile and resource plan; new projects place `profile.ini` last as the
-   initialization completion marker. `open_project` validates existing
-   profiles without overwriting user templates.
+2. **Create workspace.** Creation APIs exclusively claim a nonexistent or
+   empty destination, validate settings and resources, and publish a new
+   `profile.ini` last without replacement. Default collisions receive a fresh
+   numbered name; explicit collisions raise core errors. `open_project` only
+   validates saved state. Imports and mirror synchronization are explicit
+   update operations, never accidental consequences of creating a project.
 3. **Open session.** `RAGSession` resolves paths, acquires exclusive
    conversation ownership, opens a trace or disabled-trace equivalent,
    inspects source changes and builds or reuses indexes, then constructs

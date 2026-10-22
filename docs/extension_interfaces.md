@@ -39,10 +39,12 @@ each definition. Adding a packaged type needs no built-in-specific branch.
 External directories accepted by `load_project_types(directory)` are for
 explicit validation; they are not automatically registered or hot-loaded.
 
-`source_directory` optionally controls discovery when adopting an existing
-folder (default `sources`); it does not change the managed multi-source
-layout. See [configuration](configuration.md#existing-folder-source-convention)
-for path validation, precedence and the current schema. Empty projects are
+`source_directory` controls the source folder created by initialize_project
+inside a fresh directory (default `sources`). It does not change the managed
+multi-source layout. See
+[configuration](configuration.md#new-project-source-convention) for validation
+and the current schema. A new type cannot bypass the core's creation-only
+ownership rules or authorize reuse of an occupied workspace. Empty projects are
 supported for every type. Missing welcome content has generic fallbacks;
 project-type prompts, tools and retrieval policies still control answers.
 

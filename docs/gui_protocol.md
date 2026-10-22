@@ -76,7 +76,7 @@ paths and source paths remain subject to downstream core validation.
 | `resume` | `project` | Optional `conversation_id` selects that exact saved conversation; without it, the most recently updated conversation is selected |
 | `close` | None | Release the active project/models; child remains running |
 | `preview` | `sources`, `extensions`, `max_file_bytes` | `workspace` defaults to `""` |
-| `open` | `sources`, `type_id`, `workspace` | `selected_files`, `settings` default to `None` |
+| `open` | `sources`, `type_id`, `workspace` | Create only; `selected_files`, `settings` default to `None`. Blank workspace allocates a fresh default name. |
 | `preview_reference` | `turn_index`, `citation` | Look up one citation of a saved turn |
 | `ask` | `question` | `retrieval_count`, `generation_settings`, `effort` default to `None` |
 | `new_conversation` | None | Create an empty conversation |
@@ -147,6 +147,7 @@ can accompany an event.
 | Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
+| Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`); `backend_failed` (`message`) |
 | Process recovery | `stopped` (no required extra fields); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
@@ -280,6 +281,14 @@ Project selection consistently uses `type_id`, including `startup`,
 `projects`, `saved_project`, `opened`, and `settings.project_types` entries.
 Serialized `ProjectProfile` snapshots likewise contain `type_id`. The
 `open` command accepts `sources: []` for a new empty workspace only when
-`workspace` is explicit; no example paths are inferred. The old project
+`workspace` is explicit; no example paths are inferred. Despite its command
+name, `open` creates a new project and never reuses an existing one. `resume`
+is the separate operation for opening saved state. On `workspace_conflict`,
+`existing_project` is true for any existing profile entry, even an invalid one.
+The page may ask whether to resume; confirmation sends `resume` without any
+creation settings or pending sources. Cancellation keeps the new-project
+inputs available for choosing another destination. Non-project occupied
+folders are not offered for resume. The final allocated path is reported by
+`opened.project`, not guaranteed by a prior preview. The old project
 `kind` protocol key is not accepted. Source-preview rows still use `kind`
 for file/folder/link classification; that is a distinct contract.

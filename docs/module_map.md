@@ -23,8 +23,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Module | Responsibility (source docstring) | Primary owner | Test family |
 | --- | --- | --- | --- |
 | [`kilin/__init__.py`](../kilin/__init__.py) | Expose the package-level KíLín API. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
+| [`kilin/_project_creation.py`](../kilin/_project_creation.py) | Reserve empty destinations and allocate independent projects exclusively. | [Project workspaces](project_workspaces.md) | [Creation tests](../tests/kilin/test_project__creation.py) |
 | [`kilin/answering.py`](../kilin/answering.py) | Route questions by intent and select conversation history. | [Answering pipeline](answering_pipeline.md) | [Core tests](../tests/kilin/) |
-| [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Write local text files through isolated, atomic replacements. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
+| [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Replace or exclusively publish text files atomically. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/chat.py`](../kilin/chat.py) | Manage one loaded language model and its in-memory conversation. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/chunking.py`](../kilin/chunking.py) | Split source units into token-budgeted retrieval chunks. | [Source pipeline](source_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/cli.py`](../kilin/cli.py) | Launch KíLín's optional graphical interface from the command line. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |

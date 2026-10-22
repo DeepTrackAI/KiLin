@@ -181,5 +181,17 @@ from the configuration, with source-independent generic fallbacks.
 
 New projects may have no sources when an explicit workspace is selected.
 The engine delegates empty creation to `prepare_sources_workspace`; it
-never substitutes an example repository. Existing-workspace reopening and
-later cumulative source imports use the same core ownership rules.
+never substitutes an example repository. The core, not the GUI, allocates
+fresh names for default destinations. Explicit occupied destinations produce
+`workspace_conflict`: the page offers a separate resume command for an
+existing project or lets the user choose another destination.
+
+Creation and profile/resource preparation finish before the engine closes
+its current session or opens conversation/trace files for the new project.
+A conflict leaves the current session and protected destination unchanged,
+including trace bytes. Failures before switching are displayed without
+writing an error into the previous project's trace. After a successful
+creation, session switching, model loading, and diagnostic tracing follow
+the ordinary activation path; model-load failure does not delete the newly
+created valid project. Later imports use `add_project_sources`, not a
+creation function.
