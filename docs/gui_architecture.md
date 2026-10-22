@@ -171,3 +171,15 @@ Related: [Architecture](architecture.md),
 [GUI protocol](gui_protocol.md),
 [Conversation ownership](conversation_ownership.md),
 [Security](security.md), [Development](development.md).
+
+## Registry-driven project creation
+
+Project-type choices arrive from the core registry as `type_id` entries.
+The browser initially selects the first entry in filename order and keeps
+prompt-selection state dynamically for each type. Welcome content comes
+from the configuration, with source-independent generic fallbacks.
+
+New projects may have no sources when an explicit workspace is selected.
+The engine delegates empty creation to `prepare_sources_workspace`; it
+never substitutes an example repository. Existing-workspace reopening and
+later cumulative source imports use the same core ownership rules.

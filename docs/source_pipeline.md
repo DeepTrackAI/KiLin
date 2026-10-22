@@ -63,14 +63,14 @@ also set selection rules; see [Configuration](configuration.md).
 
 KíLín has two different, deliberately retained workflows:
 
-- `prepare_sources_workspace(source_paths, kind, workspace_directory=...)`
+- `prepare_sources_workspace(source_paths, type_id, workspace_directory=...)`
   accumulates individually selected local files/folders into managed
   `sources/`, tracking origins and selection metadata in `sources.json`.
   Re-adding a source can update matching snapshots. Deselecting or deleting
   something at the original location does **not** implicitly remove earlier
   managed copies. `remove_workspace_sources()` removes only selected managed
   snapshots, never original user files.
-- `prepare_project_workspace(source_directory, kind, workspace_root=...)`
+- `prepare_project_workspace(source_directory, type_id, workspace_root=...)`
   mirrors one source directory into a managed project and tracks its prior
   state with `source_snapshot.json`. It compares manifests before
   synchronizing. It is not a drop-in replacement for the cumulative route.
@@ -183,3 +183,12 @@ covers reason-code independence from human-readable messages.
 Related: [Project workspaces](project_workspaces.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [GUI protocol](gui_protocol.md), [Security](security.md).
+
+## Empty initial source collections
+
+`prepare_sources_workspace([], type_id, workspace_directory)` initializes
+a valid managed `sources/` tree without importing files. The destination
+must be explicit. Adding sources later uses the same cumulative import and
+selection validation as other workspaces. Adopting an existing directory
+via `initialize_project()` instead honors the type's `source_directory`
+convention, after saved-profile and existing `sources/` precedence.

@@ -123,3 +123,11 @@ For read-only timing analysis of existing conversation traces, and an optional
 standardized-question notebook, see [Performance analysis](performance.md).
 The analysis does not require a new trace mode or change the persistence
 behavior described above. Raw traces remain sensitive project data.
+
+## Project-type metadata
+
+Profile snapshots use `type_id`; qualified type identifiers in turn
+parameters and intent metadata use `project_type_id`. The prerelease
+project-kind keys are not emitted. An empty source collection reports
+`index.empty` and index status `empty` without fabricating passages or
+saving a retrieval bundle. Source-entity `kind` metadata is unchanged.

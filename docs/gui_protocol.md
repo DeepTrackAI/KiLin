@@ -68,15 +68,15 @@ paths and source paths remain subject to downstream core validation.
 | `readiness` | None | Check selected backend and model availability |
 | `install_required_models` | None | Download missing required models |
 | `use_installed_models` | None | Substitute available models where supported |
-| `settings` | `kind`, `workspace` | Read project profile or new-project defaults |
+| `settings` | `type_id`, `workspace` | Read project profile or new-project defaults |
 | `apply_models` | `settings` | Apply model and search-depth choices |
 | `download_model` | `model_id` | Download selected catalog model |
-| `saved_project` | `kind`, `workspace` | Find a matching saved project (event currently has no browser handler) |
+| `saved_project` | `type_id`, `workspace` | Find a matching saved project (event currently has no browser handler) |
 | `saved_projects` | `workspace` | List saved projects for Resume |
 | `resume` | `project` | Optional `conversation_id` selects that exact saved conversation; without it, the most recently updated conversation is selected |
 | `close` | None | Release the active project/models; child remains running |
 | `preview` | `sources`, `extensions`, `max_file_bytes` | `workspace` defaults to `""` |
-| `open` | `sources`, `kind`, `workspace` | `selected_files`, `settings` default to `None` |
+| `open` | `sources`, `type_id`, `workspace` | `selected_files`, `settings` default to `None` |
 | `preview_reference` | `turn_index`, `citation` | Look up one citation of a saved turn |
 | `ask` | `question` | `retrieval_count`, `generation_settings`, `effort` default to `None` |
 | `new_conversation` | None | Create an empty conversation |
@@ -143,7 +143,7 @@ can accompany an event.
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
-| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `kind`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
+| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
 | Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
@@ -273,3 +273,13 @@ Implementation owners: `kilin/gui/window.py`, `kilin/gui/engine.py`,
 `kilin/gui/web/app.js`; core phases in `kilin/rag.py`. Regression tests:
 `tests/kilin/gui/test__protocol.py` and
 `tests/kilin/gui/test_engine__resume.py`.
+
+## Project-type identifiers
+
+Project selection consistently uses `type_id`, including `startup`,
+`projects`, `saved_project`, `opened`, and `settings.project_types` entries.
+Serialized `ProjectProfile` snapshots likewise contain `type_id`. The
+`open` command accepts `sources: []` for a new empty workspace only when
+`workspace` is explicit; no example paths are inferred. The old project
+`kind` protocol key is not accepted. Source-preview rows still use `kind`
+for file/folder/link classification; that is a distinct contract.

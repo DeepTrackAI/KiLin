@@ -171,3 +171,16 @@ Relevant regression suites are those matching `retrieval`, `rag`,
 Related: [Source pipeline](source_pipeline.md),
 [Answering pipeline](answering_pipeline.md),
 [Package defaults](package_defaults.md), [Model management](model_management.md).
+
+## Projects without indexed passages
+
+A project with no selected sources, or no extractable chunks, has index
+status `empty`. RAG keeps an empty retrieval container and the current
+source inventory in memory; it does not persist a dummy index or call the
+query embedder. Previously saved caches are not served as evidence in this
+state. Adding sources invokes normal indexing on refresh. Existing model
+loading and the selected type's prompt/tool policies are unchanged.
+
+Progress wording describes actual work, not project IDs. Relationship
+search is announced only when the graph has entities, with actual result
+counts; otherwise the message explicitly reports that it was skipped.

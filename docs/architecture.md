@@ -151,3 +151,13 @@ answer/citation/checkpoint semantics, lock ownership, and both test runners.
 A performance optimization must additionally measure latency and preserve
 observable results. The verification procedure is in
 [Development](development.md).
+
+## Project-type identity
+
+`ProjectTypeId` identifies a validated `ProjectType` configuration;
+`ProjectProfile.type_id` selects it for a workspace. All packaged type
+definitions are available in deterministic filename order, including in
+the GUI. Standard code/literature IDs are not mandatory. See
+[configuration](configuration.md#canonical-identifiers-and-schemas) for
+field names and [project workspaces](project_workspaces.md) for empty
+creation and later source import.

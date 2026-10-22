@@ -34,21 +34,42 @@ with these names are not globally excluded.
 
 Source layout depends on which core API creates the workspace:
 
-- `kilin.initialize_project(path, kind)` uses an existing folder; it selects
-  `sources/`, a recognized existing source folder, or the project root as
-  the source location according to existing profile rules.
+- `kilin.initialize_project(path, type_id)` uses an existing folder; it selects
+  an existing `sources/`, the type's configured `source_directory`, or
+  the project root, in that order, when no saved profile exists. An existing
+  profile's explicit source always wins.
 - `kilin.prepare_sources_workspace(...)` creates or reuses a cumulative
   `sources/` tree and records imported source provenance in `sources.json`.
 - `kilin.prepare_project_workspace(...)` mirrors one original source
   directory inside a managed workspace, preserving its directory name and
   recording `source_snapshot.json`.
 
+Empty managed projects are supported without placeholder sources:
+
+```python
+import kilin
+
+project = kilin.prepare_sources_workspace(
+    [], kilin.PROJECT_TYPE_IDS[0], "/path/to/new_workspace"
+)
+project = kilin.prepare_sources_workspace(
+    ["/path/to/notes.txt"], project.profile.type_id, project.root
+)
+```
+
+An explicit workspace location is required when there are no sources.
+Creation installs the normal profile, directories and selected tool
+resources; `sources/` starts empty. `sources.json` is written when sources
+are first imported. Later imports remain cumulative and respect saved
+profile overrides. The GUI follows the same core path, without an implicit
+example repository. Model loading remains a separate session concern.
+
 The different source layouts are intentional. All three APIs use the same
 core initializer for `profile.ini`, shared directories, and resources.
 
 ## Initial project creation
 
-`kilin.project` calls `kilin.project_layout.plan_project_layout(kind)` for
+`kilin.project` calls `kilin.project_layout.plan_project_layout(type_id)` for
 **new profiles**. The planner reads the validated `ProjectType` and
 examines its intents. When an intent uses a registered tool, the tool may
 provide an optional `workspace_resources(settings)` declaration. The settings
@@ -100,7 +121,7 @@ from kilin.project_layout import (
     plan_project_layout,
 )
 
-install_project_resources(project.root, plan_project_layout(project.profile.kind))
+install_project_resources(project.root, plan_project_layout(project.profile.type_id))
 ```
 
 This installs only missing packaged resources; it never overwrites existing

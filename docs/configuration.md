@@ -11,7 +11,7 @@ rewrite an existing project's configuration.
 | Layer | Source | Scope and owner | Mutability |
 | --- | --- | --- | --- |
 | Core packaged defaults | `kilin/kilin_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
-| Project types | `kilin/project_types/code.json`, `literature.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a kind | Packaged declarations; not editable user profiles |
+| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a project type | Packaged declarations; not editable user profiles |
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
@@ -31,7 +31,7 @@ use its README and `_configuration.py`.
 
 ## Initialization versus reopening
 
-A new project's kind selects a validated `ProjectType`; the core then
+A new project's `type_id` selects a validated `ProjectType`; the core then
 constructs and validates a `ProjectProfile` using `PROJECT_PROFILE` defaults
 and the type's source defaults. `initialize_project()` installs declared
 tool resources and commits the new `profile.ini` **last**. It must not
@@ -93,9 +93,10 @@ changes.
 ## Project type JSON and intent precedence
 
 The type loader reads `project_types/*.json` in filename order, uses each
-filename stem as its kind ID and caches validated records. An invalid
+filename stem as its type ID and caches validated records. An invalid
 project type is an error, not silently skipped. The top-level object defines
-its display metadata, extensions, source size limit, base prompts,
+its display metadata, source-folder convention, extensions, size limit,
+base prompts,
 retrieval instruction, code-graph policy, history defaults, default intent,
 intents, welcome prompts and suggestions.
 
@@ -106,6 +107,52 @@ fields documented defaults (including `search` for ordinary intents and
 combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
+
+### Canonical identifiers and schemas
+
+`ProjectTypeId` is an open string alias, not a closed enum. A validated
+`ProjectType` has an `id`; an individual `ProjectProfile` has a `type_id`.
+`kilin.PROJECT_TYPE_IDS` contains all packaged IDs in filename order.
+`PROJECT_TYPE_ID_CODE` and `PROJECT_TYPE_ID_LITERATURE` name the standard
+configurations without requiring their presence. Any nonempty collection
+of valid packaged definitions is supported. An unknown ID or an empty or
+invalid registry is an error. Definitions are cached: restart after edits.
+
+The current representations are:
+
+| Boundary | Identifier field |
+| --- | --- |
+| Python `ProjectType` | `id` |
+| Python `ProjectProfile` and serialized profile snapshots | `type_id` |
+| `profile.ini`, `[project]` section | `type_id = code` |
+| GUI commands, project lists and project-type choices | `type_id` |
+| Index settings, turn parameters and intent trace metadata | `project_type_id` |
+| Project-type JSON files | Filename stem; no duplicate ID field |
+
+This is a clean prerelease change. Former Python project-kind names and
+old profile/protocol/metadata keys have no aliases or migration readers.
+Recreate development workspaces that use the previous profile schema;
+do not expect old index or trace metadata to match the new contracts.
+The unrelated `kind` fields on source entities and chunks are unchanged.
+
+### Existing-folder source convention
+
+`source_directory` is an optional project-type JSON string with default
+`"sources"`. It must be a nonempty relative POSIX directory path: no
+absolute or drive paths, backslashes, colons, control characters, empty,
+`.` or `..` components, surrounding whitespace, trailing dots, Windows
+reserved device names or characters, or the INI interpolation marker `%`. The
+managed `indexes`, `logs`, `outputs`, and `templates` folders cannot be
+selected as a source convention. Nested relative paths are allowed.
+
+The standard code definition specifies `"repository"`; literature specifies
+`"documents"`. This setting affects only `initialize_project()` when adopting
+an existing directory. A saved profile's explicit `source` takes precedence.
+For a new profile, an existing `sources/` wins over the configured folder;
+if neither exists, the project root is used. The convention does not create
+example files. Managed multi-source workspaces always use `sources/`,
+including when created with no sources. Their layout is not overridden by
+this discovery convention.
 
 ## GUI defaults and writable preferences
 
