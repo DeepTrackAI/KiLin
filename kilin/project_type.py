@@ -9,8 +9,8 @@ prompt they were answered with.
 
 Files are read once per folder and cached for the process. A malformed
 file stops loading with a ``ValueError``; no type is skipped silently. This
-module does not check that the built-in ``code`` and ``literature`` types
-exist: ``kilin.project`` owns those kinds and checks them.
+module accepts any nonempty collection of valid definitions. The standard
+``code`` and ``literature`` definitions are not mandatory.
 
 Key Features
 ------------
@@ -19,8 +19,8 @@ Key Features
 
     ``code.json`` and ``literature.json`` sit in ``kilin/project_types/``,
     a folder that holds only data. The file name is the type's ID, and
-    types are listed in file-name order. The built-in ``code`` and
-    ``literature`` types must stay; add a file to add a type.
+    types are listed in file-name order. Add or remove packaged definitions
+    to specialize a distribution; at least one valid definition is required.
 
 - **Tools by name**
 
@@ -88,6 +88,10 @@ Module Structure
 
     One validated intent of a project type.
 
+- ``ProjectTypeId``
+
+    Open string alias for a registered project-type identifier.
+
 - ``ProjectType``
 
     One validated project type.
@@ -128,7 +132,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 from typing import Final, Literal, TypeAlias
 
@@ -161,11 +165,15 @@ __all__ = [
     "HistoryPolicy",
     "Intent",
     "ProjectType",
+    "ProjectTypeId",
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
     "project_type",
 ]
+
+ProjectTypeId: TypeAlias = str
+_DEFAULT_SOURCE_DIRECTORY: Final[str] = "sources"
 
 # One JSON file per project type; the file name is the type's ID.
 PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
@@ -296,7 +304,7 @@ class ProjectType:
 
     Attributes
     ----------
-    kind: str
+    id: ProjectTypeId
         Identifier written to ``profile.ini``.
     display_name: str
         Name shown when choosing a type.
@@ -326,10 +334,15 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
+    source_directory: str
+        Relative folder convention when adopting an existing directory.
+        Defaults to ``sources``; managed workspaces always use ``sources/``.
+        A saved profile source takes precedence, followed by an existing
+        ``sources/`` folder, this convention, and finally the project root.
 
     """
 
-    kind: str
+    id: ProjectTypeId
     display_name: str
     description: str
     extensions: tuple[str, ...]
@@ -343,6 +356,7 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+    source_directory: str = _DEFAULT_SOURCE_DIRECTORY
 
     @property
     def label(self) -> str:
@@ -358,12 +372,12 @@ class ProjectType:
         return self.display_name
 
 
-def _text(kind: str, data: dict, field: str, required: bool = True) -> str:
+def _text(type_id: str, data: dict, field: str, required: bool = True) -> str:
     """Return one text field, stripped.
 
     Parameters
     ----------
-    kind: str
+    type_id: str
         Type or intent location, used in the error message.
     data: dict
         Parsed JSON object that holds the field.
@@ -387,18 +401,18 @@ def _text(kind: str, data: dict, field: str, required: bool = True) -> str:
 
     value = data.get(field, None if required else "")
     if not isinstance(value, str) or (required and not value.strip()):
-        raise ValueError(f"Project type {kind!r} needs text for {field!r}.")
+        raise ValueError(f"Project type {type_id!r} needs text for {field!r}.")
 
     return value.strip()
 
 
-def _texts(kind: str, data: dict, field: str) -> tuple[str, ...]:
+def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
     """Return a list of nonblank texts, stripped; missing reads as empty.
 
     Parameters
     ----------
-    kind: str
-        Project or configuration kind to validate.
+    type_id: str
+        Registered project-type identifier to validate.
     data: dict
         Structured input to inspect or forward.
     field: str
@@ -421,19 +435,19 @@ def _texts(kind: str, data: dict, field: str) -> tuple[str, ...]:
         isinstance(item, str) and item.strip() for item in value
     ):
         raise ValueError(
-            f"Project type {kind!r} needs a list of text for {field!r}."
+            f"Project type {type_id!r} needs a list of text for {field!r}."
         )
 
     return tuple(item.strip() for item in value)
 
 
-def _object(kind: str, data: dict, field: str) -> dict:
+def _object(type_id: str, data: dict, field: str) -> dict:
     """Return a nested JSON object; missing reads as empty.
 
     Parameters
     ----------
-    kind: str
-        Project or configuration kind to validate.
+    type_id: str
+        Registered project-type identifier to validate.
     data: dict
         Structured input to inspect or forward.
     field: str
@@ -454,13 +468,13 @@ def _object(kind: str, data: dict, field: str) -> dict:
     value = data.get(field, {})
     if not isinstance(value, dict):
         raise ValueError(
-            f"Project type {kind!r} needs an object for {field!r}."
+            f"Project type {type_id!r} needs an object for {field!r}."
         )
 
     return value
 
 
-def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
+def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     """Validate one intent of a project type.
 
     Missing settings take their defaults: history policy ``relevant``,
@@ -469,7 +483,7 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
 
     Parameters
     ----------
-    kind: str
+    type_id: str
         Project type ID, used in error messages.
     intent_id: object
         Key of the intent in the type's ``intents`` object.
@@ -490,11 +504,11 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
 
     """
 
-    where = f"{kind}.intents.{intent_id}"
+    where = f"{type_id}.intents.{intent_id}"
     if not isinstance(intent_id, str) or not _ID_PATTERN.fullmatch(intent_id):
         raise ValueError(
-            f"Intent ID {intent_id!r} in {kind!r} must be lowercase letters, "
-            "digits, hyphens, or underscores, starting with a letter."
+            f"Intent ID {intent_id!r} in {type_id!r} must be lowercase "
+            "letters, digits, hyphens, or underscores, starting with a letter."
         )
     if not isinstance(data, dict):
         raise ValueError(f"Intent {where!r} must be an object.")
@@ -601,12 +615,70 @@ def _parse_intent(kind: str, intent_id: object, data: object) -> Intent:
     )
 
 
-def _parse_project_type(kind: object, data: object) -> ProjectType:
+def _source_directory(type_id: str, data: dict) -> str:
+    """Validate the optional relative source-folder convention.
+
+    Parameters
+    ----------
+    type_id: str
+        Identifier used to contextualize validation errors.
+    data: dict
+        Parsed project-type definition.
+
+    Returns
+    -------
+    str
+        Portable relative directory path, defaulting to ``sources``.
+
+    Raises
+    ------
+    ValueError
+        If the value is not a nonempty relative POSIX path, contains unsafe
+        components, or names a managed non-source resource directory.
+
+    Notes
+    -----
+    This is a discovery convention, not permission to create or traverse
+    arbitrary paths. Explicit saved profile sources are resolved separately.
+
+    """
+
+    value = data.get("source_directory", _DEFAULT_SOURCE_DIRECTORY)
+    reserved = {"indexes", "logs", "outputs", "templates"}
+    if not isinstance(value, str) or not value:
+        raise ValueError(
+            f"Project type {type_id!r} needs a relative source_directory."
+        )
+    parts = value.split("/")
+    if (
+        PurePosixPath(value).is_absolute()
+        or PureWindowsPath(value).drive
+        or "\\" in value
+        or any(char in value for char in '<>:"|?*%')
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        or any(
+            part in {"", ".", ".."} or part != part.strip()
+            or part.endswith(".")
+            or re.fullmatch(
+                r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?",
+                part, re.IGNORECASE,
+            )
+            for part in parts
+        )
+        or parts[0].lower() in reserved
+    ):
+        raise ValueError(
+            f"Project type {type_id!r} has an unsafe source_directory."
+        )
+    return value
+
+
+def _parse_project_type(type_id: object, data: object) -> ProjectType:
     """Validate one project type file.
 
     Parameters
     ----------
-    kind: object
+    type_id: object
         Project type ID (the file name without ``.json``).
     data: object
         Parsed JSON value of the file.
@@ -625,22 +697,23 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
 
     """
 
-    if not isinstance(kind, str) or not _ID_PATTERN.fullmatch(kind):
+    if not isinstance(type_id, str) or not _ID_PATTERN.fullmatch(type_id):
         raise ValueError(
-            f"Project type ID {kind!r} must be lowercase letters, digits, "
+            f"Project type ID {type_id!r} must be lowercase letters, digits, "
             "hyphens, or underscores, starting with a letter."
         )
     if not isinstance(data, dict):
-        raise ValueError(f"Project type {kind!r} must be an object.")
+        raise ValueError(f"Project type {type_id!r} must be an object.")
 
     reject_unknown(
-        kind,
+        type_id,
         data,
         (
             "display_name",
             "description",
             "extensions",
             "max_file_bytes",
+            "source_directory",
             "retrieval_instruction",
             "system_prompt",
             "capabilities",
@@ -652,81 +725,87 @@ def _parse_project_type(kind: object, data: object) -> ProjectType:
             "suggestions",
         ),
     )
-    extensions = _texts(kind, data, "extensions")
+    extensions = _texts(type_id, data, "extensions")
     if not extensions or any(
         not extension.startswith(".") for extension in extensions
     ):
         raise ValueError(
-            f"Project type {kind!r} needs file suffixes such as '.pdf'."
+            f"Project type {type_id!r} needs file suffixes such as '.pdf'."
         )
     try:
         extensions = normalize_extensions(extensions)
     except ValueError as error:
         raise ValueError(
-            f"Project type {kind!r} needs literal file suffixes: {error}"
+            f"Project type {type_id!r} needs literal file suffixes: {error}"
         ) from error
 
     max_file_bytes = data.get("max_file_bytes")
     if type(max_file_bytes) is not int or max_file_bytes < 1:
         raise ValueError(
-            f"Project type {kind!r} needs a positive whole number for "
+            f"Project type {type_id!r} needs a positive whole number for "
             "'max_file_bytes'."
         )
 
     # The type check rejects 1 and 0, which equal True and False.
-    capabilities = _object(kind, data, "capabilities")
-    reject_unknown(f"{kind}.capabilities", capabilities, ("code_graph",))
+    capabilities = _object(type_id, data, "capabilities")
+    reject_unknown(f"{type_id}.capabilities", capabilities, ("code_graph",))
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
         bool,
         str,
     ):
         raise ValueError(
-            f"Project type {kind!r} capabilities.code_graph must be true, "
+            f"Project type {type_id!r} capabilities.code_graph must be true, "
             'false, or "auto".'
         )
 
-    history = _object(kind, data, "history")
-    reject_unknown(f"{kind}.history", history, ("recent_turns",))
+    history = _object(type_id, data, "history")
+    reject_unknown(f"{type_id}.history", history, ("recent_turns",))
     recent_turns = history.get("recent_turns", _DEFAULT_RECENT_TURNS)
     if (
         type(recent_turns) is not int
         or not 0 <= recent_turns <= _MAX_RECENT_TURNS
     ):
         raise ValueError(
-            f"Project type {kind!r} history.recent_turns must be a whole "
+            f"Project type {type_id!r} history.recent_turns must be a whole "
             f"number from 0 to {_MAX_RECENT_TURNS}."
         )
 
-    raw_intents = _object(kind, data, "intents")
+    raw_intents = _object(type_id, data, "intents")
     if not raw_intents:
-        raise ValueError(f"Project type {kind!r} needs at least one intent.")
+        raise ValueError(
+            f"Project type {type_id!r} needs at least one intent."
+        )
     intents = {
-        intent_id: _parse_intent(kind, intent_id, value)
+        intent_id: _parse_intent(type_id, intent_id, value)
         for intent_id, value in raw_intents.items()
     }
     default_intent = data.get("default_intent", next(iter(intents)))
     if default_intent not in intents:
         raise ValueError(
-            f"Project type {kind!r} default_intent {default_intent!r} is not "
+            f"Project type {type_id!r} default_intent "
+            f"{default_intent!r} is not "
             "one of its intents."
         )
 
     return ProjectType(
-        kind=kind,
-        display_name=_text(kind, data, "display_name"),
-        description=_text(kind, data, "description"),
+        id=type_id,
+        source_directory=_source_directory(type_id, data),
+        display_name=_text(type_id, data, "display_name"),
+        description=_text(type_id, data, "description"),
         extensions=extensions,
         max_file_bytes=max_file_bytes,
-        retrieval_instruction=_text(kind, data, "retrieval_instruction"),
-        system_prompt=_text(kind, data, "system_prompt"),
+        retrieval_instruction=_text(type_id, data, "retrieval_instruction"),
+        system_prompt=_text(type_id, data, "system_prompt"),
         code_graph=code_graph,
         recent_turns=recent_turns,
         default_intent=default_intent,
         intents=intents,
-        answer_guidance=_text(kind, data, "answer_guidance", required=False),
-        welcome_prompts=_texts(kind, data, "welcome_prompts"),
-        suggestions=_texts(kind, data, "suggestions"),
+        answer_guidance=_text(
+            type_id, data, "answer_guidance", required=False
+        ),
+        welcome_prompts=_texts(type_id, data, "welcome_prompts"),
+        suggestions=_texts(type_id, data, "suggestions"),
     )
 
 
@@ -784,8 +863,8 @@ def load_project_types(
     ValueError
         If the folder has no project types, a file is not valid JSON, or a
         type contains invalid or unknown fields. Every JSON file is checked;
-        loading stops at the first invalid definition. The built-in project
-        kinds are checked by ``kilin.project``, which owns them.
+        loading stops at the first invalid definition. No particular type ID
+        is required.
 
     """
 
@@ -809,12 +888,12 @@ def load_project_types(
     return types
 
 
-def project_type(kind: str) -> ProjectType:
+def project_type(type_id: ProjectTypeId) -> ProjectType:
     """Return one packaged project type by ID.
 
     Parameters
     ----------
-    kind: str
+    type_id: ProjectTypeId
         Project type ID, as written in ``profile.ini``.
 
     Returns
@@ -830,10 +909,10 @@ def project_type(kind: str) -> ProjectType:
     """
 
     types = load_project_types()
-    if kind not in types:
+    if type_id not in types:
         raise ValueError(
-            f"Unknown project type {kind!r}. Choose one of: "
+            f"Unknown project type {type_id!r}. Choose one of: "
             f"{', '.join(types)}."
         )
 
-    return types[kind]
+    return types[type_id]

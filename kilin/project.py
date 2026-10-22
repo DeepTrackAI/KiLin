@@ -43,13 +43,17 @@ Key Features
 Module Structure
 ----------------
 
-- ``PROJECT_KIND_CODE`` and ``PROJECT_KIND_LITERATURE``
+- ``PROJECT_TYPE_ID_CODE`` and ``PROJECT_TYPE_ID_LITERATURE``
 
-    Canonical string values for the two supported project categories.
+    String identifiers for the standard packaged project types.
 
-- ``PROJECT_KIND_CHOICES``
+- ``PROJECT_TYPE_IDS``
 
-    Ordered collection of the supported project-kind values.
+    All packaged type IDs in deterministic filename order, not an enum.
+
+- ``ProjectTypeId``
+
+    Open string alias for a registered project-type identifier.
 
 - ``ProjectProfile``
 
@@ -73,7 +77,7 @@ Module Structure
 
 - ``default_project_profile``
 
-    Return the settings a new project of this kind would receive.
+    Return the default profile for one registered project type.
 
 - ``configure_project``
 
@@ -93,7 +97,7 @@ Access submodule-only configuration helpers through their actual namespace:
 
 >>> import kilin.project
 >>> profile = kilin.project.default_project_profile(
-...     kilin.PROJECT_KIND_CODE
+...     kilin.PROJECT_TYPE_ID_CODE
 ... )
 
 """
@@ -111,7 +115,7 @@ from math import isfinite
 from pathlib import Path
 import re
 import shutil
-from typing import Final, Iterator, TypeAlias, cast
+from typing import Final, Iterator, cast
 
 from kilin.atomic_writes import atomic_write_text
 from kilin.defaults import (
@@ -127,7 +131,11 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import load_project_types
+from kilin.project_type import (
+    ProjectTypeId,
+    load_project_types,
+    project_type,
+)
 from kilin.project_layout import (
     ensure_project_folders,
     install_project_resources,
@@ -154,9 +162,10 @@ from kilin.runtime import (
 from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
-    "PROJECT_KIND_CODE",
-    "PROJECT_KIND_LITERATURE",
-    "PROJECT_KIND_CHOICES",
+    "PROJECT_TYPE_ID_CODE",
+    "PROJECT_TYPE_ID_LITERATURE",
+    "PROJECT_TYPE_IDS",
+    "ProjectTypeId",
     "ProjectProfile",
     "QAProject",
     "initialize_project",
@@ -166,62 +175,25 @@ __all__ = [
     "configure_project",
 ]
 
-# Project types, their default files, and their instructions come from
-# kilin/project_types/; "code" and "literature" are always present.
-ProjectKind: TypeAlias = str
-PROJECT_KIND_CODE: Final[ProjectKind] = "code"
-PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
+# Standard identifiers do not require their definitions to be installed.
+PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
+PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
 
-
-def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
-    """Return the configured project kinds, requiring the built-in ones.
-
-    Parameters
-    ----------
-    types: Mapping[str, object]
-        Project types loaded from ``kilin/project_types/``, in file order.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Project kind identifiers in file order.
-
-    Raises
-    ------
-    ValueError
-        If ``code`` or ``literature`` is missing.
-
-    """
-
-    missing = [
-        kind
-        for kind in (PROJECT_KIND_CODE, PROJECT_KIND_LITERATURE)
-        if kind not in types
-    ]
-    if missing:
-        raise ValueError(
-            "kilin/project_types/ must keep the built-in types: "
-            f"{', '.join(missing)}."
-        )
-
-    return tuple(types)
-
-
-# Loading fails at import when a project type file is malformed or a
-# built-in type is missing, so no project opens with a partial set.
-PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = _check_built_in_kinds(
+# Loading rejects an empty or invalid registry before projects can open.
+PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
     load_project_types()
 )
 
-_PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
-    kind: ", ".join(item.extensions)
-    for kind, item in load_project_types().items()
+_PROJECT_EXTENSIONS: Final[dict[ProjectTypeId, str]] = {
+    type_id: ", ".join(item.extensions)
+    for type_id, item in load_project_types().items()
 }
-_DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
-    kind: item.max_file_bytes for kind, item in load_project_types().items()
+_DEFAULT_FILE_LIMITS: Final[dict[ProjectTypeId, int]] = {
+    type_id: item.max_file_bytes
+    for type_id, item in load_project_types().items()
 }
-# Accepted kinds as listed in error messages.
-_KIND_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_KIND_CHOICES)
+# Registered type identifiers as listed in error messages.
+_TYPE_ID_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_TYPE_IDS)
 
 # These defaults are used only when generating a missing project profile;
 # existing ``profile.ini`` values always take precedence.
@@ -261,7 +233,7 @@ if _PROFILE_OVERLAP_TOKENS >= _PROFILE_TARGET_TOKENS:
 
 # Keep INI formatting and ordering unchanged for generated profiles.
 _DEFAULT_PROFILE = """[project]
-kind = {kind}
+type_id = {type_id}
 source = {source}
 extensions = {extensions}
 max_file_bytes = {max_file_bytes}
@@ -310,7 +282,7 @@ _EDITABLE_SETTINGS = {
 
 
 def _default_profile_text(
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     extensions: str,
 ) -> str:
@@ -318,7 +290,7 @@ def _default_profile_text(
 
     Parameters
     ----------
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Project category written to the profile.
     source: str
         Source path written to the profile.
@@ -334,10 +306,10 @@ def _default_profile_text(
     """
 
     return _DEFAULT_PROFILE.format(
-        kind=kind,
+        type_id=type_id,
         source=source,
         extensions=extensions,
-        max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
+        max_file_bytes=_DEFAULT_FILE_LIMITS[type_id],
         allow_download=str(_PROFILE_ALLOW_DOWNLOAD).lower(),
         target_tokens=_PROFILE_TARGET_TOKENS,
         max_tokens=_PROFILE_MAX_TOKENS,
@@ -355,24 +327,23 @@ def _default_profile_text(
     )
 
 
-def default_project_profile(kind: ProjectKind) -> ProjectProfile:
-    """Return the settings a new project of this kind would receive.
+def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
+    """Return the default profile for one registered project type.
 
     Parameters
     ----------
-    kind: ProjectKind
-        Project category, using ``PROJECT_KIND_CODE`` or
-        ``PROJECT_KIND_LITERATURE``.
+    type_id: ProjectTypeId
+        Registered project-type identifier from ``PROJECT_TYPE_IDS``.
 
     Returns
     -------
     ProjectProfile
-        The settings a new project of this kind would receive.
+        The settings a new project of the selected type would receive.
 
     Raises
     ------
     ValueError
-        If ``kind`` is not one of ``PROJECT_KIND_CHOICES``.
+        If ``type_id`` is not one of ``PROJECT_TYPE_IDS``.
 
     Notes
     -----
@@ -381,11 +352,11 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
-    extensions = _PROJECT_EXTENSIONS[kind]
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
+    extensions = _PROJECT_EXTENSIONS[type_id]
     parser = ConfigParser()
-    parser.read_string(_default_profile_text(kind, "sources", extensions))
+    parser.read_string(_default_profile_text(type_id, "sources", extensions))
     return _read_profile(parser)
 
 
@@ -483,8 +454,8 @@ class ProjectProfile:
 
     Parameters
     ----------
-    kind: ProjectKind
-        Type of material in the project.
+    type_id: ProjectTypeId
+        Registered project-type identifier.
     source: str
         Source folder, relative to the project or absolute.
     extensions: tuple[str, ...]
@@ -522,8 +493,8 @@ class ProjectProfile:
 
     Attributes
     ----------
-    kind: ProjectKind
-        Type of material in the project.
+    type_id: ProjectTypeId
+        Registered project-type identifier.
     source: str
         Source folder, relative to the project or absolute.
     extensions: tuple[str, ...]
@@ -575,7 +546,7 @@ class ProjectProfile:
 
     """
 
-    kind: ProjectKind
+    type_id: ProjectTypeId
     source: str
     extensions: tuple[str, ...]
     max_file_bytes: int
@@ -644,7 +615,7 @@ class QAProject:
     root: pathlib.Path
         Project folder containing profile.ini.
     source: pathlib.Path
-        Folder containing source code or literature documents.
+        Folder containing source material for the selected project type.
     indexes: pathlib.Path
         Folder containing reusable retrieval indexes.
     logs: pathlib.Path
@@ -657,7 +628,7 @@ class QAProject:
     root: pathlib.Path
         Project folder containing profile.ini.
     source: pathlib.Path
-        Folder containing source code or literature documents.
+        Folder containing source material for the selected project type.
     indexes: pathlib.Path
         Folder containing reusable retrieval indexes.
     logs: pathlib.Path
@@ -676,7 +647,7 @@ class QAProject:
 
 def initialize_project(
     directory: str | Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
 ) -> QAProject:
     """Create a project profile and its required tool resources.
 
@@ -684,7 +655,7 @@ def initialize_project(
     ----------
     directory: str | pathlib.Path
         Existing project, repository, or document folder.
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Type of source material in the project.
 
     Returns
@@ -699,32 +670,32 @@ def initialize_project(
     NotADirectoryError
         If the selected path is not a directory.
     ValueError
-        If kind is invalid or conflicts with an existing profile.
+        If type_id is invalid or conflicts with an existing profile.
 
     Notes
     -----
     Requires an existing directory. A missing profile.ini is initialized using
-    the selected kind; an existing profile is preserved and checked for kind
-    compatibility. New projects receive only the template files required
+    the selected type; an existing profile is preserved and checked for a
+    matching type ID. A new profile prefers an existing ``sources/``, then
+    the configured ``source_directory``, then the project root.
+    New projects receive only the template files required
     by their type; existing user templates are preserved. Opening creates
     indexes, logs, outputs and templates directories. No model is loaded.
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
 
-    source_name = (
-        "repository" if kind == PROJECT_KIND_CODE else "documents"
-    )
+    source_name = project_type(type_id).source_directory
     if (root / "sources").is_dir():
         source = "sources"
     else:
         source = source_name if (root / source_name).is_dir() else "."
-    return _initialize_profile(root, kind, source)
+    return _initialize_profile(root, type_id, source)
 
 
 class _InitializationJournal:
@@ -798,7 +769,7 @@ class _InitializationJournal:
 
 
 def _prepared_profile(
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     settings: dict[str, object] | None,
 ) -> tuple[str, ProjectProfile]:
@@ -806,7 +777,7 @@ def _prepared_profile(
 
     Parameters
     ----------
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Validated project-type identifier.
     source: str
         Initial source folder recorded in the profile.
@@ -820,7 +791,7 @@ def _prepared_profile(
 
     """
 
-    text = _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind])
+    text = _default_profile_text(type_id, source, _PROJECT_EXTENSIONS[type_id])
     parser = ConfigParser()
     parser.read_string(text)
     if settings:
@@ -841,7 +812,7 @@ def _prepared_profile(
 @contextmanager
 def _preparing_project(
     root: Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     *,
     settings: dict[str, object] | None = None,
@@ -854,7 +825,7 @@ def _preparing_project(
     ----------
     root: pathlib.Path
         Destination project directory.
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Expected project type.
     source: str
         Relative source location for a new project.
@@ -882,9 +853,9 @@ def _preparing_project(
     profile_path = root / "profile.ini"
     if profile_path.exists() or profile_path.is_symlink():
         project = open_project(root)
-        if project.profile.kind != kind:
+        if project.profile.type_id != type_id:
             raise ValueError(
-                "PROJECT_KIND conflicts with the existing profile.ini."
+                "PROJECT_TYPE_ID conflicts with the existing profile.ini."
             )
         expected = Path(source).expanduser()
         if not expected.is_absolute():
@@ -899,8 +870,8 @@ def _preparing_project(
         yield project, None
         return
 
-    text, profile = _prepared_profile(kind, source, settings)
-    layout = plan_project_layout(kind)
+    text, profile = _prepared_profile(type_id, source, settings)
+    layout = plan_project_layout(type_id)
     journal = _InitializationJournal(root)
     journal.note(root)
     for name in ("indexes", "logs", "outputs", "templates"):
@@ -937,7 +908,7 @@ def _preparing_project(
 
 
 def _initialize_profile(
-    root: Path, kind: ProjectKind, source: str
+    root: Path, type_id: ProjectTypeId, source: str
 ) -> QAProject:
     """Create a project profile after successful resource initialization.
 
@@ -945,7 +916,7 @@ def _initialize_profile(
     ----------
     root: pathlib.Path
         Workspace root.
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Expected project type.
     source: str
         Source folder within a new profile.
@@ -957,14 +928,14 @@ def _initialize_profile(
 
     """
 
-    with _preparing_project(root, kind, source):
+    with _preparing_project(root, type_id, source):
         pass
     return open_project(root)
 
 
 def prepare_project_workspace(
     source_directory: str | Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     workspace_root: str | Path,
 ) -> QAProject:
     """Mirror one source folder into a managed KíLín workspace.
@@ -984,8 +955,8 @@ def prepare_project_workspace(
     Parameters
     ----------
     source_directory: str | pathlib.Path
-        Existing source code or literature folder.
-    kind: ProjectKind
+        Existing folder containing project source material.
+    type_id: ProjectTypeId
         Type of source material in the project.
     workspace_root: str | pathlib.Path
         KíLín sandbox folder that contains managed project workspaces.
@@ -998,7 +969,7 @@ def prepare_project_workspace(
     Raises
     ------
     ValueError
-        If kind is unsupported, source/workspace locations conflict, an
+        If type_id is unsupported, source/workspace locations conflict, an
         existing managed profile is inconsistent, or a unique workspace
         location cannot be selected.
     NotADirectoryError
@@ -1018,8 +989,8 @@ def prepare_project_workspace(
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
 
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
@@ -1051,7 +1022,7 @@ def prepare_project_workspace(
                 "Uninitialized workspace has an existing source snapshot."
             )
     with _preparing_project(
-        root, kind, source_name, validate_source=True
+        root, type_id, source_name, validate_source=True
     ) as (
         project, journal
     ):
@@ -1402,10 +1373,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
     """
 
-    kind_value = _required(parser, "project", "kind")
-    if kind_value not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"project.kind must be one of: {_KIND_CHOICE_TEXT}.")
-    kind = cast("ProjectKind", kind_value)
+    type_id_value = _required(parser, "project", "type_id")
+    if type_id_value not in PROJECT_TYPE_IDS:
+        raise ValueError(
+            f"project.type_id must be one of: {_TYPE_ID_CHOICE_TEXT}."
+        )
+    type_id = cast("ProjectTypeId", type_id_value)
 
     extensions = tuple(
         part.strip()
@@ -1462,7 +1435,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         raise ValueError("generation.temperature cannot be negative.")
 
     return ProjectProfile(
-        kind=kind,
+        type_id=type_id,
         source=_required(parser, "project", "source"),
         extensions=extensions,
         max_file_bytes=_positive_integer(

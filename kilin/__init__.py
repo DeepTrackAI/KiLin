@@ -33,7 +33,7 @@ not export every public object from every submodule.
 Examples
 --------
 >>> import kilin
->>> kilin.PROJECT_KIND_CODE
+>>> kilin.PROJECT_TYPE_ID_CODE
 'code'
 
 """
@@ -80,9 +80,10 @@ from .query_formats import (
     format_qwen3_query,
 )
 from .project import (
-    PROJECT_KIND_CHOICES,
-    PROJECT_KIND_CODE,
-    PROJECT_KIND_LITERATURE,
+    PROJECT_TYPE_IDS,
+    PROJECT_TYPE_ID_CODE,
+    PROJECT_TYPE_ID_LITERATURE,
+    ProjectTypeId,
     ProjectProfile,
     QAProject,
     initialize_project,
@@ -276,9 +277,10 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
-    "PROJECT_KIND_CHOICES",
-    "PROJECT_KIND_CODE",
-    "PROJECT_KIND_LITERATURE",
+    "PROJECT_TYPE_IDS",
+    "PROJECT_TYPE_ID_CODE",
+    "PROJECT_TYPE_ID_LITERATURE",
+    "ProjectTypeId",
     "QUERY_FORMAT_CHOICES",
     "QUERY_FORMAT_PLAIN",
     "QUERY_FORMAT_QWEN3",

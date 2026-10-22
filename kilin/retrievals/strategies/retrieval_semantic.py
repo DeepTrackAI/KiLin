@@ -201,7 +201,7 @@ def semantic_matrix(index: SemanticIndex) -> np.ndarray:
     to search the same index many times without rebuilding this array on every
     call -- building it is itself an O(n) pass over every embedding, so a
     caller running many queries against one index (a benchmark corpus, a
-    "literature"-kind project with a large document collection) should build it
+    project with a large document collection) should build it
     once, not once per query.
 
     Parameters
@@ -251,8 +251,8 @@ def semantic_search(
         ``"loop"`` (the default) ranks with a plain Python loop over every
         chunk -- fine at repository scale, a few thousand chunks. ``"numpy"``
         computes the identical cosine similarity with numpy instead, worthwhile
-        once an index holds tens of thousands of chunks (a large
-        "literature"-kind project, say). The two backends agree on which chunks
+        once an index holds tens of thousands of chunks. The two backends
+        agree on which chunks
         rank where in practice, but are not guaranteed bit-for-bit identical:
         ``"numpy"`` computes in float32 versus the loop's float64, and its
         top-k selection is not guaranteed stable on exact score ties (the

@@ -64,7 +64,7 @@ Examples
 --------
 >>> import kilin
 >>> project = kilin.prepare_sources_workspace(
-...     ["/path/to/source_repository"], kilin.PROJECT_KIND_CODE,
+...     ["/path/to/source_repository"], kilin.PROJECT_TYPE_ID_CODE,
 ...     "/path/to/new_workspace",
 ... )
 
@@ -85,8 +85,8 @@ from typing import (
 )
 
 from kilin.project import (
-    PROJECT_KIND_CHOICES,
-    ProjectKind,
+    PROJECT_TYPE_IDS,
+    ProjectTypeId,
     QAProject,
     _preparing_project,
     open_project,
@@ -117,7 +117,7 @@ class _SourceRecord(TypedDict):
 
 def prepare_sources_workspace(
     source_paths: Sequence[str | Path],
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     workspace_directory: str | Path,
     *,
     selected_files: Mapping[str, Sequence[str]] | None = None,
@@ -130,7 +130,7 @@ def prepare_sources_workspace(
     Adding sources is cumulative. Re-adding a source imports newly selected
     files without deleting or overwriting existing snapshots. To replace
     selected snapshot files explicitly, pass ``replace_existing=True``.
-    Pass an empty list to reopen an existing workspace unchanged. When
+    Pass an empty list to create or reopen a workspace without sources. When
     provided, ``selected_files`` must identify every supplied source, so
     unmatched or missing keys cannot broaden the import. ``settings`` is
     validated before copying.
@@ -141,12 +141,12 @@ def prepare_sources_workspace(
         Local file/directory paths. Runtime validation accepts a list or tuple,
         although the annotation is Sequence. Entries are resolved,
         deduplicated, and checked against the destination workspace.
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Project type ID from ``kilin/project_types/``.
     workspace_directory: str | pathlib.Path
         Destination managed workspace, new/empty or already containing a
-        compatible profile.ini. Relative paths use the current working
-        directory.
+        compatible profile.ini. Required even when there are no sources.
+        Relative paths use the current working directory.
     selected_files: Mapping[str, Sequence[str]] | None, optional
         Optional mapping from source paths to selected relative filenames.
         Keys are normalized and must match all supplied source paths exactly.
@@ -199,7 +199,7 @@ def prepare_sources_workspace(
         component="workspace",
         data={
             "source_paths": [str(path) for path in source_paths],
-            "kind": kind,
+            "type_id": type_id,
             "workspace_directory": str(workspace_directory),
             "selected_files": selected_files,
             "replace_existing": replace_existing,
@@ -207,9 +207,9 @@ def prepare_sources_workspace(
         },
         status="started",
     )
-    if kind not in PROJECT_KIND_CHOICES:
+    if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(
-            f"kind must be one of: {', '.join(PROJECT_KIND_CHOICES)}."
+            f"type_id must be one of: {', '.join(PROJECT_TYPE_IDS)}."
         )
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
@@ -276,13 +276,11 @@ def prepare_sources_workspace(
                 f"missing: {missing}; unexpected: {unexpected}."
             )
 
-    if not chosen and not (workspace / "profile.ini").is_file():
-        raise ValueError("Add a source before creating a workspace.")
     source_root = workspace / "sources"
     if source_root.is_symlink():
         raise ValueError("The workspace sources folder must not be a link.")
     with _preparing_project(
-        workspace, kind, "sources", settings=settings,
+        workspace, type_id, "sources", settings=settings,
         trace=active_trace, validate_source=True,
     ) as (project, journal):
         if project.source != source_root.resolve(strict=True):
