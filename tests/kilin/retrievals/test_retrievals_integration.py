@@ -1,7 +1,8 @@
 """Exercise retrieval pipelines using synthetic and real local embeddings.
 
 The first integration path uses real source extraction, chunking, graph
-building, lexical ranking, fusion, routing, and persistence with a controlled
+building, lexical ranking, fusion, context expansion, and persistence with a
+controlled
 embedding adapter. The backend tests use locally generated tiny model weights
 and the real KíLín EmbeddingSession. Optional tests also use the standard
 pretrained embedding models when already cached locally. No test downloads
@@ -49,7 +50,7 @@ from kilin.retrievals import (
     indexes_are_current,
     lexical_search,
     load_indexes,
-    plan_retrieval,
+    plan_context_expansion,
     prepare_persistent_indexes,
     read_document,
     save_indexes,
@@ -101,7 +102,7 @@ class TestRetrievalEndToEnd(unittest.TestCase):
             count=5,
         )
         self.assertTrue(fused)
-        plan = plan_retrieval(query, graph)
+        plan = plan_context_expansion(query, graph)
         expanded = expand_retrieval_context(fused, chunks, graph, plan)
         self.assertTrue(expanded)
         self.assertEqual(len({x.identifier for x in expanded}),

@@ -36,7 +36,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
 )
-from kilin.retrievals import DocumentSelection, RetrievalPlan
+from kilin.retrievals import DocumentSelection, ContextExpansionPlan
 from kilin.retrievals.code_graph import CodeGraph
 from kilin.runtime import BACKEND_MLX
 from kilin.tools import ToolResult, ToolUse
@@ -470,7 +470,7 @@ def _search_patches():
         lexical_search=DEFAULT,
         code_search=DEFAULT,
         hybrid_search=DEFAULT,
-        plan_retrieval=DEFAULT,
+        plan_context_expansion=DEFAULT,
         expand_retrieval_context=DEFAULT,
     ) as mocks:
         for name in (
@@ -478,7 +478,7 @@ def _search_patches():
             "hybrid_search", "expand_retrieval_context",
         ):
             mocks[name].return_value = []
-        mocks["plan_retrieval"].return_value = RetrievalPlan(
+        mocks["plan_context_expansion"].return_value = ContextExpansionPlan(
             (), (), False, (), ()
         )
         yield mocks

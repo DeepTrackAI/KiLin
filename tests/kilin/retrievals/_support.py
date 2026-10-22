@@ -159,7 +159,7 @@ def graph(
 
 
 def ranked(value: Chunk, score: float = 1.0) -> HybridResult:
-    """Make a ranked chunk suitable for routing and document reading.
+    """Make a ranked chunk suitable for expansion and document reading.
 
     Parameters
     ----------

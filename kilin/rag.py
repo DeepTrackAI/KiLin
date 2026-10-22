@@ -209,7 +209,7 @@ from kilin.retrievals import (
     hybrid_search,
     lexical_search,
     load_indexes,
-    plan_retrieval,
+    plan_context_expansion,
     prepare_persistent_indexes,
     read_document,
     save_indexes,
@@ -3050,7 +3050,7 @@ class RAGSession:
                     turn_id=trace_turn_id,
                 )
 
-        plan = plan_retrieval(question, self.indexes.code_graph)
+        plan = plan_context_expansion(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
             bool(plan_data.get(name))

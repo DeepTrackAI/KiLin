@@ -1,7 +1,7 @@
-"""Test deterministic routing for named files and code relationships.
+"""Test deterministic context expansion for named files and code relationships.
 
-No model is required: routing operates on paths, names, graph edges, and
-previously ranked chunks.
+Context expansion uses paths, names, graph edges, and ranked chunks.
+No model is required.
 
 """
 
@@ -15,12 +15,12 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 import unittest
 
-from kilin.retrievals import routing
+from kilin.retrievals import context_expansion
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
 from tests.kilin.retrievals._support import chunk, ranked
 
 
-class TestRetrievalPlanning(unittest.TestCase):
+class TestContextExpansionPlanning(unittest.TestCase):
     """Verify explicit path/function recognition and relationship signals."""
 
     def setUp(self) -> None:
@@ -52,7 +52,9 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Unrecognized prose must not invent a file or function reference.
 
         """
-        result = routing.plan_retrieval("How does it work?", self.graph)
+        result = context_expansion.plan_context_expansion(
+            "How does it work?", self.graph
+        )
         self.assertEqual(result.paths, ())
         self.assertEqual(result.functions, ())
         self.assertFalse(result.relationship)
@@ -64,7 +66,7 @@ class TestRetrievalPlanning(unittest.TestCase):
         """A path named exactly takes precedence over ambiguous basenames.
 
         """
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "Explain pkg/loader.py", self.graph
         )
         self.assertEqual(result.paths, (Path("pkg/loader.py"),))
@@ -74,7 +76,7 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Windows-style path separators and case-folding work uniformly.
 
         """
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "Explain PKG\\LOADER.PY", self.graph
         )
         self.assertEqual(result.paths, (Path("pkg/loader.py"),))
@@ -83,10 +85,12 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Names are recognized only when they form a bounded filename.
 
         """
-        correct = routing.plan_retrieval("loader.py implementation",
-                                         self.graph)
-        wrong = routing.plan_retrieval("myloader.pyx implementation",
-                                       self.graph)
+        correct = context_expansion.plan_context_expansion(
+            "loader.py implementation", self.graph
+        )
+        wrong = context_expansion.plan_context_expansion(
+            "myloader.pyx implementation", self.graph
+        )
         self.assertEqual(correct.paths, (Path("pkg/loader.py"),))
         self.assertEqual(wrong.paths, ())
 
@@ -94,7 +98,7 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Relationship language expands named functions to direct neighbors.
 
         """
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "Which function calls parse?", self.graph
         )
         self.assertEqual(result.functions, ("pkg.loader.parse",))
@@ -107,7 +111,9 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Do not misidentify functions merely because a path contains them.
 
         """
-        result = routing.plan_retrieval("Inspect other/read.py", self.graph)
+        result = context_expansion.plan_context_expansion(
+            "Inspect other/read.py", self.graph
+        )
         self.assertEqual(result.paths, (Path("other/read.py"),))
         self.assertEqual(result.functions, ())
 
@@ -115,24 +121,28 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Relationship words alone do not trigger graph expansion.
 
         """
-        result = routing.plan_retrieval("Who calls functions?", self.graph)
+        result = context_expansion.plan_context_expansion(
+            "Who calls functions?", self.graph
+        )
         self.assertFalse(result.relationship)
         self.assertEqual(result.related_functions, ())
 
     def test_invalid_questions(self) -> None:
-        """Reject blank or non-string questions before routing.
+        """Reject blank or non-string questions during context planning.
 
         """
         for question in ("", "  ", 12, None, []):
             with self.subTest(question=question):
                 with self.assertRaisesRegex(ValueError, "query_text"):
-                    routing.plan_retrieval(question, self.graph)
+                    context_expansion.plan_context_expansion(
+                        question, self.graph
+                    )
 
     def test_direct_neighbors_skip_nonfunctions_and_seeds(self) -> None:
         """Only distinct function entities may be included as neighbors.
 
         """
-        result = routing._direct_function_neighbors(
+        result = context_expansion._direct_function_neighbors(
             ("pkg.loader.read",), self.graph
         )
         self.assertEqual(result, ("pkg.loader.parse",))
@@ -141,18 +151,18 @@ class TestRetrievalPlanning(unittest.TestCase):
         """Multiple explicit files are returned in deterministic path order.
 
         """
-        result = routing._explicit_paths(
+        result = context_expansion._explicit_paths(
             "pkg/notes.py and pkg/loader.py", self.graph
         )
         self.assertEqual(result,
                          (Path("pkg/loader.py"), Path("pkg/notes.py")))
 
     def test_function_kinds_are_explicitly_limited(self) -> None:
-        """Named class or module records are not routed as functions.
+        """Named class or module records are not matched as functions.
 
         """
         self.assertEqual(
-            routing._explicit_functions(
+            context_expansion._explicit_functions(
                 "pkg.notes", self.graph, ()
             ),
             (),
@@ -184,8 +194,10 @@ class TestRetrievalExpansion(unittest.TestCase):
         """Initial RRF evidence precedes expansion without re-ranking.
 
         """
-        plan = routing.RetrievalPlan((), (), False, (), ("none",))
-        result = routing.expand_retrieval_context(
+        plan = context_expansion.ContextExpansionPlan(
+            (), (), False, (), ("none",)
+        )
+        result = context_expansion.expand_retrieval_context(
             [ranked(self.c), ranked(self.a)], self.chunks,
             self.graph, plan,
         )
@@ -195,10 +207,10 @@ class TestRetrievalExpansion(unittest.TestCase):
         """File expansion appends unranked chunks in source order.
 
         """
-        plan = routing.RetrievalPlan(
+        plan = context_expansion.ContextExpansionPlan(
             (Path("pkg.py"),), (), False, (), ("exact file",)
         )
-        result = routing.expand_retrieval_context(
+        result = context_expansion.expand_retrieval_context(
             [ranked(self.c)], self.chunks, self.graph, plan
         )
         self.assertEqual([c.identifier for c in result], ["c", "a", "b"])
@@ -207,11 +219,11 @@ class TestRetrievalExpansion(unittest.TestCase):
         """Guarantee named function and its direct graph neighbor.
 
         """
-        plan = routing.RetrievalPlan(
+        plan = context_expansion.ContextExpansionPlan(
             (), ("pkg.run",), True, ("pkg.helper",),
             ("exact function", "relationship"),
         )
-        result = routing.expand_retrieval_context(
+        result = context_expansion.expand_retrieval_context(
             [], self.chunks, self.graph, plan
         )
         self.assertEqual([c.identifier for c in result], ["a", "b"])
@@ -220,25 +232,27 @@ class TestRetrievalExpansion(unittest.TestCase):
         """Unindexed names and symbol-free chunks cannot match functions.
 
         """
-        plan = routing.RetrievalPlan(
+        plan = context_expansion.ContextExpansionPlan(
             (), ("pkg.absent",), False, (), ("exact function",)
         )
-        result = routing.expand_retrieval_context(
+        result = context_expansion.expand_retrieval_context(
             [], self.chunks, self.graph, plan
         )
         self.assertEqual(result, [])
         entity = self.graph.entities[0]
-        self.assertFalse(routing._chunk_matches_function(self.c, entity))
+        self.assertFalse(
+            context_expansion._chunk_matches_function(self.c, entity)
+        )
 
     def test_deduplication_uses_chunk_identifiers(self) -> None:
         """Repeated evidence from several sources appears only once.
 
         """
-        plan = routing.RetrievalPlan(
+        plan = context_expansion.ContextExpansionPlan(
             (Path("pkg.py"),), ("pkg.run",), True,
             ("pkg.helper",), ("all",),
         )
-        result = routing.expand_retrieval_context(
+        result = context_expansion.expand_retrieval_context(
             [ranked(self.a), ranked(self.a)], self.chunks,
             self.graph, plan,
         )
@@ -251,20 +265,20 @@ class TestRetrievalExpansion(unittest.TestCase):
         a = chunk("a", start=3)
         b = chunk("b", start=3)
         self.assertEqual(
-            routing._source_order([b, a]), [a, b]
+            context_expansion._source_order([b, a]), [a, b]
         )
 
     def test_identifier_matching_escapes_punctuation(self) -> None:
         """Literal function names cannot act as injected regex syntax.
 
         """
-        self.assertTrue(routing._contains_identifier(
+        self.assertTrue(context_expansion._contains_identifier(
             "show pkg.name?", "pkg.name"
         ))
-        self.assertFalse(routing._contains_identifier(
+        self.assertFalse(context_expansion._contains_identifier(
             "show pkgxname", "pkg.name"
         ))
-        self.assertFalse(routing._contains_identifier(
+        self.assertFalse(context_expansion._contains_identifier(
             "my_reading", "read"
         ))
 
@@ -273,11 +287,17 @@ class TestRetrievalExpansion(unittest.TestCase):
 
         """
         entity = self.graph.entities[0]
-        self.assertTrue(routing._chunk_matches_function(self.a, entity))
+        self.assertTrue(
+            context_expansion._chunk_matches_function(self.a, entity)
+        )
         qualified = chunk("q", path="pkg.py", symbol="pkg.run")
-        self.assertTrue(routing._chunk_matches_function(qualified, entity))
-        self.assertFalse(routing._chunk_matches_function(self.b, entity))
-        self.assertFalse(routing._chunk_matches_function(
+        self.assertTrue(
+            context_expansion._chunk_matches_function(qualified, entity)
+        )
+        self.assertFalse(
+            context_expansion._chunk_matches_function(self.b, entity)
+        )
+        self.assertFalse(context_expansion._chunk_matches_function(
             chunk("bad", path="else.py", symbol="run"), entity
         ))
 
@@ -285,11 +305,39 @@ class TestRetrievalExpansion(unittest.TestCase):
         """Remove full and basename forms before detecting function names.
 
         """
-        text = routing._remove_path_mentions(
+        text = context_expansion._remove_path_mentions(
             "pkg/read.py and read.py call read", (Path("pkg/read.py"),)
         )
         self.assertIn("call read", text)
         self.assertNotIn("read.py", text)
+
+
+class TestContextExpansionExports(unittest.TestCase):
+    """Require the new public names without legacy routing aliases."""
+
+    def test_public_names(self) -> None:
+        """Export the new API through both package namespaces.
+
+        """
+        import kilin
+        from kilin import retrievals
+
+        for namespace in (kilin, retrievals):
+            with self.subTest(namespace=namespace.__name__):
+                self.assertIs(
+                    namespace.ContextExpansionPlan,
+                    context_expansion.ContextExpansionPlan,
+                )
+                self.assertIs(
+                    namespace.plan_context_expansion,
+                    context_expansion.plan_context_expansion,
+                )
+                self.assertIs(
+                    namespace.expand_retrieval_context,
+                    context_expansion.expand_retrieval_context,
+                )
+                self.assertFalse(hasattr(namespace, "RetrievalPlan"))
+                self.assertFalse(hasattr(namespace, "plan_retrieval"))
 
 
 if __name__ == "__main__":
