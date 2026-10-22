@@ -109,18 +109,18 @@ let answerStageQueue = [];
 let selectedModelLevel = 2;
 let selectedDepthStep = 2;
 let resumeAfterStop = false;
-let activeProjectKind = "code";
-let lastEmptyPrompt = { code: -1, literature: -1 };
+let activeProjectTypeId = "";
+const lastEmptyPrompt = Object.create(null);
 let messageAttachments = [];
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
-let projectTypes = {};
+let projectTypes = Object.create(null);
 // Saved projects last listed, shown again once the types' names arrive.
 let savedProjects = [];
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
-  welcome_prompts: ["What would you like to explore in these sources?"],
-  suggestions: ["Explain a concept", "Find evidence across my files", "Compare two approaches"],
+  welcome_prompts: ["What would you like to work on?"],
+  suggestions: ["Explain a concept", "Develop an idea", "Compare two approaches"],
 };
 
 /**
@@ -130,19 +130,19 @@ const genericEmptyChat = {
  */
 function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
-  projectTypes = Object.fromEntries(types.map((item) => [item.kind, item]));
+  projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
-  const select = byId("kind");
+  const select = byId("type-id");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
     const option = document.createElement("option");
-    option.value = item.kind;
+    option.value = item.type_id;
     option.textContent = item.label;
     return option;
   }));
-  // The first type in the file is the default.
-  select.value = projectTypes[current] ? current : types[0].kind;
-  activeProjectKind = ready ? activeProjectKind : select.value;
+  // The first type in registry filename order is the initial default.
+  select.value = projectTypes[current] ? current : types[0].type_id;
+  activeProjectTypeId = ready ? activeProjectTypeId : select.value;
 }
 
 /**
@@ -251,7 +251,7 @@ function renderSavedProjects(projects) {
   const host = byId("saved-projects");
   host.replaceChildren();
   if (projects.length) {
-    // One list of every kind, most recently used first (engine order).
+    // One list of every project type, most recently used first (engine order).
     const group = document.createElement("div");
     group.className = "saved-project-group";
     const heading = document.createElement("strong");
@@ -263,12 +263,12 @@ function renderSavedProjects(projects) {
       const name = document.createElement("span");
       name.className = "saved-project-name";
       name.textContent = `Resume ${project.name}`;
-      const kind = document.createElement("span");
-      kind.className = "saved-project-kind";
+      const typeLabel = document.createElement("span");
+      typeLabel.className = "saved-project-type";
       // The type's own name, or its ID until the types have arrived.
-      kind.textContent = projectTypes[project.kind]?.label || project.kind;
-      button.append(name, kind);
-      button.title = `Resume ${project.kind} project from ${project.project}`;
+      typeLabel.textContent = projectTypes[project.type_id]?.label || project.type_id;
+      button.append(name, typeLabel);
+      button.title = `Resume ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
         setBusy(true, "Resuming project…");
@@ -2261,16 +2261,16 @@ function clearAskingConversation() {
  */
 function renderConversationEmpty() {
   conversation.replaceChildren();
-  const type = projectTypes[activeProjectKind] || {};
+  const type = projectTypes[activeProjectTypeId] || {};
   const content = {
     prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
   };
   let promptIndex = Math.floor(Math.random() * content.prompts.length);
-  if (content.prompts.length > 1 && promptIndex === lastEmptyPrompt[activeProjectKind]) {
+  if (content.prompts.length > 1 && promptIndex === lastEmptyPrompt[activeProjectTypeId]) {
     promptIndex = (promptIndex + 1) % content.prompts.length;
   }
-  lastEmptyPrompt[activeProjectKind] = promptIndex;
+  lastEmptyPrompt[activeProjectTypeId] = promptIndex;
   const landing = document.createElement("section");
   landing.className = "conversation-empty";
   const prompt = document.createElement("h2");
@@ -2878,7 +2878,7 @@ function thoughtsBlock(text, label, open = false) {
  * @param intentId Configured project-type intent ID.
  */
 function intentName(intentId) {
-  const names = projectTypes[activeProjectKind]?.intents || {};
+  const names = projectTypes[activeProjectTypeId]?.intents || {};
   return names[intentId] || String(intentId || "").replaceAll("_", " ");
 }
 
@@ -3228,7 +3228,7 @@ function onEvent(raw) {
       savedDepth = data.search_depth || savedDepth;
       showModelFields();
     }
-    activeProjectKind = data.kind;
+    activeProjectTypeId = data.type_id;
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -3341,7 +3341,7 @@ function onEvent(raw) {
     clearReferences();
     byId("connection").textContent = "Stopped · reopen your project";
     setBusy(false);
-    bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
   } else if (data.event === "backend_failed") {
     ready = false;
     updateFloatingHeader();
@@ -3366,7 +3366,7 @@ function onEvent(raw) {
     ready = false;
     setBusy(false);
     byId("connection").textContent = "Ready";
-    bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
     bridge.requestReadiness();
     if (reopenProject) {
       setBusy(true, "Reopening the project after backend recovery…");
@@ -3454,12 +3454,15 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  const usingExample = included.length === 0;
-  byId("example-status").classList.toggle("hidden", !usingExample);
-  setBusy(true, usingExample ? "Loading example repository…" : "Opening project…");
+  if (!included.length && !byId("workspace-path").value.trim()) {
+    openModels();
+    byId("workspace-path").focus();
+    return showError("Choose a workspace folder to create a project without sources.");
+  }
+  setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
-    JSON.stringify(included), byId("kind").value, byId("workspace-path").value.trim(),
+    JSON.stringify(included), byId("type-id").value, byId("workspace-path").value.trim(),
     JSON.stringify(selected), JSON.stringify(collectSettings()),
   );
 });
@@ -3558,7 +3561,7 @@ byId("change-project").addEventListener("click", () => {
   renderPreview();
   showWorkspace(false);
   clearReferences();
-  bridge.requestSettings(byId("kind").value, "");
+  bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
 });
@@ -3608,14 +3611,14 @@ byId("attach-folder").addEventListener("click", () => {
   bridge?.chooseAttachmentFolder();
 });
 byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
-byId("kind").addEventListener("change", () => {
+byId("type-id").addEventListener("change", () => {
   hideResume();
-  bridge?.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
   refreshSavedProject();
 });
 byId("workspace-path").addEventListener("input", queueSavedProjectRefresh);
 byId("workspace-path").addEventListener("change", () => {
-  bridge?.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
   refreshSavedProject();
 });
 byId("backend").addEventListener("change", () => { saveModelFields(); showModelFields(); });
@@ -3660,10 +3663,10 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
   });
   bridge.workspaceSelected.connect((path) => {
     byId("workspace-path").value = path;
-    bridge.requestSettings(byId("kind").value, path);
+    bridge.requestSettings(byId("type-id").value, path);
     refreshSavedProject();
   });
-  bridge.requestSettings(byId("kind").value, byId("workspace-path").value.trim());
+  bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
   bridge.requestReadiness();
   showWorkspace(false);
   renderEffortPicker();
