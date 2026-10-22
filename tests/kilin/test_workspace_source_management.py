@@ -91,6 +91,11 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         expanded = include_explicit_imports(project, scanned)
         self.assertIn("image.xyz", expanded["selected_files"])
         self.assertIn(".env.local", expanded["selected_files"])
+        for row in expanded["entries"]:
+            with self.subTest(path=row["path"]):
+                self.assertEqual(row["kind"], "file")
+                self.assertNotIn("type_id", row)
+        self.assertEqual(project.profile.type_id, "code")
 
     def test_remove_direct_file_updates_manifest_not_original(self) -> None:
         """Removing a source copy does not delete its source outside KíLín."""

@@ -59,7 +59,7 @@ from tests.kilin.retrievals._support import (
 def _profile() -> SimpleNamespace:
     """Return a profile exposing the fields used by the RAG coordinator."""
     return SimpleNamespace(
-        kind="code",
+        type_id="code",
         backend="mlx",
         allow_download=False,
         query_format="plain",
@@ -182,12 +182,12 @@ def _intent(
     )
 
 
-def _kind(
+def _type_config(
     intent: Intent, *, guidance: str = ""
 ) -> SimpleNamespace:
     """Provide the minimum project-type contract for an answer turn."""
     return SimpleNamespace(
-        kind="code",
+        id="code",
         default_intent=intent.intent_id,
         intents={intent.intent_id: intent},
         recent_turns=2,
@@ -492,6 +492,7 @@ class TestRAGRetrieval(unittest.TestCase):
     ) -> None:
         """Keep embedding-query formatting separate from lexical search."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         session._format_query = Mock(return_value="formatted question")
         with _search_patches() as mocks:
             self.assertEqual(session._retrieve("question", 8), ())
@@ -514,6 +515,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_retrieval_reports_all_search_stages(self) -> None:
         """Report the expected retrieval stages in execution order."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         messages = []
         with _search_patches() as mocks:
             session._retrieve("question", status_callback=messages.append)
@@ -547,6 +549,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_retrieval_renumbers_expanded_chunks_and_keeps_cells(self) -> None:
         """Renumber evidence while retaining notebook cell locations."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         first = chunk("a", "first", path="a.py", start=3)
         second = replace(chunk("b", "second", path="b.ipynb"), cell=2)
         with _search_patches() as mocks:
@@ -567,6 +570,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_single_document_scope_uses_full_ranking(self) -> None:
         """Apply full ranking to evidence scoped to a single document."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         first = ranked(chunk("a", path="other.py"))
         focused = ranked(chunk("b", path="target.py"))
         session._rank_everything = Mock(return_value=[first, focused])
@@ -585,6 +589,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_empty_scoped_ranking_retains_general_results(self) -> None:
         """Fall back to general ranking when scoped results are empty."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         general = ranked(chunk("a", path="other.py"))
         session._rank_everything = Mock(return_value=[general])
         with _search_patches() as mocks:
@@ -606,6 +611,7 @@ class TestRAGRetrieval(unittest.TestCase):
     def test_retrieval_emits_content_when_tracing_enabled(self) -> None:
         """Attach exact retrieved content when tracing is enabled."""
         session = _session()
+        session.chunks = [chunk("indexed")]
         session.trace = MagicMock()
         session.trace.include_content = True
         session.trace.artifact.return_value = "artifact-reference"
@@ -695,6 +701,62 @@ class TestRAGRetrieval(unittest.TestCase):
         )
         self.assertEqual(session._system_prompt(),
                          rag.project_type("code").system_prompt)
+
+
+    def test_empty_retrieval_skips_models_and_all_search_stages(self) -> None:
+        """An empty project answers without fabricated retrieval results."""
+
+        session = _session()
+        messages = []
+        with _search_patches() as mocks:
+            self.assertEqual(
+                session._retrieve("hello", status_callback=messages.append),
+                (),
+            )
+            self.assertEqual(session._rank_everything("hello"), [])
+        for operation in mocks.values():
+            operation.assert_not_called()
+        session.embedding_session.embed_query.assert_not_called()
+        self.assertEqual(
+            messages, ["No indexed source passages; skipping retrieval"]
+        )
+
+    def test_relationship_progress_is_generic_and_reports_real_work(
+        self,
+    ) -> None:
+        """Report graph operations by available entities, not type IDs."""
+
+        session = _session()
+        session.project.profile.type_id = "custom"
+        session.chunks = [chunk("indexed")]
+        for available in (False, True):
+            with self.subTest(available=available):
+                session.indexes.code_graph = (
+                    graph("func") if available else CodeGraph((), ())
+                )
+                messages = []
+                with _search_patches() as mocks:
+                    session._retrieve(
+                        "hello", status_callback=messages.append
+                    )
+                if available:
+                    mocks["code_search"].assert_called_once()
+                    self.assertIn(
+                        "Searching relationships between source entities",
+                        messages,
+                    )
+                    self.assertIn("Relationship search ranked 0 results",
+                                  messages)
+                else:
+                    mocks["code_search"].assert_not_called()
+                    self.assertIn(
+                        "No source relationships indexed; skipping graph "
+                        "search", messages,
+                    )
+                    self.assertNotIn(
+                        "Searching relationships between source entities",
+                        messages,
+                    )
 
 
 class TestRAGProgress(unittest.TestCase):
@@ -807,7 +869,9 @@ def _answer_patches(
 ):
     """Isolate the real answer state machine from models and disk writes."""
     decision = decision or RouteDecision(intent.intent_id, True)
-    with patch.object(rag, "project_type", return_value=_kind(intent)), \
+    with patch.object(
+        rag, "project_type", return_value=_type_config(intent)
+    ), \
         patch.object(rag, "document_scope", return_value=((), "none")), \
         patch.object(session, "_route", return_value=decision) as route, \
         patch.object(
@@ -1089,7 +1153,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         with _answer_patches(session, intent):
             with patch.object(
                 rag, "project_type",
-                return_value=_kind(intent, guidance="Core instruction"),
+                return_value=_type_config(intent, guidance="Core instruction"),
             ):
                 session.ask("Question", use_router=False)
         prompt = session.chat_session.reply.call_args.args[0]
@@ -1100,13 +1164,13 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         )
 
     def test_caller_guidance_overrides_project_default(self) -> None:
-        """Apply explicit caller guidance instead of the kind's default."""
+        """Apply explicit caller guidance instead of the config's default."""
         session = _session()
         intent = _intent()
         with _answer_patches(session, intent):
             with patch.object(
                 rag, "project_type",
-                return_value=_kind(intent, guidance="Core instruction"),
+                return_value=_type_config(intent, guidance="Core instruction"),
             ):
                 session.ask(
                     "Question", answer_guidance="Caller instruction",
@@ -1127,7 +1191,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         with _answer_patches(session, intent):
             with patch.object(
                 rag, "project_type",
-                return_value=_kind(intent, guidance="Core instruction"),
+                return_value=_type_config(intent, guidance="Core instruction"),
             ):
                 session.ask(
                     "Question", answer_guidance="", use_router=False
@@ -1145,7 +1209,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         with _answer_patches(session, intent):
             with patch.object(
                 rag, "project_type",
-                return_value=_kind(intent, guidance="Core instruction"),
+                return_value=_type_config(intent, guidance="Core instruction"),
             ):
                 session.ask(
                     "Question", answer_guidance="", use_router=False
@@ -1161,7 +1225,7 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         with _answer_patches(session, intent) as mocks:
             with patch.object(
                 rag, "project_type",
-                return_value=_kind(intent, guidance="Core instruction"),
+                return_value=_type_config(intent, guidance="Core instruction"),
             ):
                 session.ask("Question", use_router=False)
         self.assertEqual(
@@ -1625,10 +1689,10 @@ class TestRAGRoutingAndTools(unittest.TestCase):
     def test_routing_off_uses_default_without_loading_router(self) -> None:
         """Select the default intent without loading a routing model."""
         session = _session()
-        kind = _kind(_intent())
+        config = _type_config(_intent())
         session._router_chat = Mock()
         report = Mock()
-        decision = session._route("Question", kind, False, "turn", report)
+        decision = session._route("Question", config, False, "turn", report)
         self.assertEqual(decision.intent, "test_intent")
         self.assertTrue(decision.standalone)
         self.assertEqual(decision.fallback, "routing off")
@@ -1636,13 +1700,13 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         report.assert_not_called()
         session.turns = [_turn()]
         self.assertFalse(session._route(
-            "Followup", kind, False, "turn", report
+            "Followup", config, False, "turn", report
         ).standalone)
 
     def test_routing_on_records_classification_and_fallback(self) -> None:
         """Trace route decisions and recover from invalid classifications."""
         session = _session()
-        kind = _kind(_intent())
+        config = _type_config(_intent())
         session.trace = MagicMock()
         session.trace.include_content = True
         decision = RouteDecision(
@@ -1653,10 +1717,10 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         report = Mock()
         with patch.object(rag, "route_question", return_value=decision) as rt:
             self.assertIs(session._route(
-                "Question", kind, True, "turn", report
+                "Question", config, True, "turn", report
             ), decision)
         rt.assert_called_once_with(
-            sentinel.router, kind, session.turns, "Question"
+            sentinel.router, config, session.turns, "Question"
         )
         report.assert_called_once_with(
             rag.ANSWER_PHASE_ROUTING, message="Identifying intent"

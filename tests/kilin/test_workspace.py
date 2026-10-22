@@ -99,7 +99,7 @@ class WorkspaceFixture(unittest.TestCase):
         self,
         sources: list[Path] | tuple[Path, ...],
         *,
-        kind: str = "code",
+        type_id: str = "code",
         destination: Path | None = None,
         **kwargs: object,
     ) -> workspace.QAProject:
@@ -109,8 +109,8 @@ class WorkspaceFixture(unittest.TestCase):
         ----------
         sources: list[pathlib.Path] | tuple[pathlib.Path, ...]
             Original source paths to import.
-        kind: str, optional
-            Project kind. Defaults to ``code``.
+        type_id: str, optional
+            Project type. Defaults to ``code``.
         destination: pathlib.Path | None, optional
             Override the workspace directory. Defaults to the fixture path.
         **kwargs: object
@@ -125,7 +125,7 @@ class WorkspaceFixture(unittest.TestCase):
 
         return workspace.prepare_sources_workspace(
             sources,
-            kind,
+            type_id,
             destination if destination is not None else self.destination,
             **kwargs,
         )
@@ -178,7 +178,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         project = self._prepare([original])
         self.assertEqual(project.root, self.destination.resolve())
         self.assertEqual(project.source, self.destination / "sources")
-        self.assertEqual(project.profile.kind, "code")
+        self.assertEqual(project.profile.type_id, "code")
         self.assertEqual(project.profile.source, "sources")
         self.assertTrue(project.indexes.is_dir())
         self.assertTrue(project.logs.is_dir())
@@ -199,7 +199,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
     def test_empty_list_reopens_existing_workspace_without_changes(
         self,
     ) -> None:
-        """An empty import is a no-op only for an existing workspace."""
+        """An empty import leaves an existing workspace unchanged."""
 
         original = self._file("file.py")
         project = self._prepare([original])
@@ -214,14 +214,24 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             (self.destination / "sources.json").read_bytes(), before
         )
 
-    def test_initial_empty_list_is_rejected_without_creating_project(
-        self,
-    ) -> None:
-        """A new workspace needs at least one imported source."""
+    def test_initial_empty_list_creates_a_managed_project(self) -> None:
+        """Create real workspace resources without importing dummy data."""
 
-        with self.assertRaisesRegex(ValueError, "Add a source"):
-            self._prepare([])
-        self.assertFalse(self.destination.exists())
+        project = self._prepare([])
+        self.assertEqual(project.source, self.destination / "sources")
+        self.assertTrue(project.source.is_dir())
+        self.assertEqual(list(project.source.iterdir()), [])
+        self.assertEqual(list(project.indexes.iterdir()), [])
+        self.assertTrue((project.root / "profile.ini").is_file())
+        self.assertFalse((project.root / "sources.json").exists())
+        self.assertEqual(self._prepare([]), project)
+        original = self._file("later.py")
+        updated = self._prepare([original])
+        self.assertEqual(updated.root, project.root)
+        self.assertEqual(
+            (updated.source / "later.py").read_bytes(), original.read_bytes()
+        )
+        self.assertEqual(len(self._records()), 1)
 
     def test_empty_existing_directory_can_be_adopted(self) -> None:
         """An empty user-chosen folder may become a KíLín workspace."""
@@ -317,25 +327,30 @@ class TestWorkspaceInitialization(WorkspaceFixture):
     def test_blank_workspace_directory_is_rejected(self) -> None:
         """A blank destination is not interpreted as the current directory."""
 
-        with self.assertRaisesRegex(ValueError, "workspace folder"):
-            workspace.prepare_sources_workspace(
-                [self._file("code.py")], "code", " "
-            )
+        for sources in ([self._file("code.py")], []):
+            for destination in ("", " "):
+                with self.subTest(sources=sources, destination=destination):
+                    with self.assertRaisesRegex(
+                        ValueError, "workspace folder"
+                    ):
+                        workspace.prepare_sources_workspace(
+                            sources, "code", destination
+                        )
 
-    def test_unknown_project_kind_is_rejected(self) -> None:
-        """Unknown kinds cannot initialize a workspace."""
+    def test_unknown_project_type_id_is_rejected(self) -> None:
+        """Unknown project types cannot initialize a workspace."""
 
-        with self.assertRaisesRegex(ValueError, "kind must be one of"):
-            self._prepare([self._file("code.py")], kind="unknown")
+        with self.assertRaisesRegex(ValueError, "type_id must be one of"):
+            self._prepare([self._file("code.py")], type_id="unknown")
         self.assertFalse(self.destination.exists())
 
-    def test_existing_project_kind_must_match(self) -> None:
+    def test_existing_project_type_id_must_match(self) -> None:
         """A code workspace cannot be reopened as literature."""
 
         self._prepare([self._file("code.py")])
         before = (self.destination / "profile.ini").read_bytes()
         with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._prepare([], kind="literature")
+            self._prepare([], type_id="literature")
         self.assertEqual(
             (self.destination / "profile.ini").read_bytes(), before
         )
@@ -353,19 +368,19 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         with self.assertRaisesRegex(ValueError, "project.source"):
             self._prepare([])
 
-    def test_existing_project_kind_conflict_is_rejected(self) -> None:
-        """A project cannot be reopened with a different project kind."""
+    def test_existing_project_type_id_conflict_is_rejected(self) -> None:
+        """A project cannot be reopened with a different project type."""
 
         self._prepare([self._file("code.py")])
         with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._prepare([], kind="literature")
+            self._prepare([], type_id="literature")
 
     def test_existing_profile_errors_are_not_suppressed(self) -> None:
         """A malformed existing profile is not silently regenerated."""
 
         self._prepare([self._file("code.py")])
         path = self.destination / "profile.ini"
-        path.write_text("[project]\nkind = code\n", encoding="utf-8")
+        path.write_text("[project]\ntype_id = code\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Missing profile setting"):
             self._prepare([])
 
@@ -390,7 +405,7 @@ class TestWorkspaceSelections(WorkspaceFixture):
         pdf = self.root / "paper.pdf"
         pdf.write_bytes(b"%PDF-1.4\n" + b"x" * (2 * 1024 * 1024))
         self.assertGreaterEqual(literature.max_file_bytes, pdf.stat().st_size)
-        project = self._prepare([pdf], kind="literature")
+        project = self._prepare([pdf], type_id="literature")
         self.assertEqual(
             (project.source / "paper.pdf").stat().st_size,
             pdf.stat().st_size,
@@ -1823,7 +1838,7 @@ class TestWorkspaceTracing(WorkspaceFixture):
         ])
         first_data = trace.emit.call_args_list[0].kwargs["data"]
         self.assertEqual(first_data["source_paths"], [str(first), str(second)])
-        self.assertEqual(first_data["kind"], "code")
+        self.assertEqual(first_data["type_id"], "code")
         self.assertEqual(
             trace.emit.call_args_list[1].kwargs["data"]["copied_files"],
             ["one.py"],

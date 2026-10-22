@@ -11,7 +11,6 @@ The fake session exposes the project and conversation fields used by the GUI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from hashlib import sha256
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
@@ -142,32 +141,22 @@ class TestEngineWorkflow(unittest.TestCase):
 
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.prepare_sources_workspace")
-    def test_blank_source_uses_bundled_example(
+    def test_blank_source_requires_workspace_without_using_examples(
         self, prepare, rag_session
         ) -> None:
-        """Choose the built-in example when sources and workspace are blank."""
-        prepare.return_value.root = Path("/sandbox/example")
-        prepare.return_value.source = Path("/sandbox/example/documents")
-        rag_session.return_value.turns = []
-        rag_session.return_value.index_status = "rebuilt"
-        engine = ChatEngine(Path("/project/sandbox"), lambda event: None)
+        """Reject a source-free request without its explicit destination."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
 
         engine.open_project([], "literature", "", selected_files={})
 
-        source = (
-            Path(__file__).resolve().parents[3]
-            / "example_repos"
-            / "literature_repo"
-        )
-        digest = sha256(str(source).encode()).hexdigest()[:8]
-        prepare.assert_called_once_with(
-            [str(source)],
-            "literature",
-            str(
-                Path("/project/sandbox").resolve()
-                / f"literature_repo-{digest}"
-            ),
-        )
+        prepare.assert_not_called()
+        rag_session.assert_not_called()
+        self.assertEqual(events[-1]["event"], "error")
+        self.assertIn("Choose a workspace folder", events[-1]["message"])
+        self.assertIsNone(engine.session)
+        self.assertEqual(list(self.root.iterdir()), [])
 
     def test_evidence_count_is_passed_for_one_question(self) -> None:
         """Forward the requested retrieval count to a single answer."""

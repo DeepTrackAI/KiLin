@@ -110,7 +110,9 @@ class TestRAGIndexProvenance(unittest.TestCase):
         session.trace = NullTraceLogger()
         session._emit_progress = Mock()
         session._emit_count_progress = Mock()
-        session._index_metadata = Mock(return_value={"project_kind": "code"})
+        session._index_metadata = Mock(
+            return_value={"project_type_id": "code"}
+        )
         session._prepare_source = Mock(
             return_value=(
                 [self.source_chunk] if chunks is None else chunks,
@@ -184,6 +186,70 @@ class TestRAGIndexProvenance(unittest.TestCase):
                 side_effect=compare,
             ):
             return coordinator._prepare_retrieval(embedding)
+
+    def test_empty_sources_need_no_index_and_can_be_added_later(self) -> None:
+        """Do not persist an empty bundle or reuse stale source evidence.
+
+        """
+
+        self.selected = []
+        self.manifest = {"selected_files": []}
+        coordinator = self._coordinator([])
+        embedding = self._embedding()
+        chunks, indexes, status, _ = self._prepare(coordinator, embedding)
+        self.assertEqual(status, "empty")
+        self.assertEqual(chunks, [])
+        self.assertEqual(indexes.semantic.chunks, ())
+        self.assertEqual(indexes.code_graph.entities, ())
+        self.assertEqual(embedding.calls, [])
+        coordinator._prepare_source.assert_not_called()
+        self.assertFalse(self.index_directory.exists())
+        self.assertFalse(hasattr(embedding, "_retrieval_model_identity"))
+
+        self.selected = [Path("src/example.py")]
+        self.manifest = {"selected_files": ["src/example.py"]}
+        _, _, status, _ = self._prepare(self._coordinator(), embedding)
+        self.assertEqual(status, "rebuilt")
+        self.assertEqual(embedding.calls, [["physics diffusion"]])
+        snapshot = {
+            path.name: path.read_bytes()
+            for path in self.index_directory.iterdir()
+            if path.is_file()
+        }
+
+        self.selected = []
+        self.manifest = {"selected_files": []}
+        fresh = self._embedding()
+        chunks, indexes, status, changes = self._prepare(
+            self._coordinator([]), fresh
+        )
+        self.assertEqual(status, "empty")
+        self.assertEqual(changes["removed"], ["src/example.py"])
+        self.assertEqual(chunks, [])
+        self.assertEqual(indexes.semantic.chunks, ())
+        self.assertEqual(fresh.calls, [])
+        self.assertEqual(snapshot, {
+            path.name: path.read_bytes()
+            for path in self.index_directory.iterdir() if path.is_file()
+        })
+        self.selected = [Path("src/example.py")]
+        self.manifest = {"selected_files": ["src/example.py"]}
+        _, _, status, _ = self._prepare(self._coordinator(), fresh)
+        self.assertEqual(status, "reused")
+        self.assertEqual(fresh.calls, [])
+
+    def test_selected_files_without_extractable_chunks_are_empty(self) -> None:
+        """Unchunkable files do not produce dummy vectors or index files.
+
+        """
+
+        embedding = self._embedding()
+        chunks, _, status, _ = self._prepare(self._coordinator([]), embedding)
+        self.assertEqual(status, "empty")
+        self.assertEqual(chunks, [])
+        self.assertEqual(embedding.calls, [])
+        self.assertFalse((self.index_directory / "retrieval.json").exists())
+        self.assertFalse((self.index_directory / "settings.json").exists())
 
     def test_build_then_reuse_same_model_and_unchanged_sources(self) -> None:
         """Identical model and source identities permit disk reuse.
@@ -346,7 +412,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         coordinator = self._coordinator()
         coordinator.backend = "torch"
         coordinator.project.profile = SimpleNamespace(
-            kind="code",
+            type_id="code",
             extensions=(".py",),
             max_file_bytes=100000,
             target_tokens=500,

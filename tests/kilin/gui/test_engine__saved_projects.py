@@ -26,14 +26,14 @@ class TestEngineSavedProjects(unittest.TestCase):
 
         with TemporaryDirectory() as temporary:
             sandbox = Path(temporary).resolve()
-            for index, (name, kind) in enumerate(
+            for index, (name, type_id) in enumerate(
                 (("older", "code"), ("newer", "literature"))
             ):
                 folder = sandbox / name
                 (folder / "sources").mkdir(parents=True)
                 profile = folder / "profile.ini"
                 profile.write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    f"[project]\ntype_id = {type_id}\nsource = sources\n",
                     encoding="utf-8",
                 )
                 os.utime(profile, (100 + index, 100 + index))
@@ -45,7 +45,7 @@ class TestEngineSavedProjects(unittest.TestCase):
 
             self.assertEqual(events[-1]["event"], "startup")
             self.assertEqual(events[-1]["project"], str(sandbox / "newer"))
-            self.assertEqual(events[-1]["kind"], "literature")
+            self.assertEqual(events[-1]["type_id"], "literature")
 
     def test_saved_project_tracks_type_and_deleted_folder(self) -> None:
         """Resume follows the selected type and a removed folder disappears."""
@@ -53,14 +53,14 @@ class TestEngineSavedProjects(unittest.TestCase):
         with TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             sandbox = root / "sandbox"
-            for name, kind in (
+            for name, type_id in (
                 ("code-project", "code"),
                 ("papers", "literature"),
             ):
                 folder = sandbox / name
                 (folder / "sources").mkdir(parents=True)
                 (folder / "profile.ini").write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    f"[project]\ntype_id = {type_id}\nsource = sources\n",
                     encoding="utf-8",
                 )
             events: list[dict[str, object]] = []
@@ -82,14 +82,14 @@ class TestEngineSavedProjects(unittest.TestCase):
 
         with TemporaryDirectory() as temporary:
             sandbox = Path(temporary).resolve()
-            for index, (name, kind) in enumerate(
+            for index, (name, type_id) in enumerate(
                 (("older", "code"), ("newer", "literature"))
             ):
                 folder = sandbox / name
                 (folder / "sources").mkdir(parents=True)
                 profile = folder / "profile.ini"
                 profile.write_text(
-                    f"[project]\nkind = {kind}\nsource = sources\n",
+                    f"[project]\ntype_id = {type_id}\nsource = sources\n",
                     encoding="utf-8",
                 )
                 os.utime(profile, (100 + index, 100 + index))
@@ -112,7 +112,7 @@ class TestEngineSavedProjects(unittest.TestCase):
             custom = root / "my-project"
             (custom / "sources").mkdir(parents=True)
             (custom / "profile.ini").write_text(
-                "[project]\nkind = literature\nsource = sources\n",
+                "[project]\ntype_id = literature\nsource = sources\n",
                 encoding="utf-8",
             )
             events: list[dict[str, object]] = []

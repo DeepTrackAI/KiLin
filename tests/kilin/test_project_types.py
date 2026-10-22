@@ -100,8 +100,8 @@ class ProjectTypeFixture(unittest.TestCase):
         directory.mkdir()
         if definitions is None:
             definitions = {"samples": _type_data()}
-        for kind, value in definitions.items():
-            (directory / f"{kind}.json").write_text(
+        for type_id, value in definitions.items():
+            (directory / f"{type_id}.json").write_text(
                 json.dumps(value), encoding="utf-8"
             )
         return directory
@@ -145,14 +145,14 @@ class TestPackagedProjectTypes(unittest.TestCase):
         self.assertIn("code", types)
         self.assertIn("literature", types)
         self.assertEqual(
-            project.PROJECT_KIND_CHOICES, tuple(types)
+            project.PROJECT_TYPE_IDS, tuple(types)
         )
         for path in paths:
-            with self.subTest(kind=path.stem):
+            with self.subTest(type_id=path.stem):
                 raw = json.loads(path.read_text(encoding="utf-8"))
                 definition = types[path.stem]
                 self.assertIsInstance(definition, ProjectType)
-                self.assertEqual(definition.kind, path.stem)
+                self.assertEqual(definition.id, path.stem)
                 self.assertIs(project_type(path.stem), definition)
                 self.assertEqual(definition.label, definition.display_name)
                 self.assertEqual(
@@ -174,14 +174,14 @@ class TestPackagedProjectTypes(unittest.TestCase):
     def test_packaged_intents_are_valid_and_usable(self) -> None:
         """Exercise parsed options for every current and future intent."""
 
-        for kind, definition in load_project_types().items():
-            with self.subTest(kind=kind):
+        for type_id, definition in load_project_types().items():
+            with self.subTest(type_id=type_id):
                 self.assertTrue(definition.intents)
                 self.assertGreater(definition.max_file_bytes, 0)
                 self.assertGreaterEqual(definition.recent_turns, 0)
                 self.assertTrue(definition.extensions)
                 for intent_id, intent in definition.intents.items():
-                    with self.subTest(kind=kind, intent=intent_id):
+                    with self.subTest(type_id=type_id, intent=intent_id):
                         self.assertIsInstance(intent, Intent)
                         self.assertEqual(intent.intent_id, intent_id)
                         self.assertTrue(intent.description)
@@ -208,11 +208,11 @@ class TestPackagedProjectTypes(unittest.TestCase):
     def test_builtin_defaults_follow_current_json_configuration(self) -> None:
         """Project profiles adopt configured file suffixes and size limits."""
 
-        for kind in ("code", "literature"):
-            with self.subTest(kind=kind):
-                definition = project_type(kind)
-                profile = project.default_project_profile(kind)
-                self.assertEqual(profile.kind, kind)
+        for type_id in ("code", "literature"):
+            with self.subTest(type_id=type_id):
+                definition = project_type(type_id)
+                profile = project.default_project_profile(type_id)
+                self.assertEqual(profile.type_id, type_id)
                 self.assertEqual(profile.extensions, definition.extensions)
                 self.assertEqual(
                     profile.max_file_bytes, definition.max_file_bytes
@@ -233,7 +233,7 @@ class TestPackagedProjectTypes(unittest.TestCase):
         count = 0
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
-            for kind, data in definitions.items():
+            for type_id, data in definitions.items():
                 intent_id = next(iter(data["intents"]))
                 locations = (
                     ("", ()),
@@ -250,9 +250,9 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     ),
                 )
                 for location, keys in locations:
-                    with self.subTest(kind=kind, location=location):
+                    with self.subTest(type_id=type_id, location=location):
                         changed = deepcopy(definitions)
-                        target = changed[kind]
+                        target = changed[type_id]
                         for key in keys:
                             target = target.setdefault(key, {})
                         target["unrecognized_setting"] = True
@@ -267,7 +267,7 @@ class TestPackagedProjectTypes(unittest.TestCase):
                         ) as caught:
                             load_project_types(directory)
                         self.assertIn(
-                            f"{kind}{location}", str(caught.exception)
+                            f"{type_id}{location}", str(caught.exception)
                         )
                         self.assertIn(
                             "unrecognized_setting", str(caught.exception)
@@ -281,9 +281,9 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     None,
                 )
                 if tool_id is not None:
-                    with self.subTest(kind=kind, location="tool"):
+                    with self.subTest(type_id=type_id, location="tool"):
                         changed = deepcopy(definitions)
-                        changed[kind]["intents"][tool_id]["tool"][
+                        changed[type_id]["intents"][tool_id]["tool"][
                             "unrecognized_setting"
                         ] = True
                         directory = root / f"case{count}"
@@ -297,7 +297,7 @@ class TestPackagedProjectTypes(unittest.TestCase):
                         ) as caught:
                             load_project_types(directory)
                         self.assertIn(
-                            f"{kind}.intents.{tool_id}.tool",
+                            f"{type_id}.intents.{tool_id}.tool",
                             str(caught.exception),
                         )
                         count += 1
@@ -343,8 +343,8 @@ class TestProjectTypeLoading(ProjectTypeFixture):
         definitions = {"zeta": _type_data(), "alpha": _type_data()}
         types = load_project_types(self._folder("ordered", definitions))
         self.assertEqual(list(types), ["alpha", "zeta"])
-        self.assertEqual(types["alpha"].kind, "alpha")
-        self.assertEqual(types["zeta"].kind, "zeta")
+        self.assertEqual(types["alpha"].id, "alpha")
+        self.assertEqual(types["zeta"].id, "zeta")
 
     def test_missing_or_empty_directory_is_rejected(self) -> None:
         """Report the absence of JSON definitions explicitly."""
@@ -449,11 +449,13 @@ class TestProjectTypeLoading(ProjectTypeFixture):
     def test_valid_kind_id_boundaries(self) -> None:
         """Allow valid separators and the largest permitted identifier."""
 
-        for index, kind in enumerate(("x", "a-b_c2", "a" * 32)):
-            with self.subTest(kind=kind):
+        for index, type_id in enumerate(("x", "a-b_c2", "a" * 32)):
+            with self.subTest(type_id=type_id):
                 folder = self._folder(f"valid{index}",
-                                      {kind: _type_data()})
-                self.assertEqual(load_project_types(folder)[kind].kind, kind)
+                                      {type_id: _type_data()})
+                self.assertEqual(
+                    load_project_types(folder)[type_id].id, type_id
+                )
 
 
 class TestProjectTypeFields(ProjectTypeFixture):

@@ -68,7 +68,7 @@ class ProjectFixture(unittest.TestCase):
         self,
         name: str = "configured",
         *,
-        kind: str = "code",
+        type_id: str = "code",
         source: str = ".",
     ) -> Path:
         """Write a profile using the production template and JSON defaults.
@@ -77,8 +77,8 @@ class ProjectFixture(unittest.TestCase):
         ----------
         name: str, optional
             Unique directory name. Defaults to ``configured``.
-        kind: str, optional
-            Existing built-in project kind. Defaults to ``code``.
+        type_id: str, optional
+            Existing built-in project type. Defaults to ``code``.
         source: str, optional
             Relative or absolute source path. Defaults to the project root.
 
@@ -90,9 +90,9 @@ class ProjectFixture(unittest.TestCase):
         """
 
         directory = self._folder(name)
-        definition = project_type(kind)
+        definition = project_type(type_id)
         text = project._default_profile_text(
-            kind, source, ", ".join(definition.extensions)
+            type_id, source, ", ".join(definition.extensions)
         )
         (directory / "profile.ini").write_text(
             text, encoding="utf-8"
@@ -156,32 +156,26 @@ class ProjectFixture(unittest.TestCase):
         return path
 
 
-class TestProjectKinds(ProjectFixture):
+class TestProjectTypeIds(ProjectFixture):
     """Check the mapping from type definitions to project defaults."""
 
-    def test_builtins_are_required_but_custom_types_are_permitted(
-        self,
-    ) -> None:
-        """Built-ins are mandatory for project ownership, not JSON loading."""
+    def test_registry_identifiers_are_not_a_builtin_allowlist(self) -> None:
+        """Expose all configured types without requiring standard names."""
 
         current = load_project_types()
-        self.assertEqual(project.PROJECT_KIND_CHOICES, tuple(current))
-        self.assertEqual(project._check_built_in_kinds(current),
-                         tuple(current))
-        with self.assertRaisesRegex(ValueError, "literature"):
-            project._check_built_in_kinds({"code": object()})
-        with self.assertRaisesRegex(ValueError, "code"):
-            project._check_built_in_kinds({"literature": object()})
-        extra = {**current, "another": object()}
-        self.assertEqual(project._check_built_in_kinds(extra), tuple(extra))
+        self.assertEqual(project.PROJECT_TYPE_IDS, tuple(current))
+        self.assertTrue(project.PROJECT_TYPE_IDS)
+        self.assertFalse(hasattr(project, "_check_built_in_kinds"))
+        self.assertEqual(project.PROJECT_TYPE_ID_CODE, "code")
+        self.assertEqual(project.PROJECT_TYPE_ID_LITERATURE, "literature")
 
     def test_default_profiles_match_loaded_packaged_definitions(self) -> None:
         """File filters and size limits follow data, not hard-coded values."""
 
-        for kind, definition in load_project_types().items():
-            with self.subTest(kind=kind):
-                profile = project.default_project_profile(kind)
-                self.assertEqual(profile.kind, kind)
+        for type_id, definition in load_project_types().items():
+            with self.subTest(type_id=type_id):
+                profile = project.default_project_profile(type_id)
+                self.assertEqual(profile.type_id, type_id)
                 self.assertEqual(profile.source, "sources")
                 self.assertEqual(profile.extensions, definition.extensions)
                 self.assertEqual(
@@ -199,9 +193,9 @@ class TestProjectKinds(ProjectFixture):
     def test_default_profiles_use_canonical_model_defaults(self) -> None:
         """Resolve chat and embedding settings for each selected backend."""
 
-        for kind in project.PROJECT_KIND_CHOICES:
-            with self.subTest(kind=kind):
-                item = project.default_project_profile(kind)
+        for type_id in project.PROJECT_TYPE_IDS:
+            with self.subTest(type_id=type_id):
+                item = project.default_project_profile(type_id)
                 self.assertEqual(item.chat_mlx, DEFAULT_CHAT_MODEL_MLX)
                 self.assertEqual(item.chat_torch, DEFAULT_CHAT_MODEL_TORCH)
                 self.assertEqual(
@@ -221,12 +215,12 @@ class TestProjectKinds(ProjectFixture):
                     item.embedding_model("torch"), item.embedding_torch
                 )
                 with self.assertRaises(FrozenInstanceError):
-                    item.kind = "other"
+                    item.type_id = "other"
 
     def test_invalid_default_profile_kind_has_clear_error(self) -> None:
         """Reject unknown types before constructing a default profile."""
 
-        with self.assertRaisesRegex(ValueError, "kind must be one of"):
+        with self.assertRaisesRegex(ValueError, "type_id must be one of"):
             project.default_project_profile("unknown")
 
 
@@ -238,21 +232,21 @@ class TestProjectInitialization(ProjectFixture):
     ) -> None:
         """Initialize each built-in type and preserve existing data."""
 
-        for kind in ("code", "literature"):
-            with self.subTest(kind=kind):
-                directory = self._folder(kind)
+        for type_id in ("code", "literature"):
+            with self.subTest(type_id=type_id):
+                directory = self._folder(type_id)
                 self._write(directory, "keep.txt", "keep this content")
-                result = project.initialize_project(directory, kind)
+                result = project.initialize_project(directory, type_id)
                 self.assertEqual(result.root, directory)
                 self.assertEqual(result.source, directory)
-                self.assertEqual(result.profile.kind, kind)
+                self.assertEqual(result.profile.type_id, type_id)
                 self.assertEqual(
                     result.profile.extensions,
-                    project_type(kind).extensions,
+                    project_type(type_id).extensions,
                 )
                 self.assertEqual(
                     result.profile.max_file_bytes,
-                    project_type(kind).max_file_bytes,
+                    project_type(type_id).max_file_bytes,
                 )
                 self.assertTrue((directory / "profile.ini").is_file())
                 self.assertTrue(result.indexes.is_dir())
@@ -267,16 +261,16 @@ class TestProjectInitialization(ProjectFixture):
     ) -> None:
         """Choose sources when both layout alternatives exist."""
 
-        for kind, default_folder in (
+        for type_id, default_folder in (
             ("code", "repository"),
             ("literature", "documents"),
         ):
-            with self.subTest(kind=kind):
-                directory = self._folder(f"sources-{kind}")
+            with self.subTest(type_id=type_id):
+                directory = self._folder(f"sources-{type_id}")
                 (directory / default_folder).mkdir()
                 sources = directory / "sources"
                 sources.mkdir()
-                result = project.initialize_project(directory, kind)
+                result = project.initialize_project(directory, type_id)
                 self.assertEqual(result.source, sources)
                 self.assertEqual(result.profile.source, "sources")
 
@@ -285,14 +279,14 @@ class TestProjectInitialization(ProjectFixture):
     ) -> None:
         """Choose repository/documents when sources is absent."""
 
-        for kind, source_name in (
+        for type_id, source_name in (
             ("code", "repository"),
             ("literature", "documents"),
         ):
-            directory = self._folder(f"specific-{kind}")
+            directory = self._folder(f"specific-{type_id}")
             source = directory / source_name
             source.mkdir()
-            result = project.initialize_project(directory, kind)
+            result = project.initialize_project(directory, type_id)
             self.assertEqual(result.source, source)
             self.assertEqual(result.profile.source, source_name)
 
@@ -311,11 +305,11 @@ class TestProjectInitialization(ProjectFixture):
         self.assertEqual((directory / "profile.ini").read_bytes(), before)
 
     def test_initialize_rejects_unknown_or_conflicting_kinds(self) -> None:
-        """Invalid kind and profile-kind mismatch must not overwrite INI."""
+        """Invalid or conflicting type IDs must not overwrite the profile."""
 
-        directory = self._profile("wrong-kind")
+        directory = self._profile("wrong-type_id")
         before = (directory / "profile.ini").read_bytes()
-        with self.assertRaisesRegex(ValueError, "kind must be one of"):
+        with self.assertRaisesRegex(ValueError, "type_id must be one of"):
             project.initialize_project(directory, "unregistered")
         with self.assertRaisesRegex(ValueError, "conflicts"):
             project.initialize_project(directory, "literature")
@@ -364,11 +358,11 @@ class TestProjectProfileValidation(ProjectFixture):
     def test_default_template_round_trip(self) -> None:
         """Parse the canonical INI format without changing its contents."""
 
-        for kind in ("code", "literature"):
-            with self.subTest(kind=kind):
-                root = self._profile(f"roundtrip-{kind}", kind=kind)
+        for type_id in ("code", "literature"):
+            with self.subTest(type_id=type_id):
+                root = self._profile(f"roundtrip-{type_id}", type_id=type_id)
                 parsed = project.open_project(root)
-                default = project.default_project_profile(kind)
+                default = project.default_project_profile(type_id)
                 self.assertEqual(
                     asdict(parsed.profile),
                     {**asdict(default), "source": "."},
@@ -378,7 +372,7 @@ class TestProjectProfileValidation(ProjectFixture):
         """Identify missing INI keys using section-qualified errors."""
 
         for index, (section, option) in enumerate((
-            ("project", "kind"),
+            ("project", "type_id"),
             ("project", "source"),
             ("project", "extensions"),
             ("project", "max_file_bytes"),
@@ -425,7 +419,7 @@ class TestProjectProfileValidation(ProjectFixture):
         """Reject unsupported modes and malformed source suffix lists."""
 
         for index, (section, option, value, error) in enumerate((
-            ("project", "kind", "something_else", "project.kind"),
+            ("project", "type_id", "something_else", "project.type_id"),
             ("models", "backend", "cuda", "models.backend"),
             ("models", "query_format", "raw", "models.query_format"),
             ("project", "extensions", "py", "project.extensions"),
@@ -632,11 +626,11 @@ class TestConfigureProject(ProjectFixture):
     def test_configure_rejects_unknown_settings_without_writing(
         self,
     ) -> None:
-        """Refuse unexpected options, including source and project kind."""
+        """Refuse unexpected options, including source and project type."""
 
         root = self._profile("unknown")
         before = (root / "profile.ini").read_bytes()
-        for key in ("source", "kind", "not_a_setting"):
+        for key in ("source", "type_id", "not_a_setting"):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, "Unknown"):
                     project.configure_project(root, {key: "new"})
@@ -746,12 +740,12 @@ class TestProjectWorkspace(ProjectFixture):
         self._write(self.source, self.file, "first version\n")
         self._write(self.source, "ignore.unselected_ext", "ignore\n")
 
-    def _prepare(self, kind: str = "code") -> project.QAProject:
+    def _prepare(self, type_id: str = "code") -> project.QAProject:
         """Synchronize the test source into its disposable workspace.
 
         Parameters
         ----------
-        kind: str, optional
+        type_id: str, optional
             Existing project type, defaulting to code.
 
         Returns
@@ -762,7 +756,7 @@ class TestProjectWorkspace(ProjectFixture):
         """
 
         return project.prepare_project_workspace(
-            self.source, kind, self.sandbox
+            self.source, type_id, self.sandbox
         )
 
     def test_initial_workspace_copies_only_selected_sources(self) -> None:
@@ -770,7 +764,7 @@ class TestProjectWorkspace(ProjectFixture):
 
         result = self._prepare()
         self.assertTrue(result.root.is_relative_to(self.sandbox))
-        self.assertEqual(result.profile.kind, "code")
+        self.assertEqual(result.profile.type_id, "code")
         self.assertEqual(result.profile.source, self.source.name)
         self.assertEqual(
             (result.source / self.file).read_text(encoding="utf-8"),
@@ -896,7 +890,7 @@ class TestProjectWorkspace(ProjectFixture):
     def test_workspace_rejects_wrong_kind_without_rewriting_profile(
         self,
     ) -> None:
-        """Do not replace a managed workspace's registered project kind."""
+        """Do not replace a managed workspace's registered project type."""
 
         original = self._prepare()
         before = (original.root / "profile.ini").read_bytes()
@@ -919,7 +913,7 @@ class TestProjectWorkspace(ProjectFixture):
     ) -> None:
         """Prevent unsupported kinds and an equal source/workspace root."""
 
-        with self.assertRaisesRegex(ValueError, "kind must be one of"):
+        with self.assertRaisesRegex(ValueError, "type_id must be one of"):
             self._prepare("missing")
         with self.assertRaises(ValueError):
             project.prepare_project_workspace(
