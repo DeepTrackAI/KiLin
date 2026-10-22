@@ -18,7 +18,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import Mock, patch
 
-from kilin import open_project, prepare_sources_workspace, rag
+from kilin import (
+    add_project_sources, open_project, prepare_sources_workspace, rag,
+)
 from kilin.conversation_format import conversation_state
 from kilin.trace_logging import TraceConfig
 from tests.kilin.retrievals._support import FakeEmbeddings
@@ -90,9 +92,7 @@ class TestEmptyWorkspaceRAG(unittest.TestCase):
                             "# Measurements\nDiffusion describes motion.\n",
                             encoding="utf-8",
                         )
-                        imported = prepare_sources_workspace(
-                            [source], "code", project.root
-                        )
+                        imported = add_project_sources(project.root, [source])
                         session.refresh_sources(imported)
                         self.assertEqual(session.index_status, "rebuilt")
                         self.assertTrue(session.chunks)

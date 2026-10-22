@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from kilin.project import initialize_project
+from kilin.project import initialize_project, open_project
 from kilin.repository import scan_repository
 from kilin.workspace import (
     include_explicit_imports,
@@ -163,10 +163,18 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         """Deleting managed copies cannot target a root-as-source project."""
 
         external = self.root / "external"
-        external.mkdir()
+        project = initialize_project(external, "code")
+        profile = external / "profile.ini"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "source = repository", "source = ."
+            ),
+            encoding="utf-8",
+        )
         original = external / "analysis.py"
         original.write_text("number = 1\n", encoding="utf-8")
-        project = initialize_project(external, "code")
+        project = open_project(external)
+        self.assertEqual(project.source, external)
         with self.assertRaisesRegex(ValueError, "managed sources"):
             remove_workspace_sources(project, ["sources/analysis.py"])
         self.assertTrue(original.is_file())

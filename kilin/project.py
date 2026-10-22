@@ -2,16 +2,16 @@
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
-Initialization prepares sources and required resources first, then commits
-a missing profile atomically as its completion marker, using
-``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
-profile and source location and creates the shared indexes, logs, outputs,
-and templates folders as needed. A new project receives only the packaged
-resources declared by the tools selected by its project type.
+Creation exclusively reserves a nonexistent or empty destination, prepares
+sources and resources, then atomically publishes a new profile without
+replacing any existing entry. Opening validates saved configuration without
+writing files or creating folders. Resources are installed only for a new
+project or by an explicitly requested repair operation.
 
 ``prepare_project_workspace`` mirrors selected files from one original
-repository into a managed workspace and compares source manifests to update
-that copy. This is distinct from the cumulative multi-source copying API in
+repository into a fresh workspace. ``synchronize_project_workspace`` is the
+separate, explicit operation that compares manifests and updates a saved
+copy. This is distinct from the cumulative multi-source copying API in
 ``kilin.workspace``. Neither API provides process or filesystem sandboxing.
 Configuration helpers validate settings through the INI reader before writing
 the revised profile.
@@ -65,15 +65,23 @@ Module Structure
 
 - ``initialize_project``
 
-    Create a missing profile and install selected tool resources.
+    Create a new project only in a nonexistent or empty destination.
 
 - ``open_project``
 
-    Open a project and ensure its shared workspace folders exist.
+    Validate and open a saved project without filesystem writes.
 
 - ``prepare_project_workspace``
 
     Mirror one source folder into a managed KíLín workspace.
+
+- ``synchronize_project_workspace``
+
+    Deliberately synchronize a specified existing single-source mirror.
+
+- ``ProjectAlreadyExistsError`` and ``WorkspaceOccupiedError``
+
+    Reject implicit project reuse and occupied creation destinations.
 
 - ``default_project_profile``
 
@@ -108,7 +116,6 @@ from collections.abc import Mapping
 from configparser import ConfigParser
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 from io import StringIO
 import json
 from math import isfinite
@@ -117,7 +124,13 @@ import re
 import shutil
 from typing import Final, Iterator, cast
 
-from kilin.atomic_writes import atomic_write_text
+from kilin.atomic_writes import atomic_create_text, atomic_write_text
+from kilin._project_creation import (
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
+    claim_workspace,
+    destination_path,
+)
 from kilin.defaults import (
     load_defaults_section,
     require_default_bool,
@@ -169,6 +182,9 @@ __all__ = [
     "ProjectProfile",
     "QAProject",
     "initialize_project",
+    "ProjectAlreadyExistsError",
+    "WorkspaceOccupiedError",
+    "synchronize_project_workspace",
     "open_project",
     "prepare_project_workspace",
     "default_project_profile",
@@ -649,52 +665,47 @@ def initialize_project(
     directory: str | Path,
     type_id: ProjectTypeId,
 ) -> QAProject:
-    """Create a project profile and its required tool resources.
+    """Create one project in a nonexistent or empty directory.
 
     Parameters
     ----------
     directory: str | pathlib.Path
-        Existing project, repository, or document folder.
+        New or empty destination. Existing projects and nonempty directories
+        are rejected without modification, including partial initialization.
     type_id: ProjectTypeId
-        Type of source material in the project.
+        Registered project type. Its source_directory convention selects the
+        new source subdirectory.
 
     Returns
     -------
     QAProject
-        Initialized and opened project.
+        Initialized project without loading models.
 
     Raises
     ------
-    FileNotFoundError
-        If the selected directory does not exist.
-    NotADirectoryError
-        If the selected path is not a directory.
+    ProjectAlreadyExistsError
+        If the destination or an ancestor already contains a profile entry.
+    WorkspaceOccupiedError
+        If the destination is nonempty, linked, or being initialized.
     ValueError
-        If type_id is invalid or conflicts with an existing profile.
+        If type_id or the destination is invalid.
+    OSError
+        If exclusive creation, resource installation, or publication fails.
 
     Notes
     -----
-    Requires an existing directory. A missing profile.ini is initialized using
-    the selected type; an existing profile is preserved and checked for a
-    matching type ID. A new profile prefers an existing ``sources/``, then
-    the configured ``source_directory``, then the project root.
-    New projects receive only the template files required
-    by their type; existing user templates are preserved. Opening creates
-    indexes, logs, outputs and templates directories. No model is loaded.
+    Creation never reopens a project or adopts an existing source folder.
+    Use open_project for an existing project and prepare_sources_workspace
+    to copy external sources into a new managed workspace. A failed attempt
+    rolls back only its own resources; profile.ini is published last without
+    replacing an existing entry.
 
     """
 
     if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
-    root = Path(directory).expanduser().resolve(strict=True)
-    if not root.is_dir():
-        raise NotADirectoryError(f"Choose a project folder: {root}")
-
-    source_name = project_type(type_id).source_directory
-    if (root / "sources").is_dir():
-        source = "sources"
-    else:
-        source = source_name if (root / source_name).is_dir() else "."
+    root = destination_path(directory)
+    source = project_type(type_id).source_directory
     return _initialize_profile(root, type_id, source)
 
 
@@ -816,95 +827,84 @@ def _preparing_project(
     source: str,
     *,
     settings: dict[str, object] | None = None,
-    trace: TraceSink | None = None,
-    validate_source: bool = False,
-) -> Iterator[tuple[QAProject, _InitializationJournal | None]]:
-    """Initialize or reopen a project, committing a new profile last.
+    allocate: bool = False,
+) -> Iterator[tuple[QAProject, _InitializationJournal]]:
+    """Reserve a new project, initialize resources, and publish its profile.
 
     Parameters
     ----------
     root: pathlib.Path
-        Destination project directory.
+        Explicit destination or preferred default directory.
     type_id: ProjectTypeId
-        Expected project type.
+        Registered project type.
     source: str
-        Relative source location for a new project.
+        Relative source location for the new project. It must not alias the
+        workspace root, its reservation marker, or managed state entries.
     settings: dict[str, object] | None, optional
-        Profile overrides applied before first copying. Defaults to None.
-    trace: TraceSink | None, optional
-        Optional diagnostic sink for existing-profile configuration changes.
-    validate_source: bool, optional
-        Require an existing profile to use the specified managed source
-        folder. Defaults to False for general project opening.
+        Profile overrides validated before creation. Defaults to None.
+    allocate: bool, optional
+        Reserve a fresh numbered sibling if root already exists. Defaults
+        to False, requiring root itself to be nonexistent or empty.
 
     Yields
     ------
-    tuple[QAProject, _InitializationJournal | None]
-        A project view and optional journal for source-copy operations.
+    tuple[QAProject, _InitializationJournal]
+        Provisional project and rollback journal owned by this attempt.
 
     Notes
     -----
-    For new projects, ``profile.ini`` is written atomically only when the
-    caller finishes all workspace and resource operations successfully.
-    Existing projects are opened without reinstalling user-deleted files.
+    This context never opens or configures an existing project. Every caller
+    holds the same exclusive creation marker until profile.ini is published
+    without replacement. A failed attempt removes only journaled resources.
 
     """
 
-    profile_path = root / "profile.ini"
-    if profile_path.exists() or profile_path.is_symlink():
-        project = open_project(root)
-        if project.profile.type_id != type_id:
-            raise ValueError(
-                "PROJECT_TYPE_ID conflicts with the existing profile.ini."
-            )
-        expected = Path(source).expanduser()
-        if not expected.is_absolute():
-            expected = root / expected
-        if (
-            validate_source
-            and project.source != expected.resolve(strict=True)
-        ):
-            raise ValueError("project.source conflicts with profile.ini.")
-        if settings:
-            project = configure_project(root, settings, trace=trace)
-        yield project, None
-        return
-
+    relative = Path(source)
+    reserved = {
+        "indexes", "logs", "outputs", "templates", "profile.ini",
+        "sources.json", "source_snapshot.json", ".kilin-creating",
+    }
+    if (
+        relative.is_absolute() or not relative.parts
+        or ".." in relative.parts
+        or relative.parts[0].lower() in reserved
+    ):
+        raise ValueError(
+            "The source folder conflicts with managed workspace entries; "
+            "use prepare_sources_workspace to import it under sources/."
+        )
     text, profile = _prepared_profile(type_id, source, settings)
     layout = plan_project_layout(type_id)
-    journal = _InitializationJournal(root)
-    journal.note(root)
-    for name in ("indexes", "logs", "outputs", "templates"):
-        journal.note(root / name)
-    for resource in layout.resources:
-        journal.note(root / resource.destination)
-    source_path = Path(source).expanduser()
-    if not source_path.is_absolute():
-        source_path = root / source_path
-    if source_path != root:
-        if source_path.is_relative_to(root):
+    with claim_workspace(root, allocate=allocate) as actual_root:
+        root = actual_root
+        profile_path = root / "profile.ini"
+        journal = _InitializationJournal(root)
+        for name in ("indexes", "logs", "outputs", "templates"):
+            journal.note(root / name)
+        for resource in layout.resources:
+            journal.note(root / resource.destination)
+        source_path = root / source
+        if source_path != root:
             journal.note(source_path)
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-        if source_path.is_relative_to(root) and source_path != root:
-            if source_path.is_symlink():
-                raise ValueError("Managed source directory cannot be a link.")
+        try:
             source_path.mkdir(parents=True, exist_ok=True)
-        ensure_project_folders(root)
-        install_project_resources(root, layout)
-        provisional = QAProject(
-            root=root,
-            source=source_path.resolve(strict=True),
-            indexes=root / "indexes",
-            logs=root / "logs",
-            profile=profile,
-        )
-        yield provisional, journal
-        journal.note(profile_path)
-        atomic_write_text(profile_path, text)
-    except BaseException:
-        journal.rollback()
-        raise
+            ensure_project_folders(root)
+            install_project_resources(root, layout)
+            provisional = QAProject(
+                root=root,
+                source=source_path.resolve(strict=True),
+                indexes=root / "indexes",
+                logs=root / "logs",
+                profile=profile,
+            )
+            yield provisional, journal
+            try:
+                atomic_create_text(profile_path, text)
+            except FileExistsError as error:
+                raise ProjectAlreadyExistsError(root) from error
+        except BaseException:
+            journal.rollback()
+            raise
 
 
 def _initialize_profile(
@@ -938,164 +938,205 @@ def prepare_project_workspace(
     type_id: ProjectTypeId,
     workspace_root: str | Path,
 ) -> QAProject:
-    """Mirror one source folder into a managed KíLín workspace.
-
-    The original source is never modified. A normal workspace is named
-    ``project_<source-name>`` and contains the copied source folder beside
-    ``profile.ini``, the shared workspace folders, and
-    ``source_snapshot.json``.
-    Only files selected by the project's repository rules are mirrored.
-
-    Reopening the same source verifies the managed copy against its saved
-    SHA-256 manifest. If the copy differs, it is rebuilt from the original;
-    otherwise only added, modified, and removed source files are synchronized.
-    If another source folder with the same basename already owns the preferred
-    workspace name, a short path hash is appended to avoid a collision.
+    """Create a fresh single-source mirror without reusing any workspace.
 
     Parameters
     ----------
     source_directory: str | pathlib.Path
-        Existing folder containing project source material.
+        Existing source directory. Originals are never modified.
     type_id: ProjectTypeId
-        Type of source material in the project.
+        Registered project type for the new mirror.
     workspace_root: str | pathlib.Path
-        KíLín sandbox folder that contains managed project workspaces.
+        Parent for project_<source-name>, then -2, -3, and subsequent free
+        names. Existing directories are skipped even for the same source.
 
     Returns
     -------
     QAProject
-        Project whose source points to the synchronized sandbox snapshot.
+        Independent project containing selected source copies and provenance.
 
     Raises
     ------
     ValueError
-        If type_id is unsupported, source/workspace locations conflict, an
-        existing managed profile is inconsistent, or a unique workspace
-        location cannot be selected.
-    NotADirectoryError
-        If the original source is not a directory.
+        If the project type or source/destination relationship is invalid,
+        or the source basename conflicts with managed workspace entries.
     OSError
-        If scanning, hashing, copying, deleting, or writing metadata fails.
+        If scanning, exclusive creation, copying, or publication fails.
 
     Notes
     -----
-    This mirrors one original repository using its selected-source manifest. It
-    is not the cumulative multi-source API in kilin.workspace. The current
-    implementation requires complete source and snapshot scans and verifies
-    copied content on each reopen. This adds disk I/O proportional to selected
-    source size. Reopening and synchronization are not atomic across snapshot
-    and manifest; initial project creation commits its profile last.
-    Source copying is organization, not execution sandboxing.
+    Repeated calls create independent projects. To deliberately synchronize
+    an existing mirror, use synchronize_project_workspace with its explicit
+    destination. Initial creation is rolled back on failure and publishes
+    profile.ini last, without replacing an existing entry.
 
     """
 
     if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
-
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
-
-    sandbox = Path(workspace_root).expanduser()
-    sandbox.mkdir(parents=True, exist_ok=True)
-    sandbox = sandbox.resolve(strict=True)
+    if not str(workspace_root).strip():
+        raise ValueError("Choose a workspace parent folder.")
+    sandbox = Path(workspace_root).expanduser().resolve()
     if sandbox == source:
         raise ValueError("The workspace folder must differ from the source.")
-
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip("-._")
-    if not safe_name:
-        safe_name = "project"
+    safe_name = safe_name or "project"
+    preferred = sandbox / f"project_{safe_name}"
+    with _preparing_project(
+        preferred, type_id, source.name, allocate=True
+    ) as (project, journal):
+        _synchronize_snapshot(project, source, sandbox, journal)
+    return open_project(project.root)
 
-    preferred_root = sandbox / f"project_{safe_name}"
-    root = _select_workspace_root(preferred_root, source)
-    if root.is_symlink():
+
+def synchronize_project_workspace(
+    source_directory: str | Path, project_directory: str | Path
+) -> QAProject:
+    """Deliberately synchronize a single-source mirror, not a new project.
+
+    Parameters
+    ----------
+    source_directory: str | pathlib.Path
+        Original repository to scan. Its identity must match any valid saved
+        provenance. An unreadable manifest may be rebuilt from this explicit
+        source after profile and layout validation.
+    project_directory: str | pathlib.Path
+        Existing mirror workspace. Missing or invalid profiles are errors;
+        this operation never creates or changes the project profile.
+
+    Returns
+    -------
+    QAProject
+        Existing project after the managed snapshot is synchronized.
+
+    Raises
+    ------
+    ValueError
+        If source provenance or the managed source layout conflicts.
+    OSError
+        If the project cannot be opened or synchronization fails.
+
+    Notes
+    -----
+    Unlike cumulative add_project_sources, this explicit operation may replace
+    local snapshot edits and remove copies deleted from the original. Existing
+    resource templates are not restored. Synchronization is not atomic across
+    all files; a failure may leave earlier snapshot changes in place.
+
+    """
+
+    requested = Path(project_directory).expanduser()
+    if requested.is_symlink():
         raise ValueError("Managed workspace root must not be a symbolic link.")
-    # A new profile is committed only after the complete source snapshot and
-    # its provenance manifest have been prepared successfully.
-    source_name = source.name
-    snapshot = root / source_name
+    project = open_project(project_directory)
+    source = Path(source_directory).expanduser().resolve(strict=True)
+    if not source.is_dir():
+        raise NotADirectoryError(f"Choose a source folder: {source}")
+    if source == project.root or source.is_relative_to(project.root):
+        raise ValueError("The source must be outside the mirror workspace.")
+    saved = _read_json_if_possible(project.root / "source_snapshot.json")
+    if saved is not None and saved.get("source_directory") not in (
+        None, str(source)
+    ):
+        raise ValueError("The source conflicts with saved mirror provenance.")
+    _synchronize_snapshot(project, source, project.root.parent, None)
+    return open_project(project.root)
+
+
+def _synchronize_snapshot(
+    project: QAProject,
+    source: Path,
+    sandbox: Path,
+    journal: _InitializationJournal | None,
+) -> None:
+    """Apply the existing selected-file mirroring algorithm explicitly.
+
+    Parameters
+    ----------
+    project: QAProject
+        New provisional or explicitly opened mirror project.
+    source: pathlib.Path
+        Original source directory.
+    sandbox: pathlib.Path
+        Workspace parent excluded when it lies inside the original source.
+    journal: _InitializationJournal | None
+        New-project rollback journal, or None for an intentional update.
+
+    """
+
+    root = project.root
+    snapshot = root / source.name
     if snapshot.is_symlink():
         raise ValueError("Managed source copy must not be a symbolic link.")
-    if not (root / "profile.ini").exists() and snapshot.is_dir():
-        if any(snapshot.iterdir()):
-            raise ValueError(
-                "Uninitialized workspace has an existing source snapshot."
-            )
-    with _preparing_project(
-        root, type_id, source_name, validate_source=True
-    ) as (
-        project, journal
-    ):
-        if project.source != snapshot.resolve(strict=True):
-            raise ValueError(
-                "Managed workspace profile.ini must keep project.source "
-                f"set to {source_name}."
-            )
-        excludes: tuple[str, ...] = ()
-        if sandbox.is_relative_to(source):
-            excludes = (sandbox.relative_to(source).as_posix(),)
-
-        report = scan_repository(
-            source,
-            extensions=project.profile.extensions,
-            exclude_paths=excludes,
-            max_file_bytes=project.profile.max_file_bytes,
+    if project.source != snapshot.resolve(strict=True):
+        raise ValueError(
+            "Managed workspace project.source must keep the source folder "
+            f"set to {source.name}."
         )
-        current_manifest = build_repository_manifest(report)
-        snapshot_manifest_path = root / "source_snapshot.json"
-        saved_manifest = _read_json_if_possible(snapshot_manifest_path)
-        try:
-            changes = compare_repository_manifests(
-                saved_manifest,
-                current_manifest,
-            )
-        except ValueError:
-            saved_manifest = None
-            changes = compare_repository_manifests(None, current_manifest)
+    excludes: tuple[str, ...] = ()
+    if sandbox.is_relative_to(source):
+        excludes = (sandbox.relative_to(source).as_posix(),)
 
-        # The saved source manifest alone cannot detect edits to the managed
-        # copy. Verify selected copied bytes before using the incremental diff.
-        # A divergent snapshot is rebuilt, not synchronized on top of untrusted
-        # content (including unexpected selected files and symbolic links).
-        if saved_manifest is not None and not _snapshot_matches_manifest(
-            snapshot, project.profile, saved_manifest
-        ):
-            saved_manifest = None
-            changes = compare_repository_manifests(None, current_manifest)
+    report = scan_repository(
+        source,
+        extensions=project.profile.extensions,
+        exclude_paths=excludes,
+        max_file_bytes=project.profile.max_file_bytes,
+    )
+    current_manifest = build_repository_manifest(report)
+    snapshot_manifest_path = root / "source_snapshot.json"
+    saved_manifest = _read_json_if_possible(snapshot_manifest_path)
+    try:
+        changes = compare_repository_manifests(
+            saved_manifest,
+            current_manifest,
+        )
+    except ValueError:
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
 
-        if not bool(changes["matches"]):
-            if saved_manifest is None:
-                shutil.rmtree(snapshot)
-                snapshot.mkdir(parents=True, exist_ok=True)
+    # The saved source manifest alone cannot detect edits to the managed
+    # copy. Verify selected copied bytes before using the incremental diff.
+    # A divergent snapshot is rebuilt, not synchronized on top of untrusted
+    # content (including unexpected selected files and symbolic links).
+    if saved_manifest is not None and not _snapshot_matches_manifest(
+        snapshot, project.profile, saved_manifest
+    ):
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
 
-            for relative in changes["removed"]:
-                target = snapshot / str(relative)
-                if target.is_file() or target.is_symlink():
-                    target.unlink()
+    if not bool(changes["matches"]):
+        if saved_manifest is None:
+            shutil.rmtree(snapshot)
+            snapshot.mkdir(parents=True, exist_ok=True)
 
-            for relative in [*changes["added"], *changes["modified"]]:
-                source_path = source / str(relative)
-                target = snapshot / str(relative)
-                if journal is not None:
-                    journal.note(target)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_path, target)
+        for relative in changes["removed"]:
+            target = snapshot / str(relative)
+            if target.is_file() or target.is_symlink():
+                target.unlink()
 
-            _remove_empty_directories(snapshot)
+        for relative in [*changes["added"], *changes["modified"]]:
+            source_path = source / str(relative)
+            target = snapshot / str(relative)
+            if journal is not None:
+                journal.note(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target)
 
-        # Always record ownership, including the zero-file case.  This lets the
-        # next open distinguish different sources with the same basename.
-        manifest_payload = {
-            **current_manifest,
-            "source_directory": str(source),
-        }
-        if journal is not None:
-            journal.note(snapshot_manifest_path)
-        _write_json(snapshot_manifest_path, manifest_payload)
+        _remove_empty_directories(snapshot)
 
-
-
-    return open_project(root)
+    # Always record ownership, including the zero-file case.  This lets the
+    # next open distinguish different sources with the same basename.
+    manifest_payload = {
+        **current_manifest,
+        "source_directory": str(source),
+    }
+    if journal is not None:
+        journal.note(snapshot_manifest_path)
+    _write_json(snapshot_manifest_path, manifest_payload)
 
 
 def _snapshot_matches_manifest(
@@ -1145,67 +1186,8 @@ def _snapshot_matches_manifest(
     ])
 
 
-def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
-    """Choose a readable workspace name without a source collision.
-
-    Parameters
-    ----------
-    preferred_root: pathlib.Path
-        Preferred managed-workspace directory beneath the supplied workspace
-        root.
-    source: pathlib.Path
-        Resolved original source directory whose identity is recorded in a
-        workspace manifest.
-
-    Returns
-    -------
-    pathlib.Path
-        Preferred root when compatible with the original source, otherwise a
-        source-path-hashed collision root.
-
-    Raises
-    ------
-    ValueError
-        If the deterministic collision root already belongs to another recorded
-        source.
-
-    Notes
-    -----
-    Ownership is inferred from stored source_directory metadata. Missing or
-    malformed metadata is not a general proof that an existing directory is
-    safe to replace.
-
-    """
-
-    if not preferred_root.exists():
-        return preferred_root
-
-    metadata = _read_json_if_possible(preferred_root / "source_snapshot.json")
-    if metadata is not None and metadata.get("source_directory") == str(
-        source
-    ):
-        return preferred_root
-
-    identity = sha256(str(source).encode("utf-8")).hexdigest()[:8]
-    collision_root = preferred_root.with_name(
-        f"{preferred_root.name}-{identity}"
-    )
-    collision_metadata = _read_json_if_possible(
-        collision_root / "source_snapshot.json"
-    )
-    if (
-        collision_root.exists()
-        and collision_metadata is not None
-        and collision_metadata.get("source_directory") != str(source)
-    ):
-        raise ValueError(
-            "Could not choose a unique KíLín workspace for this source."
-        )
-    return collision_root
-
-
 def open_project(directory: str | Path) -> QAProject:
-    """Open a configured project and prepare its shared folders.
+    """Validate and open a configured project without modifying its files.
 
     Parameters
     ----------
@@ -1230,15 +1212,20 @@ def open_project(directory: str | Path) -> QAProject:
     -----
     The root and configured source must already be directories and profile.ini
     must exist. A profile may name an absolute source outside the project. The
-    function creates indexes, logs, outputs and templates directories before
-    returning, without reinstalling packaged templates; it does not load
-    models.
+    function validates any existing managed folders, rejecting links and
+    nondirectories, but never creates missing folders or restores templates.
+    It loads no models. A pending creation marker is an error, not permission
+    to finish or repair a partial project.
 
     """
 
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
+
+    marker = root / ".kilin-creating"
+    if marker.exists() or marker.is_symlink():
+        raise WorkspaceOccupiedError(root, "Project creation is incomplete")
 
     profile_path = root / "profile.ini"
     if not profile_path.is_file():
@@ -1254,7 +1241,12 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
-    ensure_project_folders(root)
+    for name in ("indexes", "logs", "outputs", "templates"):
+        folder = root / name
+        if folder.is_symlink():
+            raise ValueError(f"Project folder must not be a link: {folder}")
+        if folder.exists() and not folder.is_dir():
+            raise ValueError(f"Project folder must be a directory: {folder}")
     indexes = root / "indexes"
     logs = root / "logs"
     return QAProject(

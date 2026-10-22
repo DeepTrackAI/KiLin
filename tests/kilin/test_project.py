@@ -235,10 +235,15 @@ class TestProjectInitialization(ProjectFixture):
         for type_id in ("code", "literature"):
             with self.subTest(type_id=type_id):
                 directory = self._folder(type_id)
-                self._write(directory, "keep.txt", "keep this content")
+                original = self._write(
+                    self.root, f"keep-{type_id}.txt", "keep this content"
+                )
                 result = project.initialize_project(directory, type_id)
                 self.assertEqual(result.root, directory)
-                self.assertEqual(result.source, directory)
+                self.assertEqual(
+                    result.source,
+                    directory / project_type(type_id).source_directory,
+                )
                 self.assertEqual(result.profile.type_id, type_id)
                 self.assertEqual(
                     result.profile.extensions,
@@ -252,27 +257,26 @@ class TestProjectInitialization(ProjectFixture):
                 self.assertTrue(result.indexes.is_dir())
                 self.assertTrue(result.logs.is_dir())
                 self.assertEqual(
-                    (directory / "keep.txt").read_text(encoding="utf-8"),
+                    original.read_text(encoding="utf-8"),
                     "keep this content",
                 )
 
     def test_initialize_prefers_sources_over_kind_specific_folders(
         self,
     ) -> None:
-        """Choose sources when both layout alternatives exist."""
+        """Reject both existing source-layout alternatives without adoption."""
 
-        for type_id, default_folder in (
-            ("code", "repository"),
-            ("literature", "documents"),
-        ):
+        for type_id, folder in (("code", "repository"),
+                                ("literature", "documents")):
             with self.subTest(type_id=type_id):
                 directory = self._folder(f"sources-{type_id}")
-                (directory / default_folder).mkdir()
-                sources = directory / "sources"
-                sources.mkdir()
-                result = project.initialize_project(directory, type_id)
-                self.assertEqual(result.source, sources)
-                self.assertEqual(result.profile.source, "sources")
+                (directory / folder).mkdir()
+                (directory / "sources").mkdir()
+                with self.assertRaises(project.WorkspaceOccupiedError):
+                    project.initialize_project(directory, type_id)
+                self.assertTrue((directory / folder).is_dir())
+                self.assertTrue((directory / "sources").is_dir())
+                self.assertFalse((directory / "profile.ini").exists())
 
     def test_initialize_uses_kind_specific_folder_when_available(
         self,
@@ -285,7 +289,6 @@ class TestProjectInitialization(ProjectFixture):
         ):
             directory = self._folder(f"specific-{type_id}")
             source = directory / source_name
-            source.mkdir()
             result = project.initialize_project(directory, type_id)
             self.assertEqual(result.source, source)
             self.assertEqual(result.profile.source, source_name)
@@ -298,8 +301,10 @@ class TestProjectInitialization(ProjectFixture):
         directory = self._profile("existing")
         self._edit(directory, "retrieval", "count", "17")
         before = (directory / "profile.ini").read_bytes()
-        first = project.initialize_project(directory, "code")
-        second = project.initialize_project(directory, "code")
+        with self.assertRaises(project.ProjectAlreadyExistsError):
+            project.initialize_project(directory, "code")
+        first = project.open_project(directory)
+        second = project.open_project(directory)
         self.assertEqual(first.profile.retrieval_count, 17)
         self.assertEqual(first, second)
         self.assertEqual((directory / "profile.ini").read_bytes(), before)
@@ -311,15 +316,15 @@ class TestProjectInitialization(ProjectFixture):
         before = (directory / "profile.ini").read_bytes()
         with self.assertRaisesRegex(ValueError, "type_id must be one of"):
             project.initialize_project(directory, "unregistered")
-        with self.assertRaisesRegex(ValueError, "conflicts"):
+        with self.assertRaises(project.ProjectAlreadyExistsError):
             project.initialize_project(directory, "literature")
         self.assertEqual((directory / "profile.ini").read_bytes(), before)
 
     def test_initialize_rejects_missing_file_or_nondirectory(self) -> None:
-        """Resolve only existing directories, not paths to regular files."""
+        """Create missing destinations but reject paths to regular files."""
 
-        with self.assertRaises(FileNotFoundError):
-            project.initialize_project(self.root / "missing", "code")
+        created = project.initialize_project(self.root / "missing", "code")
+        self.assertTrue((created.root / "profile.ini").is_file())
         file_path = self._write(self.root, "regular.txt", "data")
         with self.assertRaises(NotADirectoryError):
             project.initialize_project(file_path, "code")
@@ -755,9 +760,14 @@ class TestProjectWorkspace(ProjectFixture):
 
         """
 
-        return project.prepare_project_workspace(
+        if hasattr(self, "mirror"):
+            return project.synchronize_project_workspace(
+                self.source, self.mirror.root
+            )
+        self.mirror = project.prepare_project_workspace(
             self.source, type_id, self.sandbox
         )
+        return self.mirror
 
     def test_initial_workspace_copies_only_selected_sources(self) -> None:
         """Do not edit originals or mirror files excluded by source rules."""
@@ -881,8 +891,8 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertTrue((first.source / f"one{self.suffix}").is_file())
         self.assertTrue((second.source / f"two{self.suffix}").is_file())
         self.assertEqual(
-            project.prepare_project_workspace(
-                source_b, "code", self.sandbox
+            project.synchronize_project_workspace(
+                source_b, second.root
             ).root,
             second.root,
         )
@@ -894,8 +904,11 @@ class TestProjectWorkspace(ProjectFixture):
 
         original = self._prepare()
         before = (original.root / "profile.ini").read_bytes()
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._prepare("literature")
+        independent = project.prepare_project_workspace(
+            self.source, "literature", self.sandbox
+        )
+        self.assertNotEqual(independent.root, original.root)
+        self.assertEqual(independent.profile.type_id, "literature")
         self.assertEqual((original.root / "profile.ini").read_bytes(),
                          before)
 
@@ -991,7 +1004,7 @@ class TestProjectWorkspace(ProjectFixture):
         except (NotImplementedError, OSError):
             self.skipTest("Creating directory symlinks is unavailable")
         with self.assertRaisesRegex(ValueError, "symbolic link"):
-            self._prepare()
+            project.synchronize_project_workspace(self.source, first.root)
         self.assertTrue((target / "source_snapshot.json").is_file())
 
     def test_snapshot_heals_missing_selected_file(self) -> None:
@@ -1203,50 +1216,45 @@ class TestWorkspaceHelpers(ProjectFixture):
         self.assertTrue((root / "keep").exists())
 
     def test_select_workspace_root_for_new_and_known_owners(self) -> None:
-        """Reuse a managed root whose manifest records the same source."""
+        """A saved owner never turns repeated creation into a reopen."""
 
         source = self._folder("owner")
-        root = self.root / "project_owner"
-        self.assertEqual(project._select_workspace_root(root, source), root)
-        root.mkdir()
-        project._write_json(root / "source_snapshot.json", {
-            "source_directory": str(source)
-        })
-        self.assertEqual(project._select_workspace_root(root, source), root)
+        parent = self._folder("projects")
+        first = project.prepare_project_workspace(source, "code", parent)
+        second = project.prepare_project_workspace(source, "code", parent)
+        self.assertEqual(first.root.name, "project_owner")
+        self.assertEqual(second.root.name, "project_owner-2")
+        self.assertNotEqual(first.root, second.root)
 
     def test_select_workspace_root_avoids_unowned_preferred_root(
         self,
     ) -> None:
-        """Hash the source path when the preferred root has no owner."""
+        """Even an empty or unknown default destination is skipped."""
 
-        source = self._folder("other-owner")
-        root = self._folder("project_other-owner")
-        alternate = project._select_workspace_root(root, source)
-        self.assertNotEqual(alternate, root)
-        self.assertTrue(alternate.name.startswith(root.name + "-"))
-        self.assertEqual(len(alternate.name.split("-")[-1]), 8)
-        alternate.mkdir()
-        project._write_json(alternate / "source_snapshot.json", {
-            "source_directory": "someone_else"
-        })
-        with self.assertRaisesRegex(ValueError, "unique KíLín workspace"):
-            project._select_workspace_root(root, source)
+        source = self._folder("owner")
+        parent = self._folder("projects")
+        occupied = parent / "project_owner"
+        occupied.mkdir()
+        marker = occupied / "keep.txt"
+        marker.write_text("owned", encoding="utf-8")
+        created = project.prepare_project_workspace(source, "code", parent)
+        self.assertNotEqual(created.root, occupied)
+        self.assertEqual(created.root.name, "project_owner-2")
+        self.assertEqual(marker.read_text(encoding="utf-8"), "owned")
 
     def test_select_workspace_root_reuses_matching_collision_owner(
         self,
     ) -> None:
-        """Permit a collision path when its owner is already recorded."""
+        """A matching collision owner also receives an independent sibling."""
 
-        source = self._folder("identical-owner")
-        root = self._folder("project_identical-owner")
-        alternate = project._select_workspace_root(root, source)
-        alternate.mkdir()
-        project._write_json(alternate / "source_snapshot.json", {
-            "source_directory": str(source)
-        })
-        self.assertEqual(
-            project._select_workspace_root(root, source), alternate
-        )
+        source = self._folder("owner")
+        parent = self._folder("projects")
+        first = project.prepare_project_workspace(source, "code", parent)
+        second = project.prepare_project_workspace(source, "code", parent)
+        third = project.prepare_project_workspace(source, "code", parent)
+        self.assertEqual(second.root.name, first.root.name + "-2")
+        self.assertEqual(third.root.name, first.root.name + "-3")
+        self.assertNotEqual(third.root, second.root)
 
 
 if __name__ == "__main__":

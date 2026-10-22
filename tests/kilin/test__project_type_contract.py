@@ -162,20 +162,19 @@ for absent in ("code", "literature", "missing"):
 root = Path("work").resolve()
 root.mkdir()
 adopted = root / "adopted"
-(adopted / "material").mkdir(parents=True)
+adopted.mkdir()
 first = kilin.initialize_project(adopted, "alpha")
 assert first.source == (adopted / "material").resolve()
 (adopted / "sources").mkdir()
-assert kilin.initialize_project(adopted, "alpha").source == first.source
+assert kilin.open_project(adopted).source == first.source
 preferred = root / "preferred"
-(preferred / "sources").mkdir(parents=True)
-(preferred / "material").mkdir()
+preferred.mkdir()
 assert kilin.initialize_project(preferred, "zeta").source == (
-    preferred / "sources"
+    preferred / "material"
 ).resolve()
 plain = root / "plain"
 plain.mkdir()
-assert kilin.initialize_project(plain, "alpha").source == plain
+assert kilin.initialize_project(plain, "alpha").source == plain / "material"
 empty = kilin.prepare_sources_workspace([], "alpha", root / "empty")
 assert empty.profile.type_id == "alpha"
 assert empty.source.name == "sources"
@@ -186,7 +185,7 @@ assert empty.profile.max_file_bytes == 4096
 empty = configure_project(empty.root, {"max_file_bytes": 123})
 file = root / "later.txt"
 file.write_text("Later source.")
-updated = kilin.prepare_sources_workspace([file], "alpha", empty.root)
+updated = kilin.add_project_sources(empty.root, [file])
 assert updated.profile.max_file_bytes == 123
 assert (updated.source / "later.txt").read_text() == "Later source."
 coordinator = object.__new__(RAGSession)

@@ -129,8 +129,12 @@ package, it is a per-user application-data directory:
 be an absolute path (or a home-expanded `~/...` path). Explicit
 workspace paths entered through the interface take precedence. The engine
 does not create the default directory until a project needs it; existing
-projects are never moved. A saved workspace can be reopened without adding
-sources. New projects may also start without sources: choose an explicit
+projects are never moved. Repeated creation from the same sources allocates
+independent numbered folders. An explicitly selected occupied destination is
+never reused: the interface offers to resume an existing project separately,
+without importing pending sources or applying new-project settings, or lets
+you choose another destination. The current session stays open on conflicts.
+A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: choose an explicit
 workspace folder in Settings. Their managed `sources/` folder is initially
 empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an

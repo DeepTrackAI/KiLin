@@ -335,7 +335,8 @@ class ProjectType:
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
     source_directory: str
-        Relative folder convention when adopting an existing directory.
+        Relative source folder created by ``initialize_project`` inside a
+        fresh directory.
         Defaults to ``sources``; managed workspaces always use ``sources/``.
         A saved profile source takes precedence, followed by an existing
         ``sources/`` folder, this convention, and finally the project root.
@@ -638,7 +639,7 @@ def _source_directory(type_id: str, data: dict) -> str:
 
     Notes
     -----
-    This is a discovery convention, not permission to create or traverse
+    This is a source-subdirectory convention, not permission to traverse
     arbitrary paths. Explicit saved profile sources are resolved separately.
 
     """

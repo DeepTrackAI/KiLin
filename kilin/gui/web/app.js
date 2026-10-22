@@ -3375,6 +3375,21 @@ function onEvent(raw) {
         activeConversationId,
       );
     }
+  } else if (data.event === "workspace_conflict") {
+    // Creation never reuses a project; opening one is a separate decision.
+    setBusy(false);
+    error.textContent = data.message;
+    error.classList.remove("hidden");
+    const resume = data.existing_project && confirm(
+      `A project already exists at ${data.workspace}.\n\nOpen that project instead? Selected sources and new-project settings will not be applied.\n\nCancel to choose another destination.`,
+    );
+    if (resume) {
+      setBusy(true, "Opening the existing project...");
+      bridge.resumeProject(data.workspace);
+    } else {
+      openModels();
+      byId("workspace-path").focus();
+    }
   } else if (data.event === "error") {
     showError(data.message, data.trace_path || activeTracePath);
   }

@@ -87,6 +87,9 @@ from .project import (
     ProjectProfile,
     QAProject,
     initialize_project,
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
+    synchronize_project_workspace,
     open_project,
     prepare_project_workspace,
 )
@@ -234,7 +237,12 @@ from .project_files import (
     remove_project_files,
     replace_project_file,
 )
-from .workspace import prepare_sources_workspace, remove_workspace_sources
+from .workspace import (
+    add_project_sources,
+    default_workspace_path,
+    prepare_sources_workspace,
+    remove_workspace_sources,
+)
 
 __all__ = [
     "__version__",
@@ -324,6 +332,11 @@ __all__ = [
     "format_qwen3_query",
     "hybrid_search",
     "initialize_project",
+    "ProjectAlreadyExistsError",
+    "WorkspaceOccupiedError",
+    "synchronize_project_workspace",
+    "add_project_sources",
+    "default_workspace_path",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",

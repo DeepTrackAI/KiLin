@@ -123,11 +123,16 @@ class WorkspaceFixture(unittest.TestCase):
 
         """
 
+        target = destination if destination is not None else self.destination
+        if (target / "profile.ini").is_file():
+            # Cumulative tests explicitly select the update API after creation.
+            from kilin.project import configure_project
+            settings = kwargs.pop("settings", None)
+            if settings is not None:
+                configure_project(target, settings, trace=kwargs.get("trace"))
+            return workspace.add_project_sources(target, sources, **kwargs)
         return workspace.prepare_sources_workspace(
-            sources,
-            type_id,
-            destination if destination is not None else self.destination,
-            **kwargs,
+            sources, type_id, target, **kwargs,
         )
 
     def _records(self) -> list[dict[str, object]]:
@@ -242,12 +247,14 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         self.assertEqual(project.root, self.destination)
 
     def test_trace_only_workspace_is_accepted(self) -> None:
-        """Preparation may follow creation of a logs/traces directory."""
+        """A trace-only directory is protected as partial initialization."""
 
         (self.destination / "logs/traces").mkdir(parents=True)
         original = self._file("code.py")
-        project = self._prepare([original])
-        self.assertTrue((project.source / "code.py").is_file())
+        with self.assertRaisesRegex(ValueError, "empty workspace"):
+            self._prepare([original])
+        self.assertFalse((self.destination / "profile.ini").exists())
+        self.assertTrue((self.destination / "logs/traces").is_dir())
 
     def test_trace_only_workspaces_reject_extra_content(self) -> None:
         """Do not adopt directories resembling but not matching trace setup."""
@@ -264,7 +271,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
                 extra_path = destination / extra
                 extra_path.parent.mkdir(parents=True, exist_ok=True)
                 extra_path.write_text("keep", encoding="utf-8")
-                with self.assertRaisesRegex(ValueError, "empty folder"):
+                with self.assertRaisesRegex(ValueError, "empty workspace"):
                     self._prepare(
                         [self._file("code.py")],
                         destination=destination,
@@ -281,7 +288,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         (self.destination / "logs").symlink_to(
             log_target, target_is_directory=True
         )
-        with self.assertRaisesRegex(ValueError, "empty folder"):
+        with self.assertRaisesRegex(ValueError, "empty workspace"):
             self._prepare([self._file("code.py")])
 
     def test_trace_preparation_rejects_symlinked_traces(self) -> None:
@@ -292,7 +299,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         (logs / "traces").symlink_to(
             self._folder("external-traces"), target_is_directory=True
         )
-        with self.assertRaisesRegex(ValueError, "empty folder"):
+        with self.assertRaisesRegex(ValueError, "empty workspace"):
             self._prepare([self._file("code.py")])
 
     def test_existing_unmanaged_folder_is_not_overwritten(self) -> None:
@@ -301,7 +308,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         self.destination.mkdir()
         marker = self.destination / "keep.txt"
         marker.write_text("mine", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "empty folder"):
+        with self.assertRaisesRegex(ValueError, "empty workspace"):
             self._prepare([self._file("code.py")])
         self.assertEqual(marker.read_text(encoding="utf-8"), "mine")
         self.assertFalse((self.destination / "profile.ini").exists())
@@ -345,15 +352,16 @@ class TestWorkspaceInitialization(WorkspaceFixture):
         self.assertFalse(self.destination.exists())
 
     def test_existing_project_type_id_must_match(self) -> None:
-        """A code workspace cannot be reopened as literature."""
+        """Creation cannot reinterpret or reuse an existing profile."""
 
         self._prepare([self._file("code.py")])
-        before = (self.destination / "profile.ini").read_bytes()
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._prepare([], type_id="literature")
-        self.assertEqual(
-            (self.destination / "profile.ini").read_bytes(), before
-        )
+        path = self.destination / "profile.ini"
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "project already exists"):
+            workspace.prepare_sources_workspace(
+                [], "literature", self.destination
+            )
+        self.assertEqual(path.read_bytes(), before)
 
     def test_existing_profile_must_retain_sources_ownership(self) -> None:
         """Do not import into a profile pointing at a different folder."""
@@ -369,11 +377,16 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             self._prepare([])
 
     def test_existing_project_type_id_conflict_is_rejected(self) -> None:
-        """A project cannot be reopened with a different project type."""
+        """Creation cannot reinterpret or reuse an existing profile."""
 
         self._prepare([self._file("code.py")])
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._prepare([], type_id="literature")
+        path = self.destination / "profile.ini"
+        before = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "project already exists"):
+            workspace.prepare_sources_workspace(
+                [], "literature", self.destination
+            )
+        self.assertEqual(path.read_bytes(), before)
 
     def test_existing_profile_errors_are_not_suppressed(self) -> None:
         """A malformed existing profile is not silently regenerated."""
@@ -982,11 +995,16 @@ class TestSnapshotBehavior(WorkspaceFixture):
         """Only explicit Boolean replacement decisions are accepted."""
 
         original = self._file("code.py")
+        created = self._prepare([original])
+        before = (created.root / "profile.ini").read_bytes()
         for value in (1, 0, "true", None, [], 2.5):
             with self.subTest(value=value):
                 with self.assertRaisesRegex(ValueError, "replace_existing"):
                     self._prepare([original], replace_existing=value)
-        self.assertFalse(self.destination.exists())
+        self.assertEqual((created.root / "profile.ini").read_bytes(), before)
+        self.assertEqual(
+            (created.source / "code.py").read_bytes(), original.read_bytes()
+        )
 
     def test_untracked_file_inside_imported_directory_is_preserved(
         self,

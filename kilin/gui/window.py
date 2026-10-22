@@ -402,9 +402,10 @@ class ChatBridge(QObject):
         selected_json: str,
         settings_json: str,
     ) -> None:
-        """Request project preparation in the backend process.
+        """Request exclusive new-project creation in the backend process.
 
-        Files are checked before they are copied into the workspace.
+        An occupied explicit destination produces workspace_conflict, not an
+        implicit reopen. resumeProject is the separate existing-project action.
 
         Parameters
         ----------

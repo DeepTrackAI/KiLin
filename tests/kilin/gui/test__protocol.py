@@ -575,6 +575,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "answer_delta", "answer_phase", "answered", "backend_failed",
             "backend_restarted", "conversation_delete_started",
             "conversation_opened", "conversations", "error",
+            "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",
             "installation_started", "installed_models_used",

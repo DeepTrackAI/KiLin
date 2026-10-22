@@ -73,7 +73,6 @@ from configparser import ConfigParser, Error as ConfigError
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, replace
-from hashlib import sha256
 import json
 from pathlib import Path
 import math
@@ -118,7 +117,11 @@ from kilin.gui.model_catalog import (
     model_choices,
 )
 from kilin import RAGSession, prepare_sources_workspace
-from kilin.workspace import remove_workspace_sources
+from kilin.workspace import (
+    add_project_sources,
+    default_workspace_path,
+    remove_workspace_sources,
+)
 from kilin.project_files import (
     add_project_files,
     list_project_files,
@@ -132,6 +135,8 @@ from kilin.huggingface import available_models, download_model
 from kilin.project_type import load_project_types, project_type
 from kilin.project import (
     PROJECT_TYPE_IDS,
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
     QAProject,
     configure_project,
     default_project_profile,
@@ -1544,10 +1549,10 @@ class ChatEngine:
         selected_files: dict[str, list[str]] | None = None,
         settings: dict[str, object] | None = None,
     ) -> None:
-        """Add selected sources and open one KíLín workspace.
+        """Create and activate a new, independently owned workspace.
 
-        The selected source snapshot is prepared before models are loaded. An
-        empty source list creates or reopens a managed workspace unchanged.
+        Creation is exclusive and cannot resume an existing project. Empty
+        source lists require an explicit nonexistent or empty destination.
 
         Parameters
         ----------
@@ -1565,13 +1570,15 @@ class ChatEngine:
 
         Notes
         -----
-        Closes any current session before preparation. Explicit file
-        selection does not change the saved extension list. Copying uses the
-        cumulative multi-source workspace API. An empty source list requires an
-        explicit workspace location. Errors become frontend events.
+        The core reserves the final destination and completes creation before
+        the current session is closed or any new conversation/trace is created.
+        Default collisions receive a fresh name. Explicit collisions emit
+        workspace_conflict without modifying the destination or current
+        session; the frontend may request a separate resume operation.
 
         """
 
+        switched = False
         try:
             if type_id not in PROJECT_TYPE_IDS:
                 raise ValueError("Choose a project type.")
@@ -1594,8 +1601,6 @@ class ChatEngine:
                 raise ValueError(
                     "Choose a workspace folder for a project without sources."
                 )
-            if not workspace.strip():
-                workspace = str(_workspace_path(sources, self.sandbox, ""))
             if selected_files is not None:
                 # Resolve path aliases before matching checked files.
                 selected_files = {
@@ -1610,27 +1615,18 @@ class ChatEngine:
                 ]
                 if missing:
                     raise ValueError("Choose files for every added source.")
-            self.close()
-            project_directory = Path(workspace).expanduser().resolve()
-            conversation: ConversationInfo | None = None
-            if self.trace_enabled:
-                store = ConversationStore(project_directory)
-                conversation = store.ensure()
-                self.conversation_store = store
-                self.active_conversation = conversation
-                self._start_project_trace(project_directory, conversation)
-            self._send("status", message="Preparing the project…")
+            # Creation must succeed before touching the current session or
+            # creating conversation/trace files in the destination.
+            self._send("status", message="Preparing the new project...")
             options: dict[str, object] = {}
             if selected_files is not None:
                 options["selected_files"] = selected_files
             if settings:
                 options["settings"] = settings
-            if self.project_trace.enabled:
-                options["trace"] = self.project_trace
+            if not workspace.strip():
+                options["workspace_root"] = self.sandbox
             project = prepare_sources_workspace(
-                sources,
-                type_id,
-                workspace,
+                sources, type_id, workspace if workspace.strip() else None,
                 **options,
             )
             if created_depth is not None:
@@ -1638,20 +1634,34 @@ class ChatEngine:
             if created_levels:
                 for backend, levels in created_levels.items():
                     write_effort_levels(project.root, backend, levels)
+            self.close()
+            switched = True
+            conversation = self._open_conversation_store(project)
+            self._start_project_trace(project.root, conversation)
+            if created_levels:
                 self.active_trace.emit(
                     "gui.models.effort_levels.saved",
                     component="gui_engine",
                     data=created_levels,
                 )
-            if conversation is None:
-                conversation = self._open_conversation_store(project)
             self._activate_project(project, conversation)
-        except Exception as error:
-            self._report_error(
-                "gui.project.prepare.failed",
-                error,
-                f"Could not prepare the project: {error}",
+        except WorkspaceOccupiedError as error:
+            # Do not append even an error trace to the protected project.
+            # Resuming requires a separate explicit frontend command.
+            self._send(
+                "workspace_conflict",
+                workspace=str(error.directory),
+                existing_project=isinstance(error, ProjectAlreadyExistsError),
+                message=str(error),
             )
+        except Exception as error:
+            message = f"Could not prepare the project: {error}"
+            if switched:
+                self._report_error(
+                    "gui.project.prepare.failed", error, message
+                )
+            else:
+                self._send("error", message=message, trace_path=None)
             if self.session is None:
                 self._close_project_trace()
 
@@ -1871,7 +1881,6 @@ class ChatEngine:
             ):
                 raise ValueError("Choose source files or folders.")
             root = self.session.project.root
-            type_id = self.session.project.profile.type_id
             conversation_id = self.active_conversation.conversation_id
             self.active_trace.emit(
                 "gui.sources.add.requested",
@@ -1881,8 +1890,8 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
-            project = prepare_sources_workspace(
-                sources, type_id, root, trace=self.active_trace
+            project = add_project_sources(
+                root, sources, trace=self.active_trace
             )
             self._refresh_sources(project)
         except Exception as error:
@@ -3541,7 +3550,7 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
-    """Resolve the same workspace location for preview and preparation.
+    """Suggest a preview location without reserving or reusing a workspace.
 
     Parameters
     ----------
@@ -3562,16 +3571,14 @@ def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
 
     Notes
     -----
-    Deriving a default uses the first supplied source. The returned name does
-    not establish isolation or ownership by itself.
+    Deriving a default uses the core naming helper and first supplied source.
+    Creation may select a numbered sibling. Preview does not reserve a path.
 
     """
 
     if chosen.strip():
         return Path(chosen).expanduser().resolve()
-    source = Path(sources[0]).expanduser().resolve()
-    digest = sha256(str(source).encode()).hexdigest()[:8]
-    return (sandbox / f"{source.stem}-{digest}").resolve()
+    return default_workspace_path(sources, sandbox)
 
 
 def main() -> None:

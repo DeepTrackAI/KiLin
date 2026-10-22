@@ -16,7 +16,9 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from kilin.project import initialize_project, prepare_project_workspace
+from kilin.project import (
+    initialize_project, open_project, prepare_project_workspace,
+)
 from kilin.workspace import prepare_sources_workspace
 
 
@@ -37,7 +39,7 @@ class TestProjectTransaction(unittest.TestCase):
 
         workspace = self.root / "workspace"
         workspace.mkdir()
-        keep = workspace / "keep.txt"
+        keep = self.root / "keep.txt"
         keep.write_text("user-owned\n", encoding="utf-8")
         with patch(
             "kilin.project.install_project_resources",
@@ -80,10 +82,10 @@ class TestProjectTransaction(unittest.TestCase):
 
         workspace = self.root / "workspace"
         workspace.mkdir()
-        keep = workspace / "original.md"
+        keep = self.root / "original.md"
         keep.write_text("manual\n", encoding="utf-8")
         with patch(
-            "kilin.project.atomic_write_text",
+            "kilin.project.atomic_create_text",
             side_effect=OSError("cannot commit"),
         ):
             with self.assertRaisesRegex(OSError, "cannot commit"):
@@ -97,7 +99,7 @@ class TestProjectTransaction(unittest.TestCase):
 
         workspace = self.root / "workspace"
         workspace.mkdir()
-        from kilin.project import atomic_write_text
+        from kilin.project import atomic_create_text
 
         def inspect_commit(path, text):
             self.assertTrue(
@@ -105,10 +107,10 @@ class TestProjectTransaction(unittest.TestCase):
             )
             self.assertTrue((workspace / "outputs").is_dir())
             self.assertFalse((workspace / "profile.ini").exists())
-            return atomic_write_text(path, text)
+            return atomic_create_text(path, text)
 
         with patch(
-            "kilin.project.atomic_write_text", side_effect=inspect_commit
+            "kilin.project.atomic_create_text", side_effect=inspect_commit
         ):
             initialize_project(workspace, "literature")
 
@@ -160,7 +162,7 @@ class TestProjectTransaction(unittest.TestCase):
         project = initialize_project(root, "literature")
         deleted = project.root / "templates/research_briefing.md"
         deleted.unlink()
-        initialize_project(root, "literature")
+        open_project(root)
         self.assertFalse(deleted.exists())
 
 
