@@ -1,5 +1,5 @@
 {
-  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first six questions were used during development; the last four (set 'added') were written afterwards and not run before the final evaluation.",
+  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first ten questions (set 'development') were used while improving retrieval; the last five (set 'held_out') were written afterwards and not run before the final evaluation.",
   "questions": [
     {
       "id": "routing",
@@ -152,7 +152,7 @@
     {
       "id": "chunking",
       "kind": "mechanism",
-      "set": "added",
+      "set": "development",
       "question": "Explain how chunk_source_units handles a source unit that is longer than the maximum chunk size, and how the overlap between consecutive chunks is kept.",
       "gold": [
         {
@@ -183,7 +183,7 @@
     {
       "id": "rank_everything_callers",
       "kind": "dependency",
-      "set": "added",
+      "set": "development",
       "question": "Explain which RAGSession methods call _rank_everything, and why each of them needs a ranking of every chunk.",
       "gold": [
         {
@@ -208,7 +208,7 @@
     {
       "id": "history_selection",
       "kind": "location",
-      "set": "added",
+      "set": "development",
       "question": "Explain where KíLín decides which earlier turns of a conversation are given to the model as history, and what determines how many.",
       "gold": [
         {
@@ -230,7 +230,7 @@
     {
       "id": "conversation_lock",
       "kind": "mechanism",
-      "set": "added",
+      "set": "development",
       "question": "Explain how ConversationFileLock prevents two sessions from writing the same conversation file at the same time.",
       "gold": [
         {
@@ -248,6 +248,126 @@
         "A registry within the process rejects a second owner of the same path before the file is opened.",
         "The operating system releases the lock when the owning process exits.",
         "It coordinates KíLín writers only; programs that ignore the lock are not prevented from writing."
+      ]
+    },
+    {
+      "id": "backend_choice",
+      "kind": "mechanism",
+      "set": "held_out",
+      "question": "Explain how choose_backend selects the computation backend, and which PyTorch device is used when PyTorch is selected.",
+      "gold": [
+        {
+          "path": "kilin/runtime.py",
+          "symbol": "choose_backend"
+        },
+        {
+          "path": "kilin/runtime.py",
+          "symbol": "torch_device"
+        }
+      ],
+      "facts": [
+        "The requested value must be auto, mlx, or torch; anything else raises an error.",
+        "auto selects MLX on a native Apple silicon Mac (macOS on arm64) and PyTorch otherwise.",
+        "Requesting mlx explicitly on any other platform raises an error.",
+        "With PyTorch, the device is CUDA if available, otherwise Apple MPS if available, otherwise the CPU."
+      ]
+    },
+    {
+      "id": "tool_confirmation",
+      "kind": "mechanism",
+      "set": "held_out",
+      "question": "Explain how needs_confirmation and confirm_plan decide whether a tool asks the user before running, and what happens with the user's answer.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "needs_confirmation"
+        },
+        {
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "confirm_plan"
+        }
+      ],
+      "facts": [
+        "A plan with no items never asks, and the policy never never asks.",
+        "The policy always always asks; when_large asks only when the plan's model calls exceed the tool's large-batch threshold.",
+        "confirm_plan asks only when a confirmation callback is available and needs_confirmation says so; otherwise it continues.",
+        "The answer can be continue, quick, or cancel; any other answer is treated as cancel.",
+        "The proposed plan and the decision are both recorded in the trace."
+      ]
+    },
+    {
+      "id": "ask_choice_callers",
+      "kind": "dependency",
+      "set": "held_out",
+      "question": "Explain which functions call ask_choice, and what each of them asks the user to choose.",
+      "gold": [
+        {
+          "path": "kilin/tools/_shared/long_lists.py",
+          "symbol": "offer_export"
+        },
+        {
+          "path": "kilin/tools/_shared/choose_document.py",
+          "symbol": "choose_document"
+        }
+      ],
+      "facts": [
+        "offer_export asks whether to save a long list as a Markdown file in outputs/ or to show only the first items in the chat.",
+        "choose_document asks the user which of several candidate files the question refers to.",
+        "If the user cancels the document choice, the tool stops and says which files matched."
+      ]
+    },
+    {
+      "id": "readable_trace",
+      "kind": "mechanism",
+      "set": "held_out",
+      "question": "Explain when TraceLogger rewrites the human-readable trace file, and how it avoids leaving a partially written file.",
+      "gold": [
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_readable_trace"
+        },
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_event"
+        },
+        {
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger.update_conversation"
+        }
+      ],
+      "facts": [
+        "The file is rewritten after each recorded event; progress updates rewrite it at most every half second.",
+        "It is also rewritten when the conversation data is updated.",
+        "A new temporary file replaces the target in one step, while the exclusive lock on the companion file is held.",
+        "Repeated writes replace this run's part of the file without duplicating it or overwriting earlier runs.",
+        "If writing fails, the event stays in memory and the failure is handled rather than raised."
+      ]
+    },
+    {
+      "id": "workspace_sync",
+      "kind": "mechanism",
+      "set": "held_out",
+      "question": "Explain how prepare_project_workspace keeps its copy of a source folder up to date with the original folder.",
+      "gold": [
+        {
+          "path": "kilin/project.py",
+          "symbol": "prepare_project_workspace"
+        },
+        {
+          "path": "kilin/project.py",
+          "symbol": "_snapshot_matches_manifest"
+        },
+        {
+          "path": "kilin/repository.py",
+          "symbol": "compare_repository_manifests"
+        }
+      ],
+      "facts": [
+        "A manifest with SHA-256 hashes of the selected source files is built and compared with the saved manifest (source_snapshot.json) to find added, modified, and removed files.",
+        "Before using that comparison, the copied files are checked against their saved hashes; if the copy was changed, it is rebuilt from the original.",
+        "Otherwise only added and modified files are copied and removed files deleted, then empty folders are removed.",
+        "The new manifest, with the source folder's path, is saved for the next opening.",
+        "The original folder is never modified."
       ]
     }
   ]
