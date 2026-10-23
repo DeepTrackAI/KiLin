@@ -114,9 +114,7 @@ class TestDefaultValueValidation(unittest.TestCase):
         )
         for value in (True, False, 0, -2, 1.5, "3", None):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(
-                    ValueError, "ANSWERING.MAX"
-                ):
+                with self.assertRaisesRegex(ValueError, "ANSWERING.MAX"):
                     defaults.require_default_int(
                         {"MAX": value}, "MAX", "ANSWERING"
                     )
@@ -126,9 +124,7 @@ class TestDefaultValueValidation(unittest.TestCase):
     def test_nonnegative_integer_accepts_zero_and_rejects_bad_types(
         self,
     ) -> None:
-        """Allow a zero overlap or graph distance but never a boolean.
-
-        """
+        """Allow a zero overlap or graph distance but never a boolean."""
 
         self.assertEqual(
             defaults.require_default_nonnegative_int(
@@ -138,17 +134,13 @@ class TestDefaultValueValidation(unittest.TestCase):
         )
         for value in (True, False, -1, 0.5, "0", None):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(
-                    ValueError, "RETRIEVAL.DISTANCE"
-                ):
+                with self.assertRaisesRegex(ValueError, "RETRIEVAL.DISTANCE"):
                     defaults.require_default_nonnegative_int(
                         {"DISTANCE": value}, "DISTANCE", "RETRIEVAL"
                     )
 
     def test_boolean_requires_an_actual_json_boolean(self) -> None:
-        """Prevent numeric and string values from mimicking booleans.
-
-        """
+        """Prevent numeric and string values from mimicking booleans."""
 
         for value in (True, False):
             self.assertIs(
@@ -169,25 +161,31 @@ class TestDefaultValueValidation(unittest.TestCase):
     def test_finite_numbers_distinguish_zero_and_positive_bounds(
         self,
     ) -> None:
-        """Reject nonfinite and nonnumeric progress and temperature values.
-
-        """
+        """Reject nonfinite and nonnumeric progress and temperature values."""
 
         self.assertEqual(
             defaults.require_default_number(
-                {"TEMPERATURE": 0}, "TEMPERATURE", "PROJECT_PROFILE",
+                {"TEMPERATURE": 0},
+                "TEMPERATURE",
+                "PROJECT_PROFILE",
                 allow_zero=True,
             ),
             0.0,
         )
         self.assertEqual(
-            defaults.require_default_number(
-                {"RATE": 0.15}, "RATE", "RAG"
-            ),
+            defaults.require_default_number({"RATE": 0.15}, "RATE", "RAG"),
             0.15,
         )
-        for value in (True, False, None, "0", -0.5, float("nan"),
-                      float("inf"), 10 ** 1000):
+        for value in (
+            True,
+            False,
+            None,
+            "0",
+            -0.5,
+            float("nan"),
+            float("inf"),
+            10**1000,
+        ):
             with self.subTest(value=str(value)[:20]):
                 with self.assertRaisesRegex(ValueError, "RAG.RATE"):
                     defaults.require_default_number(
@@ -225,9 +223,7 @@ class TestDefaultValueValidation(unittest.TestCase):
         )
         for value in (None, [], [""], ["  "], [12], "one"):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(
-                    ValueError, "REPOSITORY.FILES"
-                ):
+                with self.assertRaisesRegex(ValueError, "REPOSITORY.FILES"):
                     defaults.require_default_strings(
                         {"FILES": value}, "FILES", "REPOSITORY"
                     )
@@ -241,9 +237,7 @@ class TestDefaultValueValidation(unittest.TestCase):
         self.assertIsNotNone(expression.search("HELLO"))
         for value in ("(", "", False, 3):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(
-                    ValueError, "ANSWERING.CUE"
-                ):
+                with self.assertRaisesRegex(ValueError, "ANSWERING.CUE"):
                     defaults.require_default_pattern(
                         {"CUE": value}, "CUE", "ANSWERING"
                     )
@@ -261,9 +255,7 @@ class TestDefaultValueValidation(unittest.TestCase):
         )
         for value in ([], ["Word"], ["two words"], ["  word"], [9]):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(
-                    ValueError, "ANSWERING.WORDS"
-                ):
+                with self.assertRaisesRegex(ValueError, "ANSWERING.WORDS"):
                     defaults.require_default_lowercase_words(
                         {"WORDS": value}, "WORDS", "ANSWERING"
                     )
@@ -275,9 +267,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
     def test_project_profile_receives_configured_creation_values(
         self,
     ) -> None:
-        """Keep package settings separate from saved profile overrides.
-
-        """
+        """Keep package settings separate from saved profile overrides."""
 
         from kilin import project
 
@@ -287,22 +277,16 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         self.assertEqual(profile.target_tokens, settings["TARGET_TOKENS"])
         self.assertEqual(profile.max_tokens, settings["MAX_TOKENS"])
         self.assertEqual(profile.overlap_tokens, settings["OVERLAP_TOKENS"])
-        self.assertEqual(
-            profile.retrieval_count, settings["RETRIEVAL_COUNT"]
-        )
+        self.assertEqual(profile.retrieval_count, settings["RETRIEVAL_COUNT"])
         self.assertEqual(profile.thinking, settings["THINKING"])
         self.assertEqual(profile.temperature, settings["TEMPERATURE"])
-        self.assertEqual(
-            profile.max_new_tokens, settings["MAX_NEW_TOKENS"]
-        )
+        self.assertEqual(profile.max_new_tokens, settings["MAX_NEW_TOKENS"])
         # A query-format default has deliberately not been introduced.
         self.assertNotIn("DEFAULT_QUERY_FORMAT", settings)
         self.assertEqual(profile.query_format, "qwen3")
 
     def test_chunking_function_defaults_are_independent(self) -> None:
-        """Use generic size defaults only when sizes are not supplied.
-
-        """
+        """Use generic size defaults only when sizes are not supplied."""
 
         from kilin.chunking import chunk_source_units
 
@@ -322,20 +306,15 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         )
 
     def test_rag_limits_are_loaded_from_configuration(self) -> None:
-        """Keep the RAG evidence and progress limits traceable to JSON.
-
-        """
+        """Keep the RAG evidence and progress limits traceable to JSON."""
 
         from kilin import rag
 
         settings = defaults.load_defaults_section("RAG")
         values = {
-            "EMBEDDING_PROGRESS_BATCH_SIZE":
-                rag._EMBEDDING_PROGRESS_BATCH_SIZE,
-            "PROGRESS_MIN_INTERVAL_SECONDS":
-                rag._PROGRESS_MIN_INTERVAL_SECONDS,
-            "PROGRESS_TRACE_PERCENT_STEP":
-                rag._PROGRESS_TRACE_PERCENT_STEP,
+            "EMBEDDING_PROGRESS_BATCH_SIZE": rag._EMBEDDING_PROGRESS_BATCH_SIZE,
+            "PROGRESS_MIN_INTERVAL_SECONDS": rag._PROGRESS_MIN_INTERVAL_SECONDS,
+            "PROGRESS_TRACE_PERCENT_STEP": rag._PROGRESS_TRACE_PERCENT_STEP,
             "MAX_REUSED_EVIDENCE": rag._MAX_REUSED_EVIDENCE,
             "MAX_RELATED_EVIDENCE": rag._MAX_RELATED_EVIDENCE,
             "UNCITED_RELATED_EVIDENCE": rag._UNCITED_RELATED_EVIDENCE,
@@ -344,9 +323,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         self.assertEqual(values, settings)
 
     def test_project_type_fallbacks_use_packaged_values(self) -> None:
-        """Keep omitted project-type fields linked to packaged defaults.
-
-        """
+        """Keep omitted project-type fields linked to packaged defaults."""
 
         import importlib
 
@@ -355,7 +332,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         settings = defaults.load_defaults_section("PROJECT_TYPES")
         self.assertEqual(
             project_type_module.DOCUMENT_MAX_TOKENS,
-            settings["DOCUMENT_MAX_TOKENS"]
+            settings["DOCUMENT_MAX_TOKENS"],
         )
         # Only omitted JSON fields should use the fallback value.
         self.assertEqual(
@@ -364,9 +341,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         )
 
     def test_retrieval_function_defaults_and_heuristics(self) -> None:
-        """Link retrieval algorithms and language heuristics to JSON.
-
-        """
+        """Link retrieval algorithms and language heuristics to JSON."""
 
         from kilin.retrievals import context_expansion, document_reading
         from kilin.retrievals.strategies import (
@@ -377,12 +352,14 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         settings = defaults.load_defaults_section("RETRIEVAL")
         self.assertEqual(
             inspect.signature(retrieval_code.code_search)
-            .parameters["max_distance"].default,
+            .parameters["max_distance"]
+            .default,
             settings["CODE_MAX_DISTANCE"],
         )
         self.assertEqual(
             inspect.signature(retrieval_hybrid.hybrid_search)
-            .parameters["rank_constant"].default,
+            .parameters["rank_constant"]
+            .default,
             settings["RRF_RANK_CONSTANT"],
         )
         self.assertEqual(
@@ -444,7 +421,6 @@ class TestDefaultDocumentation(unittest.TestCase):
             for key in settings:
                 with self.subTest(section=section, key=key):
                     self.assertIn(f"`{key}`", guide)
-
 
 
 if __name__ == "__main__":
