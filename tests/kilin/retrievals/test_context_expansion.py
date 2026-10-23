@@ -99,7 +99,7 @@ class TestContextExpansionPlanning(unittest.TestCase):
 
         """
         result = context_expansion.plan_context_expansion(
-            "Which function calls parse?", self.graph
+            "Which function calls parse()?", self.graph
         )
         self.assertEqual(result.functions, ("pkg.loader.parse",))
         self.assertTrue(result.relationship)
@@ -156,6 +156,177 @@ class TestContextExpansionPlanning(unittest.TestCase):
         )
         self.assertEqual(result,
                          (Path("pkg/loader.py"), Path("pkg/notes.py")))
+
+    def test_ambiguous_plain_word_needs_a_code_marker(self) -> None:
+        """A plain word shared by several functions must be marked as code.
+
+        """
+        result = context_expansion.plan_context_expansion(
+            "Please read this.", self.graph
+        )
+        self.assertEqual(result.functions, ())
+        for question in ("How does `read` work?", "What does read() do?",
+                         "Explain the read function."):
+            with self.subTest(question=question):
+                result = context_expansion.plan_context_expansion(
+                    question, self.graph
+                )
+                self.assertEqual(result.functions,
+                                 ("other.read", "pkg.loader.read"))
+        result = context_expansion.plan_context_expansion(
+            "Explain loader.read.", self.graph
+        )
+        self.assertEqual(result.functions, ("pkg.loader.read",))
+
+    def test_unique_plain_function_name_matches(self) -> None:
+        """One top-level function with a plain-word name still matches.
+
+        """
+        result = context_expansion.plan_context_expansion(
+            "How does parse work?", self.graph
+        )
+        self.assertEqual(result.functions, ("pkg.loader.parse",))
+
+    def test_method_with_plain_name_needs_a_code_marker(self) -> None:
+        """Ordinary words do not match methods; marked names do.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("m.Client.reply", "python_method", Path("m.py")),
+                CodeEntity("m.Batch.to", "python_method", Path("m.py")),
+                CodeEntity("m.go", "python_function", Path("m.py")),
+            ),
+            relations=(),
+        )
+        for question in ("Explain how to send a reply.",
+                         "When does the go signal start?"):
+            with self.subTest(question=question):
+                result = context_expansion.plan_context_expansion(
+                    question, graph
+                )
+                self.assertEqual(result.functions, ())
+        for question in ("Explain the reply method.", "What does reply() do?",
+                         "Explain Client.reply."):
+            with self.subTest(question=question):
+                result = context_expansion.plan_context_expansion(
+                    question, graph
+                )
+                self.assertEqual(result.functions, ("m.Client.reply",))
+
+    def test_code_like_names_match_without_markers(self) -> None:
+        """Underscores, digits, and inner capitals identify code names.
+
+        """
+        for name in ("parse_file", "_helper", "parse2", "parseFile",
+                     "ParseFile"):
+            with self.subTest(name=name):
+                self.assertTrue(context_expansion._looks_like_code(name))
+        for name in ("parse", "Parse", "to", "reply"):
+            with self.subTest(name=name):
+                self.assertFalse(context_expansion._looks_like_code(name))
+
+    def test_singular_call_is_a_relationship_phrase(self) -> None:
+        """'Which functions call X' asks for relationships like 'calls'.
+
+        """
+        result = context_expansion.plan_context_expansion(
+            "Which functions call `parse`?", self.graph
+        )
+        self.assertTrue(result.relationship)
+        self.assertEqual(result.related_functions, ("pkg.loader.read",))
+
+    def test_named_function_without_relationship_adds_callees(self) -> None:
+        """Explaining a function also brings the functions it calls.
+
+        """
+        result = context_expansion.plan_context_expansion(
+            "Explain loader.read.", self.graph
+        )
+        self.assertFalse(result.relationship)
+        self.assertEqual(result.related_functions, ("pkg.loader.parse",))
+        self.assertEqual(result.signals, ("exact function", "callees"))
+
+    def test_callees_prefer_shared_words_and_respect_limit(self) -> None:
+        """Callees sharing words with the question come first.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("m.route_question", "python_function",
+                           Path("m.py")),
+                CodeEntity("m._parse_route", "python_function", Path("m.py")),
+                CodeEntity("m.side_reply", "python_function", Path("m.py")),
+                CodeEntity("m.unrelated", "python_function", Path("m.py")),
+                CodeEntity("m.Decision", "python_class", Path("m.py")),
+            ),
+            relations=(
+                CodeRelation("m.route_question", "calls", "m.unrelated"),
+                CodeRelation("m.route_question", "calls", "m.side_reply"),
+                CodeRelation("m.route_question", "calls", "m._parse_route"),
+                CodeRelation("m.route_question", "calls", "m.Decision"),
+                CodeRelation("m.other", "calls", "m.route_question"),
+            ),
+        )
+        question = "How does route_question use the router reply?"
+        for limit, expected in (
+            (3, ("m._parse_route", "m.side_reply", "m.unrelated")),
+            (1, ("m._parse_route",)),
+            (0, ()),
+        ):
+            with self.subTest(limit=limit):
+                self.assertEqual(
+                    context_expansion._ranked_callees(
+                        ("m.route_question",), graph, question, limit
+                    ),
+                    expected,
+                )
+
+    def test_related_test_code_needs_a_question_about_tests(self) -> None:
+        """Test functions are related context only for questions on tests.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("pkg.core.fuse_ranks", "python_function",
+                           Path("pkg/core.py")),
+                CodeEntity("pkg.api.search", "python_function",
+                           Path("pkg/api.py")),
+                CodeEntity("tests.test_core.test_fuse", "python_function",
+                           Path("tests/test_core.py")),
+                CodeEntity("pkg.core_test.check", "python_function",
+                           Path("pkg/core_test.py")),
+            ),
+            relations=(
+                CodeRelation("pkg.api.search", "calls",
+                             "pkg.core.fuse_ranks"),
+                CodeRelation("tests.test_core.test_fuse", "calls",
+                             "pkg.core.fuse_ranks"),
+                CodeRelation("pkg.core_test.check", "calls",
+                             "pkg.core.fuse_ranks"),
+            ),
+        )
+        result = context_expansion.plan_context_expansion(
+            "Which functions call fuse_ranks?", graph
+        )
+        self.assertEqual(result.related_functions, ("pkg.api.search",))
+        result = context_expansion.plan_context_expansion(
+            "Which tests call fuse_ranks?", graph
+        )
+        self.assertEqual(
+            result.related_functions,
+            ("pkg.api.search", "pkg.core_test.check",
+             "tests.test_core.test_fuse"),
+        )
+
+    def test_identifier_words_split_code_names(self) -> None:
+        """Split snake_case and camelCase identifiers into words.
+
+        """
+        self.assertEqual(
+            context_expansion._identifier_words("_parse_route sideReply"),
+            ["parse", "route", "side", "reply"],
+        )
 
     def test_function_kinds_are_explicitly_limited(self) -> None:
         """Named class or module records are not matched as functions.
@@ -222,6 +393,19 @@ class TestRetrievalExpansion(unittest.TestCase):
         plan = context_expansion.ContextExpansionPlan(
             (), ("pkg.run",), True, ("pkg.helper",),
             ("exact function", "relationship"),
+        )
+        result = context_expansion.expand_retrieval_context(
+            [], self.chunks, self.graph, plan
+        )
+        self.assertEqual([c.identifier for c in result], ["a", "b"])
+
+    def test_callee_plan_without_relationship_expands(self) -> None:
+        """Planned callees are added even without relationship language.
+
+        """
+        plan = context_expansion.ContextExpansionPlan(
+            (), ("pkg.run",), False, ("pkg.helper",),
+            ("exact function", "callees"),
         )
         result = context_expansion.expand_retrieval_context(
             [], self.chunks, self.graph, plan

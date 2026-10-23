@@ -176,10 +176,12 @@ corresponding function defaults.
 | `CODE_MAX_DISTANCE` | `1` | Maximum graph hops used by default in `code_search()`; zero permits only directly matched entities. |
 | `DOCUMENT_CHARACTERS_PER_TOKEN` | `4` | Approximate number of characters per token in document-budget estimation; not a tokenizer. |
 | `MIN_DOCUMENT_STEM_LENGTH` | `4` | Shortest file stem recognized as a named-document candidate. |
+| `CALLEE_EXPANSION_MAX` | `4` | Most direct callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first. Zero disables callee expansion. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` is a nonnegative exact integer.
+integers. `CODE_MAX_DISTANCE` and `CALLEE_EXPANSION_MAX` are nonnegative
+exact integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.
 The original vocabulary is preserved in the JSON, and the code-graph entity

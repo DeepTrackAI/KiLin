@@ -397,6 +397,10 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             context_expansion._RELATION_PHRASES,
             tuple(settings["RELATION_PHRASES"]),
         )
+        self.assertEqual(
+            context_expansion._CALLEE_EXPANSION_MAX,
+            settings["CALLEE_EXPANSION_MAX"],
+        )
 
 
 class TestDefaultDocumentation(unittest.TestCase):

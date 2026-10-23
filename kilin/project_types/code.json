@@ -10,7 +10,7 @@
   ],
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
-  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient. When you list functions, callers, or uses, do not claim that the list is complete unless the evidence shows it is; say that it covers the supplied evidence.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
     "code_graph": true

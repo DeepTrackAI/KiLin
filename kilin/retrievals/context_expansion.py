@@ -57,13 +57,18 @@ Examples
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import re
 
 from kilin.chunking import Chunk
-from kilin.defaults import load_defaults_section, require_default_strings
+from kilin.defaults import (
+    load_defaults_section,
+    require_default_nonnegative_int,
+    require_default_strings,
+)
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
@@ -94,7 +99,14 @@ if any(
         "trimmed phrases."
     )
 
+# Most direct callees added for a named function when the question does not
+# ask about relationships; zero disables callee expansion.
+_CALLEE_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "CALLEE_EXPANSION_MAX", "RETRIEVAL"
+)
 _WORD = re.compile(r"[A-Za-z0-9]+")
+# Words used in plain prose that introduce a code name ("the reply method").
+_CODE_NOUNS = ("function", "method")
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,7 +122,8 @@ class ContextExpansionPlan:
     relationship: bool
         Whether the question asks about relationships around a function.
     related_functions: tuple[str, ...]
-        Direct function neighbors when relationship expansion is requested.
+        Direct function neighbors when relationship expansion is requested;
+        otherwise the named functions' most relevant direct callees.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
 
@@ -123,7 +136,8 @@ class ContextExpansionPlan:
     relationship: bool
         Whether the question asks about relationships around a function.
     related_functions: tuple[str, ...]
-        Direct function neighbors when relationship expansion is requested.
+        Direct function neighbors when relationship expansion is requested;
+        otherwise the named functions' most relevant direct callees.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
 
@@ -168,6 +182,21 @@ def plan_context_expansion(
     A relationship request requires at least one explicit function match. It
     does not infer arbitrary semantic references.
 
+    A function is recognized by its qualified name, by a dotted suffix of it
+    (``Class.method``), or by its leaf name. A leaf name that reads as a
+    plain word (no underscore, digit, or internal capital) matches only when
+    it is unambiguous (one top-level function, not a method, longer than two
+    letters) or is marked as code in the question (backticks, a following
+    ``(``, or the word "function" or "method" next to it). Ordinary words
+    such as "to" or "reply" therefore do not match methods of those names.
+
+    Without relationship language, the named functions' direct callees are
+    added, at most ``CALLEE_EXPANSION_MAX``, preferring callees whose names
+    share words with the question: explaining a function usually requires
+    the functions it calls. Related functions in test code (a ``tests`` or
+    ``test`` folder, or a ``test_*`` or ``*_test`` file) are left out unless
+    the question mentions tests.
+
     """
 
     if not isinstance(query_text, str) or not query_text.strip():
@@ -176,9 +205,16 @@ def plan_context_expansion(
     paths = _explicit_paths(query_text, graph)
     functions = _explicit_functions(query_text, graph, paths)
     relationship = bool(functions) and _has_relationship(query_text)
-    related_functions = (
-        _direct_function_neighbors(functions, graph) if relationship else ()
-    )
+    if relationship:
+        related_functions = _direct_function_neighbors(functions, graph)
+    elif functions:
+        related_functions = _ranked_callees(
+            functions, graph, query_text, _CALLEE_EXPANSION_MAX
+        )
+    else:
+        related_functions = ()
+    if related_functions and not _mentions_tests(query_text):
+        related_functions = _without_test_code(related_functions, graph)
 
     signals: list[str] = []
     if paths:
@@ -187,6 +223,8 @@ def plan_context_expansion(
         signals.append("exact function")
     if relationship:
         signals.append("relationship")
+    elif related_functions:
+        signals.append("callees")
     if not signals:
         signals.append("none")
 
@@ -230,8 +268,9 @@ def expand_retrieval_context(
     Notes
     -----
     Initial fused results stay first. Explicit-path chunks, named-function
-    chunks, and requested direct function neighbors follow. Deduplication is by
-    chunk identifier. No output-count or token-budget limit is applied.
+    chunks, and the planned related functions (direct neighbors or callees)
+    follow. Deduplication is by chunk identifier. No output-count or
+    token-budget limit is applied.
 
     """
 
@@ -256,7 +295,7 @@ def expand_retrieval_context(
     )
     _append_unique(expanded, seen, function_chunks)
 
-    if plan.relationship:
+    if plan.related_functions:
         related_chunks = _chunks_for_functions(
             chunks,
             graph,
@@ -338,12 +377,24 @@ def _explicit_functions(
     normalized = query_text.replace("\\", "/").casefold()
     normalized = _remove_path_mentions(normalized, paths)
 
-    matches = {
-        entity.name
-        for entity in graph.entities
-        if entity.kind in _FUNCTION_KINDS
-        and _function_is_named(normalized, entity.name.casefold())
-    }
+    functions = [
+        entity for entity in graph.entities if entity.kind in _FUNCTION_KINDS
+    ]
+    leaf_counts = Counter(
+        entity.name.rsplit(".", 1)[-1].casefold() for entity in functions
+    )
+    matches = set()
+    for entity in functions:
+        leaf = entity.name.rsplit(".", 1)[-1].casefold()
+        # A plain word names a function only when it is unambiguous: one
+        # top-level function, not a method, and longer than two letters.
+        plain_word_ok = (
+            entity.kind != "python_method"
+            and leaf_counts[leaf] == 1
+            and len(leaf) > 2
+        )
+        if _function_is_named(normalized, entity.name, plain_word_ok):
+            matches.add(entity.name)
     return tuple(sorted(matches))
 
 
@@ -414,6 +465,79 @@ def _direct_function_neighbors(
             neighbors.add(neighbor)
 
     return tuple(sorted(neighbors))
+
+
+def _mentions_tests(query_text: str) -> bool:
+    """Return whether a question is about tests.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+
+    Returns
+    -------
+    bool
+        True when the question contains "test", "tests", "tested", or
+        "testing" as a word or inside an identifier.
+
+    """
+
+    return any(
+        word in {"test", "tests", "tested", "testing"}
+        for word in _identifier_words(query_text)
+    )
+
+
+def _without_test_code(
+    functions: tuple[str, ...], graph: CodeGraph
+) -> tuple[str, ...]:
+    """Drop functions defined in test code.
+
+    Parameters
+    ----------
+    functions: tuple[str, ...]
+        Qualified names of function entities.
+    graph: CodeGraph
+        Graph supplying the path of each entity.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Functions whose file is not in a ``tests`` or ``test`` folder and
+        is not named ``test_*`` or ``*_test``, in their original order.
+
+    """
+
+    paths = {entity.name: entity.path for entity in graph.entities}
+    return tuple(
+        name for name in functions if not _is_test_path(paths.get(name))
+    )
+
+
+def _is_test_path(path: Path | None) -> bool:
+    """Return whether a source path belongs to test code.
+
+    Parameters
+    ----------
+    path: pathlib.Path | None
+        Repository-relative source path, or None when unknown.
+
+    Returns
+    -------
+    bool
+        True for files in a ``tests`` or ``test`` folder and for files named
+        ``test_*`` or ``*_test``.
+
+    """
+
+    if path is None:
+        return False
+    return (
+        any(part in {"tests", "test"} for part in path.parts[:-1])
+        or path.stem.startswith("test_")
+        or path.stem.endswith("_test")
+    )
 
 
 def _chunks_for_functions(
@@ -523,28 +647,169 @@ def _remove_path_mentions(
     return cleaned
 
 
-def _function_is_named(query_text: str, function: str) -> bool:
-    """Return whether a qualified or leaf function name is written.
+def _function_is_named(
+    query_text: str, function: str, plain_word_ok: bool = True
+) -> bool:
+    """Return whether a function is named in the question.
 
     Parameters
     ----------
     query_text: str
-        Question text to inspect for explicit file/function mentions and
-        recognized relationship phrases.
+        Case-folded question text, with recognized paths removed.
     function: str
-        Qualified function name being matched against the question.
+        Qualified function name, in its original case.
+    plain_word_ok: bool, optional
+        Whether a leaf name that reads as a plain word may match without a
+        code marker. Defaults to ``True``.
 
     Returns
     -------
     bool
-        Whether a qualified or leaf function name is written.
+        True for the qualified name or a dotted suffix of it
+        (``Class.method``), or for the leaf name when it looks like code, is
+        marked as code in the question, or is an accepted plain word.
 
     """
 
-    leaf = function.rsplit(".", 1)[-1]
-    return _contains_identifier(query_text, function) or _contains_identifier(
-        query_text, leaf
+    parts = function.casefold().split(".")
+    for start in range(len(parts) - 1):
+        if _contains_identifier(query_text, ".".join(parts[start:])):
+            return True
+    leaf = parts[-1]
+    if not _contains_identifier(query_text, leaf):
+        return False
+    original_leaf = function.rsplit(".", 1)[-1]
+    return (
+        plain_word_ok
+        or _looks_like_code(original_leaf)
+        or _marked_as_code(query_text, leaf)
     )
+
+
+def _looks_like_code(name: str) -> bool:
+    """Return whether an identifier cannot be an ordinary word.
+
+    Parameters
+    ----------
+    name: str
+        Identifier in its original case.
+
+    Returns
+    -------
+    bool
+        True when the name contains an underscore or a digit, or a capital
+        letter after its first character (``camelCase``, ``CamelCase``).
+
+    """
+
+    return (
+        "_" in name
+        or any(character.isdigit() for character in name)
+        or any(character.isupper() for character in name[1:])
+    )
+
+
+def _marked_as_code(query_text: str, leaf: str) -> bool:
+    """Return whether the question marks a plain name as code.
+
+    Parameters
+    ----------
+    query_text: str
+        Case-folded question text.
+    leaf: str
+        Case-folded leaf function name.
+
+    Returns
+    -------
+    bool
+        True when the name is in backticks, is followed by ``(``, or stands
+        next to the word "function" or "method".
+
+    """
+
+    name = re.escape(leaf)
+    nouns = "|".join(_CODE_NOUNS)
+    patterns = (
+        rf"`{name}(\(\))?`",
+        rf"(?<![A-Za-z0-9_.]){name}\s*\(",
+        rf"\b(?:{nouns})\s+`?{name}(?![A-Za-z0-9_])",
+        rf"(?<![A-Za-z0-9_.]){name}`?\s+(?:{nouns})\b",
+    )
+    return any(re.search(pattern, query_text) for pattern in patterns)
+
+
+def _ranked_callees(
+    functions: tuple[str, ...],
+    graph: CodeGraph,
+    query_text: str,
+    limit: int,
+) -> tuple[str, ...]:
+    """Return the most relevant functions called by the named functions.
+
+    Parameters
+    ----------
+    functions: tuple[str, ...]
+        Qualified names of recognized function entities.
+    graph: CodeGraph
+        Graph supplying function entities and ``calls`` relations.
+    query_text: str
+        Question text, used to prefer callees whose names share words with
+        it.
+    limit: int
+        Most callees returned; zero returns none.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Callee names, most shared words first, then in name order.
+
+    """
+
+    if limit <= 0:
+        return ()
+    function_names = {
+        entity.name
+        for entity in graph.entities
+        if entity.kind in _FUNCTION_KINDS
+    }
+    targets = set(functions)
+    callees = {
+        relation.target
+        for relation in graph.relations
+        if relation.relation == "calls"
+        and relation.source in targets
+        and relation.target in function_names
+        and relation.target not in targets
+    }
+    question_words = set(_identifier_words(query_text))
+    shared = {
+        name: len(
+            question_words & set(_identifier_words(name.rsplit(".", 1)[-1]))
+        )
+        for name in callees
+    }
+    ranked = sorted(callees, key=lambda name: (-shared[name], name))
+    return tuple(ranked[:limit])
+
+
+def _identifier_words(text: str) -> list[str]:
+    """Split text and identifiers into lowercase words.
+
+    Parameters
+    ----------
+    text: str
+        Prose or an identifier such as ``_parse_route`` or ``sideReply``.
+
+    Returns
+    -------
+    list[str]
+        Lowercase words; ``route_question`` gives ``route`` and
+        ``question``.
+
+    """
+
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text).replace("_", " ")
+    return [word.casefold() for word in _WORD.findall(spaced)]
 
 
 def _contains_identifier(text: str, value: str) -> bool:
