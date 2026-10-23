@@ -64,6 +64,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import os
 import re
 
 from kilin.chunking import Chunk
@@ -120,6 +121,11 @@ _CLASS_METHOD_EXPANSION_MAX = require_default_nonnegative_int(
 _RELATED_CHUNKS_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "RELATED_CHUNKS_MAX", "RETRIEVAL"
 )
+# Most functions added because every word of their name occurs in the
+# question ("which PyTorch device" adds ``torch_device``); zero disables it.
+_NAME_WORD_EXPANSION_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "NAME_WORD_EXPANSION_MAX", "RETRIEVAL"
+)
 _CLASS_KINDS = {"matlab_class", "python_class"}
 _WORD = re.compile(r"[A-Za-z0-9]+")
 # Words used in plain prose that introduce a code name ("the reply method").
@@ -141,7 +147,8 @@ class RetrievalPlan:
     related_functions: tuple[str, ...]
         Direct function neighbors when relationship expansion is requested;
         otherwise the named functions' most relevant callees. Methods of
-        named classes are appended.
+        named classes and functions described by the question's words are
+        appended.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
     focus_terms: tuple[str, ...], optional
@@ -160,7 +167,8 @@ class RetrievalPlan:
     related_functions: tuple[str, ...]
         Direct function neighbors when relationship expansion is requested;
         otherwise the named functions' most relevant callees. Methods of
-        named classes are appended.
+        named classes and functions described by the question's words are
+        appended.
     signals: tuple[str, ...]
         Human-readable signals that explain the expansion.
     focus_terms: tuple[str, ...]
@@ -224,7 +232,14 @@ def plan_retrieval(
     the functions it calls. A named class (recognized like a function, and
     by the word "class" next to a plain name) adds its methods: all of them
     when there are at most ``CLASS_METHOD_EXPANSION_MAX``, otherwise those
-    whose names share most words with the question. Related functions in
+    whose names share most words with the question. When ranking callees
+    and methods, the words of the named functions and classes themselves
+    are ignored, since every candidate tends to share them. Question words
+    match identifier words in simple variants ("written" matches
+    ``write``; "PyTorch" gives "py" and "torch"). Finally, up to
+    ``NAME_WORD_EXPANSION_MAX`` functions are added whose names have at
+    least two words of four or more letters, all occurring in the question
+    (``torch_device`` for "which PyTorch device"). Related functions in
     test code (a ``tests`` or ``test`` folder, or a ``test_*`` or ``*_test``
     file) are left out unless the question mentions tests.
 
@@ -236,30 +251,41 @@ def plan_retrieval(
     paths = _explicit_paths(query_text, graph)
     functions = _explicit_functions(query_text, graph, paths)
     relationship = bool(functions) and _has_relationship(query_text)
+    classes = _explicit_classes(query_text, graph, paths)
+    # Candidates would all share the words of the names that led to them,
+    # so those words do not rank callees, methods, or described functions.
+    ranking_text = _without_names(query_text, (*functions, *classes))
     if relationship:
         related_functions = _direct_function_neighbors(functions, graph)
     elif functions:
         related_functions = _ranked_callees(
             functions,
             graph,
-            query_text,
+            ranking_text,
             _CALLEE_EXPANSION_MAX,
             _CALLEE_EXPANSION_DEPTH,
         )
     else:
         related_functions = ()
-    classes = _explicit_classes(query_text, graph, paths)
     class_methods = _class_methods(
-        classes, graph, query_text, _CLASS_METHOD_EXPANSION_MAX
+        classes, graph, ranking_text, _CLASS_METHOD_EXPANSION_MAX
+    )
+    tests_allowed = _mentions_tests(query_text)
+    described = _described_functions(
+        ranking_text,
+        graph,
+        set(functions) | set(related_functions) | set(class_methods),
+        _NAME_WORD_EXPANSION_MAX,
+        tests_allowed,
     )
     related_functions = tuple(
         dict.fromkeys(
             name
-            for name in (*related_functions, *class_methods)
+            for name in (*related_functions, *class_methods, *described)
             if name not in functions
         )
     )
-    if related_functions and not _mentions_tests(query_text):
+    if related_functions and not tests_allowed:
         related_functions = _without_test_code(related_functions, graph)
 
     signals: list[str] = []
@@ -271,8 +297,12 @@ def plan_retrieval(
         signals.append("exact class")
     if relationship:
         signals.append("relationship")
-    elif functions and set(related_functions) - set(class_methods):
+    elif functions and set(related_functions) - set(class_methods) - set(
+        described
+    ):
         signals.append("callees")
+    if described:
+        signals.append("name words")
     if not signals:
         signals.append("none")
 
@@ -870,7 +900,8 @@ def _ranked_callees(
     -------
     tuple[str, ...]
         Callee names, most shared words first, then fewer call steps, then
-        in name order.
+        those calling more repository functions themselves (they do more of
+        the work than small utilities), then in name order.
 
     """
 
@@ -902,6 +933,7 @@ def _ranked_callees(
         key=lambda name: (
             -_shared_words(question_words, name.rsplit(".", 1)[-1]),
             steps[name],
+            -len(calls.get(name, ())),
             name,
         ),
     )
@@ -1013,6 +1045,101 @@ def _class_methods(
     return tuple(selected)
 
 
+def _described_functions(
+    query_text: str,
+    graph: CodeGraph,
+    exclude: set[str],
+    limit: int,
+    tests_allowed: bool,
+) -> tuple[str, ...]:
+    """Return functions whose name words all occur in the question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text, without the names it states explicitly.
+    graph: CodeGraph
+        Graph supplying function entities and their paths.
+    exclude: set[str]
+        Qualified names already in the plan.
+    limit: int
+        Most functions returned; zero returns none.
+    tests_allowed: bool
+        Whether functions in test code may be returned.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Qualified names, those with more name words first, then those whose
+        words occur unchanged in the question, then in name order.
+
+    Notes
+    -----
+    A function qualifies only when its leaf name has at least two words of
+    four or more letters and every word of it matches a question word
+    (``_words_match``). Special methods never qualify. This describes a
+    function in prose ("which PyTorch device") without naming it.
+
+    """
+
+    if limit <= 0:
+        return ()
+    question_words = set(_identifier_words(query_text))
+    scored: list[tuple[int, int, str]] = []
+    for entity in graph.entities:
+        if entity.kind not in _FUNCTION_KINDS or entity.name in exclude:
+            continue
+        leaf = entity.name.rsplit(".", 1)[-1]
+        if leaf.startswith("__") and leaf.endswith("__"):
+            continue
+        words = set(_identifier_words(leaf))
+        if sum(len(word) >= 4 for word in words) < 2:
+            continue
+        if not all(
+            any(_words_match(word, other) for other in question_words)
+            for word in words
+        ):
+            continue
+        if not tests_allowed and _is_test_path(entity.path):
+            continue
+        exact = len(words & question_words)
+        scored.append((-len(words), -exact, entity.name))
+    return tuple(name for _, _, name in sorted(scored)[:limit])
+
+
+def _without_names(query_text: str, names: Sequence[str]) -> str:
+    """Remove mentions of named code entities from a question.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+    names: Sequence[str]
+        Qualified names of the functions and classes the question names.
+
+    Returns
+    -------
+    str
+        The question with each name, dotted suffix, or leaf name replaced
+        by a space, ignoring case. Prose words equal to a part of a name
+        ("the project folder" for ``prepare_project``) are kept.
+
+    """
+
+    text = query_text
+    spellings = set()
+    for name in names:
+        parts = name.split(".")
+        spellings.update(
+            ".".join(parts[index:]) for index in range(len(parts))
+        )
+    for spelling in sorted(spellings, key=len, reverse=True):
+        text = re.sub(
+            _identifier_pattern(spelling), " ", text, flags=re.IGNORECASE
+        )
+    return text
+
+
 def _focused_chunks(
     chunks: list[Chunk],
     named_leaves: set[str],
@@ -1063,7 +1190,9 @@ def _focused_chunks(
         )
         words = set(_identifier_words(chunk.text))
         shared = sum(
-            1 for term in set(focus_terms) if _word_forms(term) & words
+            1
+            for term in set(focus_terms)
+            if any(_words_match(term, word) for word in words)
         )
         return mentions, shared
 
@@ -1092,19 +1221,51 @@ def _shared_words(question_words: list[str], identifier: str) -> int:
     Returns
     -------
     int
-        Identifier words matching a question word, allowing simple plural
-        forms ("indexes" matches "index").
+        Identifier words matching a question word, as decided by
+        ``_words_match``.
 
     """
 
-    question_forms = set()
-    for word in question_words:
-        question_forms |= _word_forms(word)
+    candidates = set(question_words)
     return sum(
         1
         for word in set(_identifier_words(identifier))
-        if _word_forms(word) & question_forms
+        if any(_words_match(word, other) for other in candidates)
     )
+
+
+def _words_match(first: str, second: str) -> bool:
+    """Return whether two lowercase words are variants of one word.
+
+    Parameters
+    ----------
+    first: str
+        Lowercase word.
+    second: str
+        Lowercase word.
+
+    Returns
+    -------
+    bool
+        Whether the words are equal up to a simple plural ending, or the
+        shorter one has at least five letters, the longer one at most three
+        more, and they agree from the start up to the shorter one's
+        next-to-last letter ("write" and "written", "store" and "storage",
+        "selects" and "selected").
+
+    Notes
+    -----
+    The length limits keep short or distant words apart: "read" does not
+    match "readable" or "thread", and "event" does not match "prevents".
+
+    """
+
+    if _word_forms(first) & _word_forms(second):
+        return True
+    shorter, longer = sorted((first, second), key=len)
+    if len(shorter) < 5 or len(longer) - len(shorter) > 3:
+        return False
+    return len(os.path.commonprefix((shorter, longer))) >= len(shorter) - 1
 
 
 def _word_forms(word: str) -> set[str]:
