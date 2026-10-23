@@ -1,0 +1,439 @@
+{
+  "date": "2026-10-23T14:52:11+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.8",
+    "os_version": "26.6.2",
+    "model": "Mac16,7",
+    "chip": "Apple M4 Pro",
+    "memory_gb": 48,
+    "mlx": "0.32.3"
+  },
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "ec3f9d05e25ea6f6b3303e8406e24ab087d2b632",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "use_router": true,
+  "retrieval_count": null,
+  "corpus": {
+    "source_files": 309,
+    "chunks": 5116,
+    "graph_entities": 4318,
+    "graph_relations": 25623
+  },
+  "index_status": "rebuilt",
+  "questions": [
+    {
+      "id": "routing",
+      "kind": "mechanism",
+      "intent": "code_explanation",
+      "wall_s": 24.42,
+      "answer": "The `route_question` function assigns a question to an intent by first checking if the question matches any intent's shortcut patterns [2]. If a match is found, it directly returns the intent and marks the question as standalone. If not, it constructs a prompt using the project's intents and previous conversation turns [9], then queries a router model to classify the question [6]. The router's reply is parsed as JSON [7], and if valid, the intent and related turns are determined. \n\nWhen the router reply cannot be used (e.g., malformed JSON, unknown intent, or errors during processing), the function defaults to the project's default intent [7]. This fallback ensures the question is still routed, even if the router fails. Additionally, if the intent is invalid or missing, the default intent is applied, and a fallback message explains the issue [8]. The function also checks if the question refers to previous turns, influencing intent assignment and related turn selection [3]. If no related turns are found, the question is marked as standalone [6]. This process ensures robust intent assignment while handling router failures gracefully.",
+      "trace_file": "conversation_2026-10-23T14-52-11.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "route_question"
+        ],
+        "lexical": [],
+        "code": [
+          "route_question"
+        ],
+        "hybrid": [
+          "route_question"
+        ],
+        "evidence": [
+          "route_question",
+          "_parse_route",
+          "side_reply"
+        ],
+        "cited": [
+          "route_question",
+          "_parse_route"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 12,
+      "cited_count": 6,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/answering.py",
+          "symbol": "route_question",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/answering.py",
+          "symbol": "route_question",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/answering.py",
+          "symbol": "route_question",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/answering.py",
+          "symbol": "_parse_route",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/answering.py",
+          "symbol": "_parse_route",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/answering.py",
+          "symbol": "_router_prompt",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "index_reuse",
+      "kind": "mechanism",
+      "intent": "code_explanation",
+      "wall_s": 16.54,
+      "answer": "RAGSession decides to reuse or rebuild saved retrieval indexes by checking the validity of cached data against current project state. It uses a **fingerprint** to track inputs like chunk content, embedding model configuration, and chunking settings, ensuring the saved index matches these conditions [2]. If the fingerprint indicates the index is still valid (e.g., no changes to chunks or configuration), it reuses the saved index [4]. However, if the index is stale (e.g., chunks have changed or the embedding model differs), it rebuilds the index to ensure accuracy [2]. The `index_status` attribute in `RAGSession` records whether the index was reused or rebuilt [3]. Additionally, the system validates the embedding model's identity to ensure cached weights align with current settings, preventing mismatches between saved and active configurations [4]. This process ensures indexes are up-to-date while avoiding unnecessary recomputation when valid [1].",
+      "trace_file": "conversation_2026-10-23T14-54-57.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 5,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "tutorials/140_logging_trace.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "tutorials/100_persistent_indexes.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "docs/retrieval_pipeline.md",
+          "symbol": null,
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "index_storage",
+      "kind": "mechanism",
+      "intent": "code_explanation",
+      "wall_s": 23.44,
+      "answer": "The `build_semantic_index` function embeds chunks by processing their text content using an embedding model. It batches the chunks (controlled by `batch_size`), generates vector representations via `embedding_session.embed_documents`, and validates the resulting vectors for consistency (e.g., dimensions, finite values) [1][4]. These vectors are stored alongside the original chunks in a `SemanticIndex` object.  \n\n`save_indexes` and `load_indexes` protect the saved index through validation and integrity checks. During saving, `save_indexes` verifies the index structure, ensures chunk identifiers are unique, and computes a checksum (`payload_sha256`) for the payload to detect accidental corruption [8][9]. During loading, `load_indexes` checks the checksum against a recomputed value, validates the embedding model identity, and ensures all data fields (chunks, vectors, code graph) are correctly formatted and consistent [6][7]. If any validation fails, errors are raised, preventing the use of corrupted or incompatible indexes. This ensures saved indexes remain trustworthy and reusable across sessions.",
+      "trace_file": "conversation_2026-10-23T14-55-19.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "build_semantic_index"
+        ],
+        "lexical": [],
+        "code": [
+          "build_semantic_index"
+        ],
+        "hybrid": [
+          "build_semantic_index"
+        ],
+        "evidence": [
+          "build_semantic_index",
+          "save_indexes",
+          "load_indexes"
+        ],
+        "cited": [
+          "build_semantic_index",
+          "save_indexes",
+          "load_indexes"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 14,
+      "cited_count": 6,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "save_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "save_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strip_thinking_callers",
+      "kind": "dependency",
+      "intent": "code_explanation",
+      "wall_s": 20.66,
+      "answer": "The `strip_thinking` function is called by three key functions: `history_messages`, `side_reply`, and `turn_representation`.  \n\n1. **`history_messages`** [6] uses `strip_thinking` to remove model reasoning and citations from turn answers, ensuring only the final answer is included in user/assistant message pairs. This is critical for maintaining a clean, human-readable conversation history without exposing internal processing.  \n\n2. **`side_reply`** [7] calls `strip_thinking` to eliminate thinking text from the model’s reply, ensuring the output is a direct, final answer. This aligns with the side question’s purpose of generating concise, unambiguous responses without intermediate steps.  \n\n3. **`turn_representation`** [5] and [8] uses `strip_thinking` to clean the answer’s summary, removing reasoning and collapsing whitespace. This ensures compact, standardized representations of turns for logging or analysis, focusing only on the final answer.  \n\nEach function requires stripping reasoning to eliminate internal model steps, ensuring outputs are user-facing, concise, and free from unnecessary metadata.",
+      "trace_file": "conversation_2026-10-23T14-55-48.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "hybrid": [
+          "turn_representation"
+        ],
+        "evidence": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "cited": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "code_only": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ]
+      },
+      "evidence_count": 8,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 5,
+          "path": "tests/kilin/test_answering.py",
+          "symbol": "TestHistory.test_representation_strips_thinking_and_collapses_spaces",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/answering.py",
+          "symbol": "history_messages",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/answering.py",
+          "symbol": "side_reply",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/answering.py",
+          "symbol": "turn_representation",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hybrid_callers",
+      "kind": "dependency",
+      "intent": "code_explanation",
+      "wall_s": 27.86,
+      "answer": "The `RAGSession` class calls `hybrid_search` in two methods: `_rank_everything` and `_retrieve`.  \n\n1. **`_rank_everything`** [3]: This method calls `hybrid_search` to fuse semantic, lexical, and code rankings into a single list of `HybridResult` objects. It uses the fused ranking to prioritize chunks based on combined reciprocal rank scores, ensuring duplicates are removed and ties are broken by chunk identifiers. This fused ranking is used when the scope is a single document, ensuring its best passages are included even if they are not in the project-wide top results.  \n\n2. **`_retrieve`** [11]: This method calls `hybrid_search` after performing semantic, lexical, and code searches. It uses the fused ranking (from `hybrid_search`) as the basis for context expansion and trace logging. The fused ranking is then passed to `expand_retrieval_context` to generate the final evidence tuple, which includes the most relevant chunks for the user's query.  \n\nBoth methods rely on `hybrid_search` to combine results from semantic, lexical, and code sources, applying reciprocal rank fusion to prioritize chunks based on their combined scores across all channels. The fused ranking is critical for subsequent steps like context expansion and trace reporting.",
+      "trace_file": "conversation_2026-10-23T14-56-13.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "lexical": [
+          "RAGSession._rank_everything"
+        ],
+        "code": [
+          "hybrid_search"
+        ],
+        "hybrid": [
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "evidence": [
+          "RAGSession._retrieve",
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "cited": [
+          "RAGSession._retrieve",
+          "RAGSession._rank_everything"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 14,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._rank_everything",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 11,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "citation_check",
+      "kind": "location",
+      "intent": "code_explanation",
+      "wall_s": 16.8,
+      "answer": "KíLín checks citation validity in the `_invalid_citations` function [4], which compares citation numbers in the answer against the supplied evidence's available citations. It uses regex to extract citations from the answer and identifies numbers outside the range of valid evidence. When invalid citations are found, they are recorded as invalid identifiers in the output but do not trigger corrections or re-generations of the answer. This check is a diagnostic step, not a semantic verification of claims, and the answer may still contain unsupported claims even if all citations resolve [1]. The function returns a tuple of invalid identifiers in first-occurrence order, ensuring duplicates are omitted [4].",
+      "trace_file": "conversation_2026-10-23T14-56-46.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "_invalid_citations"
+        ],
+        "code": [],
+        "hybrid": [
+          "_invalid_citations"
+        ],
+        "evidence": [
+          "_invalid_citations"
+        ],
+        "cited": [
+          "_invalid_citations"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 5,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "docs/answering_pipeline.md",
+          "symbol": null,
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/rag.py",
+          "symbol": "_invalid_citations",
+          "retrieved_by": [
+            "lexical"
+          ]
+        }
+      ]
+    }
+  ],
+  "baseline": {}
+}

@@ -332,7 +332,7 @@ def write_worksheet(path: Path, results: dict, questions: Sequence[dict]):
         record = by_id[item["id"]]
         found = record.get("gold_found", {})
         lines += [
-            f"## {item['id']} ({item['kind']})",
+            f"## {item['id']} ({item['kind']}, {item.get('set')})",
             "",
             f"**Question.** {item['question']}",
             "",
@@ -522,6 +522,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         record = {
             "id": item["id"],
             "kind": item["kind"],
+            "set": item.get("set"),
             "intent": routed_intent(trace_path),
             "wall_s": round(elapsed, 2),
             "answer": answer,

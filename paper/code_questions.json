@@ -1,14 +1,23 @@
 {
-  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand.",
+  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first six questions were used during development; the last four (set 'added') were written afterwards and not run before the final evaluation.",
   "questions": [
     {
       "id": "routing",
       "kind": "mechanism",
       "question": "Explain how route_question assigns a question to an intent, and what happens when the router reply cannot be used.",
       "gold": [
-        {"path": "kilin/answering.py", "symbol": "route_question"},
-        {"path": "kilin/answering.py", "symbol": "_parse_route"},
-        {"path": "kilin/answering.py", "symbol": "side_reply"}
+        {
+          "path": "kilin/answering.py",
+          "symbol": "route_question"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "_parse_route"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "side_reply"
+        }
       ],
       "facts": [
         "A message that fully matches an intent's shortcut pattern is routed without calling the model.",
@@ -16,31 +25,48 @@
         "The reply is parsed by _parse_route into a RouteDecision.",
         "If the router call fails or its reply is unusable, the project type's default intent is used.",
         "Related earlier turns proposed by the router are kept only if the question refers back or shares a distinctive term."
-      ]
+      ],
+      "set": "development"
     },
     {
       "id": "index_reuse",
       "kind": "mechanism",
       "question": "Explain how RAGSession decides whether to reuse the saved retrieval indexes or to rebuild them.",
       "gold": [
-        {"path": "kilin/rag.py", "symbol": "RAGSession._prepare_retrieval"},
-        {"path": "kilin/retrievals/persistence.py", "symbol": "load_indexes"}
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes"
+        }
       ],
       "facts": [
         "The saved index is reused only if the index file, its metadata and the source manifest exist, the configuration is unchanged, and the sources match.",
         "The embedding-model identity of the saved index must match the current model.",
         "If the sources changed but the configuration did not, unchanged files keep their saved chunks and vectors and only new or changed files are embedded.",
         "Any problem with the saved index leads to embedding everything again."
-      ]
+      ],
+      "set": "development"
     },
     {
       "id": "index_storage",
       "kind": "mechanism",
       "question": "Explain how build_semantic_index embeds the chunks, and how save_indexes and load_indexes protect the saved index.",
       "gold": [
-        {"path": "kilin/retrievals/strategies/retrieval_semantic.py", "symbol": "build_semantic_index"},
-        {"path": "kilin/retrievals/persistence.py", "symbol": "save_indexes"},
-        {"path": "kilin/retrievals/persistence.py", "symbol": "load_indexes"}
+        {
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "save_indexes"
+        },
+        {
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes"
+        }
       ],
       "facts": [
         "Chunk texts are embedded in batches, and the backend cache is cleared after each batch.",
@@ -48,51 +74,180 @@
         "save_indexes validates the records and the source fingerprint and stores a payload checksum.",
         "load_indexes verifies the checksum, the embedding-model identity and the fingerprint.",
         "The checksum detects accidental corruption; it is not an authenticity guarantee."
-      ]
+      ],
+      "set": "development"
     },
     {
       "id": "strip_thinking_callers",
       "kind": "dependency",
       "question": "Explain which functions call strip_thinking, and why each of them needs to remove the model's reasoning.",
       "gold": [
-        {"path": "kilin/answering.py", "symbol": "turn_representation"},
-        {"path": "kilin/answering.py", "symbol": "side_reply"},
-        {"path": "kilin/answering.py", "symbol": "history_messages"}
+        {
+          "path": "kilin/answering.py",
+          "symbol": "turn_representation"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "side_reply"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "history_messages"
+        }
       ],
       "facts": [
         "turn_representation removes reasoning (and citations) from an earlier answer to build the compact representation shown to the router.",
         "side_reply returns the reply of an auxiliary model call, such as the router's, without reasoning.",
         "history_messages removes reasoning from earlier answers before they are included as conversation history."
-      ]
+      ],
+      "set": "development"
     },
     {
       "id": "hybrid_callers",
       "kind": "dependency",
       "question": "Explain which RAGSession methods call hybrid_search, and how each of them uses the fused ranking.",
       "gold": [
-        {"path": "kilin/rag.py", "symbol": "RAGSession._retrieve"},
-        {"path": "kilin/rag.py", "symbol": "RAGSession._rank_everything"},
-        {"path": "kilin/retrievals/strategies/retrieval_hybrid.py", "symbol": "hybrid_search"}
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._rank_everything"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_hybrid.py",
+          "symbol": "hybrid_search"
+        }
       ],
       "facts": [
         "_retrieve fuses the semantic, lexical and code-graph rankings for the configured retrieval count to select the evidence for an answer.",
         "_rank_everything ranks every chunk with the same fused channels, for uses that need a complete ranking, such as tools.",
         "hybrid_search combines the rankings by reciprocal-rank fusion."
-      ]
+      ],
+      "set": "development"
     },
     {
       "id": "citation_check",
       "kind": "location",
       "question": "Explain where KíLín checks that the citation numbers in an answer refer to the supplied evidence, and what happens when they do not.",
       "gold": [
-        {"path": "kilin/rag.py", "symbol": "_invalid_citations"},
-        {"path": "kilin/rag.py", "symbol": "RAGSession.ask"}
+        {
+          "path": "kilin/rag.py",
+          "symbol": "_invalid_citations"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession.ask"
+        }
       ],
       "facts": [
         "_invalid_citations returns the citation numbers in the answer that do not match any supplied evidence.",
         "RAGSession.ask records them in the turn parameters as invalid_citations.",
         "The answer is neither modified nor regenerated.",
         "The check is syntactic: it does not verify that the cited evidence supports the claim."
+      ],
+      "set": "development"
+    },
+    {
+      "id": "chunking",
+      "kind": "mechanism",
+      "set": "added",
+      "question": "Explain how chunk_source_units handles a source unit that is longer than the maximum chunk size, and how the overlap between consecutive chunks is kept.",
+      "gold": [
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "chunk_source_units"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_chunk_source_unit"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_split_unit"
+        },
+        {
+          "path": "kilin/chunking.py",
+          "symbol": "_overlap_start"
+        }
+      ],
+      "facts": [
+        "A unit within the maximum size is kept whole as one chunk.",
+        "An oversized unit is split through its children only when the children cover all of its non-whitespace text.",
+        "Otherwise it is split along line boundaries, and within a single line if that line is too long.",
+        "The target size guides where to split; the maximum size is the bound every chunk must respect.",
+        "Overlap with the previous chunk is kept as whole source lines or a character suffix, up to the overlap token limit."
+      ]
+    },
+    {
+      "id": "rank_everything_callers",
+      "kind": "dependency",
+      "set": "added",
+      "question": "Explain which RAGSession methods call _rank_everything, and why each of them needs a ranking of every chunk.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._run_tool"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._read_document"
+        }
+      ],
+      "facts": [
+        "_retrieve ranks every chunk when the question names exactly one document, and keeps that document's best passages, which may not be in the project-wide top results.",
+        "_run_tool gives tools a rank function, so a tool can rank all chunks for any text.",
+        "_read_document ranks all chunks to choose the document to read within the token budget."
+      ]
+    },
+    {
+      "id": "history_selection",
+      "kind": "location",
+      "set": "added",
+      "question": "Explain where KíLín decides which earlier turns of a conversation are given to the model as history, and what determines how many.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "select_history"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession.ask"
+        }
+      ],
+      "facts": [
+        "select_history chooses the earlier turns, and RAGSession.ask calls it for each question.",
+        "The intent's history policy decides: none includes nothing, recent includes the last few turns, relevant also adds the turns the router marked as related.",
+        "The number of recent turns comes from the project type (history.recent_turns).",
+        "A question the router judged standalone still receives the previous turn, without its evidence."
+      ]
+    },
+    {
+      "id": "conversation_lock",
+      "kind": "mechanism",
+      "set": "added",
+      "question": "Explain how ConversationFileLock prevents two sessions from writing the same conversation file at the same time.",
+      "gold": [
+        {
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "ConversationFileLock.acquire"
+        },
+        {
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "conversation_write_ownership"
+        }
+      ],
+      "facts": [
+        "The lock is an operating-system advisory lock on a companion .json.lock file, so it survives atomic replacement of the conversation file.",
+        "Acquisition does not wait: if another writer holds the lock, ConversationLockedError is raised.",
+        "A registry within the process rejects a second owner of the same path before the file is opened.",
+        "The operating system releases the lock when the owning process exits.",
+        "It coordinates KíLín writers only; programs that ignore the lock are not prevented from writing."
       ]
     }
   ]
