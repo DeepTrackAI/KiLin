@@ -12,7 +12,7 @@ snapshot.
 
 | Extension | Registration / owner | Main invariant |
 | --- | --- | --- |
-| Project type | `kilin/project_types/<kind>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
+| Project type | `kilin/project_types/<type_id>.json` read by `project_type.py` | Validate all intents, tools, sources and prompts before use. |
 | New source format | `sources/extensions/sources_<suffix>.py`, dispatched by `sources.py` | Return well-formed `SourceFile` / `SourceUnit` records with exact provenance. |
 | Code graph language | `retrievals/code_graph/extensions/` | Extract structural hints without executing source code. |
 | Built-in tool | `tools/<name>/` plus `tools/_registry.py` | Validate settings; honor `ToolRequest`, `ToolContext`, `ToolResult`. |
@@ -23,12 +23,30 @@ snapshot.
 ## Creating a project type
 
 The shipped examples are `code.json` and `literature.json`. A new type is a
-packaged `<kind>.json` resource with validated `display_name`, `description`,
+packaged `<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
-optional `answer_guidance`, `capabilities`, history settings, a valid
+optional `source_directory`, `answer_guidance`, `capabilities`, history
+settings, a valid
 `default_intent`, an `intents` object and optional empty-chat prompts. The
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
+
+The registry requires at least one valid definition, not either standard
+type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
+is the filename-derived identifier. The GUI takes its initial selection
+from the first registry entry and derives labels and welcome content from
+each definition. Adding a packaged type needs no built-in-specific branch.
+External directories accepted by `load_project_types(directory)` are for
+explicit validation; they are not automatically registered or hot-loaded.
+
+`source_directory` controls the source folder created by initialize_project
+inside a fresh directory (default `sources`). It does not change the managed
+multi-source layout. See
+[configuration](configuration.md#new-project-source-convention) for validation
+and the current schema. A new type cannot bypass the core's creation-only
+ownership rules or authorize reuse of an occupied workspace. Empty projects are
+supported for every type. Missing welcome content has generic fallbacks;
+project-type prompts, tools and retrieval policies still control answers.
 
 Each intent key names an operation. Its fields may supply a description,
 shortcuts, history policy, retrieval mode/strategy, instruction, and a tool
@@ -41,7 +59,7 @@ fails validation rather than importing a module by string.
 
 Adding a new project type requires checking its source-selection defaults,
 router prompts, installed tool requirements, selected template resources,
-and how the GUI lists it. Merely adding a kind ID is not proof that the
+and how the GUI lists it. Merely adding a type ID is not proof that the
 entire pipeline supports its source formats or domain reasoning.
 
 ## Source reader/extractor contract
@@ -63,7 +81,7 @@ When adding a suffix:
 4. Ensure citation previews can interpret the coordinates (especially PDF
    page-local and notebook cell-local line numbers).
 5. Recheck chunk identities, source manifests and incremental index reuse.
-6. Update project-type suffix defaults **only if** the kind should select
+6. Update project-type suffix defaults **only if** the project type should select
    the new format automatically; explicit files follow different policy.
 
 Code relationship extractors for Python and MATLAB live under
@@ -138,7 +156,7 @@ callback, so document the default policy and cost.
 | `find_passages` | Locate relevant literal passages/sentences. | [README](../kilin/tools/find_passages/README.md) |
 | `paper_overview` | Produce a structured overview of a paper. | [README](../kilin/tools/paper_overview/README.md) |
 | `reference_check` | Check a paper's references against the project's files, find their citations, and judge each claim against the cited paper. | [README](../kilin/tools/reference_check/README.md) |
-| `suggest_reference` | Find the papers in the project that could be cited for a statement, each with a checked quote. | [README](../kilin/tools/suggest_reference/README.md) |
+| `suggest_reference` | Suggest papers for a statement from model-assessed passages; include checked quotations when available. | [README](../kilin/tools/suggest_reference/README.md) |
 | `show_source` | Display requested exact source context. | [README](../kilin/tools/show_source/README.md) |
 | `generate_paper_summary` | Create template-driven reports and saved artifacts. | [README](../kilin/tools/generate_paper_summary/README.md) |
 

@@ -368,7 +368,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         """
 
-        from kilin.retrievals import document_reading, routing
+        from kilin.retrievals import context_expansion, document_reading
         from kilin.retrievals.strategies import (
             retrieval_code,
             retrieval_hybrid,
@@ -394,7 +394,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             settings["MIN_DOCUMENT_STEM_LENGTH"],
         )
         self.assertEqual(
-            routing._RELATION_PHRASES,
+            context_expansion._RELATION_PHRASES,
             tuple(settings["RELATION_PHRASES"]),
         )
 

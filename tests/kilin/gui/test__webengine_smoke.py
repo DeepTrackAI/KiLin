@@ -152,7 +152,7 @@ def _native_smoke(directory: Path) -> None:
                 {
                     "event": "opened",
                     "project": str(directory / "project"),
-                    "kind": "literature",
+                    "type_id": "literature",
                     "workspace_files": ["sources/papers/paper.md"],
                     "turns": [
                         {

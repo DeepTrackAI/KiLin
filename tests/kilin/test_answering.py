@@ -429,7 +429,7 @@ class TestRouting(unittest.TestCase):
     def setUp(self) -> None:
         """Create code-project turns without loading a language model."""
 
-        self.kind = project_type("code")
+        self.config = project_type("code")
         self.turns = [_turn(f"q{n}", f"a{n} [1].") for n in range(1, 5)]
 
     def _route(
@@ -453,7 +453,7 @@ class TestRouting(unittest.TestCase):
 
         with patch.object(answering, "side_reply", return_value=reply):
             return answering.route_question(
-                object(), self.kind, self.turns, question
+                object(), self.config, self.turns, question
             )
 
     def test_valid_reply_is_used(self) -> None:
@@ -474,7 +474,7 @@ class TestRouting(unittest.TestCase):
         """Preserve the default intent and explain an unknown identifier."""
 
         decision = self._route('{"intent": "poetry", "standalone": true}')
-        self.assertEqual(decision.intent, self.kind.default_intent)
+        self.assertEqual(decision.intent, self.config.default_intent)
         self.assertIn("poetry", decision.fallback)
         self.assertTrue(decision.standalone)
 
@@ -487,7 +487,7 @@ class TestRouting(unittest.TestCase):
                     {"intent": value, "standalone": True}
                 )
                 decision = self._route(reply)
-                self.assertEqual(decision.intent, self.kind.default_intent)
+                self.assertEqual(decision.intent, self.config.default_intent)
                 self.assertEqual(decision.related_turn_ids, ())
                 self.assertEqual(
                     decision.fallback, "intent was not a string"
@@ -506,7 +506,7 @@ class TestRouting(unittest.TestCase):
                     }
                 )
                 decision = self._route(reply)
-                self.assertEqual(decision.intent, self.kind.default_intent)
+                self.assertEqual(decision.intent, self.config.default_intent)
                 self.assertEqual(decision.related_turn_ids, ())
                 self.assertEqual(
                     decision.fallback, "related_turns was not a list"
@@ -542,7 +542,7 @@ class TestRouting(unittest.TestCase):
         for reply in ("REUSE", "[1, 2]", '{"intent": missing}'):
             with self.subTest(reply=reply):
                 decision = self._route(reply)
-                self.assertEqual(decision.intent, self.kind.default_intent)
+                self.assertEqual(decision.intent, self.config.default_intent)
                 self.assertEqual(decision.related_turn_ids, ())
                 self.assertEqual(decision.fallback, "reply was not JSON")
 
@@ -582,7 +582,7 @@ class TestRouting(unittest.TestCase):
 
         with patch.object(answering, "side_reply", return_value=raw):
             first = answering.route_question(
-                object(), self.kind, [], "Explain the repository"
+                object(), self.config, [], "Explain the repository"
             )
         self.assertTrue(first.standalone)
 
@@ -604,10 +604,10 @@ class TestRouting(unittest.TestCase):
             answering, "side_reply", return_value=reply
         ) as router:
             decision = answering.route_question(
-                object(), self.kind, self.turns, "How are you today?"
+                object(), self.config, self.turns, "How are you today?"
             )
             mixed = answering.route_question(
-                object(), self.kind, self.turns, "hi, what does fit do?"
+                object(), self.config, self.turns, "hi, what does fit do?"
             )
 
         self.assertEqual(decision.intent, "small_talk")
@@ -623,10 +623,10 @@ class TestRouting(unittest.TestCase):
             answering, "side_reply", side_effect=OSError("offline")
         ):
             decision = answering.route_question(
-                object(), self.kind, self.turns, "why?"
+                object(), self.config, self.turns, "why?"
             )
 
-        self.assertEqual(decision.intent, self.kind.default_intent)
+        self.assertEqual(decision.intent, self.config.default_intent)
         self.assertIn("router failed: offline", decision.fallback)
         self.assertTrue(decision.refers_back)
         self.assertFalse(decision.standalone)
@@ -639,12 +639,12 @@ class TestRouting(unittest.TestCase):
             answering, "side_reply", side_effect=RuntimeError("failure")
         ):
             decision = answering.route_question(
-                object(), self.kind, [], "What is fit?"
+                object(), self.config, [], "What is fit?"
             )
 
         self.assertTrue(decision.standalone)
         self.assertEqual(decision.related_turn_ids, ())
-        self.assertEqual(decision.intent, self.kind.default_intent)
+        self.assertEqual(decision.intent, self.config.default_intent)
 
 
 class TestRouterPrompt(unittest.TestCase):
@@ -653,12 +653,12 @@ class TestRouterPrompt(unittest.TestCase):
     def test_lists_configured_intents_and_question(self) -> None:
         """Show supported intent descriptions and the current question."""
 
-        kind = project_type("literature")
+        config = project_type("literature")
         with patch.object(
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, [], "What does MRI measure?"
+                object(), config, [], "What does MRI measure?"
             )
 
         system, prompt = router.call_args.args[1:3]
@@ -679,13 +679,13 @@ class TestRouterPrompt(unittest.TestCase):
     def test_limits_listed_turns_to_latest_thirty(self) -> None:
         """Keep the router prompt bounded even with a long conversation."""
 
-        kind = project_type("literature")
+        config = project_type("literature")
         turns = [_turn(f"Topic_{n}", "Response") for n in range(1, 36)]
         with patch.object(
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, turns, "How does it work?"
+                object(), config, turns, "How does it work?"
             )
 
         prompt = router.call_args.args[2]
@@ -699,7 +699,7 @@ class TestRouterPrompt(unittest.TestCase):
     def test_excludes_small_talk_from_router_context(self) -> None:
         """Do not show conversation-ignoring turns to the router."""
 
-        kind = project_type("literature")
+        config = project_type("literature")
         turns = [
             _turn("Hello", "Hi", intent="small_talk"),
             _turn("What is NOVA?", "A model."),
@@ -708,7 +708,7 @@ class TestRouterPrompt(unittest.TestCase):
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, turns, "What is RFE?"
+                object(), config, turns, "What is RFE?"
             )
 
         prompt = router.call_args.args[2]
@@ -718,7 +718,7 @@ class TestRouterPrompt(unittest.TestCase):
     def test_uses_saved_turn_representation_when_available(self) -> None:
         """Prefer a saved summary over rebuilding it from current text."""
 
-        kind = project_type("code")
+        config = project_type("code")
         turn = _turn("Newer question", "Newer answer")
         turn.parameters["representation"] = {
             "turn_id": 99,
@@ -730,7 +730,7 @@ class TestRouterPrompt(unittest.TestCase):
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, [turn], "What happens next?"
+                object(), config, [turn], "What happens next?"
             )
 
         prompt = router.call_args.args[2]
@@ -757,7 +757,7 @@ class TestRouterPrompt(unittest.TestCase):
             {**valid, "summary": "S" * 201},
             {**valid, "sources": ["f.py"] * 6},
         )
-        kind = project_type("code")
+        config = project_type("code")
         for stored in malformed:
             with self.subTest(stored=stored):
                 turn = _turn("Original question", "Original answer.")
@@ -766,7 +766,7 @@ class TestRouterPrompt(unittest.TestCase):
                     answering, "side_reply", return_value="not JSON"
                 ) as router:
                     answering.route_question(
-                        object(), kind, [turn], "What happens next?"
+                        object(), config, [turn], "What happens next?"
                     )
                 prompt = router.call_args.args[2]
                 self.assertIn("Turn 1: Q: Original question", prompt)
@@ -777,14 +777,14 @@ class TestRouterPrompt(unittest.TestCase):
     def test_missing_saved_fields_rebuild_representation(self) -> None:
         """Missing sources and summary must not crash prompt formatting."""
 
-        kind = project_type("code")
+        config = project_type("code")
         turn = _turn("Original question", "Original answer")
         turn.parameters["representation"] = {"question": "Saved"}
         with patch.object(
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, [turn], "What happens next?"
+                object(), config, [turn], "What happens next?"
             )
         self.assertIn(
             "Turn 1: Q: Original question", router.call_args.args[2]
@@ -793,7 +793,7 @@ class TestRouterPrompt(unittest.TestCase):
     def test_invalid_turn_parameters_do_not_break_routing(self) -> None:
         """Treat malformed persisted turn metadata as nonrestrictive."""
 
-        kind = project_type("code")
+        config = project_type("code")
         turn = _turn("Original question", "Original answer")
         for parameters in (["invalid metadata"], {"intent": []}):
             with self.subTest(parameters=parameters):
@@ -802,9 +802,9 @@ class TestRouterPrompt(unittest.TestCase):
                     answering, "side_reply", return_value="not JSON"
                 ) as router:
                     decision = answering.route_question(
-                        object(), kind, [turn], "What happens next?"
+                        object(), config, [turn], "What happens next?"
                     )
-                self.assertEqual(decision.intent, kind.default_intent)
+                self.assertEqual(decision.intent, config.default_intent)
                 self.assertIn(
                     "Turn 1: Q: Original question",
                     router.call_args.args[2],
@@ -813,13 +813,13 @@ class TestRouterPrompt(unittest.TestCase):
     def test_includes_example_for_reuse_intent(self) -> None:
         """Use a structural example without mislabeling user wording."""
 
-        kind = project_type("code")
+        config = project_type("code")
         turns = [_turn("How is it loaded?", "With a loader.")]
         with patch.object(
             answering, "side_reply", return_value="not JSON"
         ) as router:
             answering.route_question(
-                object(), kind, turns, "What happens next?"
+                object(), config, turns, "What happens next?"
             )
 
         prompt = router.call_args.args[2]
@@ -840,7 +840,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
     def setUp(self) -> None:
         """Prepare a small-talk turn and an evidence-bearing turn."""
 
-        self.kind = project_type("literature")
+        self.config = project_type("literature")
         self.turns = [
             _turn("how are you", "Fine, thanks.", (), intent="small_talk"),
             _turn("what is NOVA", "NOVA analyses infrared spectra [1]."),
@@ -875,7 +875,7 @@ class TestRelatedTurnChecks(unittest.TestCase):
             answering, "side_reply", return_value=reply
         ) as router:
             decision = answering.route_question(
-                object(), self.kind, self.turns, question
+                object(), self.config, self.turns, question
             )
         return decision, router.call_args.args[2]
 

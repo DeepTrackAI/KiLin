@@ -72,7 +72,7 @@ records supplied with that answer.
 
 ## Source selection and workspace preparation
 
-Select code or literature, then choose local files or directories through the
+Select a registered project type, then choose local files or directories in the
 native dialog or drag-and-drop. The engine previews directory selections
 using repository scanning. The tree shows selected and skipped entries;
 protected entries remain unavailable. Oversized eligible files can be checked
@@ -129,10 +129,16 @@ package, it is a per-user application-data directory:
 be an absolute path (or a home-expanded `~/...` path). Explicit
 workspace paths entered through the interface take precedence. The engine
 does not create the default directory until a project needs it; existing
-projects are never moved. A saved workspace can be reopened without adding
-sources. The default example-source route requires an example repository
-that is not included in this archive. A workspace is a directory organization
-convention, not an execution sandbox or a boundary for hostile inputs.
+projects are never moved. Repeated creation from the same sources allocates
+independent numbered folders. An explicitly selected occupied destination is
+never reused: the interface offers to resume an existing project separately,
+without importing pending sources or applying new-project settings, or lets
+you choose another destination. The current session stays open on conflicts.
+A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: choose an explicit
+workspace folder in Settings. Their managed `sources/` folder is initially
+empty, and sources can be added later. No development example is selected
+automatically. A workspace is a directory organization convention, not an
+execution sandbox or a boundary for hostile inputs.
 
 Settings configure the profile before indexing and model loading.
 GUI projects never download models while preparing; missing models are
@@ -224,9 +230,12 @@ paper you are working on there. Saving never overwrites a file: `-2`, `-3`, ... 
 Workspace initialization never renames unrelated directories.
 
 Types are validated when KíLín starts; mistakes name the type and field.
-Add a JSON file to create a new type; `code` and `literature` must stay.
-Restart KíLín after editing. Only `code` and `literature` have bundled
-example repositories, so other types need sources. Tutorial 150 explains
+Add or remove packaged JSON files to specialize a distribution; at least
+one valid type must remain. Neither `code` nor `literature` is mandatory.
+Restart KíLín after editing. The first registered type is the initial GUI
+selection. Welcome prompts and their selection history are dynamic for all
+types; absent prompts fall back to "What would you like to work on?".
+Tutorial 150 explains
 project types and intents and builds a new type; tutorial 160 shows how to
 write and register a new tool.
 

@@ -205,3 +205,39 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.engine.add_project_sources([str(self.root / "missing.txt")])
         self.assert_chat_preserved(self.project.root)
         self.assertEqual(self.events[-1]["event"], "error")
+
+
+class TestEngineEmptyProjects(unittest.TestCase):
+    """Create empty workspaces through the normal GUI-to-core boundary."""
+
+    def test_empty_creation_requires_location_and_imports_later(self):
+        """Never substitute demo paths; keep source-free projects usable."""
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            events = []
+            engine = ChatEngine(root, events.append)
+            try:
+                engine.open_project([], "code", "")
+                self.assertEqual(events[-1]["event"], "error")
+                self.assertEqual(list(root.iterdir()), [])
+                with patch("kilin.gui.engine.RAGSession", FakeSession):
+                    engine.open_project([], "code", str(root / "empty"))
+                    self.assertEqual(events[-1]["event"], "opened")
+                    self.assertEqual(events[-1]["type_id"], "code")
+                    self.assertNotIn("kind", events[-1])
+                    self.assertEqual(events[-1]["profile"]["type_id"],
+                                     "code")
+                    project = engine.session.project
+                    self.assertEqual(list(project.source.iterdir()), [])
+                    self.assertEqual(list(project.indexes.iterdir()), [])
+                    original = root / "new.py"
+                    original.write_text("value = 3\n", encoding="utf-8")
+                    engine.add_project_sources([str(original)])
+                    self.assertEqual(events[-1]["event"], "opened")
+                    self.assertTrue((project.source / "new.py").is_file())
+                    self.assertEqual(engine.session.refreshed, 1)
+                    self.assertEqual(original.read_text(encoding="utf-8"),
+                                     "value = 3\n")
+            finally:
+                engine.close()

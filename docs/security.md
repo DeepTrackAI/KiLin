@@ -146,3 +146,15 @@ Related: [Project workspaces](project_workspaces.md),
 [Model management](model_management.md),
 [Trace recording](trace_recording.md),
 [Development](development.md).
+
+## Creation ownership
+
+Core creation accepts only nonexistent or empty explicit destinations and
+allocates independent folders on default-name collisions. An exclusive
+`.kilin-creating` marker coordinates cooperating processes; profile publication
+fails rather than replacing any existing entry. Nonempty or partial folders
+are protected, including stale creation markers. Recovery is deliberate, not
+an automatic deletion policy. These guards are not a defense against arbitrary
+hostile filesystem mutation; explicit imports and synchronization retain their
+separate update and partial-failure contracts. See
+[Project workspaces](project_workspaces.md).

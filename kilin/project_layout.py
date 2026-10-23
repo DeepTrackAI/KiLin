@@ -211,12 +211,12 @@ def _tool_owned_source(source: Path, tool_name: str) -> Path:
     return path
 
 
-def plan_project_layout(kind: str) -> ProjectLayout:
+def plan_project_layout(type_id: str) -> ProjectLayout:
     """Build a project resource plan from its configured tool intents.
 
     Parameters
     ----------
-    kind: str
+    type_id: str
         Registered project type identifier.
 
     Returns
@@ -232,7 +232,7 @@ def plan_project_layout(kind: str) -> ProjectLayout:
 
     """
 
-    definition = project_type(kind)
+    definition = project_type(type_id)
     resources: dict[str, WorkspaceResource] = {}
     for intent in definition.intents.values():
         use = intent.tool

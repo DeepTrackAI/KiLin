@@ -1,4 +1,4 @@
-"""Verify isolated temporary files and atomic text replacement.
+"""Verify isolated temporary files and atomic text publication.
 
 Tests use real files in private temporary directories and simulate write and
 replacement failures. The helper is deliberately independent of filesystem
@@ -17,11 +17,11 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
-from kilin.atomic_writes import atomic_write_text
+from kilin.atomic_writes import atomic_create_text, atomic_write_text
 
 
 class TestAtomicTextWrites(unittest.TestCase):
-    """Check successful replacement and failure rollback of one file."""
+    """Check replacement, exclusive creation, and rollback of one file."""
 
     def setUp(self) -> None:
         """Allocate a disposable output directory."""
@@ -105,6 +105,39 @@ class TestAtomicTextWrites(unittest.TestCase):
         with self.assertRaises(OSError):
             atomic_write_text(path, "text")
         self.assertFalse(path.parent.exists())
+
+    def test_create_preserves_an_existing_destination(self) -> None:
+        """Publish complete UTF-8 text once without replacing its owner."""
+
+        atomic_create_text(self.path, "first \u03b1\n")
+        before = self.path.stat()
+        with self.assertRaises(FileExistsError):
+            atomic_create_text(self.path, "second")
+        self.assertEqual(
+            self.path.read_text(encoding="utf-8"), "first \u03b1\n"
+        )
+        self.assertEqual(self.path.stat().st_ino, before.st_ino)
+        self.assertEqual(self.path.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(self._temporary_files(), [])
+
+    def test_unsupported_exclusive_publication_fails_closed(self) -> None:
+        """Never fall back to replacing a file when hard links fail."""
+
+        with patch("kilin.atomic_writes.os.link", side_effect=OSError("no")):
+            with self.assertRaisesRegex(OSError, "no"):
+                atomic_create_text(self.path, "aborted")
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self._temporary_files(), [])
+
+    def test_create_encoding_failure_leaves_no_destination(self) -> None:
+        """Do not publish a partial file if encoding the text fails."""
+
+        with patch("kilin.atomic_writes.os.link") as publish:
+            with self.assertRaises(UnicodeEncodeError):
+                atomic_create_text(self.path, "\ud800")
+        publish.assert_not_called()
+        self.assertFalse(self.path.exists())
+        self.assertEqual(self._temporary_files(), [])
 
 
 if __name__ == "__main__":

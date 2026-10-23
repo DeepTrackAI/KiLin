@@ -171,3 +171,27 @@ Related: [Architecture](architecture.md),
 [GUI protocol](gui_protocol.md),
 [Conversation ownership](conversation_ownership.md),
 [Security](security.md), [Development](development.md).
+
+## Registry-driven project creation
+
+Project-type choices arrive from the core registry as `type_id` entries.
+The browser initially selects the first entry in filename order and keeps
+prompt-selection state dynamically for each type. Welcome content comes
+from the configuration, with source-independent generic fallbacks.
+
+New projects may have no sources when an explicit workspace is selected.
+The engine delegates empty creation to `prepare_sources_workspace`; it
+never substitutes an example repository. The core, not the GUI, allocates
+fresh names for default destinations. Explicit occupied destinations produce
+`workspace_conflict`: the page offers a separate resume command for an
+existing project or lets the user choose another destination.
+
+Creation and profile/resource preparation finish before the engine closes
+its current session or opens conversation/trace files for the new project.
+A conflict leaves the current session and protected destination unchanged,
+including trace bytes. Failures before switching are displayed without
+writing an error into the previous project's trace. After a successful
+creation, session switching, model loading, and diagnostic tracing follow
+the ordinary activation path; model-load failure does not delete the newly
+created valid project. Later imports use `add_project_sources`, not a
+creation function.

@@ -1,16 +1,18 @@
 """Copy selected local sources into a managed multi-source workspace.
 
-``prepare_sources_workspace`` accepts local files or directories, prepares a
-project profile, creates its shared core directories and selected tool
-resources, copies content into ``sources``, and records source origins in
-``sources.json``. Imported snapshots are project-owned: later
-imports preserve existing files unless replacement is explicitly requested.
-Source names are disambiguated when needed.
+``prepare_sources_workspace`` exclusively creates a new project, copies
+selected local inputs into ``sources``, and records origins in
+``sources.json``.
+An explicit destination must be nonexistent or empty. Default names are
+allocated without reusing occupied folders, even for identical sources.
+``add_project_sources`` deliberately imports into a saved project, preserving
+existing snapshots unless replacement is explicitly requested. It never
+creates or reconfigures the project. Source names are disambiguated as needed.
 Directory inputs use conservative repository scanning. Individual-file
 inputs bypass scan extension and protected-name filters, while retaining
 size and filesystem checks.
 
-This API is cumulative: adding or reselecting sources copies their current
+The explicit import API is cumulative: reselecting sources copies their current
 selected files but does not remove old copies merely because the originals
 were deleted or deselected. It differs from the single-source mirroring API
 in ``kilin.project``. A workspace organizes local files; it is not an
@@ -35,7 +37,8 @@ Key Features
 
 - **Profile integration**
 
-    Initialize a managed project and apply supported configuration updates.
+    Apply validated settings only during new-project creation. Existing
+    settings change only through the separate configure_project API.
 
 - **Trace integration**
 
@@ -47,7 +50,15 @@ Module Structure
 
 - ``prepare_sources_workspace``
 
-    Add sources to one project without changing their original files.
+    Create an independent managed project without changing original sources.
+
+- ``add_project_sources``
+
+    Deliberately add sources to an existing managed project.
+
+- ``default_workspace_path``
+
+    Suggest a base name without reserving or establishing ownership.
 
 - ``remove_workspace_sources``
 
@@ -64,7 +75,7 @@ Examples
 --------
 >>> import kilin
 >>> project = kilin.prepare_sources_workspace(
-...     ["/path/to/source_repository"], kilin.PROJECT_KIND_CODE,
+...     ["/path/to/source_repository"], kilin.PROJECT_TYPE_ID_CODE,
 ...     "/path/to/new_workspace",
 ... )
 
@@ -74,8 +85,10 @@ This writes a workspace copy; it does not alter the source repository.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from hashlib import sha256
 import json
+import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
 from tempfile import NamedTemporaryFile
@@ -84,9 +97,10 @@ from typing import (
     Callable, Final, Mapping, NotRequired, Sequence, TypedDict, cast,
 )
 
+from kilin._project_creation import check_available, destination_path
 from kilin.project import (
-    PROJECT_KIND_CHOICES,
-    ProjectKind,
+    PROJECT_TYPE_IDS,
+    ProjectTypeId,
     QAProject,
     _preparing_project,
     open_project,
@@ -96,6 +110,8 @@ from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "prepare_sources_workspace",
+    "add_project_sources",
+    "default_workspace_path",
     "remove_workspace_sources",
     "include_explicit_imports",
 ]
@@ -115,101 +131,227 @@ class _SourceRecord(TypedDict):
     files: NotRequired[list[str]]
 
 
+def default_workspace_path(
+    source_paths: Sequence[str | Path], workspace_root: str | Path
+) -> Path:
+    """Suggest a deterministic base name without reserving or reusing it.
+
+    Parameters
+    ----------
+    source_paths: Sequence[str | pathlib.Path]
+        Nonempty list or tuple of sources. The first source supplies the name.
+    workspace_root: str | pathlib.Path
+        Parent directory for automatically allocated workspaces.
+
+    Returns
+    -------
+    pathlib.Path
+        Preferred source-name/path-hash destination. Creation may choose a
+        numbered sibling when this path is occupied.
+
+    Raises
+    ------
+    ValueError
+        If sources or the parent directory are missing.
+
+    Notes
+    -----
+    This helper has no filesystem side effects and confers no ownership.
+    prepare_sources_workspace reserves the final location exclusively.
+
+    """
+
+    if not isinstance(source_paths, (list, tuple)) or not source_paths:
+        raise ValueError("Choose a workspace folder for an empty project.")
+    if not str(workspace_root).strip():
+        raise ValueError("Choose a workspace parent folder.")
+    source = Path(source_paths[0]).expanduser().resolve()
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.stem).strip("-._")
+    name = name or "project"
+    digest = sha256(str(source).encode("utf-8")).hexdigest()[:8]
+    parent = Path(workspace_root).expanduser().resolve()
+    return parent / f"{name}-{digest}"
+
+
 def prepare_sources_workspace(
     source_paths: Sequence[str | Path],
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
+    workspace_directory: str | Path | None = None,
+    *,
+    workspace_root: str | Path | None = None,
+    selected_files: Mapping[str, Sequence[str]] | None = None,
+    settings: dict[str, object] | None = None,
+    trace: TraceSink | None = None,
+) -> QAProject:
+    """Create a new managed workspace without reusing an existing project.
+
+    Parameters
+    ----------
+    source_paths: Sequence[str | pathlib.Path]
+        List or tuple of files or folders to copy. An empty collection creates
+        a source-free project and requires an explicit workspace_directory.
+    type_id: ProjectTypeId
+        Registered project type.
+    workspace_directory: str | pathlib.Path | None, optional
+        Explicit nonexistent or empty destination. Defaults to None, requiring
+        workspace_root and at least one source for automatic name allocation.
+    workspace_root: str | pathlib.Path | None, optional
+        Parent for a default destination derived from the first source. On
+        collision, append -2, -3, and so on, including for existing empty
+        folders. Cannot be combined with workspace_directory. Defaults to None.
+    selected_files: Mapping[str, Sequence[str]] | None, optional
+        Exact per-source selections. Defaults to None, using scan selections.
+    settings: dict[str, object] | None, optional
+        Validated profile overrides for this new project. Defaults to None.
+    trace: TraceSink | None, optional
+        Caller-owned diagnostic sink. Defaults to None. No event is emitted
+        before the destination is claimed and inputs are validated.
+
+    Returns
+    -------
+    QAProject
+        New project with managed sources/ and normal resource directories.
+
+    Raises
+    ------
+    ProjectAlreadyExistsError
+        If an explicit destination already contains a profile entry.
+    WorkspaceOccupiedError
+        If an explicit destination contains other content or is reserved.
+    ValueError
+        If paths, settings, project type, or selections are invalid.
+    OSError
+        If exclusive creation, copying, or profile publication fails.
+
+    Notes
+    -----
+    Creation never resumes a project, applies settings to an existing profile,
+    or permits overwriting a destination. Use open_project for read-only
+    opening and add_project_sources for intentional cumulative imports.
+    profile.ini is published last; failures roll back this attempt's entries.
+    Copying provides organization, not an execution sandbox.
+
+    """
+
+    allocate = workspace_directory is None
+    if allocate:
+        if workspace_root is None:
+            raise ValueError("Choose a workspace folder or parent folder.")
+        destination = default_workspace_path(source_paths, workspace_root)
+    else:
+        if workspace_root is not None:
+            raise ValueError("Choose a workspace or its parent, not both.")
+        destination = destination_path(workspace_directory)
+        check_available(destination)
+    return _prepare_sources_workspace(
+        source_paths, type_id, destination, selected_files=selected_files,
+        settings=settings, trace=trace, allocate=allocate,
+    )
+
+
+def add_project_sources(
+    project_directory: str | Path,
+    source_paths: Sequence[str | Path],
+    *,
+    selected_files: Mapping[str, Sequence[str]] | None = None,
+    replace_existing: bool = False,
+    trace: TraceSink | None = None,
+) -> QAProject:
+    """Deliberately import sources into an existing managed workspace.
+
+    Parameters
+    ----------
+    project_directory: str | pathlib.Path
+        Existing project with a managed sources/ directory. Its saved profile
+        is authoritative; this operation never creates or reconfigures it.
+    source_paths: Sequence[str | pathlib.Path]
+        List or tuple of files or directories. Empty collections are allowed.
+    selected_files: Mapping[str, Sequence[str]] | None, optional
+        Exact selections for each source. Defaults to None, using scan rules.
+    replace_existing: bool, optional
+        Replace reselected snapshot files only when explicitly requested.
+        Defaults to False, preserving existing project-owned copies.
+    trace: TraceSink | None, optional
+        Caller-owned diagnostic sink. Defaults to None.
+
+    Returns
+    -------
+    QAProject
+        Existing project after cumulative import and provenance updates.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the destination has no existing project profile.
+    ValueError
+        If the profile, sources, or selection rules are invalid.
+    OSError
+        If reading, copying, or updating provenance fails.
+
+    Notes
+    -----
+    This explicit update is not a multi-file transaction. Successful earlier
+    copies may remain if a later source fails. Deleted or deselected originals
+    never remove existing snapshots. configure_project remains the separate
+    operation for changing saved profile settings.
+
+    """
+
+    project = open_project(project_directory)
+    return _prepare_sources_workspace(
+        source_paths, project.profile.type_id, project.root,
+        selected_files=selected_files, replace_existing=replace_existing,
+        trace=trace, existing=project,
+    )
+
+
+def _prepare_sources_workspace(
+    source_paths: Sequence[str | Path],
+    type_id: ProjectTypeId,
     workspace_directory: str | Path,
     *,
     selected_files: Mapping[str, Sequence[str]] | None = None,
     replace_existing: bool = False,
     settings: dict[str, object] | None = None,
     trace: TraceSink | None = None,
+    existing: QAProject | None = None,
+    allocate: bool = False,
 ) -> QAProject:
-    """Add sources to one project without changing their original files.
-
-    Adding sources is cumulative. Re-adding a source imports newly selected
-    files without deleting or overwriting existing snapshots. To replace
-    selected snapshot files explicitly, pass ``replace_existing=True``.
-    Pass an empty list to reopen an existing workspace unchanged. When
-    provided, ``selected_files`` must identify every supplied source, so
-    unmatched or missing keys cannot broaden the import. ``settings`` is
-    validated before copying.
+    """Share validated source copying between explicit create and import.
 
     Parameters
     ----------
-    source_paths: list[str | pathlib.Path] | tuple
-        Local file/directory paths. Runtime validation accepts a list or tuple,
-        although the annotation is Sequence. Entries are resolved,
-        deduplicated, and checked against the destination workspace.
-    kind: ProjectKind
-        Project type ID from ``kilin/project_types/``.
+    source_paths: Sequence[str | pathlib.Path]
+        Original source inputs.
+    type_id: ProjectTypeId
+        Registered project type, derived from the saved profile for imports.
     workspace_directory: str | pathlib.Path
-        Destination managed workspace, new/empty or already containing a
-        compatible profile.ini. Relative paths use the current working
-        directory.
+        Explicit project destination or preferred allocation path.
     selected_files: Mapping[str, Sequence[str]] | None, optional
-        Optional mapping from source paths to selected relative filenames.
-        Keys are normalized and must match all supplied source paths exactly.
-        Each directory selection must be a nonempty subset of the scan report;
-        None uses the scan selection. Defaults to ``None``.
+        Per-source selections. Defaults to None.
     replace_existing: bool, optional
-        Whether to overwrite already imported files selected again. Defaults
-        to ``False``, preserving project-owned snapshots even when their
-        originals or the local copies have changed. Missing files and newly
-        selected files are still copied.
+        Explicit snapshot replacement for imports. Defaults to False.
     settings: dict[str, object] | None, optional
-        Optional supported profile updates applied through configure_project
-        before copying. Defaults to ``None``.
+        New-profile overrides only. Defaults to None.
     trace: TraceSink | None, optional
-        Optional caller-owned sink receiving preparation and copy events; None
-        uses a null sink. Defaults to ``None``.
+        Caller-owned diagnostic sink. Defaults to None.
+    existing: QAProject | None, optional
+        Explicitly opened destination for an import. Defaults to None.
+    allocate: bool, optional
+        Reserve a fresh default sibling for creation. Defaults to False.
 
     Returns
     -------
     QAProject
-        QAProject reopened from the prepared workspace after the selected copy
-        operations.
-
-    Raises
-    ------
-    ValueError
-        If kinds, paths, workspace ownership/profile, source selections,
-        replacement policy, or source-origin records fail their checks.
-    NotADirectoryError
-        If an existing workspace is not a directory.
-    OSError
-        If sources cannot be resolved/read or workspace content cannot be
-        created/copied/written.
-
-    Notes
-    -----
-    Copying is cumulative: removed or deselected original files are not deleted
-    from old workspace copies. Existing snapshots are preserved by default;
-    a replacement must be explicitly requested. Directory sources must have
-    complete scans; direct files use a narrower extension/size check.
-    Files, profile, and source-origin records are not committed as one
-    transaction. A workspace is not an execution sandbox.
+        Created or deliberately updated project.
 
     """
 
     started_at = perf_counter()
     active_trace = trace if trace is not None else NullTraceLogger()
-    active_trace.emit(
-        "workspace.prepare.started",
-        component="workspace",
-        data={
-            "source_paths": [str(path) for path in source_paths],
-            "kind": kind,
-            "workspace_directory": str(workspace_directory),
-            "selected_files": selected_files,
-            "replace_existing": replace_existing,
-            "settings": settings,
-        },
-        status="started",
-    )
-    if kind not in PROJECT_KIND_CHOICES:
+    if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(
-            f"kind must be one of: {', '.join(PROJECT_KIND_CHOICES)}."
+            f"type_id must be one of: {', '.join(PROJECT_TYPE_IDS)}."
         )
     if not isinstance(source_paths, (list, tuple)):
         raise ValueError("Choose source files or folders.")
@@ -218,19 +360,19 @@ def prepare_sources_workspace(
     if not str(workspace_directory).strip():
         raise ValueError("Choose a workspace folder.")
 
-    workspace = Path(workspace_directory).expanduser().resolve()
+    workspace = (
+        Path(workspace_directory).expanduser().resolve()
+        if existing is not None
+        else destination_path(
+            workspace_directory, allow_occupied_link=allocate
+        )
+    )
     if workspace in {Path.home().resolve(), Path(workspace.anchor)}:
         raise ValueError(
             "Choose a project workspace, not a home or drive root."
         )
-    if workspace.exists() and not workspace.is_dir():
+    if not allocate and workspace.exists() and not workspace.is_dir():
         raise NotADirectoryError(f"Choose a workspace folder: {workspace}")
-    if workspace.is_dir() and not (workspace / "profile.ini").is_file():
-        if any(workspace.iterdir()) and not _contains_only_trace_output(
-            workspace
-        ):
-            raise ValueError("Choose an empty folder or a KíLín workspace.")
-
     chosen: list[Path] = []
     for value in source_paths:
         source = Path(value).expanduser()
@@ -242,7 +384,7 @@ def prepare_sources_workspace(
         # A file KíLín wrote (outputs/) or a template may become a source;
         # the rest of the workspace (sources, indexes, logs) may not.
         inside = source == workspace or source.is_relative_to(workspace)
-        if inside and not any(
+        if not allocate and inside and not any(
             source.is_relative_to(workspace / folder)
             and source != workspace / folder
             for folder in _COPYABLE_WORKSPACE_FOLDERS
@@ -276,18 +418,43 @@ def prepare_sources_workspace(
                 f"missing: {missing}; unexpected: {unexpected}."
             )
 
-    if not chosen and not (workspace / "profile.ini").is_file():
-        raise ValueError("Add a source before creating a workspace.")
     source_root = workspace / "sources"
-    if source_root.is_symlink():
+    if not allocate and source_root.is_symlink():
         raise ValueError("The workspace sources folder must not be a link.")
-    with _preparing_project(
-        workspace, kind, "sources", settings=settings,
-        trace=active_trace, validate_source=True,
-    ) as (project, journal):
-        if project.source != source_root.resolve(strict=True):
+    preparation = (
+        nullcontext((existing, None))
+        if existing is not None
+        else _preparing_project(
+            workspace, type_id, "sources", settings=settings,
+            allocate=allocate,
+        )
+    )
+    with preparation as (project, journal):
+        workspace = project.root
+        source_root = project.source
+        # A suggested path can be occupied; only the claimed root defines
+        # the creation boundary. Never inspect a skipped project's sources.
+        if allocate and any(
+            source == workspace or source.is_relative_to(workspace)
+            for source in chosen
+        ):
+            raise ValueError("Do not add the workspace as its own source.")
+        active_trace.emit(
+            "workspace.prepare.started",
+            component="workspace",
+            data={
+                "source_paths": [str(path) for path in source_paths],
+                "type_id": type_id,
+                "workspace_directory": str(workspace),
+                "selected_files": selected_files,
+                "replace_existing": replace_existing,
+                "settings": settings,
+            },
+            status="started",
+        )
+        if project.source != (workspace / "sources").resolve(strict=True):
             raise ValueError(
-                "This project does not use a managed sources/ folder."
+                "project.source must use the managed sources/ folder."
             )
         manifest_path = workspace / "sources.json"
         records = _read_records(manifest_path)
@@ -353,43 +520,6 @@ def prepare_sources_workspace(
         duration_ms=(perf_counter() - started_at) * 1000,
     )
     return prepared
-
-
-def _contains_only_trace_output(workspace: Path) -> bool:
-    """Allow a new project trace to exist before workspace preparation.
-
-    Parameters
-    ----------
-    workspace: pathlib.Path
-        Resolved managed-workspace path excluded from source copies when
-        applicable.
-
-    Returns
-    -------
-    bool
-        True if the existing workspace contains only the permitted logs/traces
-        preparation structure.
-
-    Notes
-    -----
-    Used to allow an early-created trace directory before the project profile
-    is initialized.
-
-    """
-
-    entries = list(workspace.iterdir())
-    if len(entries) != 1 or entries[0].name != "logs":
-        return False
-    logs = entries[0]
-    if logs.is_symlink() or not logs.is_dir():
-        return False
-    log_entries = list(logs.iterdir())
-    return (
-        len(log_entries) == 1
-        and log_entries[0].name == "traces"
-        and log_entries[0].is_dir()
-        and not log_entries[0].is_symlink()
-    )
 
 
 def _unique_name(source: Path, used: set[str], root: Path) -> str:

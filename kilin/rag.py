@@ -175,7 +175,7 @@ from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
 )
-from kilin.project import PROJECT_KIND_CODE, QAProject, open_project
+from kilin.project import QAProject, open_project
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
@@ -199,6 +199,7 @@ from kilin.retrievals import (
     CodeGraph,
     DocumentSelection,
     HybridResult,
+    LexicalIndex,
     PersistentIndexes,
     SemanticIndex,
     build_code_graph,
@@ -209,7 +210,7 @@ from kilin.retrievals import (
     hybrid_search,
     lexical_search,
     load_indexes,
-    plan_retrieval,
+    plan_context_expansion,
     prepare_persistent_indexes,
     read_document,
     save_indexes,
@@ -598,7 +599,7 @@ class RAGSession:
     backend: "mlx" | "torch"
         Selected model backend.
     index_status: str
-        Either reused or rebuilt for this opening.
+        Either ``reused``, ``rebuilt``, or ``empty`` for this opening.
     turns: list[ConversationTurn]
         Previous and current persisted interactions.
     conversation_path: pathlib.Path
@@ -869,7 +870,7 @@ class RAGSession:
                 thinking=profile.thinking,
                 temperature=profile.temperature,
                 max_new_tokens=profile.max_new_tokens,
-                system_prompt=project_type(profile.kind).system_prompt,
+                system_prompt=project_type(profile.type_id).system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
             )
@@ -1362,11 +1363,11 @@ class RAGSession:
 
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
-            kind = project_type(self.project.profile.kind)
+            config = project_type(self.project.profile.type_id)
             decision = self._route(
-                question, kind, use_router, turn_id, report_phase
+                question, config, use_router, turn_id, report_phase
             )
-            intent = kind.intents[decision.intent]
+            intent = config.intents[decision.intent]
             # Resolve once, including for tool-written answers. An explicit
             # empty string disables the project default, not intent guidance.
             if intent.answer_guidance:
@@ -1374,7 +1375,7 @@ class RAGSession:
             elif answer_guidance is not None:
                 resolved_guidance = answer_guidance
             else:
-                resolved_guidance = kind.answer_guidance
+                resolved_guidance = config.answer_guidance
             if resolved_guidance or answer_guidance is not None:
                 effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode
@@ -1386,20 +1387,20 @@ class RAGSession:
                 component="rag",
                 data={
                     "policy": intent.history_policy,
-                    "recent_turns": kind.recent_turns,
+                    "recent_turns": config.recent_turns,
                 },
                 turn_id=turn_id,
             ):
                 history_ids = select_history(
                     len(self.turns),
                     intent.history_policy,
-                    kind.recent_turns,
+                    config.recent_turns,
                     decision,
                 )
             recent_ids = select_history(
                 len(self.turns),
                 HISTORY_POLICY_RECENT,
-                kind.recent_turns,
+                config.recent_turns,
                 decision,
             )
             trace.emit(
@@ -1608,7 +1609,7 @@ class RAGSession:
                     token_callback(answer)
             else:
                 system_prompt = (
-                    f"{kind.system_prompt}\n\n{intent.system_prompt}"
+                    f"{config.system_prompt}\n\n{intent.system_prompt}"
                 )
                 # The model sees only the selected turns (questions and
                 # answers, without their evidence), so the history is
@@ -1627,7 +1628,7 @@ class RAGSession:
                     component="rag",
                     data={
                         "machine_state": MACHINE_STATE_ANSWERING,
-                        "project_type": kind.kind,
+                        "project_type_id": config.id,
                         "intent": intent.intent_id,
                         "history_turn_ids": history_ids,
                         "history_message_count": 2 * len(history_ids),
@@ -2248,7 +2249,7 @@ class RAGSession:
             report = include_explicit_imports(self.project, report)
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
-        use_code_graph = project_type(profile.kind).code_graph is not False
+        use_code_graph = project_type(profile.type_id).code_graph is not False
 
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
@@ -2446,7 +2447,11 @@ class RAGSession:
         self._emit_progress(
             "building_code_graph",
             56.0,
-            f"Building code graph from {len(chunks)} chunks...",
+            (
+                f"Building source relationships from {len(chunks)} chunks..."
+                if use_code_graph and source_files
+                else "No source relationships to build; skipping graph"
+            ),
             current=len(chunks),
             total=len(chunks),
         )
@@ -2484,7 +2489,7 @@ class RAGSession:
         -------
         tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]
             Tuple (chunks, indexes, index_status, source_changes), where status
-            is reused or rebuilt.
+            is ``reused``, ``rebuilt``, or ``empty``.
 
         Raises
         ------
@@ -2498,6 +2503,8 @@ class RAGSession:
         reuse. Existing vectors are loaded only if the stored bundle is
         accepted. Source completeness is not checked here; index and metadata
         files are written separately rather than as one transaction.
+        Empty collections keep a current inventory in memory but write no
+        retrieval bundle. Search is skipped until sources yield chunks.
 
         """
 
@@ -2541,23 +2548,6 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
-        # Bind the saved vectors to the actual loaded model, not merely to
-        # its configured ID or directory path. Cache identity on the loaded
-        # session so source refreshes do not rehash large local weight files.
-        model_source = getattr(embedding_session, "model_source", None)
-        if not isinstance(model_source, str):
-            raise ValueError("The embedding model source is unavailable.")
-        model_identity = getattr(
-            embedding_session, "_retrieval_model_identity", None
-        )
-        if model_identity is None:
-            model_identity = embedding_model_identity(
-                embedding_session.model_id, model_source
-            )
-            embedding_session._retrieval_model_identity = model_identity
-        expected_metadata["embedding_model_source"] = model_source
-        expected_metadata["embedding_model_identity"] = model_identity
-
         saved_manifest: dict[str, object] | None = None
         saved_metadata: dict[str, object] | None = None
         if manifest_path.is_file():
@@ -2584,6 +2574,33 @@ class RAGSession:
                     saved_metadata = value
             except (OSError, json.JSONDecodeError):
                 saved_metadata = None
+
+        if not selected_count:
+            changes["configuration_changed"] = (
+                saved_metadata is None
+                or any(
+                    saved_metadata.get(key) != value
+                    for key, value in expected_metadata.items()
+                )
+            )
+            return self._empty_retrieval(changes, current_manifest)
+
+        # Bind the saved vectors to the actual loaded model, not merely to
+        # its configured ID or directory path. Cache identity on the loaded
+        # session so source refreshes do not rehash large local weight files.
+        model_source = getattr(embedding_session, "model_source", None)
+        if not isinstance(model_source, str):
+            raise ValueError("The embedding model source is unavailable.")
+        model_identity = getattr(
+            embedding_session, "_retrieval_model_identity", None
+        )
+        if model_identity is None:
+            model_identity = embedding_model_identity(
+                embedding_session.model_id, model_source
+            )
+            embedding_session._retrieval_model_identity = model_identity
+        expected_metadata["embedding_model_source"] = model_source
+        expected_metadata["embedding_model_identity"] = model_identity
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
@@ -2649,6 +2666,7 @@ class RAGSession:
                     85.0,
                     "Saved retrieval index loaded.",
                 )
+                self._current_source_manifest = current_manifest
                 return (
                     list(indexes.semantic.chunks),
                     indexes,
@@ -2716,6 +2734,8 @@ class RAGSession:
             report=report,
             cached_chunks=cached_chunks,
         )
+        if not chunks:
+            return self._empty_retrieval(changes, current_manifest)
         # A chunk is embedded unless an identical saved chunk has a vector.
         pending_chunks = [
             chunk
@@ -2849,7 +2869,53 @@ class RAGSession:
             85.0,
             "Retrieval index saved.",
         )
+        self._current_source_manifest = current_manifest
         return chunks, indexes, "rebuilt", changes
+
+    def _empty_retrieval(
+        self,
+        changes: dict[str, object],
+        manifest: dict[str, object],
+    ) -> tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]:
+        """Represent an empty source collection without persisting an index.
+
+        Parameters
+        ----------
+        changes: dict[str, object]
+            Source and configuration changes detected by the current scan.
+        manifest: dict[str, object]
+            Current source inventory, retained in memory for tool coverage.
+
+        Returns
+        -------
+        tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]
+            Empty chunks, an in-memory retrieval container, the status
+            ``empty``, and the supplied change report.
+
+        Notes
+        -----
+        Persistence still requires real chunks. Old on-disk caches, when
+        present, are left untouched and are not consulted for this session's
+        evidence. Adding sources runs normal indexing on the next refresh.
+
+        """
+
+        self._current_source_manifest = manifest
+        indexes = PersistentIndexes(
+            fingerprint="",
+            semantic=SemanticIndex((), ()),
+            lexical=LexicalIndex((), (), {}),
+            code_graph=CodeGraph((), ()),
+        )
+        self.trace.emit(
+            "index.empty", component="rag",
+            data={"chunk_count": 0, "changes": changes},
+        )
+        self._emit_progress(
+            "index_ready", 85.0,
+            "No source passages to index; ready without retrieval evidence.",
+        )
+        return [], indexes, "empty", changes
 
     def _retrieve(
         self: RAGSession,
@@ -2915,6 +2981,9 @@ class RAGSession:
             if status_callback is not None:
                 status_callback(message)
 
+        if not self.chunks:
+            report("No indexed source passages; skipping retrieval")
+            return ()
         count = retrieval_count or self.project.profile.retrieval_count
         report("Formatting the search query")
         query_text = self._format_query(question)
@@ -2982,23 +3051,23 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
-            report(
-                "Searching the code graph"
-                if self.project.profile.kind == PROJECT_KIND_CODE
-                else "Checking structured relationships"
-            )
-            # The graph is empty without code files or when the project type
-            # turns it off; there is nothing to search then.
-            code = (
-                code_search(
+            if self.indexes.code_graph.entities:
+                report("Searching relationships between source entities")
+                code = code_search(
                     self.indexes.code_graph,
                     self.chunks,
                     question,
                     count=count,
                 )
-                if self.indexes.code_graph.entities
-                else []
-            )
+                report(
+                    "Relationship search ranked "
+                    f"{len(code)} results"
+                )
+            else:
+                code = []
+                report(
+                    "No source relationships indexed; skipping graph search"
+                )
         trace.emit(
             "retrieval.code.ranked",
             component="retrieval",
@@ -3007,11 +3076,6 @@ class RAGSession:
                 include_text=trace.include_content,
             ),
             turn_id=trace_turn_id,
-        )
-        report(
-            f"Code graph search ranked {len(code)} results"
-            if self.project.profile.kind == PROJECT_KIND_CODE
-            else f"Structured relationship search found {len(code)} results"
         )
         report("Combining and ranking search results")
         combined = hybrid_search(
@@ -3050,7 +3114,7 @@ class RAGSession:
                     turn_id=trace_turn_id,
                 )
 
-        plan = plan_retrieval(question, self.indexes.code_graph)
+        plan = plan_context_expansion(question, self.indexes.code_graph)
         plan_data = asdict(plan)
         expansion_requested = any(
             bool(plan_data.get(name))
@@ -3334,8 +3398,9 @@ class RAGSession:
     def _source_files(self: RAGSession) -> dict[Path, int]:
         """Return selected source files and sizes from the source manifest.
 
-        A missing or unreadable manifest gives an empty mapping; tools use
-        the result only for inventories and coverage reports.
+        Prefer the current in-memory scan, including an empty collection,
+        over an older saved manifest. A missing or unreadable manifest gives
+        an empty mapping; tools use this for inventories and coverage reports.
 
         Returns
         -------
@@ -3347,7 +3412,10 @@ class RAGSession:
 
         manifest = self.project.indexes / "source_manifest.json"
         try:
-            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+            current = getattr(self, "_current_source_manifest", None)
+            if current is None:
+                current = json.loads(manifest.read_text(encoding="utf-8"))
+            files = current["files"]
             return {
                 Path(name): int(entry.get("size_bytes", 0))
                 for name, entry in files.items()
@@ -3396,6 +3464,8 @@ class RAGSession:
 
         """
 
+        if not self.chunks:
+            return []
         everything = len(self.chunks)
         semantic = semantic_search(
             self.indexes.semantic,
@@ -3510,7 +3580,7 @@ class RAGSession:
         profile = self.project.profile
         if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
-        instruction = project_type(profile.kind).retrieval_instruction
+        instruction = project_type(profile.type_id).retrieval_instruction
         return format_qwen3_query(question, instruction)
 
     def _system_prompt(self: RAGSession) -> str:
@@ -3525,12 +3595,12 @@ class RAGSession:
 
         """
 
-        return project_type(self.project.profile.kind).system_prompt
+        return project_type(self.project.profile.type_id).system_prompt
 
     def _route(
         self: RAGSession,
         question: str,
-        kind: object,
+        config: object,
         use_router: bool,
         turn_id: str,
         report_phase: Callable[..., None],
@@ -3544,7 +3614,7 @@ class RAGSession:
         ----------
         question: str
             User question to classify.
-        kind: object
+        config: object
             Loaded project type with its intents and default intent.
         use_router: bool
             Whether to call the router instead of selecting the default intent.
@@ -3564,7 +3634,7 @@ class RAGSession:
         started = perf_counter()
         if not use_router:
             decision = RouteDecision(
-                intent=kind.default_intent,
+                intent=config.default_intent,
                 standalone=not self.turns,
                 fallback="routing off",
             )
@@ -3575,8 +3645,8 @@ class RAGSession:
                 component="rag",
                 data={
                     "machine_state": MACHINE_STATE_ANSWERING,
-                    "project_type": kind.kind,
-                    "intents": list(kind.intents),
+                    "project_type_id": config.id,
+                    "intents": list(config.intents),
                     "turn_count": len(self.turns),
                     "router_model": self.router_model,
                 },
@@ -3589,9 +3659,9 @@ class RAGSession:
                 turn_id=turn_id,
             ):
                 decision = route_question(
-                    self._router_chat(), kind, self.turns, question
+                    self._router_chat(), config, self.turns, question
                 )
-        intent = kind.intents[decision.intent]
+        intent = config.intents[decision.intent]
         data: dict[str, object] = {
             "classification": {
                 "intent": decision.intent,
@@ -3734,7 +3804,7 @@ class RAGSession:
 
         profile = self.project.profile
         metadata: dict[str, object] = {
-            "project_kind": profile.kind,
+            "project_type_id": profile.type_id,
             "backend": self.backend,
             "embedding_model": profile.embedding_model(self.backend),
             "query_format": profile.query_format,
@@ -3745,7 +3815,7 @@ class RAGSession:
             "overlap_tokens": profile.overlap_tokens,
         }
         # Recorded only when off, so existing indexes stay valid by default.
-        if project_type(profile.kind).code_graph is False:
+        if project_type(profile.type_id).code_graph is False:
             metadata["code_graph"] = False
         # Projects that read PDFs re-index when the PDF text extractor
         # changes; other projects are unaffected.
@@ -3781,7 +3851,7 @@ class RAGSession:
         profile = self.project.profile
         return {
             **self._index_metadata(),
-            "project_kind": profile.kind,
+            "project_type_id": profile.type_id,
             "source": str(self.project.source),
             "backend_preference": profile.backend,
             "allow_download": profile.allow_download,

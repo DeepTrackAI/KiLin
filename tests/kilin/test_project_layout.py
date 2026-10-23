@@ -23,6 +23,7 @@ from kilin.project import (
     initialize_project,
     open_project,
     prepare_project_workspace,
+    synchronize_project_workspace,
 )
 from kilin.project_layout import (
     ProjectLayout,
@@ -155,7 +156,8 @@ class TestProjectLayout(unittest.TestCase):
         deleted.unlink()
         custom.write_text("# User template\n", encoding="utf-8")
         open_project(root)
-        initialize_project(root, "literature")
+        with self.assertRaises(ValueError):
+            initialize_project(root, "literature")
         self.assertEqual(
             edited.read_text(encoding="utf-8"), "# Edited by the user\n"
         )
@@ -178,7 +180,8 @@ class TestProjectLayout(unittest.TestCase):
             path.unlink()
         (root / "templates").rmdir()
         self.assertEqual(open_project(root).root.resolve(), root.resolve())
-        self.assertTrue((root / "templates").is_dir())
+        self.assertFalse((root / "templates").exists())
+        ensure_project_folders(root)
         self.assertEqual(list((root / "templates").iterdir()), [])
 
     def test_multi_source_path_installs_selected_templates(self) -> None:
@@ -212,7 +215,7 @@ class TestProjectLayout(unittest.TestCase):
         # Repeated synchronization cannot replace an edited template.
         modified = workspace.root / "templates/research_briefing.md"
         modified.write_text("# Custom\n", encoding="utf-8")
-        prepare_project_workspace(original, "literature", sandbox)
+        synchronize_project_workspace(original, workspace.root)
         self.assertEqual(modified.read_text(encoding="utf-8"), "# Custom\n")
 
     def test_user_provided_project_type_template_needs_no_package(
@@ -244,6 +247,12 @@ class TestProjectLayout(unittest.TestCase):
         from kilin.project import configure_project
 
         root = self._project("code")
+        profile = root / "profile.ini"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                "source = repository", "source = ."
+            ), encoding="utf-8",
+        )
         project = configure_project(
             root, {"extensions": [".py", ".ini", ".json"]}
         )
@@ -271,10 +280,16 @@ class TestProjectLayout(unittest.TestCase):
             ["profile.ini", "sources.json"],
         )
 
+
     def test_root_source_excludes_managed_templates_from_scans(self) -> None:
         """Template Markdown is not indexed when source equals project root."""
 
         root = self._project("literature")
+        profile = root / "profile.ini"
+        text = profile.read_text(encoding="utf-8")
+        text = text.replace("source = documents", "source = .")
+        text = text.replace("source = repository", "source = .")
+        profile.write_text(text, encoding="utf-8")
         opened = open_project(root)
         self.assertEqual(opened.source.resolve(), root.resolve())
         (root / "study.md").write_text("# Source", encoding="utf-8")
@@ -296,6 +311,7 @@ class TestProjectLayout(unittest.TestCase):
         self.assertEqual(
             source_scan_exclusions(root, root / "external"), ()
         )
+
 
     def test_resolved_root_alias_still_excludes_managed_folders(
         self,
@@ -332,11 +348,13 @@ class TestProjectLayout(unittest.TestCase):
         (root / "templates").mkdir()
         template = root / "templates/research_briefing.md"
         template.write_text("# Custom\n", encoding="utf-8")
-        initialize_project(root, "literature")
+        with self.assertRaises(ValueError):
+            initialize_project(root, "literature")
         self.assertEqual(template.read_text(encoding="utf-8"), "# Custom\n")
         self.assertEqual(
-            len(list((root / "templates").glob("*.md"))), 4
+            len(list((root / "templates").glob("*.md"))), 1
         )
+        self.assertFalse((root / "profile.ini").exists())
 
     def test_explicit_repair_is_opt_in(self) -> None:
         """A separate core operation can restore selected resources."""

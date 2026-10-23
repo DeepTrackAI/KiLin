@@ -91,7 +91,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             (
                 {
                     "action": "saved_project",
-                    "kind": "code",
+                    "type_id": "code",
                     "workspace": "/parent",
                 },
                 "find_saved_project",
@@ -99,7 +99,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             (
                 {
                     "action": "settings",
-                    "kind": "code",
+                    "type_id": "code",
                     "workspace": "",
                 },
                 "settings",
@@ -128,7 +128,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ),
             (
                 {"action": "open", "sources": ["/inputs"],
-                 "kind": "code", "workspace": ""},
+                 "type_id": "code", "workspace": ""},
                 "open_project",
             ),
             (
@@ -190,7 +190,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             }),
             json.dumps({
                 "action": "open", "sources": ["/a"],
-                "kind": "code", "workspace": "",
+                "type_id": "code", "workspace": "",
             }),
         ])
         worker.ask.assert_called_once_with(
@@ -575,6 +575,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "answer_delta", "answer_phase", "answered", "backend_failed",
             "backend_restarted", "conversation_delete_started",
             "conversation_opened", "conversations", "error",
+            "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",
             "installation_started", "installed_models_used",

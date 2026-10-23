@@ -13,7 +13,7 @@ operations should not be mistaken for one transaction:
 | Step | Owner / main API | Output |
 | --- | --- | --- |
 | Preview policy | `repository.scan_repository()` | Scan report with entries, selected files, skip codes |
-| Snapshot / source management | `workspace.prepare_sources_workspace()` or `project.prepare_project_workspace()` | Managed copies and source manifest |
+| Snapshot / source management | Create through preparation APIs; update through explicit import/synchronization APIs | Managed copies and source manifest |
 | File content | `sources.read_repository_files()` | `SourceFile` records |
 | Natural units | `sources.extract_source_units()` | `SourceUnit` records |
 | Chunking | `chunking.chunk_source_units()` | `Chunk` records with stable identifiers |
@@ -61,26 +61,28 @@ also set selection rules; see [Configuration](configuration.md).
 
 ## 2. Snapshot and provenance alternatives
 
-KíLín has two different, deliberately retained workflows:
+KíLín retains two source-management workflows, with creation separated from
+updates in both:
 
-- `prepare_sources_workspace(source_paths, kind, workspace_directory=...)`
-  accumulates individually selected local files/folders into managed
-  `sources/`, tracking origins and selection metadata in `sources.json`.
-  Re-adding a source can update matching snapshots. Deselecting or deleting
-  something at the original location does **not** implicitly remove earlier
-  managed copies. `remove_workspace_sources()` removes only selected managed
-  snapshots, never original user files.
-- `prepare_project_workspace(source_directory, kind, workspace_root=...)`
-  mirrors one source directory into a managed project and tracks its prior
-  state with `source_snapshot.json`. It compares manifests before
-  synchronizing. It is not a drop-in replacement for the cumulative route.
+- `prepare_sources_workspace(...)` creates a fresh managed `sources/` tree.
+  `add_project_sources(project_directory, source_paths, ...)` subsequently
+  imports cumulatively using the saved profile and `sources.json` provenance.
+  Existing snapshots are preserved unless `replace_existing=True` is chosen.
+  Removed or deselected originals never remove previous copies implicitly.
+  `remove_workspace_sources()` deletes selected managed copies, not originals.
+- `prepare_project_workspace(source_directory, type_id, workspace_root)`
+  always creates a fresh single-source mirror. To compare source manifests
+  and synchronize a saved copy, call
+  `synchronize_project_workspace(source_directory, project_directory)`.
+  This explicit operation may restore edits to the mirror and remove files
+  deleted from the original, preserving the established mirroring policy.
 
-`initialize_project()` operates on an existing folder and chooses a valid
-source location according to its profile rules; it does not perform an
-unrequested import. The GUI delegates cumulative imports and deletions to
-core functions and then requests index refresh. `project_files.py` manages
-`outputs/` and `templates/` separately; those folders are not newly indexed
-as ordinary source material.
+`initialize_project()` creates a new project in a nonexistent or empty folder
+using the type's source-directory convention. It never adopts nonempty source
+folders or reopens a project. `open_project()` reads saved profiles without
+creating folders. The GUI uses explicit import/removal operations and requests
+index refresh afterward. `project_files.py` separately manages `outputs/` and
+`templates/`; those folders are not newly indexed as ordinary source material.
 
 Source additions/removals are **not** a multi-file atomic transaction. In the
 cumulative route an earlier successful source remains even if a later import
@@ -183,3 +185,13 @@ covers reason-code independence from human-readable messages.
 Related: [Project workspaces](project_workspaces.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [GUI protocol](gui_protocol.md), [Security](security.md).
+
+## Empty initial source collections
+
+`prepare_sources_workspace([], type_id, workspace_directory)` initializes
+a valid managed `sources/` tree without importing files. The destination
+must be explicit and unoccupied. Adding sources later uses the explicit
+`add_project_sources()` API with the same selection validation. In contrast,
+`initialize_project()` creates the configured `source_directory` subfolder in
+a fresh destination. Existing profile source settings remain authoritative
+when the project is opened explicitly.

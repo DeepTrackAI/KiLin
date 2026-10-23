@@ -73,7 +73,6 @@ from configparser import ConfigParser, Error as ConfigError
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import asdict, replace
-from hashlib import sha256
 import json
 from pathlib import Path
 import math
@@ -118,7 +117,11 @@ from kilin.gui.model_catalog import (
     model_choices,
 )
 from kilin import RAGSession, prepare_sources_workspace
-from kilin.workspace import remove_workspace_sources
+from kilin.workspace import (
+    add_project_sources,
+    default_workspace_path,
+    remove_workspace_sources,
+)
 from kilin.project_files import (
     add_project_files,
     list_project_files,
@@ -131,9 +134,9 @@ from kilin.conversations import ConversationInfo, ConversationStore
 from kilin.huggingface import available_models, download_model
 from kilin.project_type import load_project_types, project_type
 from kilin.project import (
-    PROJECT_KIND_CODE,
-    PROJECT_KIND_CHOICES,
-    PROJECT_KIND_LITERATURE,
+    PROJECT_TYPE_IDS,
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
     QAProject,
     configure_project,
     default_project_profile,
@@ -271,17 +274,17 @@ class ChatEngine:
     -------
     startup()
         Suggest the most recently used valid sandbox project.
-    find_saved_project(kind, workspace)
+    find_saved_project(type_id, workspace)
         Refresh Resume for the selected type and workspace folder.
     resume_project(directory)
         Reopen a saved project without copying source files.
-    settings(kind, workspace)
+    settings(type_id, workspace)
         Return saved or default settings and cached model IDs.
     download(model_id)
         Download only a model explicitly chosen from the GUI catalog.
     preview(sources, extensions, max_file_bytes, workspace='')
         List eligible files before copying any source.
-    open_project(sources, kind, workspace, selected_files=None, settings=None)
+    open_project(sources, type_id, workspace, ...)
         Add selected sources and open one KíLín workspace.
     ask(question, retrieval_count=None, generation_settings=None)
         Ask the loaded project and return its saved answer and evidence.
@@ -586,8 +589,8 @@ class ChatEngine:
 
         project = self._find_saved_project(None, "")
         if project is not None:
-            folder, kind = project
-            self._send("startup", project=str(folder), kind=kind)
+            folder, type_id = project
+            self._send("startup", project=str(folder), type_id=type_id)
         else:
             self._send("startup", project=None)
 
@@ -854,7 +857,7 @@ class ChatEngine:
         return perf_counter() - model_started
 
     def list_saved_projects(self, workspace: str) -> None:
-        """Report valid code and literature projects, newest first.
+        """Report valid projects of all registered types, newest first.
 
         Parameters
         ----------
@@ -869,14 +872,15 @@ class ChatEngine:
                 {
                     "project": str(folder),
                     "name": folder.name,
-                    "kind": kind,
+                    "type_id": type_id,
                     "updated_at": updated_at,
                 }
-                for updated_at, folder, kind in self._saved_projects(workspace)
+                for updated_at, folder, type_id
+                in self._saved_projects(workspace)
             ],
         )
 
-    def find_saved_project(self, kind: str, workspace: str) -> None:
+    def find_saved_project(self, type_id: str, workspace: str) -> None:
         """Refresh Resume for the selected type and workspace folder.
 
         A chosen workspace is checked directly. Without one, the most recent
@@ -884,33 +888,33 @@ class ChatEngine:
 
         Parameters
         ----------
-        kind: str
-            Requested project category: code or literature. Discovery helpers
-            also accept None to search either kind.
+        type_id: str
+            Requested registered project-type identifier. Discovery helpers
+            also accept None to search all registered types.
         workspace: str
             Explicit workspace path string. An empty string requests discovery
             or default allocation under the engine workspace root.
 
         """
 
-        project = self._find_saved_project(kind or None, workspace)
+        project = self._find_saved_project(type_id or None, workspace)
         self._send(
             "saved_project",
             project=str(project[0]) if project is not None else None,
-            kind=kind,
+            type_id=type_id,
             workspace=workspace,
         )
 
     def _find_saved_project(
-        self, kind: str | None, workspace: str
+        self, type_id: str | None, workspace: str
     ) -> tuple[Path, str] | None:
         """Find a current project, ignoring deleted or incomplete folders.
 
         Parameters
         ----------
-        kind: str | None
-            Requested project category: code or literature. Discovery helpers
-            also accept None to search either kind.
+        type_id: str | None
+            Requested registered project-type identifier. Discovery helpers
+            also accept None to search all registered types.
         workspace: str
             Explicit workspace path string. An empty string requests discovery
             or default allocation under the engine workspace root.
@@ -918,7 +922,7 @@ class ChatEngine:
         Returns
         -------
         tuple[pathlib.Path, str] | None
-            Pair (workspace_path, project_kind) for the most recently used
+            Pair (workspace_path, project_type_id) for the most recently used
             valid candidate, or None.
 
         Notes
@@ -929,16 +933,16 @@ class ChatEngine:
 
         """
 
-        projects = self._saved_projects(workspace, kind)
+        projects = self._saved_projects(workspace, type_id)
         if not projects:
             return None
-        _, folder, saved_kind = max(
+        _, folder, saved_type_id = max(
             projects, key=lambda item: (item[0], str(item[1]))
         )
-        return folder, saved_kind
+        return folder, saved_type_id
 
     def _saved_projects(
-        self, workspace: str, kind: str | None = None
+        self, workspace: str, type_id: str | None = None
     ) -> list[tuple[float, Path, str]]:
         """Return valid saved projects ordered from newest to oldest.
 
@@ -946,8 +950,8 @@ class ChatEngine:
         ----------
         workspace: str
             Workspace containing saved projects.
-        kind: str | None, optional
-            Project or configuration kind to validate. Defaults to ``None``.
+        type_id: str | None, optional
+            Project-type identifier to filter by. Defaults to ``None``.
 
         Returns
         -------
@@ -956,7 +960,7 @@ class ChatEngine:
 
         """
 
-        if kind is not None and kind not in PROJECT_KIND_CHOICES:
+        if type_id is not None and type_id not in PROJECT_TYPE_IDS:
             return []
         if workspace.strip():
             folders = [Path(workspace).expanduser()]
@@ -975,11 +979,11 @@ class ChatEngine:
             parser = ConfigParser()
             try:
                 parser.read(profile_path, encoding="utf-8")
-                saved_kind = parser.get("project", "kind")
+                saved_type_id = parser.get("project", "type_id")
                 source_text = parser.get("project", "source")
-                if saved_kind not in PROJECT_KIND_CHOICES:
+                if saved_type_id not in PROJECT_TYPE_IDS:
                     continue
-                if kind is not None and saved_kind != kind:
+                if type_id is not None and saved_type_id != type_id:
                     continue
                 if not source_text.strip():
                     continue
@@ -1001,7 +1005,7 @@ class ChatEngine:
                     default=0,
                 )
                 recent = max(profile_path.stat().st_mtime, last_chat)
-                projects.append((recent, folder, saved_kind))
+                projects.append((recent, folder, saved_type_id))
             except (ConfigError, OSError, ValueError):
                 continue
         return sorted(
@@ -1042,13 +1046,13 @@ class ChatEngine:
             if self.session is None:
                 self._close_project_trace()
 
-    def settings(self, kind: str, workspace: str) -> None:
+    def settings(self, type_id: str, workspace: str) -> None:
         """Return saved or default settings and cached model IDs.
 
         Parameters
         ----------
-        kind: str
-            Code or literature project.
+        type_id: str
+            Registered project-type identifier.
         workspace: str
             Existing workspace path, or blank for new-project defaults.
 
@@ -1056,13 +1060,13 @@ class ChatEngine:
 
         try:
             # Before the page knows the types, use the first one in the file.
-            kind = kind or next(iter(load_project_types()))
+            type_id = type_id or next(iter(load_project_types()))
             profile_path = Path(workspace).expanduser() / "profile.ini"
             profile = (
                 open_project(profile_path.parent).profile
                 if workspace.strip() and profile_path.is_file()
                 else replace(
-                    default_project_profile(kind),
+                    default_project_profile(type_id),
                     # Generation comes from the core project profile;
                     # the GUI selects only application-specific defaults.
                     chat_mlx=str(
@@ -1114,7 +1118,7 @@ class ChatEngine:
                 },
                 project_types=[
                     {
-                        "kind": item.kind,
+                        "type_id": item.id,
                         "label": item.display_name,
                         "intents": {
                             intent_id: intent_id.replace("_", " ").capitalize()
@@ -1540,24 +1544,25 @@ class ChatEngine:
     def open_project(
         self,
         sources: list[str],
-        kind: str,
+        type_id: str,
         workspace: str,
         selected_files: dict[str, list[str]] | None = None,
         settings: dict[str, object] | None = None,
     ) -> None:
-        """Add selected sources and open one KíLín workspace.
+        """Create and activate a new, independently owned workspace.
 
-        The selected source snapshot is prepared before models are loaded. An
-        empty source list can reopen a managed workspace unchanged.
+        Creation is exclusive and cannot resume an existing project. Empty
+        source lists require an explicit nonexistent or empty destination.
 
         Parameters
         ----------
         sources: list[str]
             Source files and folders to copy into the workspace.
-        kind: str
-            Code or literature project.
+        type_id: str
+            Registered project-type identifier.
         workspace: str
-            Workspace folder, or blank to use the sandbox.
+            Workspace folder; required without sources. With sources, a blank
+            value derives a name beneath the configured workspace parent.
         selected_files: dict[str, list[str]] | None, optional
             Checked file paths within each source folder. Defaults to ``None``.
         settings: dict[str, object] | None, optional
@@ -1565,16 +1570,17 @@ class ChatEngine:
 
         Notes
         -----
-        Closes any current session before preparation. Explicit file
-        selection does not change the saved extension list. Copying uses the
-        cumulative multi-source workspace API. With neither sources nor
-        workspace, the implementation uses a development example path not
-        included in this archive. Errors become frontend events.
+        The core reserves the final destination and completes creation before
+        the current session is closed or any new conversation/trace is created.
+        Default collisions receive a fresh name. Explicit collisions emit
+        workspace_conflict without modifying the destination or current
+        session; the frontend may request a separate resume operation.
 
         """
 
+        switched = False
         try:
-            if kind not in PROJECT_KIND_CHOICES:
+            if type_id not in PROJECT_TYPE_IDS:
                 raise ValueError("Choose a project type.")
             settings = dict(settings or {})
             created_levels = settings.pop("_gui_effort_levels", None)
@@ -1592,17 +1598,9 @@ class ChatEngine:
                     for backend, levels in created_levels.items()
                 }
             if not sources and not workspace.strip():
-                if kind not in (PROJECT_KIND_CODE, PROJECT_KIND_LITERATURE):
-                    raise ValueError("Add sources for this project type.")
-                example = (
-                    "code_repo"
-                    if kind == PROJECT_KIND_CODE
-                    else "literature_repo"
+                raise ValueError(
+                    "Choose a workspace folder for a project without sources."
                 )
-                sources = [str(ROOT / "example_repos" / example)]
-                selected_files = None
-            if not workspace.strip():
-                workspace = str(_workspace_path(sources, self.sandbox, ""))
             if selected_files is not None:
                 # Resolve path aliases before matching checked files.
                 selected_files = {
@@ -1617,27 +1615,18 @@ class ChatEngine:
                 ]
                 if missing:
                     raise ValueError("Choose files for every added source.")
-            self.close()
-            project_directory = Path(workspace).expanduser().resolve()
-            conversation: ConversationInfo | None = None
-            if self.trace_enabled:
-                store = ConversationStore(project_directory)
-                conversation = store.ensure()
-                self.conversation_store = store
-                self.active_conversation = conversation
-                self._start_project_trace(project_directory, conversation)
-            self._send("status", message="Preparing the project…")
+            # Creation must succeed before touching the current session or
+            # creating conversation/trace files in the destination.
+            self._send("status", message="Preparing the new project...")
             options: dict[str, object] = {}
             if selected_files is not None:
                 options["selected_files"] = selected_files
             if settings:
                 options["settings"] = settings
-            if self.project_trace.enabled:
-                options["trace"] = self.project_trace
+            if not workspace.strip():
+                options["workspace_root"] = self.sandbox
             project = prepare_sources_workspace(
-                sources,
-                kind,
-                workspace,
+                sources, type_id, workspace if workspace.strip() else None,
                 **options,
             )
             if created_depth is not None:
@@ -1645,20 +1634,34 @@ class ChatEngine:
             if created_levels:
                 for backend, levels in created_levels.items():
                     write_effort_levels(project.root, backend, levels)
+            self.close()
+            switched = True
+            conversation = self._open_conversation_store(project)
+            self._start_project_trace(project.root, conversation)
+            if created_levels:
                 self.active_trace.emit(
                     "gui.models.effort_levels.saved",
                     component="gui_engine",
                     data=created_levels,
                 )
-            if conversation is None:
-                conversation = self._open_conversation_store(project)
             self._activate_project(project, conversation)
-        except Exception as error:
-            self._report_error(
-                "gui.project.prepare.failed",
-                error,
-                f"Could not prepare the project: {error}",
+        except WorkspaceOccupiedError as error:
+            # Do not append even an error trace to the protected project.
+            # Resuming requires a separate explicit frontend command.
+            self._send(
+                "workspace_conflict",
+                workspace=str(error.directory),
+                existing_project=isinstance(error, ProjectAlreadyExistsError),
+                message=str(error),
             )
+        except Exception as error:
+            message = f"Could not prepare the project: {error}"
+            if switched:
+                self._report_error(
+                    "gui.project.prepare.failed", error, message
+                )
+            else:
+                self._send("error", message=message, trace_path=None)
             if self.session is None:
                 self._close_project_trace()
 
@@ -1774,7 +1777,7 @@ class ChatEngine:
             "opened",
             project=str(project.root),
             source=str(project.source),
-            kind=project.profile.kind,
+            type_id=project.profile.type_id,
             profile=asdict(project.profile),
             effort_levels=_effort_levels_by_backend(
                 project.root, project.profile
@@ -1878,7 +1881,6 @@ class ChatEngine:
             ):
                 raise ValueError("Choose source files or folders.")
             root = self.session.project.root
-            kind = self.session.project.profile.kind
             conversation_id = self.active_conversation.conversation_id
             self.active_trace.emit(
                 "gui.sources.add.requested",
@@ -1888,8 +1890,8 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
-            project = prepare_sources_workspace(
-                sources, kind, root, trace=self.active_trace
+            project = add_project_sources(
+                root, sources, trace=self.active_trace
             )
             self._refresh_sources(project)
         except Exception as error:
@@ -3548,7 +3550,7 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
-    """Resolve the same workspace location for preview and preparation.
+    """Suggest a preview location without reserving or reusing a workspace.
 
     Parameters
     ----------
@@ -3569,16 +3571,14 @@ def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
 
     Notes
     -----
-    Deriving a default uses the first supplied source. The returned name does
-    not establish isolation or ownership by itself.
+    Deriving a default uses the core naming helper and first supplied source.
+    Creation may select a numbered sibling. Preview does not reserve a path.
 
     """
 
     if chosen.strip():
         return Path(chosen).expanduser().resolve()
-    source = Path(sources[0]).expanduser().resolve()
-    digest = sha256(str(source).encode()).hexdigest()[:8]
-    return (sandbox / f"{source.stem}-{digest}").resolve()
+    return default_workspace_path(sources, sandbox)
 
 
 def main() -> None:
@@ -3667,13 +3667,15 @@ def main() -> None:
                     if action == "open":
                         engine.open_project(
                             command["sources"],
-                            command["kind"],
+                            command["type_id"],
                             command["workspace"],
                             command.get("selected_files"),
                             command.get("settings"),
                         )
                     elif action == "settings":
-                        engine.settings(command["kind"], command["workspace"])
+                        engine.settings(
+                            command["type_id"], command["workspace"]
+                        )
                     elif action == "apply_models":
                         engine.apply_model_settings(command["settings"])
                     elif action == "download_model":
@@ -3688,7 +3690,7 @@ def main() -> None:
                         engine.use_installed_models()
                     elif action == "saved_project":
                         engine.find_saved_project(
-                            command["kind"], command["workspace"]
+                            command["type_id"], command["workspace"]
                         )
                     elif action == "saved_projects":
                         engine.list_saved_projects(command["workspace"])

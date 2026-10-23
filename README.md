@@ -3,6 +3,12 @@
 KíLín runs locally to answer questions about your code and literature,
 with citations to your files and customizable project types, intents, and tools.
 
+## Citation
+
+Please cite KíLín using the metadata in [CITATION.cff](CITATION.cff).
+The citation lists Io̍k-uí Tiunn, Joana B. Pereira, Carlo Manzo, and
+Giovanni Volpe as authors.
+
 ## Setup
 
 After downloading the code, open a terminal in the KíLín folder and run
@@ -98,7 +104,7 @@ Follow these notebooks in order, or open the one you need.
 - [90 · Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb): Find code through symbols and relationships such as calls and imports.
 - [100 · Persistent indexes](tutorials/100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
 - [110 · Hybrid ranking](tutorials/110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
-- [120 · Retrieval expansion](tutorials/120_retrieval_routing.ipynb): Add context for explicitly named files, functions, and code relationships.
+- [120 · Retrieval expansion](tutorials/120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
 - [130 · Project chat](tutorials/130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
 - [140 · Execution traces](tutorials/140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
 - [150 · Project types](tutorials/150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.

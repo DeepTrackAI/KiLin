@@ -33,10 +33,25 @@ not export every public object from every submodule.
 Examples
 --------
 >>> import kilin
->>> kilin.PROJECT_KIND_CODE
+>>> kilin.PROJECT_TYPE_ID_CODE
 'code'
 
 """
+
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _distribution_version
+
+try:
+    __version__ = _distribution_version("kilin")
+except _PackageNotFoundError:
+    # Uninstalled source checkouts use the same version from pyproject.toml.
+    from pathlib import Path as _Path
+    import tomllib as _tomllib
+
+    with (_Path(__file__).resolve().parents[1] / "pyproject.toml").open(
+        "rb"
+    ) as _stream:
+        __version__ = _tomllib.load(_stream)["project"]["version"]
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
 from .chunking import Chunk, chunk_source_units
@@ -65,12 +80,16 @@ from .query_formats import (
     format_qwen3_query,
 )
 from .project import (
-    PROJECT_KIND_CHOICES,
-    PROJECT_KIND_CODE,
-    PROJECT_KIND_LITERATURE,
+    PROJECT_TYPE_IDS,
+    PROJECT_TYPE_ID_CODE,
+    PROJECT_TYPE_ID_LITERATURE,
+    ProjectTypeId,
     ProjectProfile,
     QAProject,
     initialize_project,
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
+    synchronize_project_workspace,
     open_project,
     prepare_project_workspace,
 )
@@ -160,7 +179,7 @@ from .retrievals import (
     LexicalIndex,
     LexicalResult,
     PersistentIndexes,
-    RetrievalPlan,
+    ContextExpansionPlan,
     SemanticIndex,
     SemanticResult,
     build_code_graph,
@@ -173,7 +192,7 @@ from .retrievals import (
     lexical_search,
     lexical_terms,
     load_indexes,
-    plan_retrieval,
+    plan_context_expansion,
     prepare_persistent_indexes,
     read_document,
     resolve_code_entities,
@@ -218,9 +237,15 @@ from .project_files import (
     remove_project_files,
     replace_project_file,
 )
-from .workspace import prepare_sources_workspace, remove_workspace_sources
+from .workspace import (
+    add_project_sources,
+    default_workspace_path,
+    prepare_sources_workspace,
+    remove_workspace_sources,
+)
 
 __all__ = [
+    "__version__",
     "ANSWER_PHASE_CHOICES",
     "ANSWER_PHASE_COMPLETED",
     "ANSWER_PHASE_EVIDENCE_READY",
@@ -260,9 +285,10 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
-    "PROJECT_KIND_CHOICES",
-    "PROJECT_KIND_CODE",
-    "PROJECT_KIND_LITERATURE",
+    "PROJECT_TYPE_IDS",
+    "PROJECT_TYPE_ID_CODE",
+    "PROJECT_TYPE_ID_LITERATURE",
+    "ProjectTypeId",
     "QUERY_FORMAT_CHOICES",
     "QUERY_FORMAT_PLAIN",
     "QUERY_FORMAT_QWEN3",
@@ -272,7 +298,7 @@ __all__ = [
     "ProgressEvent",
     "QAProject",
     "RAGSession",
-    "RetrievalPlan",
+    "ContextExpansionPlan",
     "SYSTEM_ROLE",
     "SelectedBackend",
     "SemanticIndex",
@@ -306,13 +332,18 @@ __all__ = [
     "format_qwen3_query",
     "hybrid_search",
     "initialize_project",
+    "ProjectAlreadyExistsError",
+    "WorkspaceOccupiedError",
+    "synchronize_project_workspace",
+    "add_project_sources",
+    "default_workspace_path",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
     "load_indexes",
     "model_is_available",
     "open_project",
-    "plan_retrieval",
+    "plan_context_expansion",
     "read_document",
     "DocumentSelection",
     "DocumentReason",

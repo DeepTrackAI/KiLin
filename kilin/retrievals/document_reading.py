@@ -94,11 +94,11 @@ from typing import Final, Literal, TypeAlias
 from kilin.chunking import Chunk
 from kilin.defaults import load_defaults_section, require_default_int
 from kilin.retrievals.code_graph import CodeGraph
-from kilin.retrievals.routing import (
-    RetrievalPlan,
+from kilin.retrievals.context_expansion import (
+    ContextExpansionPlan,
     _chunk_matches_function,
     expand_retrieval_context,
-    plan_retrieval,
+    plan_context_expansion,
 )
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
@@ -236,13 +236,13 @@ def read_document(
         return None
 
     # A caller-specified path takes precedence over named functions.
-    plan = plan_retrieval(question, graph)
+    plan = plan_context_expansion(question, graph)
     if path is None and plan.functions:
         target = expand_retrieval_context(
             (),
             chunks,
             graph,
-            RetrievalPlan(
+            ContextExpansionPlan(
                 paths=(),
                 functions=plan.functions,
                 relationship=False,

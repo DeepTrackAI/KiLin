@@ -14,8 +14,8 @@ is about one statement and the project's papers. The tool:
    passages most related to the statement, a verdict, the passage sentence
    it rests on (checked to be in the passages), and a critical comment.
    The plan is shown first when it is large.
-4. Answers with the papers that support the statement, best first, each
-   with its quote as evidence, and lists the other papers checked.
+4. Answers with papers that could be cited, best first, with comments
+   and confirmed quotations when available, then lists the others.
 
 Only the project's files are searched: a paper that is not in the folder
 cannot be suggested, and the answer says so when none supports the
@@ -24,10 +24,11 @@ statement. Each paper is judged from a few passages, not all of it.
 Key Features
 ------------
 
-- **Only checked suggestions**
+- **Passage-based suggestions**
 
-    A paper is suggested only with a verdict from its own passages, and
-    its quote is confirmed in them.
+    The model judges passages from each paper. A quotation is shown
+    only when confirmed in those passages; a positive verdict may
+    remain without a confirmed quotation.
 
 - **Sources before repeats**
 

@@ -1,9 +1,10 @@
-"""Write local text files through isolated, atomic replacements.
+"""Write local text files through atomic replacement or exclusive publication.
 
 A uniquely created temporary file in the destination directory avoids
 collisions and following an existing predictable temporary-file symlink.
-Each successful write replaces one file atomically. Failed writes remove the
-temporary file without replacing the previous destination.
+atomic_write_text replaces an existing file; atomic_create_text instead
+publishes a new entry and fails if any entry already exists. Failed writes
+remove their temporary files without replacing a protected destination.
 
 The caller remains responsible for creating the destination directory and
 coordinating concurrent writers. Atomic replacement does not provide a
@@ -27,6 +28,10 @@ Module Structure
 
     Write UTF-8 text through a temporary file and replace one destination.
 
+- ``atomic_create_text``
+
+    Publish a new UTF-8 file atomically without replacing any existing entry.
+
 Examples
 --------
 >>> from pathlib import Path
@@ -38,10 +43,11 @@ Examples
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-__all__ = ["atomic_write_text"]
+__all__ = ["atomic_write_text", "atomic_create_text"]
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -81,5 +87,44 @@ def atomic_write_text(path: Path, content: str) -> None:
         with stream:
             stream.write(content)
         temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def atomic_create_text(path: Path, content: str) -> None:
+    """Publish complete text only when the destination does not exist.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        New file whose parent already exists.
+    content: str
+        UTF-8 text to publish.
+
+    Raises
+    ------
+    FileExistsError
+        If any destination entry already exists, including a symbolic link.
+    OSError
+        If writing or linking fails, including unsupported filesystems.
+
+    Notes
+    -----
+    A same-directory hard link publishes the fully written temporary file
+    without a check-then-replace race. Unsupported hard links fail closed;
+    this helper never falls back to overwriting. It does not force data to
+    stable storage or provide a multi-file transaction.
+
+    """
+
+    stream = NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=path.parent,
+        prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    )
+    temporary = Path(stream.name)
+    try:
+        with stream:
+            stream.write(content)
+        os.link(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

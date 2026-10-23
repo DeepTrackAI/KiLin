@@ -36,9 +36,9 @@
         <section id="saved-projects" class="saved-projects hidden" aria-label="Saved projects"></section>
         <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
-          <label for="kind">Project type</label>
-          <!-- Filled from kilin/project_types.json, in file order. -->
-          <select id="kind"></select>
+          <label for="type-id">Project type</label>
+          <!-- Filled from kilin/project_types/*.json, in filename order. -->
+          <select id="type-id"></select>
           <label>Sources</label>
           <button id="drop-zone" class="drop-zone" type="button">Drop files or folders here, or click here to browse…</button>
           <section id="scope" class="scope hidden" aria-label="Choose files">
@@ -46,7 +46,6 @@
             <div id="file-tree" class="file-tree"></div>
           </section>
           <button id="open" class="primary" type="submit">Prepare project</button>
-          <p id="example-status" class="hint hidden" role="status">Loading example repository…</p>
         </form>
       </section>
 
@@ -192,7 +191,7 @@
           <h3>Project</h3>
           <div class="advanced-fields">
             <label for="workspace-path">Workspace folder</label>
-            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Default: KíLín sandbox"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
+            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Required without sources"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
             <label for="backend">Computation backend</label>
             <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
             <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">

@@ -53,8 +53,8 @@ uses text patterns. These are useful structured hints, **not complete
 semantic call graphs** and not a code execution or static type checker.
 
 `retrieval_code.py` resolves likely code entities in a question and finds
-related chunks. `retrievals/routing.py` can detect an explicit file/function
-reference and expand retrieved context accordingly. Graph structure and
+related chunks. `retrievals/context_expansion.py` can detect explicit
+file/function references and expand retrieved context accordingly. Graph structure and
 chunk provenance must agree: a stale graph can misdirect named-function
 context even when semantic vectors remain readable.
 
@@ -96,8 +96,8 @@ A document-scoped request may require ranking enough material **inside that
 document**, even if global top-k omitted its relevant passages; therefore
 simply deleting an additional ranking query can be a correctness regression.
 
-`retrievals/routing.py` separately expands evidence near named source
-references using `RetrievalPlan` and the graph. This expansion is not the
+`retrievals/context_expansion.py` separately expands evidence near named source
+references using `ContextExpansionPlan` and the graph. This expansion is not the
 same as model-based intent routing in `answering.py`; the latter decides
 which **operation** to perform, not which chunk matches a function name.
 
@@ -164,10 +164,23 @@ changing the retrieval implementation. Proposed retrieval optimization is
 checks justify it.
 
 Relevant sources: `retrievals/persistence.py`, `strategies/retrieval_*`,
-`code_graph/`, `document_reading.py`, `routing.py`, `rag.py`.
+`code_graph/`, `document_reading.py`, `context_expansion.py`, `rag.py`.
 Relevant regression suites are those matching `retrieval`, `rag`,
 `embeddings`, `chunking` and `project` in `tests/kilin/`.
 
 Related: [Source pipeline](source_pipeline.md),
 [Answering pipeline](answering_pipeline.md),
 [Package defaults](package_defaults.md), [Model management](model_management.md).
+
+## Projects without indexed passages
+
+A project with no selected sources, or no extractable chunks, has index
+status `empty`. RAG keeps an empty retrieval container and the current
+source inventory in memory; it does not persist a dummy index or call the
+query embedder. Previously saved caches are not served as evidence in this
+state. Adding sources invokes normal indexing on refresh. Existing model
+loading and the selected type's prompt/tool policies are unchanged.
+
+Progress wording describes actual work, not project IDs. Relationship
+search is announced only when the graph has entities, with actual result
+counts; otherwise the message explicitly reports that it was skipped.

@@ -23,8 +23,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Module | Responsibility (source docstring) | Primary owner | Test family |
 | --- | --- | --- | --- |
 | [`kilin/__init__.py`](../kilin/__init__.py) | Expose the package-level KíLín API. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
+| [`kilin/_project_creation.py`](../kilin/_project_creation.py) | Reserve empty destinations and allocate independent projects exclusively. | [Project workspaces](project_workspaces.md) | [Creation tests](../tests/kilin/test_project__creation.py) |
 | [`kilin/answering.py`](../kilin/answering.py) | Route questions by intent and select conversation history. | [Answering pipeline](answering_pipeline.md) | [Core tests](../tests/kilin/) |
-| [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Write local text files through isolated, atomic replacements. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
+| [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Replace or exclusively publish text files atomically. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/chat.py`](../kilin/chat.py) | Manage one loaded language model and its in-memory conversation. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/chunking.py`](../kilin/chunking.py) | Split source units into token-budgeted retrieval chunks. | [Source pipeline](source_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/cli.py`](../kilin/cli.py) | Launch KíLín's optional graphical interface from the command line. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
@@ -62,7 +63,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/document_reading.py`](../kilin/retrievals/document_reading.py) | Read one whole document or function as evidence. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/routing.py`](../kilin/retrievals/routing.py) | Expand retrieval context from explicit source references in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/context_expansion.py`](../kilin/retrievals/context_expansion.py) | Expand retrieval context from explicit source references in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/__init__.py`](../kilin/retrievals/strategies/__init__.py) | Expose the concrete retrieval strategies and their result records. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_code.py`](../kilin/retrievals/strategies/retrieval_code.py) | Retrieve chunks near code entities recognized in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_hybrid.py`](../kilin/retrievals/strategies/retrieval_hybrid.py) | Combine retrieval rankings through reciprocal-rank fusion. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |

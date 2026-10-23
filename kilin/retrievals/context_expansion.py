@@ -1,8 +1,9 @@
 """Expand retrieval context from explicit source references in a question.
 
-Routing recognizes file paths, known function names, and a configurable
-vocabulary of relationship requests. It produces a ``RetrievalPlan``
-and adds matching file or function chunks and eligible graph neighbors to an
+Context expansion recognizes file paths and function names, and uses a
+configurable vocabulary of relationship requests. It produces a
+``ContextExpansionPlan`` and adds matching file or function chunks and
+eligible graph neighbors to an
 existing ranking.
 This is deterministic text matching over the supplied source metadata, not a
 language-model router or a complete interpretation of the question.
@@ -31,7 +32,7 @@ Key Features
 Module Structure
 ----------------
 
-- ``RetrievalPlan``
+- ``ContextExpansionPlan``
 
     Deterministic context expansion requested by one question.
 
@@ -39,7 +40,7 @@ Module Structure
 
     Add complete requested context after normal RRF retrieval.
 
-- ``plan_retrieval``
+- ``plan_context_expansion``
 
     Detect exact repository context requested by one question.
 
@@ -50,7 +51,7 @@ Examples
 --------
 >>> import kilin
 >>> graph = kilin.CodeGraph(entities=(), relations=())
->>> plan = kilin.plan_retrieval("Explain this project.", graph)
+>>> plan = kilin.plan_context_expansion("Explain this project.", graph)
 
 """
 
@@ -67,9 +68,9 @@ from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
 __all__ = [
-    "RetrievalPlan",
+    "ContextExpansionPlan",
     "expand_retrieval_context",
-    "plan_retrieval",
+    "plan_context_expansion",
 ]
 
 
@@ -97,7 +98,7 @@ _WORD = re.compile(r"[A-Za-z0-9]+")
 
 
 @dataclass(frozen=True, slots=True)
-class RetrievalPlan:
+class ContextExpansionPlan:
     """Deterministic context expansion requested by one question.
 
     Parameters
@@ -135,10 +136,10 @@ class RetrievalPlan:
     signals: tuple[str, ...]
 
 
-def plan_retrieval(
+def plan_context_expansion(
     query_text: str,
     graph: CodeGraph,
-) -> RetrievalPlan:
+) -> ContextExpansionPlan:
     """Detect exact repository context requested by one question.
 
     The plan does not change Reciprocal Rank Fusion. It only records context
@@ -153,7 +154,7 @@ def plan_retrieval(
 
     Returns
     -------
-    RetrievalPlan
+    ContextExpansionPlan
         Exact files, functions, and direct related functions to include.
 
     Raises
@@ -189,7 +190,7 @@ def plan_retrieval(
     if not signals:
         signals.append("none")
 
-    return RetrievalPlan(
+    return ContextExpansionPlan(
         paths=paths,
         functions=functions,
         relationship=relationship,
@@ -202,7 +203,7 @@ def expand_retrieval_context(
     rrf_results: Sequence[HybridResult],
     chunks: Sequence[Chunk],
     graph: CodeGraph,
-    plan: RetrievalPlan,
+    plan: ContextExpansionPlan,
 ) -> list[Chunk]:
     """Add complete requested context after normal RRF retrieval.
 
@@ -218,7 +219,7 @@ def expand_retrieval_context(
         All searchable repository chunks.
     graph: CodeGraph
         Current repository code graph.
-    plan: RetrievalPlan
+    plan: ContextExpansionPlan
         Deterministic expansion plan for the question.
 
     Returns

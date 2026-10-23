@@ -123,3 +123,26 @@ For read-only timing analysis of existing conversation traces, and an optional
 standardized-question notebook, see [Performance analysis](performance.md).
 The analysis does not require a new trace mode or change the persistence
 behavior described above. Raw traces remain sensitive project data.
+
+## Project-type metadata
+
+Profile snapshots use `type_id`; qualified type identifiers in turn
+parameters and intent metadata use `project_type_id`. The prerelease
+project-kind keys are not emitted. An empty source collection reports
+`index.empty` and index status `empty` without fabricating passages or
+saving a retrieval bundle. Source-entity `kind` metadata is unchanged.
+
+## Project-creation ordering
+
+The desktop engine creates a project before opening its conversation and
+trace files. This prevents diagnostic setup from making an empty destination
+nonempty or writing into an existing project before a collision is rejected.
+A creation conflict produces the GUI `workspace_conflict` event without
+changing the existing trace. Preparation failures before session switching
+are displayed without appending an error to the previous project's trace.
+
+Core creation can still receive a caller-owned external trace sink; it emits
+preparation events only after obtaining the destination reservation. Do not
+precreate a trace inside a destination intended for a new project. To trace
+later source imports inside the project, create/open it first, start the
+trace, and call `add_project_sources(..., trace=trace)`.

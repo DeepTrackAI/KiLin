@@ -2,16 +2,16 @@
 
 ``QAProject`` groups an existing project directory, its ``profile.ini``
 profile, selected source directory, and managed index/log directories.
-Initialization prepares sources and required resources first, then commits
-a missing profile atomically as its completion marker, using
-``PROJECT_PROFILE`` in the packaged defaults. Opening a project validates its
-profile and source location and creates the shared indexes, logs, outputs,
-and templates folders as needed. A new project receives only the packaged
-resources declared by the tools selected by its project type.
+Creation exclusively reserves a nonexistent or empty destination, prepares
+sources and resources, then atomically publishes a new profile without
+replacing any existing entry. Opening validates saved configuration without
+writing files or creating folders. Resources are installed only for a new
+project or by an explicitly requested repair operation.
 
 ``prepare_project_workspace`` mirrors selected files from one original
-repository into a managed workspace and compares source manifests to update
-that copy. This is distinct from the cumulative multi-source copying API in
+repository into a fresh workspace. ``synchronize_project_workspace`` is the
+separate, explicit operation that compares manifests and updates a saved
+copy. This is distinct from the cumulative multi-source copying API in
 ``kilin.workspace``. Neither API provides process or filesystem sandboxing.
 Configuration helpers validate settings through the INI reader before writing
 the revised profile.
@@ -43,13 +43,17 @@ Key Features
 Module Structure
 ----------------
 
-- ``PROJECT_KIND_CODE`` and ``PROJECT_KIND_LITERATURE``
+- ``PROJECT_TYPE_ID_CODE`` and ``PROJECT_TYPE_ID_LITERATURE``
 
-    Canonical string values for the two supported project categories.
+    String identifiers for the standard packaged project types.
 
-- ``PROJECT_KIND_CHOICES``
+- ``PROJECT_TYPE_IDS``
 
-    Ordered collection of the supported project-kind values.
+    All packaged type IDs in deterministic filename order, not an enum.
+
+- ``ProjectTypeId``
+
+    Open string alias for a registered project-type identifier.
 
 - ``ProjectProfile``
 
@@ -61,19 +65,27 @@ Module Structure
 
 - ``initialize_project``
 
-    Create a missing profile and install selected tool resources.
+    Create a new project only in a nonexistent or empty destination.
 
 - ``open_project``
 
-    Open a project and ensure its shared workspace folders exist.
+    Validate and open a saved project without filesystem writes.
 
 - ``prepare_project_workspace``
 
     Mirror one source folder into a managed KíLín workspace.
 
+- ``synchronize_project_workspace``
+
+    Deliberately synchronize a specified existing single-source mirror.
+
+- ``ProjectAlreadyExistsError`` and ``WorkspaceOccupiedError``
+
+    Reject implicit project reuse and occupied creation destinations.
+
 - ``default_project_profile``
 
-    Return the settings a new project of this kind would receive.
+    Return the default profile for one registered project type.
 
 - ``configure_project``
 
@@ -93,7 +105,7 @@ Access submodule-only configuration helpers through their actual namespace:
 
 >>> import kilin.project
 >>> profile = kilin.project.default_project_profile(
-...     kilin.PROJECT_KIND_CODE
+...     kilin.PROJECT_TYPE_ID_CODE
 ... )
 
 """
@@ -104,16 +116,21 @@ from collections.abc import Mapping
 from configparser import ConfigParser
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
-from hashlib import sha256
 from io import StringIO
 import json
 from math import isfinite
 from pathlib import Path
 import re
 import shutil
-from typing import Final, Iterator, TypeAlias, cast
+from typing import Final, Iterator, cast
 
-from kilin.atomic_writes import atomic_write_text
+from kilin.atomic_writes import atomic_create_text, atomic_write_text
+from kilin._project_creation import (
+    ProjectAlreadyExistsError,
+    WorkspaceOccupiedError,
+    claim_workspace,
+    destination_path,
+)
 from kilin.defaults import (
     load_defaults_section,
     require_default_bool,
@@ -127,7 +144,11 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import load_project_types
+from kilin.project_type import (
+    ProjectTypeId,
+    load_project_types,
+    project_type,
+)
 from kilin.project_layout import (
     ensure_project_folders,
     install_project_resources,
@@ -154,74 +175,41 @@ from kilin.runtime import (
 from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
-    "PROJECT_KIND_CODE",
-    "PROJECT_KIND_LITERATURE",
-    "PROJECT_KIND_CHOICES",
+    "PROJECT_TYPE_ID_CODE",
+    "PROJECT_TYPE_ID_LITERATURE",
+    "PROJECT_TYPE_IDS",
+    "ProjectTypeId",
     "ProjectProfile",
     "QAProject",
     "initialize_project",
+    "ProjectAlreadyExistsError",
+    "WorkspaceOccupiedError",
+    "synchronize_project_workspace",
     "open_project",
     "prepare_project_workspace",
     "default_project_profile",
     "configure_project",
 ]
 
-# Project types, their default files, and their instructions come from
-# kilin/project_types/; "code" and "literature" are always present.
-ProjectKind: TypeAlias = str
-PROJECT_KIND_CODE: Final[ProjectKind] = "code"
-PROJECT_KIND_LITERATURE: Final[ProjectKind] = "literature"
+# Standard identifiers do not require their definitions to be installed.
+PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
+PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
 
-
-def _check_built_in_kinds(types: Mapping[str, object]) -> tuple[str, ...]:
-    """Return the configured project kinds, requiring the built-in ones.
-
-    Parameters
-    ----------
-    types: Mapping[str, object]
-        Project types loaded from ``kilin/project_types/``, in file order.
-
-    Returns
-    -------
-    tuple[str, ...]
-        Project kind identifiers in file order.
-
-    Raises
-    ------
-    ValueError
-        If ``code`` or ``literature`` is missing.
-
-    """
-
-    missing = [
-        kind
-        for kind in (PROJECT_KIND_CODE, PROJECT_KIND_LITERATURE)
-        if kind not in types
-    ]
-    if missing:
-        raise ValueError(
-            "kilin/project_types/ must keep the built-in types: "
-            f"{', '.join(missing)}."
-        )
-
-    return tuple(types)
-
-
-# Loading fails at import when a project type file is malformed or a
-# built-in type is missing, so no project opens with a partial set.
-PROJECT_KIND_CHOICES: Final[tuple[ProjectKind, ...]] = _check_built_in_kinds(
+# Loading rejects an empty or invalid registry before projects can open.
+PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
     load_project_types()
 )
 
-_PROJECT_EXTENSIONS: Final[dict[ProjectKind, str]] = {
-    kind: ", ".join(item.extensions)
-    for kind, item in load_project_types().items()
+_PROJECT_EXTENSIONS: Final[dict[ProjectTypeId, str]] = {
+    type_id: ", ".join(item.extensions)
+    for type_id, item in load_project_types().items()
 }
-_DEFAULT_FILE_LIMITS: Final[dict[ProjectKind, int]] = {
-    kind: item.max_file_bytes for kind, item in load_project_types().items()
+_DEFAULT_FILE_LIMITS: Final[dict[ProjectTypeId, int]] = {
+    type_id: item.max_file_bytes
+    for type_id, item in load_project_types().items()
 }
-# Accepted kinds as listed in error messages.
-_KIND_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_KIND_CHOICES)
+# Registered type identifiers as listed in error messages.
+_TYPE_ID_CHOICE_TEXT: Final[str] = ", ".join(PROJECT_TYPE_IDS)
 
 # These defaults are used only when generating a missing project profile;
 # existing ``profile.ini`` values always take precedence.
@@ -261,7 +249,7 @@ if _PROFILE_OVERLAP_TOKENS >= _PROFILE_TARGET_TOKENS:
 
 # Keep INI formatting and ordering unchanged for generated profiles.
 _DEFAULT_PROFILE = """[project]
-kind = {kind}
+type_id = {type_id}
 source = {source}
 extensions = {extensions}
 max_file_bytes = {max_file_bytes}
@@ -310,7 +298,7 @@ _EDITABLE_SETTINGS = {
 
 
 def _default_profile_text(
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     extensions: str,
 ) -> str:
@@ -318,7 +306,7 @@ def _default_profile_text(
 
     Parameters
     ----------
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Project category written to the profile.
     source: str
         Source path written to the profile.
@@ -334,10 +322,10 @@ def _default_profile_text(
     """
 
     return _DEFAULT_PROFILE.format(
-        kind=kind,
+        type_id=type_id,
         source=source,
         extensions=extensions,
-        max_file_bytes=_DEFAULT_FILE_LIMITS[kind],
+        max_file_bytes=_DEFAULT_FILE_LIMITS[type_id],
         allow_download=str(_PROFILE_ALLOW_DOWNLOAD).lower(),
         target_tokens=_PROFILE_TARGET_TOKENS,
         max_tokens=_PROFILE_MAX_TOKENS,
@@ -355,24 +343,23 @@ def _default_profile_text(
     )
 
 
-def default_project_profile(kind: ProjectKind) -> ProjectProfile:
-    """Return the settings a new project of this kind would receive.
+def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
+    """Return the default profile for one registered project type.
 
     Parameters
     ----------
-    kind: ProjectKind
-        Project category, using ``PROJECT_KIND_CODE`` or
-        ``PROJECT_KIND_LITERATURE``.
+    type_id: ProjectTypeId
+        Registered project-type identifier from ``PROJECT_TYPE_IDS``.
 
     Returns
     -------
     ProjectProfile
-        The settings a new project of this kind would receive.
+        The settings a new project of the selected type would receive.
 
     Raises
     ------
     ValueError
-        If ``kind`` is not one of ``PROJECT_KIND_CHOICES``.
+        If ``type_id`` is not one of ``PROJECT_TYPE_IDS``.
 
     Notes
     -----
@@ -381,11 +368,11 @@ def default_project_profile(kind: ProjectKind) -> ProjectProfile:
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
-    extensions = _PROJECT_EXTENSIONS[kind]
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
+    extensions = _PROJECT_EXTENSIONS[type_id]
     parser = ConfigParser()
-    parser.read_string(_default_profile_text(kind, "sources", extensions))
+    parser.read_string(_default_profile_text(type_id, "sources", extensions))
     return _read_profile(parser)
 
 
@@ -483,8 +470,8 @@ class ProjectProfile:
 
     Parameters
     ----------
-    kind: ProjectKind
-        Type of material in the project.
+    type_id: ProjectTypeId
+        Registered project-type identifier.
     source: str
         Source folder, relative to the project or absolute.
     extensions: tuple[str, ...]
@@ -522,8 +509,8 @@ class ProjectProfile:
 
     Attributes
     ----------
-    kind: ProjectKind
-        Type of material in the project.
+    type_id: ProjectTypeId
+        Registered project-type identifier.
     source: str
         Source folder, relative to the project or absolute.
     extensions: tuple[str, ...]
@@ -575,7 +562,7 @@ class ProjectProfile:
 
     """
 
-    kind: ProjectKind
+    type_id: ProjectTypeId
     source: str
     extensions: tuple[str, ...]
     max_file_bytes: int
@@ -644,7 +631,7 @@ class QAProject:
     root: pathlib.Path
         Project folder containing profile.ini.
     source: pathlib.Path
-        Folder containing source code or literature documents.
+        Folder containing source material for the selected project type.
     indexes: pathlib.Path
         Folder containing reusable retrieval indexes.
     logs: pathlib.Path
@@ -657,7 +644,7 @@ class QAProject:
     root: pathlib.Path
         Project folder containing profile.ini.
     source: pathlib.Path
-        Folder containing source code or literature documents.
+        Folder containing source material for the selected project type.
     indexes: pathlib.Path
         Folder containing reusable retrieval indexes.
     logs: pathlib.Path
@@ -676,55 +663,50 @@ class QAProject:
 
 def initialize_project(
     directory: str | Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
 ) -> QAProject:
-    """Create a project profile and its required tool resources.
+    """Create one project in a nonexistent or empty directory.
 
     Parameters
     ----------
     directory: str | pathlib.Path
-        Existing project, repository, or document folder.
-    kind: ProjectKind
-        Type of source material in the project.
+        New or empty destination. Existing projects and nonempty directories
+        are rejected without modification, including partial initialization.
+    type_id: ProjectTypeId
+        Registered project type. Its source_directory convention selects the
+        new source subdirectory.
 
     Returns
     -------
     QAProject
-        Initialized and opened project.
+        Initialized project without loading models.
 
     Raises
     ------
-    FileNotFoundError
-        If the selected directory does not exist.
-    NotADirectoryError
-        If the selected path is not a directory.
+    ProjectAlreadyExistsError
+        If the destination or an ancestor already contains a profile entry.
+    WorkspaceOccupiedError
+        If the destination is nonempty, linked, or being initialized.
     ValueError
-        If kind is invalid or conflicts with an existing profile.
+        If type_id or the destination is invalid.
+    OSError
+        If exclusive creation, resource installation, or publication fails.
 
     Notes
     -----
-    Requires an existing directory. A missing profile.ini is initialized using
-    the selected kind; an existing profile is preserved and checked for kind
-    compatibility. New projects receive only the template files required
-    by their type; existing user templates are preserved. Opening creates
-    indexes, logs, outputs and templates directories. No model is loaded.
+    Creation never reopens a project or adopts an existing source folder.
+    Use open_project for an existing project and prepare_sources_workspace
+    to copy external sources into a new managed workspace. A failed attempt
+    rolls back only its own resources; profile.ini is published last without
+    replacing an existing entry.
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
-    root = Path(directory).expanduser().resolve(strict=True)
-    if not root.is_dir():
-        raise NotADirectoryError(f"Choose a project folder: {root}")
-
-    source_name = (
-        "repository" if kind == PROJECT_KIND_CODE else "documents"
-    )
-    if (root / "sources").is_dir():
-        source = "sources"
-    else:
-        source = source_name if (root / source_name).is_dir() else "."
-    return _initialize_profile(root, kind, source)
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
+    root = destination_path(directory)
+    source = project_type(type_id).source_directory
+    return _initialize_profile(root, type_id, source)
 
 
 class _InitializationJournal:
@@ -798,7 +780,7 @@ class _InitializationJournal:
 
 
 def _prepared_profile(
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     settings: dict[str, object] | None,
 ) -> tuple[str, ProjectProfile]:
@@ -806,7 +788,7 @@ def _prepared_profile(
 
     Parameters
     ----------
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Validated project-type identifier.
     source: str
         Initial source folder recorded in the profile.
@@ -820,7 +802,7 @@ def _prepared_profile(
 
     """
 
-    text = _default_profile_text(kind, source, _PROJECT_EXTENSIONS[kind])
+    text = _default_profile_text(type_id, source, _PROJECT_EXTENSIONS[type_id])
     parser = ConfigParser()
     parser.read_string(text)
     if settings:
@@ -841,103 +823,92 @@ def _prepared_profile(
 @contextmanager
 def _preparing_project(
     root: Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     source: str,
     *,
     settings: dict[str, object] | None = None,
-    trace: TraceSink | None = None,
-    validate_source: bool = False,
-) -> Iterator[tuple[QAProject, _InitializationJournal | None]]:
-    """Initialize or reopen a project, committing a new profile last.
+    allocate: bool = False,
+) -> Iterator[tuple[QAProject, _InitializationJournal]]:
+    """Reserve a new project, initialize resources, and publish its profile.
 
     Parameters
     ----------
     root: pathlib.Path
-        Destination project directory.
-    kind: ProjectKind
-        Expected project type.
+        Explicit destination or preferred default directory.
+    type_id: ProjectTypeId
+        Registered project type.
     source: str
-        Relative source location for a new project.
+        Relative source location for the new project. It must not alias the
+        workspace root, its reservation marker, or managed state entries.
     settings: dict[str, object] | None, optional
-        Profile overrides applied before first copying. Defaults to None.
-    trace: TraceSink | None, optional
-        Optional diagnostic sink for existing-profile configuration changes.
-    validate_source: bool, optional
-        Require an existing profile to use the specified managed source
-        folder. Defaults to False for general project opening.
+        Profile overrides validated before creation. Defaults to None.
+    allocate: bool, optional
+        Reserve a fresh numbered sibling if root already exists. Defaults
+        to False, requiring root itself to be nonexistent or empty.
 
     Yields
     ------
-    tuple[QAProject, _InitializationJournal | None]
-        A project view and optional journal for source-copy operations.
+    tuple[QAProject, _InitializationJournal]
+        Provisional project and rollback journal owned by this attempt.
 
     Notes
     -----
-    For new projects, ``profile.ini`` is written atomically only when the
-    caller finishes all workspace and resource operations successfully.
-    Existing projects are opened without reinstalling user-deleted files.
+    This context never opens or configures an existing project. Every caller
+    holds the same exclusive creation marker until profile.ini is published
+    without replacement. A failed attempt removes only journaled resources.
 
     """
 
-    profile_path = root / "profile.ini"
-    if profile_path.exists() or profile_path.is_symlink():
-        project = open_project(root)
-        if project.profile.kind != kind:
-            raise ValueError(
-                "PROJECT_KIND conflicts with the existing profile.ini."
-            )
-        expected = Path(source).expanduser()
-        if not expected.is_absolute():
-            expected = root / expected
-        if (
-            validate_source
-            and project.source != expected.resolve(strict=True)
-        ):
-            raise ValueError("project.source conflicts with profile.ini.")
-        if settings:
-            project = configure_project(root, settings, trace=trace)
-        yield project, None
-        return
-
-    text, profile = _prepared_profile(kind, source, settings)
-    layout = plan_project_layout(kind)
-    journal = _InitializationJournal(root)
-    journal.note(root)
-    for name in ("indexes", "logs", "outputs", "templates"):
-        journal.note(root / name)
-    for resource in layout.resources:
-        journal.note(root / resource.destination)
-    source_path = Path(source).expanduser()
-    if not source_path.is_absolute():
-        source_path = root / source_path
-    if source_path != root:
-        if source_path.is_relative_to(root):
-            journal.note(source_path)
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-        if source_path.is_relative_to(root) and source_path != root:
-            if source_path.is_symlink():
-                raise ValueError("Managed source directory cannot be a link.")
-            source_path.mkdir(parents=True, exist_ok=True)
-        ensure_project_folders(root)
-        install_project_resources(root, layout)
-        provisional = QAProject(
-            root=root,
-            source=source_path.resolve(strict=True),
-            indexes=root / "indexes",
-            logs=root / "logs",
-            profile=profile,
+    relative = Path(source)
+    reserved = {
+        "indexes", "logs", "outputs", "templates", "profile.ini",
+        "sources.json", "source_snapshot.json", ".kilin-creating",
+    }
+    if (
+        relative.is_absolute() or not relative.parts
+        or ".." in relative.parts
+        or relative.parts[0].lower() in reserved
+    ):
+        raise ValueError(
+            "The source folder conflicts with managed workspace entries; "
+            "use prepare_sources_workspace to import it under sources/."
         )
-        yield provisional, journal
-        journal.note(profile_path)
-        atomic_write_text(profile_path, text)
-    except BaseException:
-        journal.rollback()
-        raise
+    text, profile = _prepared_profile(type_id, source, settings)
+    layout = plan_project_layout(type_id)
+    with claim_workspace(root, allocate=allocate) as actual_root:
+        root = actual_root
+        profile_path = root / "profile.ini"
+        journal = _InitializationJournal(root)
+        for name in ("indexes", "logs", "outputs", "templates"):
+            journal.note(root / name)
+        for resource in layout.resources:
+            journal.note(root / resource.destination)
+        source_path = root / source
+        if source_path != root:
+            journal.note(source_path)
+        try:
+            source_path.mkdir(parents=True, exist_ok=True)
+            ensure_project_folders(root)
+            install_project_resources(root, layout)
+            provisional = QAProject(
+                root=root,
+                source=source_path.resolve(strict=True),
+                indexes=root / "indexes",
+                logs=root / "logs",
+                profile=profile,
+            )
+            yield provisional, journal
+            try:
+                atomic_create_text(profile_path, text)
+            except FileExistsError as error:
+                raise ProjectAlreadyExistsError(root) from error
+        except BaseException:
+            journal.rollback()
+            raise
 
 
 def _initialize_profile(
-    root: Path, kind: ProjectKind, source: str
+    root: Path, type_id: ProjectTypeId, source: str
 ) -> QAProject:
     """Create a project profile after successful resource initialization.
 
@@ -945,7 +916,7 @@ def _initialize_profile(
     ----------
     root: pathlib.Path
         Workspace root.
-    kind: ProjectKind
+    type_id: ProjectTypeId
         Expected project type.
     source: str
         Source folder within a new profile.
@@ -957,174 +928,215 @@ def _initialize_profile(
 
     """
 
-    with _preparing_project(root, kind, source):
+    with _preparing_project(root, type_id, source):
         pass
     return open_project(root)
 
 
 def prepare_project_workspace(
     source_directory: str | Path,
-    kind: ProjectKind,
+    type_id: ProjectTypeId,
     workspace_root: str | Path,
 ) -> QAProject:
-    """Mirror one source folder into a managed KíLín workspace.
-
-    The original source is never modified. A normal workspace is named
-    ``project_<source-name>`` and contains the copied source folder beside
-    ``profile.ini``, the shared workspace folders, and
-    ``source_snapshot.json``.
-    Only files selected by the project's repository rules are mirrored.
-
-    Reopening the same source verifies the managed copy against its saved
-    SHA-256 manifest. If the copy differs, it is rebuilt from the original;
-    otherwise only added, modified, and removed source files are synchronized.
-    If another source folder with the same basename already owns the preferred
-    workspace name, a short path hash is appended to avoid a collision.
+    """Create a fresh single-source mirror without reusing any workspace.
 
     Parameters
     ----------
     source_directory: str | pathlib.Path
-        Existing source code or literature folder.
-    kind: ProjectKind
-        Type of source material in the project.
+        Existing source directory. Originals are never modified.
+    type_id: ProjectTypeId
+        Registered project type for the new mirror.
     workspace_root: str | pathlib.Path
-        KíLín sandbox folder that contains managed project workspaces.
+        Parent for project_<source-name>, then -2, -3, and subsequent free
+        names. Existing directories are skipped even for the same source.
 
     Returns
     -------
     QAProject
-        Project whose source points to the synchronized sandbox snapshot.
+        Independent project containing selected source copies and provenance.
 
     Raises
     ------
     ValueError
-        If kind is unsupported, source/workspace locations conflict, an
-        existing managed profile is inconsistent, or a unique workspace
-        location cannot be selected.
-    NotADirectoryError
-        If the original source is not a directory.
+        If the project type or source/destination relationship is invalid,
+        or the source basename conflicts with managed workspace entries.
     OSError
-        If scanning, hashing, copying, deleting, or writing metadata fails.
+        If scanning, exclusive creation, copying, or publication fails.
 
     Notes
     -----
-    This mirrors one original repository using its selected-source manifest. It
-    is not the cumulative multi-source API in kilin.workspace. The current
-    implementation requires complete source and snapshot scans and verifies
-    copied content on each reopen. This adds disk I/O proportional to selected
-    source size. Reopening and synchronization are not atomic across snapshot
-    and manifest; initial project creation commits its profile last.
-    Source copying is organization, not execution sandboxing.
+    Repeated calls create independent projects. To deliberately synchronize
+    an existing mirror, use synchronize_project_workspace with its explicit
+    destination. Initial creation is rolled back on failure and publishes
+    profile.ini last, without replacing an existing entry.
 
     """
 
-    if kind not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"kind must be one of: {_KIND_CHOICE_TEXT}.")
-
+    if type_id not in PROJECT_TYPE_IDS:
+        raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
-
-    sandbox = Path(workspace_root).expanduser()
-    sandbox.mkdir(parents=True, exist_ok=True)
-    sandbox = sandbox.resolve(strict=True)
+    if not str(workspace_root).strip():
+        raise ValueError("Choose a workspace parent folder.")
+    sandbox = Path(workspace_root).expanduser().resolve()
     if sandbox == source:
         raise ValueError("The workspace folder must differ from the source.")
-
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.name).strip("-._")
-    if not safe_name:
-        safe_name = "project"
+    safe_name = safe_name or "project"
+    preferred = sandbox / f"project_{safe_name}"
+    with _preparing_project(
+        preferred, type_id, source.name, allocate=True
+    ) as (project, journal):
+        _synchronize_snapshot(project, source, sandbox, journal)
+    return open_project(project.root)
 
-    preferred_root = sandbox / f"project_{safe_name}"
-    root = _select_workspace_root(preferred_root, source)
-    if root.is_symlink():
+
+def synchronize_project_workspace(
+    source_directory: str | Path, project_directory: str | Path
+) -> QAProject:
+    """Deliberately synchronize a single-source mirror, not a new project.
+
+    Parameters
+    ----------
+    source_directory: str | pathlib.Path
+        Original repository to scan. Its identity must match any valid saved
+        provenance. An unreadable manifest may be rebuilt from this explicit
+        source after profile and layout validation.
+    project_directory: str | pathlib.Path
+        Existing mirror workspace. Missing or invalid profiles are errors;
+        this operation never creates or changes the project profile.
+
+    Returns
+    -------
+    QAProject
+        Existing project after the managed snapshot is synchronized.
+
+    Raises
+    ------
+    ValueError
+        If source provenance or the managed source layout conflicts.
+    OSError
+        If the project cannot be opened or synchronization fails.
+
+    Notes
+    -----
+    Unlike cumulative add_project_sources, this explicit operation may replace
+    local snapshot edits and remove copies deleted from the original. Existing
+    resource templates are not restored. Synchronization is not atomic across
+    all files; a failure may leave earlier snapshot changes in place.
+
+    """
+
+    requested = Path(project_directory).expanduser()
+    if requested.is_symlink():
         raise ValueError("Managed workspace root must not be a symbolic link.")
-    # A new profile is committed only after the complete source snapshot and
-    # its provenance manifest have been prepared successfully.
-    source_name = source.name
-    snapshot = root / source_name
+    project = open_project(project_directory)
+    source = Path(source_directory).expanduser().resolve(strict=True)
+    if not source.is_dir():
+        raise NotADirectoryError(f"Choose a source folder: {source}")
+    if source == project.root or source.is_relative_to(project.root):
+        raise ValueError("The source must be outside the mirror workspace.")
+    saved = _read_json_if_possible(project.root / "source_snapshot.json")
+    if saved is not None and saved.get("source_directory") not in (
+        None, str(source)
+    ):
+        raise ValueError("The source conflicts with saved mirror provenance.")
+    _synchronize_snapshot(project, source, project.root.parent, None)
+    return open_project(project.root)
+
+
+def _synchronize_snapshot(
+    project: QAProject,
+    source: Path,
+    sandbox: Path,
+    journal: _InitializationJournal | None,
+) -> None:
+    """Apply the existing selected-file mirroring algorithm explicitly.
+
+    Parameters
+    ----------
+    project: QAProject
+        New provisional or explicitly opened mirror project.
+    source: pathlib.Path
+        Original source directory.
+    sandbox: pathlib.Path
+        Workspace parent excluded when it lies inside the original source.
+    journal: _InitializationJournal | None
+        New-project rollback journal, or None for an intentional update.
+
+    """
+
+    root = project.root
+    snapshot = root / source.name
     if snapshot.is_symlink():
         raise ValueError("Managed source copy must not be a symbolic link.")
-    if not (root / "profile.ini").exists() and snapshot.is_dir():
-        if any(snapshot.iterdir()):
-            raise ValueError(
-                "Uninitialized workspace has an existing source snapshot."
-            )
-    with _preparing_project(
-        root, kind, source_name, validate_source=True
-    ) as (
-        project, journal
-    ):
-        if project.source != snapshot.resolve(strict=True):
-            raise ValueError(
-                "Managed workspace profile.ini must keep project.source "
-                f"set to {source_name}."
-            )
-        excludes: tuple[str, ...] = ()
-        if sandbox.is_relative_to(source):
-            excludes = (sandbox.relative_to(source).as_posix(),)
-
-        report = scan_repository(
-            source,
-            extensions=project.profile.extensions,
-            exclude_paths=excludes,
-            max_file_bytes=project.profile.max_file_bytes,
+    if project.source != snapshot.resolve(strict=True):
+        raise ValueError(
+            "Managed workspace project.source must keep the source folder "
+            f"set to {source.name}."
         )
-        current_manifest = build_repository_manifest(report)
-        snapshot_manifest_path = root / "source_snapshot.json"
-        saved_manifest = _read_json_if_possible(snapshot_manifest_path)
-        try:
-            changes = compare_repository_manifests(
-                saved_manifest,
-                current_manifest,
-            )
-        except ValueError:
-            saved_manifest = None
-            changes = compare_repository_manifests(None, current_manifest)
+    excludes: tuple[str, ...] = ()
+    if sandbox.is_relative_to(source):
+        excludes = (sandbox.relative_to(source).as_posix(),)
 
-        # The saved source manifest alone cannot detect edits to the managed
-        # copy. Verify selected copied bytes before using the incremental diff.
-        # A divergent snapshot is rebuilt, not synchronized on top of untrusted
-        # content (including unexpected selected files and symbolic links).
-        if saved_manifest is not None and not _snapshot_matches_manifest(
-            snapshot, project.profile, saved_manifest
-        ):
-            saved_manifest = None
-            changes = compare_repository_manifests(None, current_manifest)
+    report = scan_repository(
+        source,
+        extensions=project.profile.extensions,
+        exclude_paths=excludes,
+        max_file_bytes=project.profile.max_file_bytes,
+    )
+    current_manifest = build_repository_manifest(report)
+    snapshot_manifest_path = root / "source_snapshot.json"
+    saved_manifest = _read_json_if_possible(snapshot_manifest_path)
+    try:
+        changes = compare_repository_manifests(
+            saved_manifest,
+            current_manifest,
+        )
+    except ValueError:
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
 
-        if not bool(changes["matches"]):
-            if saved_manifest is None:
-                shutil.rmtree(snapshot)
-                snapshot.mkdir(parents=True, exist_ok=True)
+    # The saved source manifest alone cannot detect edits to the managed
+    # copy. Verify selected copied bytes before using the incremental diff.
+    # A divergent snapshot is rebuilt, not synchronized on top of untrusted
+    # content (including unexpected selected files and symbolic links).
+    if saved_manifest is not None and not _snapshot_matches_manifest(
+        snapshot, project.profile, saved_manifest
+    ):
+        saved_manifest = None
+        changes = compare_repository_manifests(None, current_manifest)
 
-            for relative in changes["removed"]:
-                target = snapshot / str(relative)
-                if target.is_file() or target.is_symlink():
-                    target.unlink()
+    if not bool(changes["matches"]):
+        if saved_manifest is None:
+            shutil.rmtree(snapshot)
+            snapshot.mkdir(parents=True, exist_ok=True)
 
-            for relative in [*changes["added"], *changes["modified"]]:
-                source_path = source / str(relative)
-                target = snapshot / str(relative)
-                if journal is not None:
-                    journal.note(target)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_path, target)
+        for relative in changes["removed"]:
+            target = snapshot / str(relative)
+            if target.is_file() or target.is_symlink():
+                target.unlink()
 
-            _remove_empty_directories(snapshot)
+        for relative in [*changes["added"], *changes["modified"]]:
+            source_path = source / str(relative)
+            target = snapshot / str(relative)
+            if journal is not None:
+                journal.note(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target)
 
-        # Always record ownership, including the zero-file case.  This lets the
-        # next open distinguish different sources with the same basename.
-        manifest_payload = {
-            **current_manifest,
-            "source_directory": str(source),
-        }
-        if journal is not None:
-            journal.note(snapshot_manifest_path)
-        _write_json(snapshot_manifest_path, manifest_payload)
+        _remove_empty_directories(snapshot)
 
-
-
-    return open_project(root)
+    # Always record ownership, including the zero-file case.  This lets the
+    # next open distinguish different sources with the same basename.
+    manifest_payload = {
+        **current_manifest,
+        "source_directory": str(source),
+    }
+    if journal is not None:
+        journal.note(snapshot_manifest_path)
+    _write_json(snapshot_manifest_path, manifest_payload)
 
 
 def _snapshot_matches_manifest(
@@ -1174,67 +1186,8 @@ def _snapshot_matches_manifest(
     ])
 
 
-def _select_workspace_root(preferred_root: Path, source: Path) -> Path:
-    """Choose a readable workspace name without a source collision.
-
-    Parameters
-    ----------
-    preferred_root: pathlib.Path
-        Preferred managed-workspace directory beneath the supplied workspace
-        root.
-    source: pathlib.Path
-        Resolved original source directory whose identity is recorded in a
-        workspace manifest.
-
-    Returns
-    -------
-    pathlib.Path
-        Preferred root when compatible with the original source, otherwise a
-        source-path-hashed collision root.
-
-    Raises
-    ------
-    ValueError
-        If the deterministic collision root already belongs to another recorded
-        source.
-
-    Notes
-    -----
-    Ownership is inferred from stored source_directory metadata. Missing or
-    malformed metadata is not a general proof that an existing directory is
-    safe to replace.
-
-    """
-
-    if not preferred_root.exists():
-        return preferred_root
-
-    metadata = _read_json_if_possible(preferred_root / "source_snapshot.json")
-    if metadata is not None and metadata.get("source_directory") == str(
-        source
-    ):
-        return preferred_root
-
-    identity = sha256(str(source).encode("utf-8")).hexdigest()[:8]
-    collision_root = preferred_root.with_name(
-        f"{preferred_root.name}-{identity}"
-    )
-    collision_metadata = _read_json_if_possible(
-        collision_root / "source_snapshot.json"
-    )
-    if (
-        collision_root.exists()
-        and collision_metadata is not None
-        and collision_metadata.get("source_directory") != str(source)
-    ):
-        raise ValueError(
-            "Could not choose a unique KíLín workspace for this source."
-        )
-    return collision_root
-
-
 def open_project(directory: str | Path) -> QAProject:
-    """Open a configured project and prepare its shared folders.
+    """Validate and open a configured project without modifying its files.
 
     Parameters
     ----------
@@ -1259,15 +1212,20 @@ def open_project(directory: str | Path) -> QAProject:
     -----
     The root and configured source must already be directories and profile.ini
     must exist. A profile may name an absolute source outside the project. The
-    function creates indexes, logs, outputs and templates directories before
-    returning, without reinstalling packaged templates; it does not load
-    models.
+    function validates any existing managed folders, rejecting links and
+    nondirectories, but never creates missing folders or restores templates.
+    It loads no models. A pending creation marker is an error, not permission
+    to finish or repair a partial project.
 
     """
 
     root = Path(directory).expanduser().resolve(strict=True)
     if not root.is_dir():
         raise NotADirectoryError(f"Choose a project folder: {root}")
+
+    marker = root / ".kilin-creating"
+    if marker.exists() or marker.is_symlink():
+        raise WorkspaceOccupiedError(root, "Project creation is incomplete")
 
     profile_path = root / "profile.ini"
     if not profile_path.is_file():
@@ -1283,7 +1241,12 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
-    ensure_project_folders(root)
+    for name in ("indexes", "logs", "outputs", "templates"):
+        folder = root / name
+        if folder.is_symlink():
+            raise ValueError(f"Project folder must not be a link: {folder}")
+        if folder.exists() and not folder.is_dir():
+            raise ValueError(f"Project folder must be a directory: {folder}")
     indexes = root / "indexes"
     logs = root / "logs"
     return QAProject(
@@ -1402,10 +1365,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
 
     """
 
-    kind_value = _required(parser, "project", "kind")
-    if kind_value not in PROJECT_KIND_CHOICES:
-        raise ValueError(f"project.kind must be one of: {_KIND_CHOICE_TEXT}.")
-    kind = cast("ProjectKind", kind_value)
+    type_id_value = _required(parser, "project", "type_id")
+    if type_id_value not in PROJECT_TYPE_IDS:
+        raise ValueError(
+            f"project.type_id must be one of: {_TYPE_ID_CHOICE_TEXT}."
+        )
+    type_id = cast("ProjectTypeId", type_id_value)
 
     extensions = tuple(
         part.strip()
@@ -1462,7 +1427,7 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
         raise ValueError("generation.temperature cannot be negative.")
 
     return ProjectProfile(
-        kind=kind,
+        type_id=type_id,
         source=_required(parser, "project", "source"),
         extensions=extensions,
         max_file_bytes=_positive_integer(

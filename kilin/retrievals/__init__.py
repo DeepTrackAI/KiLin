@@ -1,7 +1,8 @@
 """Expose KíLín's retrieval, code-graph, and index-persistence API.
 
 This namespace collects the concrete strategy implementations, source-code
-relations, query routing helpers, and serialized index containers. It performs
+relations, context-expansion helpers, and serialized index containers.
+It performs
 no search or index construction during import. Model-dependent semantic
 indexing remains an explicit operation on an embedding session.
 
@@ -18,7 +19,7 @@ Key Features
     Expose index construction, persistence, and chunk/graph fingerprint
     comparison.
 
-- **Context routing**
+- **Context expansion**
 
     Expose deterministic explicit-path and function-neighbor expansion helpers.
 
@@ -78,7 +79,7 @@ Module Structure
 
     Retrieval data saved for the same repository state.
 
-- ``RetrievalPlan``
+- ``ContextExpansionPlan``
 
     Deterministic context expansion requested by one question.
 
@@ -146,7 +147,7 @@ Module Structure
 
     Validate and combine retrieval data from one repository state.
 
-- ``plan_retrieval``
+- ``plan_context_expansion``
 
     Detect exact repository context requested by one question.
 
@@ -213,10 +214,10 @@ from kilin.retrievals.strategies.retrieval_semantic import (
     semantic_matrix,
     semantic_search,
 )
-from kilin.retrievals.routing import (
-    RetrievalPlan,
+from kilin.retrievals.context_expansion import (
+    ContextExpansionPlan,
     expand_retrieval_context,
-    plan_retrieval,
+    plan_context_expansion,
 )
 from kilin.retrievals.document_reading import (
     DOCUMENT_REASON_CHOICES,
@@ -246,7 +247,7 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
-    "RetrievalPlan",
+    "ContextExpansionPlan",
     "SemanticIndex",
     "SemanticResult",
     "build_code_graph",
@@ -263,7 +264,7 @@ __all__ = [
     "load_indexes",
     "named_paths",
     "prepare_persistent_indexes",
-    "plan_retrieval",
+    "plan_context_expansion",
     "read_document",
     "resolve_code_entities",
     "save_indexes",

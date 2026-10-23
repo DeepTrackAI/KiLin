@@ -16,6 +16,7 @@ from pathlib import Path
 import subprocess
 import sys
 import sysconfig
+import tomllib
 
 
 # The source package of this checkout.
@@ -77,8 +78,16 @@ def check_installed_package() -> None:
             "KíLín was imported outside the isolated installation: "
             f"{package_file}"
         )
-    if not metadata.version("kilin"):
-        raise AssertionError("Missing KíLín distribution metadata")
+    installed_version = metadata.version("kilin")
+    if not installed_version or kilin.__version__ != installed_version:
+        raise AssertionError("Public KíLín version differs from metadata")
+    with (SOURCE.parent / "pyproject.toml").open("rb") as stream:
+        manifest = tomllib.load(stream)["project"]
+    authors = ", ".join(author["name"] for author in manifest["authors"])
+    if metadata.metadata("kilin")["Author"] != authors:
+        raise AssertionError("Installed wheel author metadata differs")
+    if installed_version != manifest["version"]:
+        raise AssertionError("Installed wheel version differs from source")
     if "PySide6" in sys.modules:
         raise AssertionError("Core imports must not load PySide6")
 

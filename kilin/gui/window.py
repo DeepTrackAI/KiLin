@@ -123,13 +123,13 @@ class ChatBridge(QObject):
         Add one or more individual files.
     chooseWorkspace()
         Choose the folder in which KíLín stores its project.
-    requestSettings(kind, workspace)
+    requestSettings(type_id, workspace)
         Read the existing profile or new-project defaults.
     downloadModel(model_id)
         Download one suggested model only after the user chooses it.
     previewSources(sources_json, extensions_json, max_file_bytes, workspace)
         Scan selected roots without copying them.
-    openProject(sources_json, kind, workspace, selected_json, settings_json)
+    openProject(sources_json, type_id, workspace, selected_json, settings_json)
         Request project preparation in the backend process.
     askQuestion(question, effort, settings_json)
         Request one answer with the selected GUI effort preset.
@@ -148,7 +148,7 @@ class ChatBridge(QObject):
     deleteConversation(conversation_id)
         Archive a conversation and remove it from the project catalog.
     listSavedProjects(workspace)
-        List valid saved code and literature projects.
+        List valid saved projects of all registered types.
     resumeProject(directory)
         Open a saved project without changing its source snapshot.
     resumeProjectConversation(directory, conversation_id)
@@ -300,14 +300,14 @@ class ChatBridge(QObject):
             self.workspaceSelected.emit(path)
 
     @Slot(str, str)
-    def requestSettings(self, kind: str, workspace: str) -> None:
+    def requestSettings(self, type_id: str, workspace: str) -> None:
         """Read the existing profile or new-project defaults.
 
         ``workspace`` is blank when the user is preparing a new project.
 
         Parameters
         ----------
-        kind: str
+        type_id: str
             Project category string forwarded to the backend engine.
         workspace: str
             Workspace path string, possibly empty when the engine should
@@ -316,7 +316,7 @@ class ChatBridge(QObject):
         """
 
         self.commandRequested.emit(
-            {"action": "settings", "kind": kind, "workspace": workspace}
+            {"action": "settings", "type_id": type_id, "workspace": workspace}
         )
 
     @Slot()
@@ -397,20 +397,21 @@ class ChatBridge(QObject):
     def openProject(
         self,
         sources_json: str,
-        kind: str,
+        type_id: str,
         workspace: str,
         selected_json: str,
         settings_json: str,
     ) -> None:
-        """Request project preparation in the backend process.
+        """Request exclusive new-project creation in the backend process.
 
-        Files are checked before they are copied into the workspace.
+        An occupied explicit destination produces workspace_conflict, not an
+        implicit reopen. resumeProject is the separate existing-project action.
 
         Parameters
         ----------
         sources_json: str
             JSON-encoded list of source-path strings from the web page.
-        kind: str
+        type_id: str
             Project category string forwarded to the backend engine.
         workspace: str
             Workspace path string, possibly empty when the engine should
@@ -447,7 +448,7 @@ class ChatBridge(QObject):
             {
                 "action": "open",
                 "sources": sources,
-                "kind": kind,
+                "type_id": type_id,
                 "workspace": workspace,
                 "selected_files": json.loads(selected_json),
                 "settings": json.loads(settings_json),
@@ -770,12 +771,12 @@ class ChatBridge(QObject):
             )
 
     @Slot(str, str)
-    def findSavedProject(self, kind: str, workspace: str) -> None:
+    def findSavedProject(self, type_id: str, workspace: str) -> None:
         """Refresh Resume for the selected project type and workspace.
 
         Parameters
         ----------
-        kind: str
+        type_id: str
             Project category string forwarded to the backend engine.
         workspace: str
             Workspace path string, possibly empty when the engine should
@@ -786,7 +787,7 @@ class ChatBridge(QObject):
         self.commandRequested.emit(
             {
                 "action": "saved_project",
-                "kind": kind,
+                "type_id": type_id,
                 "workspace": workspace,
             }
         )
