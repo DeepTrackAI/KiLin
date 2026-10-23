@@ -20,8 +20,8 @@ retrieved passages are not exported; they stay in the sandbox trace.
 
 Usage, from the repository root::
 
-    uv run --no-sync python assets/paper_numbers.py
-    uv run --no-sync python assets/paper_numbers.py --ref v0.1.0 --repeats 3
+    uv run --no-sync python paper/paper_numbers.py
+    uv run --no-sync python paper/paper_numbers.py --ref v0.1.0 --repeats 3
 
 Models must already be in the local Hugging Face cache unless
 ``--allow-download`` is given. The sandbox workspace is reused between runs;
@@ -169,9 +169,15 @@ def describe_environment() -> dict[str, object]:
 # Left out of the indexed corpus by default:
 # - example_repos: bundled third-party example corpora (about 66 MB of text),
 #   not part of the KíLín code base; indexing them would take hours;
-# - assets, benchmarks: measurement and benchmark scripts, which contain the
-#   evaluation questions themselves and would be retrieved as evidence.
-DEFAULT_EXCLUDES: tuple[str, ...] = ("example_repos", "assets", "benchmarks")
+# - assets, benchmarks, paper: measurement, benchmark and paper scripts,
+#   which contain the evaluation questions themselves and would be
+#   retrieved as evidence.
+DEFAULT_EXCLUDES: tuple[str, ...] = (
+    "example_repos",
+    "assets",
+    "benchmarks",
+    "paper",
+)
 
 
 def export_revision(
@@ -239,6 +245,50 @@ def _disable_downloads(profile_path: Path) -> None:
     if count != 1:
         raise RuntimeError("Could not find allow_download in profile.ini.")
     profile_path.write_text(updated, encoding="utf-8")
+
+
+def prepare_code_project(
+    ref: str, excludes: Sequence[str], allow_download: bool = False
+) -> tuple[object, dict[str, object]]:
+    """Export a revision of this repository and open it as a code project.
+
+    Parameters
+    ----------
+    ref: str
+        Git revision, tag or branch to index.
+    excludes: Sequence[str]
+        Top-level folders left out of the indexed corpus.
+    allow_download: bool, optional
+        Keep model downloads enabled in the project profile. Defaults to
+        ``False``, which sets ``allow_download = false``.
+
+    Returns
+    -------
+    tuple[kilin.QAProject, dict[str, object]]
+        The sandbox project and the description of the indexed revision.
+
+    Notes
+    -----
+    The revision is exported to a fixed folder in the system temporary
+    directory, so repeated runs reuse one sandbox workspace and only
+    synchronize changed files.
+
+    """
+
+    import kilin
+
+    source = Path(gettempdir()) / "kilin_paper_source"
+    if source.exists():
+        shutil.rmtree(source)
+    source.mkdir()
+    revision = export_revision(ref, source, excludes)
+    RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    project = kilin.prepare_project_workspace(
+        source, kilin.PROJECT_KIND_CODE, RESULTS_DIRECTORY
+    )
+    if not allow_download:
+        _disable_downloads(project.root / "profile.ini")
+    return project, revision
 
 
 def corpus_size(project_root: Path, source: Path) -> dict[str, int]:
@@ -457,7 +507,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--include-examples",
         action="store_true",
-        help="also index example_repos, assets and benchmarks (slow)",
+        help="also index example_repos, assets, benchmarks and paper (slow)",
     )
     parser.add_argument(
         "--allow-download",
@@ -485,29 +535,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     }
 
     # 1. Export the pinned revision outside the repository and mirror it.
-    # A fixed export folder keeps one sandbox workspace across runs.
-    source = Path(gettempdir()) / "kilin_paper_source"
-    if source.exists():
-        shutil.rmtree(source)
-    source.mkdir()
     excludes = () if args.include_examples else DEFAULT_EXCLUDES
-    results["indexed_revision"] = export_revision(
-        args.ref, source, excludes
+    project, revision = prepare_code_project(
+        args.ref, excludes, allow_download=args.allow_download
     )
-    project = kilin.prepare_project_workspace(
-        source, kilin.PROJECT_KIND_CODE, RESULTS_DIRECTORY
-    )
+    results["indexed_revision"] = revision
     project_root = project.root
-    profile_path = project_root / "profile.ini"
-    if not args.allow_download:
-        _disable_downloads(profile_path)
+    backend = kilin.choose_backend(project.profile.backend)
     results["models"] = {
-        "chat": project.profile.chat_model(
-            kilin.choose_backend(project.profile.backend)
-        ),
-        "embedding": project.profile.embedding_model(
-            kilin.choose_backend(project.profile.backend)
-        ),
+        "chat": project.profile.chat_model(backend),
+        "embedding": project.profile.embedding_model(backend),
     }
 
     # 2. Cold opening: remove saved indexes so every index is rebuilt.
