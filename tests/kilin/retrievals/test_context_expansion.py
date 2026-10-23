@@ -401,6 +401,115 @@ class TestContextExpansionPlanning(unittest.TestCase):
         self.assertEqual(routing._shared_words(words, "policy"), 1)
         self.assertEqual(routing._shared_words(words, "_save"), 0)
 
+    def test_word_variants_match(self) -> None:
+        """Close variants match; short or distant words do not.
+
+        """
+        for first, second, expected in (
+            ("write", "written", True),
+            ("store", "storage", True),
+            ("selects", "selected", True),
+            ("index", "indexes", True),
+            ("read", "readable", False),
+            ("event", "prevents", False),
+            ("refer", "references", False),
+        ):
+            with self.subTest(first=first, second=second):
+                self.assertEqual(
+                    routing._words_match(first, second), expected
+                )
+                self.assertEqual(
+                    routing._words_match(second, first), expected
+                )
+        self.assertEqual(routing._identifier_words("PyTorch"), ["py", "torch"])
+
+    def test_named_words_do_not_rank_candidates(self) -> None:
+        """Words of the named function do not favor its callees.
+
+        """
+        callees = ("m._prepare_lock", "m._prepare_root",
+                   "m._workspace_prepare_path", "m._workspace_root",
+                   "m._update_snapshot")
+        graph = CodeGraph(
+            entities=tuple(
+                CodeEntity(name, "python_function", Path("m.py"))
+                for name in ("m.prepare_workspace", *callees)
+            ),
+            relations=tuple(
+                CodeRelation("m.prepare_workspace", "calls", name)
+                for name in callees
+            ),
+        )
+        result = routing.plan_retrieval(
+            "How does prepare_workspace refresh its snapshot?", graph
+        )
+        self.assertEqual(result.related_functions[0], "m._update_snapshot")
+        self.assertEqual(len(result.related_functions), 4)
+        self.assertEqual(
+            routing._without_names(
+                "Does `m.prepare_workspace` prepare a Workspace?",
+                ("m.prepare_workspace",),
+            ),
+            "Does ` ` prepare a Workspace?",
+        )
+
+    def test_callees_calling_more_functions_come_first_on_ties(self) -> None:
+        """Among equally relevant callees, the busier helpers come first.
+
+        """
+        graph = CodeGraph(
+            entities=tuple(
+                CodeEntity(name, "python_function", Path("m.py"))
+                for name in ("m.run", "m.a_leaf", "m.b_worker", "m.c_step")
+            ),
+            relations=(
+                CodeRelation("m.run", "calls", "m.a_leaf"),
+                CodeRelation("m.run", "calls", "m.b_worker"),
+                CodeRelation("m.b_worker", "calls", "m.c_step"),
+                CodeRelation("m.b_worker", "calls", "m.a_leaf"),
+            ),
+        )
+        self.assertEqual(
+            routing._ranked_callees(("m.run",), graph, "Explain run.", 2),
+            ("m.b_worker", "m.a_leaf"),
+        )
+
+    def test_functions_described_by_question_words(self) -> None:
+        """A function whose name words all occur in the question is added.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("m.choose_backend", "python_function",
+                           Path("m.py")),
+                CodeEntity("m.torch_device", "python_function",
+                           Path("m.py")),
+                CodeEntity("m.to_device", "python_function", Path("m.py")),
+                CodeEntity("m.torch_device_count", "python_function",
+                           Path("m.py")),
+                CodeEntity("tests.helpers.torch_device", "python_function",
+                           Path("tests/helpers.py")),
+            ),
+            relations=(),
+        )
+        question = (
+            "Explain how choose_backend works, and which PyTorch device "
+            "is used."
+        )
+        result = routing.plan_retrieval(question, graph)
+        self.assertEqual(result.related_functions, ("m.torch_device",))
+        self.assertEqual(result.signals, ("exact function", "name words"))
+        self.assertEqual(
+            routing._described_functions(
+                question, graph, {"m.choose_backend"}, 5, True
+            ),
+            ("m.torch_device", "tests.helpers.torch_device"),
+        )
+        self.assertEqual(
+            routing._described_functions(question, graph, set(), 0, True),
+            (),
+        )
+
     def test_demote_test_results_keeps_order_within_groups(self) -> None:
         """Results from test code follow source results unless asked for.
 

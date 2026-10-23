@@ -401,6 +401,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             "CALLEE_EXPANSION_DEPTH",
             "CALLEE_EXPANSION_MAX",
             "CLASS_METHOD_EXPANSION_MAX",
+            "NAME_WORD_EXPANSION_MAX",
             "RELATED_CHUNKS_MAX",
         ):
             with self.subTest(setting=name):
