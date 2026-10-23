@@ -216,6 +216,7 @@ from kilin.retrievals import (
     save_indexes,
     semantic_search,
 )
+from kilin.retrievals.routing import demote_test_results
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from kilin.sources import (
     SourceFile,
@@ -3078,12 +3079,15 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         report("Combining and ranking search results")
-        combined = hybrid_search(
+        # Fuse every candidate, then rank test code after source code (unless
+        # the question is about tests) before keeping the top results.
+        candidates = hybrid_search(
             semantic=semantic,
             lexical=lexical,
             code=code,
-            count=count,
+            count=max(count, len(semantic) + len(lexical) + len(code)),
         )
+        combined = demote_test_results(candidates, question)[:count]
         trace.emit(
             "retrieval.hybrid.ranked",
             component="retrieval",

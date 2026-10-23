@@ -319,6 +319,105 @@ class TestContextExpansionPlanning(unittest.TestCase):
              "tests.test_core.test_fuse"),
         )
 
+    def test_callees_follow_call_steps_up_to_depth(self) -> None:
+        """Callees of callees are reachable, nearer ones first on ties.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("m.split_text", "python_function", Path("m.py")),
+                CodeEntity("m._split_unit", "python_function", Path("m.py")),
+                CodeEntity("m._overlap_start", "python_function",
+                           Path("m.py")),
+                CodeEntity("m._cut", "python_function", Path("m.py")),
+            ),
+            relations=(
+                CodeRelation("m.split_text", "calls", "m._split_unit"),
+                CodeRelation("m._split_unit", "calls", "m._overlap_start"),
+                CodeRelation("m._overlap_start", "calls", "m._cut"),
+            ),
+        )
+        question = "How does split_text keep the overlap?"
+        for depth, expected in (
+            (1, ("m._split_unit",)),
+            (2, ("m._split_unit", "m._overlap_start")),
+            (3, ("m._split_unit", "m._overlap_start", "m._cut")),
+            (0, ()),
+        ):
+            with self.subTest(depth=depth):
+                self.assertEqual(
+                    routing._ranked_callees(
+                        ("m.split_text",), graph, question, 5, depth
+                    ),
+                    expected,
+                )
+
+    def test_named_class_adds_its_methods(self) -> None:
+        """A small class adds all methods; a large one the relevant ones.
+
+        """
+        small = [f"m.Lock.{name}" for name in ("acquire", "release")]
+        special = [f"m.Lock.{name}" for name in ("__init__", "__exit__")]
+        large = [
+            f"m.Session.{name}"
+            for name in ("_prepare_retrieval", "_index_metadata", "ask",
+                         "close", "reset", "_emit_progress")
+        ]
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("m.Lock", "python_class", Path("m.py")),
+                CodeEntity("m.Session", "python_class", Path("m.py")),
+                CodeEntity("m.Chunk", "python_class", Path("m.py")),
+                *(CodeEntity(name, "python_method", Path("m.py"))
+                  for name in (*small, *special, *large, "m.Chunk.text")),
+            ),
+            relations=(),
+        )
+        result = routing.plan_retrieval(
+            "How does `Lock` stop two writers?", graph
+        )
+        self.assertEqual(result.related_functions, tuple(sorted(small)))
+        self.assertIn("exact class", result.signals)
+        self.assertEqual(
+            routing._class_methods(
+                ("m.Session",), graph,
+                "How does Session decide to reuse the retrieval indexes?", 2,
+            ),
+            ("m.Session._index_metadata", "m.Session._prepare_retrieval"),
+        )
+        result = routing.plan_retrieval("What is in a Chunk?", graph)
+        self.assertEqual(result.related_functions, ())
+        result = routing.plan_retrieval(
+            "What is in the Chunk class?", graph
+        )
+        self.assertEqual(result.related_functions, ("m.Chunk.text",))
+
+    def test_plural_words_match_singular_names(self) -> None:
+        """Simple plurals share words with singular identifier parts.
+
+        """
+        words = routing._identifier_words("saved indexes and policies")
+        self.assertEqual(routing._shared_words(words, "_index_metadata"), 1)
+        self.assertEqual(routing._shared_words(words, "policy"), 1)
+        self.assertEqual(routing._shared_words(words, "_save"), 0)
+
+    def test_demote_test_results_keeps_order_within_groups(self) -> None:
+        """Results from test code follow source results unless asked for.
+
+        """
+        results = [
+            ranked(chunk("t1", path="tests/test_a.py")),
+            ranked(chunk("s1", path="pkg/a.py")),
+            ranked(chunk("t2", path="pkg/a_test.py")),
+            ranked(chunk("s2", path="pkg/b.py")),
+        ]
+        demoted = routing.demote_test_results(results, "How does a work?")
+        self.assertEqual([r.chunk.identifier for r in demoted],
+                         ["s1", "s2", "t1", "t2"])
+        unchanged = routing.demote_test_results(results, "Which tests?")
+        self.assertEqual([r.chunk.identifier for r in unchanged],
+                         ["t1", "s1", "t2", "s2"])
+
     def test_identifier_words_split_code_names(self) -> None:
         """Split snake_case and camelCase identifiers into words.
 
@@ -411,6 +510,29 @@ class TestRetrievalExpansion(unittest.TestCase):
             [], self.chunks, self.graph, plan
         )
         self.assertEqual([c.identifier for c in result], ["a", "b"])
+
+    def test_long_related_function_keeps_relevant_chunks(self) -> None:
+        """Only the call site and the most relevant chunks are kept.
+
+        """
+        parts = [
+            chunk("p1", "def caller(): setup", path="pkg.py", start=10,
+                  symbol="caller"),
+            chunk("p2", "unrelated cleanup", path="pkg.py", start=20,
+                  symbol="caller"),
+            chunk("p3", "result = run(data)", path="pkg.py", start=30,
+                  symbol="caller"),
+            chunk("p4", "save the cache", path="pkg.py", start=40,
+                  symbol="caller"),
+        ]
+        kept = routing._focused_chunks(parts, {"run"}, ("cache",), 2)
+        self.assertEqual([c.identifier for c in kept], ["p3", "p4"])
+        self.assertEqual(
+            routing._focused_chunks(parts, {"run"}, (), 0), parts
+        )
+        self.assertEqual(
+            routing._focused_chunks(parts[:2], {"run"}, (), 2), parts[:2]
+        )
 
     def test_missing_function_and_missing_symbol(self) -> None:
         """Unindexed names and symbol-free chunks cannot match functions.

@@ -176,12 +176,15 @@ corresponding function defaults.
 | `CODE_MAX_DISTANCE` | `1` | Maximum graph hops used by default in `code_search()`; zero permits only directly matched entities. |
 | `DOCUMENT_CHARACTERS_PER_TOKEN` | `4` | Approximate number of characters per token in document-budget estimation; not a tokenizer. |
 | `MIN_DOCUMENT_STEM_LENGTH` | `4` | Shortest file stem recognized as a named-document candidate. |
-| `CALLEE_EXPANSION_MAX` | `4` | Most direct callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first. Zero disables callee expansion. |
+| `CALLEE_EXPANSION_DEPTH` | `2` | Call steps followed from a named function when collecting its callees (1 = direct callees only). Zero disables callee expansion. |
+| `CALLEE_EXPANSION_MAX` | `4` | Most callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first, then nearer ones. Zero disables callee expansion. |
+| `CLASS_METHOD_EXPANSION_MAX` | `4` | Methods added when a question names a class: all of them if the class has at most this many, otherwise this many of those sharing most words with the question. Zero disables class expansion. |
+| `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` and `CALLEE_EXPANSION_MAX` are nonnegative
-exact integers.
+integers. `CODE_MAX_DISTANCE` and the four expansion limits are
+nonnegative exact integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.
 The original vocabulary is preserved in the JSON, and the code-graph entity

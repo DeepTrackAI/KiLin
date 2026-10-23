@@ -397,10 +397,16 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             context_expansion._RELATION_PHRASES,
             tuple(settings["RELATION_PHRASES"]),
         )
-        self.assertEqual(
-            context_expansion._CALLEE_EXPANSION_MAX,
-            settings["CALLEE_EXPANSION_MAX"],
-        )
+        for name in (
+            "CALLEE_EXPANSION_DEPTH",
+            "CALLEE_EXPANSION_MAX",
+            "CLASS_METHOD_EXPANSION_MAX",
+            "RELATED_CHUNKS_MAX",
+        ):
+            with self.subTest(setting=name):
+                self.assertEqual(
+                    getattr(routing, f"_{name}"), settings[name]
+                )
 
 
 class TestDefaultDocumentation(unittest.TestCase):
