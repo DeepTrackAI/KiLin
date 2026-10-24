@@ -189,12 +189,15 @@ corresponding function defaults.
 | `CALLEE_EXPANSION_MAX` | `4` | Most callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first, then nearer ones. Zero disables callee expansion. |
 | `CLASS_METHOD_EXPANSION_MAX` | `4` | Methods added when a question names a class: all of them if the class has at most this many, otherwise this many of those sharing most words with the question. Zero disables class expansion. |
 | `NAME_WORD_EXPANSION_MAX` | `2` | Most functions added because every word of their name occurs in the question, without the name itself ("its HTML templates" adds `html_template`). Only names with at least two words of four or more letters count. Zero disables this expansion. |
+| `DOCUMENTATION_NAME_EXPANSION_MAX` | `2` | Most functions added because retrieved documentation or notebook passages name them as code (an underscore, digit, or inner capital), when the name identifies one function outside test code. Zero disables this expansion. |
+| `MODULE_FUNCTION_EXPANSION_MAX` | `4` | Most top-level functions added from modules whose header (docstring and imports) was retrieved: all of a module's functions when it has at most this many, otherwise those sharing most words with the question. Zero disables this expansion. |
+| `TEST_SUBJECT_EXPANSION_MAX` | `2` | Most source functions added because a retrieved test calls them; those of the best-ranked test come first, then those sharing most words with the question. Zero disables this expansion. |
 | `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
 | `DOCUMENTATION_WORDS` | `["doc", "docs", "documentation", "documented", "example", "guide", "manual", "markdown", "readme", "tutorial"]` | Lowercase words (also in plural) that mark a question as being about documentation. For an intent with `retrieval.prefer_source_code`, Markdown, notebook-cell, plain-text, and PDF passages are ranked after source code unless the question contains one of them. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` and the five expansion limits are
+integers. `CODE_MAX_DISTANCE` and the eight expansion limits are
 nonnegative exact integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.

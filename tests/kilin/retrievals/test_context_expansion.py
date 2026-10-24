@@ -570,6 +570,96 @@ class TestContextExpansionPlanning(unittest.TestCase):
             notebooks,
         )
 
+    def test_retrieved_results_lead_to_the_code_they_describe(self) -> None:
+        """Tests, module headers, and documentation add source functions.
+
+        """
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("pkg.m", "source_file", Path("pkg/m.py")),
+                CodeEntity("pkg.m.split_text", "python_function",
+                           Path("pkg/m.py")),
+                CodeEntity("pkg.m.helper", "python_function",
+                           Path("pkg/m.py")),
+                CodeEntity("pkg.m.Box.size", "python_method",
+                           Path("pkg/m.py")),
+                CodeEntity("pkg.lex.lexical_terms", "python_function",
+                           Path("pkg/lex.py")),
+                CodeEntity("pkg.lex.count", "python_function",
+                           Path("pkg/lex.py")),
+                CodeEntity("tests.test_m.test_split", "python_function",
+                           Path("tests/test_m.py")),
+                CodeEntity("tests.test_m.fixture_text", "python_function",
+                           Path("tests/test_m.py")),
+            ),
+            relations=(
+                CodeRelation("tests.test_m.test_split", "calls",
+                             "pkg.m.split_text"),
+                CodeRelation("tests.test_m.test_split", "calls",
+                             "tests.test_m.fixture_text"),
+            ),
+        )
+        question = "How is long text cut into pieces?"
+        test = ranked(chunk("t", path="tests/test_m.py", symbol="test_split"))
+        header = ranked(
+            chunk("h", path="pkg/m.py", kind="python_module_context")
+        )
+        guide = ranked(
+            chunk("g", "Use `lexical_terms`, then count() the terms.",
+                  path="docs/a.md", kind="markdown_section")
+        )
+        plan = context_expansion.plan_context_expansion(
+            question, graph, [test]
+        )
+        self.assertEqual(plan.related_functions, ("pkg.m.split_text",))
+        self.assertIn("tested code", plan.signals)
+        plan = context_expansion.plan_context_expansion(
+            question, graph, [header]
+        )
+        self.assertEqual(
+            plan.related_functions, ("pkg.m.helper", "pkg.m.split_text")
+        )
+        self.assertIn("module functions", plan.signals)
+        plan = context_expansion.plan_context_expansion(
+            question, graph, [guide]
+        )
+        self.assertEqual(plan.related_functions, ("pkg.lex.lexical_terms",))
+        self.assertIn("documentation names", plan.signals)
+        plan = context_expansion.plan_context_expansion(
+            question, graph, [test, header, guide]
+        )
+        self.assertEqual(
+            plan.related_functions,
+            ("pkg.m.split_text", "pkg.m.helper", "pkg.lex.lexical_terms"),
+        )
+        self.assertEqual(
+            context_expansion.plan_context_expansion(question, graph),
+            context_expansion.plan_context_expansion(question, graph, ()),
+        )
+
+    def test_large_module_adds_only_functions_sharing_words(self) -> None:
+        """A module with many functions adds those matching the question.
+
+        """
+        names = ("cut_text", "join_parts", "load", "save", "close")
+        graph = CodeGraph(
+            entities=(
+                CodeEntity("pkg.m", "source_file", Path("pkg/m.py")),
+                *(CodeEntity(f"pkg.m.{name}", "python_function",
+                             Path("pkg/m.py")) for name in names),
+            ),
+            relations=(),
+        )
+        header = ranked(
+            chunk("h", path="pkg/m.py", kind="python_module_context")
+        )
+        self.assertEqual(
+            context_expansion._module_functions(
+                [header], graph, "How is text cut?", set(), 4
+            ),
+            ("pkg.m.cut_text",),
+        )
+
     def test_identifier_words_split_code_names(self) -> None:
         """Split snake_case and camelCase identifiers into words.
 

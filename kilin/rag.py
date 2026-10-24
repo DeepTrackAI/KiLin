@@ -3132,7 +3132,11 @@ class RAGSession:
                     turn_id=trace_turn_id,
                 )
 
-        plan = plan_context_expansion(question, self.indexes.code_graph)
+        # Every fused candidate, not only the kept top results, may lead to
+        # code: retrieved documentation, module headers, and tests.
+        plan = plan_context_expansion(
+            question, self.indexes.code_graph, candidates
+        )
         plan_data = asdict(plan)
         expansion_requested = any(
             bool(plan_data.get(name))

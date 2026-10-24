@@ -67,8 +67,52 @@ class TestCodeGraphNames(unittest.TestCase):
         self.assertEqual(cg._resolve_name("missing", known), "missing")
         cg._remember_name(known, "other.alpha")
         self.assertEqual(cg._resolve_name("alpha", known), "alpha")
+        # An explicit qualified reference names its own entity.
+        self.assertEqual(cg._resolve_name("pkg.alpha", known), "pkg.alpha")
+
+    def test_dotted_suffix_and_enclosing_scope_resolve_names(self) -> None:
+        """Qualified suffixes and Python's scope lookup break ties.
+
+        """
+        known: dict[str, set[str]] = {}
+        for name in (
+            "pkg.py_ext.extract", "pkg.pdf_ext.extract",
+            "pkg.match._candidate", "pkg.store._candidate",
+            "pkg.store.Store._candidate", "pkg.other.close",
+            "pkg.store.Store.close",
+        ):
+            cg._remember_name(known, name)
         self.assertEqual(
-            cg._resolve_name("pkg.alpha", known), "other.alpha"
+            cg._resolve_name("py_ext.extract", known), "pkg.py_ext.extract"
+        )
+        self.assertEqual(cg._resolve_name("extract", known), "extract")
+        self.assertEqual(
+            cg._resolve_name(
+                "_candidate", known, "pkg.match.find", "pkg.match"
+            ),
+            "pkg.match._candidate",
+        )
+        scope = ("pkg.store.Store.add", "pkg.store")
+        # A plain name in a method is the module's, not the class's.
+        self.assertEqual(
+            cg._resolve_name("_candidate", known, *scope),
+            "pkg.store._candidate",
+        )
+        self.assertEqual(
+            cg._resolve_name("self._candidate", known, *scope),
+            "pkg.store.Store._candidate",
+        )
+        self.assertEqual(
+            cg._resolve_name("self.close", known, *scope),
+            "pkg.store.Store.close",
+        )
+        # Another object's attribute is not resolved by the caller's scope.
+        self.assertEqual(
+            cg._resolve_name("stream.close", known, *scope), "stream.close"
+        )
+        self.assertEqual(
+            cg._resolve_name("_candidate", known, "pkg.other.f", "pkg.other"),
+            "_candidate",
         )
 
 

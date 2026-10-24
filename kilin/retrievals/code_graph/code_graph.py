@@ -384,8 +384,13 @@ def _remember_name(known: dict[str, set[str]], name: str) -> None:
     known.setdefault(name.split(".")[-1], set()).add(name)
 
 
-def _resolve_name(name: str, known: dict[str, set[str]]) -> str:
-    """Resolve an unambiguous local name.
+def _resolve_name(
+    name: str,
+    known: dict[str, set[str]],
+    scope: str | None = None,
+    module: str | None = None,
+) -> str:
+    """Resolve a referenced name to one known entity when it is clear.
 
     Parameters
     ----------
@@ -393,6 +398,12 @@ def _resolve_name(name: str, known: dict[str, set[str]]) -> str:
         Name to register or resolve using the known-entity map.
     known: dict[str, set[str]]
         Mapping from recognized names to candidate qualified entity names.
+    scope: str | None, optional
+        Qualified name of the entity containing the reference, such as
+        ``pkg.module.Class.method``. Defaults to ``None`` (no scope rule).
+    module: str | None, optional
+        Qualified name of the module containing the reference. Defaults to
+        ``None`` (no scope rule).
 
     Returns
     -------
@@ -402,14 +413,63 @@ def _resolve_name(name: str, known: dict[str, set[str]]) -> str:
 
     Notes
     -----
-    Ambiguity is preserved rather than resolved using runtime import or
-    dispatch semantics.
+    Candidates share the reference's last component. One candidate is
+    taken. Otherwise, in order:
+
+    1. a dotted reference (``sources_py.extract_source_units``) takes the
+       only candidate that is it or ends with it;
+    2. with ``scope`` and ``module``, as Python looks names up: a plain
+       name (``_candidate``) takes the only candidate defined at the top
+       level of the same module, and a ``self.``/``cls.`` attribute the
+       candidate defined in the innermost class enclosing the reference;
+    3. the only candidate that differs from the reference itself.
+
+    Anything still ambiguous is kept as written rather than guessed with
+    runtime import or dispatch semantics.
 
     """
 
     candidates = known.get(name.split(".")[-1], set())
     if len(candidates) == 1:
         return next(iter(candidates))
+
+    parts = name.split(".")
+    if len(parts) > 1 and parts[0] not in {"self", "cls"}:
+        suffixed = {
+            candidate
+            for candidate in candidates
+            if candidate == name or candidate.endswith(f".{name}")
+        }
+        if len(suffixed) == 1:
+            return next(iter(suffixed))
+
+    if scope and module:
+        parents = {
+            candidate: candidate.rsplit(".", 1)[0]
+            for candidate in candidates
+            if "." in candidate
+        }
+        if len(parts) == 1:
+            # Class attributes are not visible to plain names in methods.
+            top_level = [
+                candidate
+                for candidate, parent in parents.items()
+                if parent == module
+            ]
+            if len(top_level) == 1:
+                return top_level[0]
+        elif len(parts) == 2 and parts[0] in {"self", "cls"}:
+            members = [
+                candidate
+                for candidate, parent in parents.items()
+                if parent.startswith(f"{module}.")
+                and scope.startswith(f"{parent}.")
+            ]
+            if members:
+                depth = max(candidate.count(".") for candidate in members)
+                innermost = [c for c in members if c.count(".") == depth]
+                if len(innermost) == 1:
+                    return innermost[0]
 
     nested = {candidate for candidate in candidates if candidate != name}
     return next(iter(nested)) if len(nested) == 1 else name
