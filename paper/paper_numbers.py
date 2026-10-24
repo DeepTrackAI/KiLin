@@ -270,8 +270,12 @@ def prepare_code_project(
     Notes
     -----
     The revision is exported to a fixed folder in the system temporary
-    directory, so repeated runs reuse one sandbox workspace and only
-    synchronize changed files.
+    directory. The first run creates the sandbox workspace
+    ``project_kilin_paper_source``; later runs synchronize that same
+    workspace, so only changed files are copied. A workspace that the
+    installed KíLín cannot open (for example one written by an older
+    version) is renamed with a time stamp and a new one is created, so
+    traces of earlier runs are kept.
 
     """
 
@@ -283,9 +287,28 @@ def prepare_code_project(
     source.mkdir()
     revision = export_revision(ref, source, excludes)
     RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    project = kilin.prepare_project_workspace(
-        source, kilin.PROJECT_KIND_CODE, RESULTS_DIRECTORY
-    )
+    workspace = RESULTS_DIRECTORY / f"project_{source.name}"
+    project = None
+    if workspace.exists():
+        try:
+            project = kilin.synchronize_project_workspace(source, workspace)
+        except (OSError, ValueError) as error:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            retired = workspace.with_name(f"{workspace.name}_old_{stamp}")
+            print(
+                f"Cannot reuse {workspace.name} ({error}); "
+                f"renamed it to {retired.name}."
+            )
+            workspace.rename(retired)
+    if project is None:
+        project = kilin.prepare_project_workspace(
+            source, kilin.PROJECT_TYPE_ID_CODE, RESULTS_DIRECTORY
+        )
+        if project.root != workspace:
+            raise RuntimeError(
+                f"Expected the sandbox workspace {workspace}, "
+                f"got {project.root}."
+            )
     if not allow_download:
         _disable_downloads(project.root / "profile.ini")
     return project, revision
