@@ -1,5 +1,5 @@
 {
-  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first ten questions (set 'development') were used while improving retrieval. The next five (set 'held_out_1') were written afterwards; their first run led to a further round of retrieval changes, so they are no longer held out. The last five (set 'held_out_2') were written after those changes and not run before the final evaluation. After develop split workspace creation (prepare_project_workspace) from synchronization (synchronize_project_workspace), the held_out_1 question 'workspace_sync' was rewritten to name synchronize_project_workspace, with gold and facts updated to match.",
+  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first ten questions (set 'development') were used while improving retrieval. The next five (set 'held_out_1') were written afterwards; their first run led to a further round of retrieval changes, so they are no longer held out. The last five (set 'held_out_2') were written after those changes and not run before the final evaluation. After develop split workspace creation (prepare_project_workspace) from synchronization (synchronize_project_workspace), the held_out_1 question 'workspace_sync' was rewritten to name synchronize_project_workspace, with gold and facts updated to match. The five questions in set 'held_out_3' were written after the fixes prompted by held_out_2 (routing of file-handling questions, single-file scoping) and not run before evaluation.",
   "questions": [
     {
       "id": "routing",
@@ -487,6 +487,123 @@
         "Vectors are L2-normalized.",
         "_check_vectors requires one vector per text, the same nonzero dimension for all, finite numeric values, and no all-zero vector; otherwise it raises RuntimeError.",
         "embed_documents rejects empty or blank texts and a closed session, and does not truncate inputs."
+      ]
+    },
+    {
+      "id": "notebook_extraction",
+      "kind": "location",
+      "set": "held_out_3",
+      "question": "Where does KíLín turn a Jupyter notebook into searchable text, and which parts of a notebook are left out?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "extract_source_units"
+        }
+      ],
+      "facts": [
+        "The notebook extension (sources_ipynb.py) reads the notebook JSON; extract_source_units returns the units built by _notebook_units.",
+        "Only code and Markdown cells become source units; outputs, execution state, attachments, metadata, and raw cells are not indexed.",
+        "Empty cells are skipped.",
+        "Each kept cell is one unit with its one-based position in the original cell list (skipped cells included) and line numbers local to the cell; a Markdown cell's first heading becomes its section.",
+        "A malformed notebook raises ValueError."
+      ]
+    },
+    {
+      "id": "atomic_files",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "question": "Explain how atomic_write_text and atomic_create_text write a file so that it is never left half-written, and how the two differ.",
+      "gold": [
+        {
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_write_text"
+        },
+        {
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_create_text"
+        }
+      ],
+      "facts": [
+        "Both write the full UTF-8 text to a new uniquely named temporary file in the same folder (.<name>.*.tmp) and only then publish it.",
+        "atomic_write_text replaces the destination with the temporary file (Path.replace), overwriting an existing file.",
+        "atomic_create_text publishes with a hard link (os.link), so it fails with FileExistsError if the destination already exists and never overwrites; unsupported hard links fail instead of falling back.",
+        "The temporary file is removed in all cases, including failures.",
+        "Neither takes a lock nor forces the data to disk (no fsync)."
+      ]
+    },
+    {
+      "id": "claim_passages_callers",
+      "kind": "dependency",
+      "set": "held_out_3",
+      "question": "Explain which functions call claim_passages, and what each of them uses the selected passages for.",
+      "gold": [
+        {
+          "path": "kilin/tools/reference_check/tool.py",
+          "symbol": "_verify"
+        },
+        {
+          "path": "kilin/tools/suggest_reference/tool.py",
+          "symbol": "run"
+        }
+      ],
+      "facts": [
+        "The reference_check tool's _verify calls it for each citing claim, with the citing sentence (citation marks removed) and what the reference is cited for, over the cited file's passages; verify_claim then has the model judge whether they support the claim.",
+        "The suggest_reference tool's run calls it for each candidate paper with the user's statement; judge_support then has the model judge whether that paper supports the statement.",
+        "claim_passages fuses the rankings of its texts by reciprocal rank, keeps at most count passages within a token budget (the best one is always kept), and returns them in reading order."
+      ]
+    },
+    {
+      "id": "model_identity",
+      "kind": "location",
+      "set": "held_out_3",
+      "question": "How does KíLín identify the embedding model that built a saved index, so that it can tell when the model has changed?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "embedding_model_identity"
+        },
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "_hub_snapshot_commit"
+        },
+        {
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "_directory_digest"
+        }
+      ],
+      "facts": [
+        "A standard Hugging Face cache snapshot is identified by repository and commit (huggingface:<model>@<commit>).",
+        "Any other model folder is identified by a SHA-256 digest over its files' relative names and content hashes (local-sha256:...).",
+        "Per-file hashes are cached in a manifest outside the model folder and reused when file size, times, device, and inode are unchanged; force_verify rehashes every file.",
+        "The identity is stored with the index; a different identity means the saved vectors are not reused.",
+        "It is meant for index compatibility, not authentication."
+      ]
+    },
+    {
+      "id": "conversation_branch",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "question": "Explain how ConversationStore creates a branch of a conversation: what is copied from the parent, how the branch is named, and how it avoids overwriting an existing file.",
+      "gold": [
+        {
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.create"
+        },
+        {
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore._branch_name"
+        }
+      ],
+      "facts": [
+        "With branch_from, the parent's saved resumable state is copied, except its metadata fields, while holding the parent's write lock; old trace operations are not copied.",
+        "The branch records its parent conversation and the parent's checkpoint identifier.",
+        "It is named '<parent name> branch N' with the first N not already used; a new independent conversation is named 'Conversation N'.",
+        "A new file path is chosen, locked, and checked; if it already exists, FileExistsError is raised instead of overwriting.",
+        "The new conversation is registered and becomes the active one."
       ]
     }
   ]
