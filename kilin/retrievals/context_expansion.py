@@ -123,7 +123,7 @@ _RELATED_CHUNKS_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "RELATED_CHUNKS_MAX", "RETRIEVAL"
 )
 # Most functions added because every word of their name occurs in the
-# question ("which PyTorch device" adds ``torch_device``); zero disables it.
+# question ("its HTML templates" adds ``html_template``); zero disables it.
 _NAME_WORD_EXPANSION_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "NAME_WORD_EXPANSION_MAX", "RETRIEVAL"
 )
@@ -240,7 +240,7 @@ def plan_context_expansion(
     ``write``; "PyTorch" gives "py" and "torch"). Finally, up to
     ``NAME_WORD_EXPANSION_MAX`` functions are added whose names have at
     least two words of four or more letters, all occurring in the question
-    (``torch_device`` for "which PyTorch device"). Related functions in
+    (``html_template`` for "its HTML templates"). Related functions in
     test code (a ``tests`` or ``test`` folder, or a ``test_*`` or ``*_test``
     file) are left out unless the question mentions tests.
 
@@ -1079,7 +1079,7 @@ def _described_functions(
     A function qualifies only when its leaf name has at least two words of
     four or more letters and every word of it matches a question word
     (``_words_match``). Special methods never qualify. This describes a
-    function in prose ("which PyTorch device") without naming it.
+    function in prose ("its HTML templates") without naming it.
 
     """
 

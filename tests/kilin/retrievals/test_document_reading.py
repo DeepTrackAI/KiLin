@@ -98,12 +98,12 @@ class TestDocumentPathMatching(unittest.TestCase):
 
         """
         paths = [
-            Path("docs/source_pipeline.md"),
+            Path("docs/build_steps.md"),
             Path("papers/smith_review.pdf"),
             Path("papers/smith2020.pdf"),
         ]
         for question in (
-            "Which files of a source folder are indexed?",
+            "Which build options are supported?",
             "How does the smith method work?",
         ):
             with self.subTest(question=question):

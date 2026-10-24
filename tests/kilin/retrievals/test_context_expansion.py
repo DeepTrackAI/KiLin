@@ -490,30 +490,27 @@ class TestContextExpansionPlanning(unittest.TestCase):
         """
         graph = CodeGraph(
             entities=(
-                CodeEntity("m.choose_backend", "python_function",
+                CodeEntity("m.render_page", "python_function",
                            Path("m.py")),
-                CodeEntity("m.torch_device", "python_function",
+                CodeEntity("m.html_template", "python_function",
                            Path("m.py")),
-                CodeEntity("m.to_device", "python_function", Path("m.py")),
-                CodeEntity("m.torch_device_count", "python_function",
+                CodeEntity("m.to_html", "python_function", Path("m.py")),
+                CodeEntity("m.html_template_count", "python_function",
                            Path("m.py")),
-                CodeEntity("tests.helpers.torch_device", "python_function",
+                CodeEntity("tests.helpers.html_template", "python_function",
                            Path("tests/helpers.py")),
             ),
             relations=(),
         )
-        question = (
-            "Explain how choose_backend works, and which PyTorch device "
-            "is used."
-        )
+        question = "Explain how render_page fills its HTML templates."
         result = context_expansion.plan_context_expansion(question, graph)
-        self.assertEqual(result.related_functions, ("m.torch_device",))
+        self.assertEqual(result.related_functions, ("m.html_template",))
         self.assertEqual(result.signals, ("exact function", "name words"))
         self.assertEqual(
             context_expansion._described_functions(
-                question, graph, {"m.choose_backend"}, 5, True
+                question, graph, {"m.render_page"}, 5, True
             ),
-            ("m.torch_device", "tests.helpers.torch_device"),
+            ("m.html_template", "tests.helpers.html_template"),
         )
         self.assertEqual(
             context_expansion._described_functions(

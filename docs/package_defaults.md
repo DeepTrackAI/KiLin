@@ -188,7 +188,7 @@ corresponding function defaults.
 | `CALLEE_EXPANSION_DEPTH` | `2` | Call steps followed from a named function when collecting its callees (1 = direct callees only). Zero disables callee expansion. |
 | `CALLEE_EXPANSION_MAX` | `4` | Most callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first, then nearer ones. Zero disables callee expansion. |
 | `CLASS_METHOD_EXPANSION_MAX` | `4` | Methods added when a question names a class: all of them if the class has at most this many, otherwise this many of those sharing most words with the question. Zero disables class expansion. |
-| `NAME_WORD_EXPANSION_MAX` | `2` | Most functions added because every word of their name occurs in the question, without the name itself ("which PyTorch device" adds `torch_device`). Only names with at least two words of four or more letters count. Zero disables this expansion. |
+| `NAME_WORD_EXPANSION_MAX` | `2` | Most functions added because every word of their name occurs in the question, without the name itself ("its HTML templates" adds `html_template`). Only names with at least two words of four or more letters count. Zero disables this expansion. |
 | `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 

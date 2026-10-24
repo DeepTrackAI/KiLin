@@ -43,14 +43,13 @@ INVENTORY_QUESTIONS = (
 
 # Questions about code that selects, reads, or skips files.
 FILE_CODE_QUESTIONS = (
-    "Where does the code decide which files of a folder are indexed?",
+    "In which function are hidden folders skipped during scanning?",
     "How does scan_repository treat symbolic links?",
     "How does the loader skip hidden files?",
     "How are PDF files converted to text before they are indexed?",
     "Explain how build_repository_manifest computes the hashes of the "
     "source files.",
-    "Which files does the indexer always leave out, and where is that "
-    "decided?",
+    "How does the importer handle a file that is too large?",
 )
 
 
