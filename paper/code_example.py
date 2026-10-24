@@ -22,6 +22,7 @@ Usage, from the repository root::
 
     uv run --no-sync python paper/code_example.py
     uv run --no-sync python paper/code_example.py --ref v0.1.0
+    uv run --no-sync python paper/code_example.py --sets evaluation
 
 Models must already be in the local Hugging Face cache unless
 ``--allow-download`` is given.
@@ -478,6 +479,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="allow model downloads (first run on a new machine)",
     )
+    parser.add_argument(
+        "--sets",
+        default=None,
+        help="comma-separated question sets to run, such as evaluation "
+        "(default: all)",
+    )
     args = parser.parse_args(argv)
     if args.retrieval_count is not None and args.retrieval_count < 1:
         parser.error("--retrieval-count must be at least 1")
@@ -490,6 +497,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     questions = json.loads(QUESTIONS_FILE.read_text(encoding="utf-8"))[
         "questions"
     ]
+    if args.sets:
+        wanted = {name.strip() for name in args.sets.split(",")}
+        unknown = wanted - {item.get("set") for item in questions}
+        if unknown:
+            parser.error(f"unknown question set: {sorted(unknown)[0]}")
+        questions = [item for item in questions if item.get("set") in wanted]
     project, revision = prepare_code_project(
         args.ref, DEFAULT_EXCLUDES, allow_download=args.allow_download
     )
@@ -498,6 +511,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "environment": describe_environment(),
         "indexed_revision": revision,
         "use_router": not args.no_router,
+        "question_sets": sorted({item.get("set") for item in questions}),
         "retrieval_count": args.retrieval_count,
     }
 

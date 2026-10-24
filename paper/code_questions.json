@@ -1,5 +1,5 @@
 {
-  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. The first ten questions (set 'development') were used while improving retrieval. The next five (set 'held_out_1') were written afterwards; their first run led to a further round of retrieval changes, so they are no longer held out. The last five (set 'held_out_2') were written after those changes and not run before the final evaluation. After develop split workspace creation (prepare_project_workspace) from synchronization (synchronize_project_workspace), the held_out_1 question 'workspace_sync' was rewritten to name synchronize_project_workspace, with gold and facts updated to match. The five questions in set 'held_out_3' were written after the fixes prompted by held_out_2 (routing of file-handling questions, single-file scoping) and not run before evaluation.",
+  "description": "Questions about the KíLín code base for the paper's code example. Each question names code entities (except the location questions) and lists the functions a complete answer must draw on (gold), identified by file and symbol rather than line numbers, so the set stays valid while line numbers change. Facts are for grading answers by hand. Sets 'development', 'held_out_1', 'held_out_2', and 'held_out_3' (25 questions) were written in successive rounds; each round's results led to retrieval or routing changes, so all of them are development questions. The ten questions in set 'evaluation' were written after the last change (documentation ranked after source code), in parts of the code base no earlier question covers, and were not run before the evaluation.",
   "questions": [
     {
       "id": "routing",
@@ -604,6 +604,250 @@
         "It is named '<parent name> branch N' with the first N not already used; a new independent conversation is named 'Conversation N'.",
         "A new file path is chosen, locked, and checked; if it already exists, FileExistsError is raised instead of overwriting.",
         "The new conversation is registered and becomes the active one."
+      ]
+    },
+    {
+      "id": "python_units",
+      "kind": "location",
+      "set": "evaluation",
+      "question": "How does KíLín divide a Python file into the parts it indexes, and what happens to a file that is not valid Python?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_py.py",
+          "symbol": "_python_units"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_py.py",
+          "symbol": "_python_class_unit"
+        }
+      ],
+      "facts": [
+        "The file is parsed with Python's ast module; nothing is executed.",
+        "Each top-level function becomes one unit, and the code between definitions (imports, constants) becomes module-context units.",
+        "A class becomes one class unit whose children are its methods and the class-level code between them.",
+        "A file that does not parse (SyntaxError) becomes a single python_file unit."
+      ]
+    },
+    {
+      "id": "pdf_text",
+      "kind": "location",
+      "set": "evaluation",
+      "question": "How does KíLín get the text out of a PDF file, and what happens when a PDF contains no text?",
+      "gold": [
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "read_source_file"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "_layout_pages"
+        },
+        {
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "extract_source_units"
+        }
+      ],
+      "facts": [
+        "Pages are extracted with pdfminer.six layout analysis; if that fails or gives a different page count, pypdf's plain extraction is used.",
+        "Encrypted or unreadable PDFs raise an error.",
+        "The text is cleaned (invalid Unicode surrogates, unmapped glyphs, trailing spaces, repeated blank lines).",
+        "A PDF with no extractable text raises an error saying scanned PDFs need OCR.",
+        "Pages are joined with a page break, and each non-empty page becomes one unit labelled with its page number."
+      ]
+    },
+    {
+      "id": "call_relations",
+      "kind": "location",
+      "set": "evaluation",
+      "question": "How does KíLín work out which functions call which other functions in Python code, and what happens when a called name could refer to several functions?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_py.py",
+          "symbol": "extract_code_relations"
+        },
+        {
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_py.py",
+          "symbol": "_Visitor.visit_Call"
+        },
+        {
+          "path": "kilin/retrievals/code_graph/code_graph.py",
+          "symbol": "_resolve_name"
+        }
+      ],
+      "facts": [
+        "Each Python file is parsed with ast and walked; the code is never imported or run, and a file with a syntax error contributes no relations.",
+        "For every call, the called expression is turned into a dotted name (a plain name or attribute chain) and recorded as a calls relation from the enclosing function, method, class, or module.",
+        "The name is resolved by its last component against the known entities: a unique match gives the qualified name.",
+        "An ambiguous name is kept as written (unless only one candidate differs from the name itself), so no call is guessed; calls through non-static expressions are not recorded."
+      ]
+    },
+    {
+      "id": "keyword_scoring",
+      "kind": "location",
+      "set": "evaluation",
+      "question": "How are passages scored in KíLín's keyword search, and how are code identifiers broken into searchable words?",
+      "gold": [
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "lexical_terms"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "lexical_search"
+        },
+        {
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "_tfidf_vector"
+        }
+      ],
+      "facts": [
+        "Text is split into lowercase words of letters, digits, and underscores; identifiers also contribute their camelCase and snake_case parts longer than one character.",
+        "Adjacent words also form two-word terms; there is no stemming or stop-word removal.",
+        "Each passage and the query become TF-IDF vectors with sublinear term frequency (1 + log f) and smoothed inverse document frequency, normalized to unit length.",
+        "Passages are ranked by cosine similarity, ties by chunk identifier, with no minimum score."
+      ]
+    },
+    {
+      "id": "follow_up_query",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "question": "Explain how refers_back decides that a question depends on the earlier conversation, and how search_text uses that to build the search query.",
+      "gold": [
+        {
+          "path": "kilin/answering.py",
+          "symbol": "refers_back"
+        },
+        {
+          "path": "kilin/answering.py",
+          "symbol": "search_text"
+        }
+      ],
+      "facts": [
+        "refers_back is true for messages of at most two words or when a configured pattern matches: pronouns (it, they, this), ordinal references (the second one), pointers back (you said, earlier, so far), or elliptical openings (and, what about).",
+        "search_text returns the question unchanged unless the routing decision refers back and lists related turns.",
+        "Otherwise it appends the questions of the related turns, with whitespace normalized, after the new question.",
+        "Model-written text (earlier answers) is never added to the query."
+      ]
+    },
+    {
+      "id": "download_progress",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "question": "Explain how download_model reports download progress to its caller, and where the downloaded model files are stored.",
+      "gold": [
+        {
+          "path": "kilin/huggingface.py",
+          "symbol": "download_model"
+        },
+        {
+          "path": "kilin/huggingface.py",
+          "symbol": "_progress_tqdm"
+        }
+      ],
+      "facts": [
+        "download_model calls huggingface_hub.snapshot_download, so files go to (or are reused from) Hugging Face's shared cache; KíLín does not copy them.",
+        "With a progress callback, it passes a progress class built by _progress_tqdm; without one, the Hub shows its own progress.",
+        "That class disables terminal output and reports only the aggregate byte bar as (completed bytes, total bytes).",
+        "Because a disabled tqdm stops counting, the class keeps the count itself.",
+        "It returns the snapshot path and does not load the model."
+      ]
+    },
+    {
+      "id": "reference_matching",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "question": "Explain how match_reference decides which project file a reference entry points to, and when a match is only probable.",
+      "gold": [
+        {
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "match_reference"
+        },
+        {
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "_candidate"
+        }
+      ],
+      "facts": [
+        "A file's DOI found in the entry gives a found match.",
+        "So does the entry's first author appearing in the file's authors or first page together with the same journal citation.",
+        "Otherwise the score is the share of the file's title words found in the entry (or of the entry's words found on the first page when there is no title), compared with found and probable thresholds.",
+        "A high score with a different first author, or a lower score with the same first author, is only probable.",
+        "Found matches come before probable ones, then higher scores; other matches are listed as alternatives; an entry with too few distinctive words is unreadable, and one with no candidate is missing."
+      ]
+    },
+    {
+      "id": "term_hits_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "question": "Explain which functions call term_hits, and what each of them does with the passages it returns.",
+      "gold": [
+        {
+          "path": "kilin/tools/batch_review/tool.py",
+          "symbol": "run"
+        },
+        {
+          "path": "kilin/tools/find_fact/tool.py",
+          "symbol": "run"
+        },
+        {
+          "path": "kilin/tools/find_passages/tool.py",
+          "symbol": "run"
+        }
+      ],
+      "facts": [
+        "term_hits asks the router model for the question's exact terms and returns them with the passages that mention any of them (whole words, ignoring case).",
+        "batch_review's run uses them for its quick version: only the passages that mention the terms, read in parts.",
+        "find_fact's run uses them for its quick version: only the parts that contain a hit, per file.",
+        "find_passages' run uses them for its quick version: the sentences of those passages, found without the model.",
+        "Without terms, each falls back to the best-ranked passages."
+      ]
+    },
+    {
+      "id": "explicit_imports_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "question": "Explain which functions call include_explicit_imports, and why each of them needs it.",
+      "gold": [
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval"
+        },
+        {
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_source"
+        }
+      ],
+      "facts": [
+        "Both scan the project's source folder with scan_repository and then call include_explicit_imports on the report.",
+        "_prepare_retrieval uses the scan to build the source manifest and compare it with the saved index, to decide whether to reuse or rebuild it.",
+        "_prepare_source uses it (when no report is supplied) to choose which files to read and split into chunks.",
+        "include_explicit_imports adds files the user imported one by one (recorded in sources.json) even when their suffix or name would otherwise be skipped; size limits and link safeguards still apply, and imported folders keep the normal rules."
+      ]
+    },
+    {
+      "id": "extension_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "question": "Explain which functions call normalize_extensions, and what each of them checks with it.",
+      "gold": [
+        {
+          "path": "kilin/project.py",
+          "symbol": "_read_profile"
+        },
+        {
+          "path": "kilin/project_type.py",
+          "symbol": "_parse_project_type"
+        },
+        {
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository"
+        }
+      ],
+      "facts": [
+        "normalize_extensions lowercases the suffixes, adds a leading dot, rejects wildcards, whitespace, and non-text values, and removes duplicates.",
+        "_read_profile checks the extensions setting of a project's profile.ini.",
+        "_parse_project_type checks the extensions declared by a project-type JSON file.",
+        "scan_repository checks the extensions it is asked to select before scanning."
       ]
     }
   ]
