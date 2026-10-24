@@ -568,6 +568,37 @@ class TestRAGRetrieval(unittest.TestCase):
             session.chunks,
         )
 
+    def test_source_code_preference_ranks_documentation_later(self) -> None:
+        """Documentation follows source code only when the intent asks."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        tutorial = ranked(
+            chunk("t", path="tutorials/a.ipynb", kind="notebook_markdown")
+        )
+        guide = ranked(chunk("g", path="docs/a.md", kind="markdown_section"))
+        test = ranked(chunk("x", path="tests/test_a.py"))
+        source = ranked(chunk("s", path="pkg/a.py"))
+        for prefer, expected in (
+            (True, [source, tutorial]),
+            (False, [tutorial, guide]),
+        ):
+            with self.subTest(prefer=prefer), _search_patches() as mocks:
+                mocks["hybrid_search"].return_value = [
+                    tutorial, guide, test, source
+                ]
+                session._retrieve("question", 2, prefer_source_code=prefer)
+                self.assertEqual(
+                    mocks["expand_retrieval_context"].call_args.args[0],
+                    expected,
+                )
+        with _search_patches() as mocks:
+            mocks["hybrid_search"].return_value = [tutorial, test, source]
+            session._retrieve("question", 3, prefer_source_code=True)
+            self.assertEqual(
+                mocks["expand_retrieval_context"].call_args.args[0],
+                [source, tutorial, test],
+            )
+
     def test_single_document_scope_uses_full_ranking(self) -> None:
         """Apply full ranking to evidence scoped to a single document."""
         session = _session()

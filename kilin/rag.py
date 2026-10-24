@@ -216,7 +216,10 @@ from kilin.retrievals import (
     save_indexes,
     semantic_search,
 )
-from kilin.retrievals.context_expansion import demote_test_results
+from kilin.retrievals.context_expansion import (
+    demote_documentation,
+    demote_test_results,
+)
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from kilin.sources import (
     SourceFile,
@@ -1472,6 +1475,7 @@ class RAGSession:
                     "strategy": intent.retrieval_strategy,
                     "intent": intent.intent_id,
                     "query_extended": search_text not in (None, question),
+                    "prefer_source_code": intent.prefer_source_code,
                 },
                 turn_id=turn_id,
             )
@@ -1519,6 +1523,7 @@ class RAGSession:
                         ANSWER_PHASE_RETRIEVING, message=message
                     ),
                     scope=scope,
+                    prefer_source_code=intent.prefer_source_code,
                 )
                 found = len(evidence)
                 related_turns = [
@@ -2927,6 +2932,7 @@ class RAGSession:
         trace_turn_id: str | None = None,
         status_callback: Callable[[str], None] | None = None,
         scope: Sequence[Path] = (),
+        prefer_source_code: bool = False,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -2949,6 +2955,10 @@ class RAGSession:
             When it holds exactly one path, only that document's passages
             are kept (if it has any); otherwise every document is searched.
             Defaults to ``()``.
+        prefer_source_code: bool, optional
+            Rank documentation and notebook passages after source code
+            before keeping the top results, unless the question asks about
+            documentation (``demote_documentation``). Defaults to ``False``.
 
         Returns
         -------
@@ -3081,13 +3091,16 @@ class RAGSession:
         )
         report("Combining and ranking search results")
         # Fuse every candidate, then rank test code after source code (unless
-        # the question is about tests) before keeping the top results.
+        # the question is about tests) and, when the intent prefers source
+        # code, documentation before tests, before keeping the top results.
         candidates = hybrid_search(
             semantic=semantic,
             lexical=lexical,
             code=code,
             count=max(count, len(semantic) + len(lexical) + len(code)),
         )
+        if prefer_source_code:
+            candidates = demote_documentation(candidates, question)
         combined = demote_test_results(candidates, question)[:count]
         trace.emit(
             "retrieval.hybrid.ranked",

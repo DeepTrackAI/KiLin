@@ -40,6 +40,10 @@ Module Structure
 
     Rank results from test code after the others.
 
+- ``demote_documentation``
+
+    Rank documentation and notebook results after source code.
+
 - ``expand_retrieval_context``
 
     Add complete requested context after normal RRF retrieval.
@@ -71,6 +75,7 @@ import re
 from kilin.chunking import Chunk
 from kilin.defaults import (
     load_defaults_section,
+    require_default_lowercase_words,
     require_default_nonnegative_int,
     require_default_strings,
 )
@@ -79,6 +84,7 @@ from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 
 __all__ = [
     "ContextExpansionPlan",
+    "demote_documentation",
     "demote_test_results",
     "expand_retrieval_context",
     "plan_context_expansion",
@@ -127,6 +133,13 @@ _RELATED_CHUNKS_MAX = require_default_nonnegative_int(
 _NAME_WORD_EXPANSION_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "NAME_WORD_EXPANSION_MAX", "RETRIEVAL"
 )
+# Words that ask about documentation rather than how the code works.
+_DOCUMENTATION_WORDS = require_default_lowercase_words(
+    _RETRIEVAL_DEFAULTS, "DOCUMENTATION_WORDS", "RETRIEVAL"
+)
+# Chunk kinds of prose and notebooks: Markdown files, notebook cells
+# (tutorial examples rather than the implementation), plain text, and PDFs.
+_DOCUMENTATION_KIND_PREFIXES = ("markdown_", "notebook_", "text_", "pdf_")
 _CLASS_KINDS = {"matlab_class", "python_class"}
 _WORD = re.compile(r"[A-Za-z0-9]+")
 # Words used in plain prose that introduce a code name ("the reply method").
@@ -601,6 +614,64 @@ def demote_test_results(
     source = [r for r in results if not _is_test_path(r.chunk.path)]
     tests = [r for r in results if _is_test_path(r.chunk.path)]
     return source + tests
+
+
+def demote_documentation(
+    results: Sequence[HybridResult], query_text: str
+) -> list[HybridResult]:
+    """Rank documentation and notebook results after source code.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        Fused results, best first.
+    query_text: str
+        Question text; results are left unchanged when it asks about
+        documentation (a word in ``RETRIEVAL.DOCUMENTATION_WORDS``, such as
+        "docs", "tutorial", or "readme", also in plural).
+
+    Returns
+    -------
+    list[HybridResult]
+        The same results with Markdown, notebook-cell, plain-text, and PDF
+        passages moved after the others, each group keeping its order.
+
+    Notes
+    -----
+    Tutorials and documentation explain concepts in the words a question
+    uses, so they can outrank the code that implements them. For a
+    question about how the code works, the code is the better evidence;
+    documentation still fills the remaining places when too few source
+    results were found. In a project of notebooks only, nothing changes.
+
+    """
+
+    words = set()
+    for word in _identifier_words(query_text):
+        words |= _word_forms(word)
+    if words & set(_DOCUMENTATION_WORDS):
+        return list(results)
+    source = [r for r in results if not _is_documentation(r.chunk)]
+    prose = [r for r in results if _is_documentation(r.chunk)]
+    return source + prose
+
+
+def _is_documentation(chunk: Chunk) -> bool:
+    """Return whether a chunk is documentation rather than source code.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        Indexed passage.
+
+    Returns
+    -------
+    bool
+        True for Markdown, notebook-cell, plain-text, and PDF passages.
+
+    """
+
+    return str(chunk.kind).startswith(_DOCUMENTATION_KIND_PREFIXES)
 
 
 def _mentions_tests(query_text: str) -> bool:

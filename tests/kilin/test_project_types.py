@@ -825,6 +825,31 @@ class TestIntentFields(ProjectTypeFixture):
                                         "include_related_evidence"):
                 self._load(f"relatedbad{index}", data)
 
+    def test_source_code_preference_requires_a_boolean(self) -> None:
+        """Parse the optional preference for source code over docs."""
+
+        default = self._load("preferdefault", self._with_intent())
+        self.assertFalse(default.intents["explain"].prefer_source_code)
+        data = self._with_intent(retrieval={"prefer_source_code": True})
+        self.assertTrue(
+            self._load("preferok", data)
+            .intents["explain"].prefer_source_code
+        )
+        for index, bad in enumerate(("yes", None, 1)):
+            data = self._with_intent(retrieval={"prefer_source_code": bad})
+            with self.assertRaisesRegex(ValueError, "prefer_source_code"):
+                self._load(f"preferbad{index}", data)
+
+    def test_code_explanation_prefers_source_code(self) -> None:
+        """Code explanation and debugging rank documentation later."""
+
+        from kilin.project_type import project_type
+
+        intents = project_type("code").intents
+        self.assertTrue(intents["code_explanation"].prefer_source_code)
+        self.assertTrue(intents["debugging"].prefer_source_code)
+        self.assertFalse(intents["code_generation"].prefer_source_code)
+
     def test_document_token_budget_boundaries(self) -> None:
         """Enforce inclusive minimum and maximum evidence budgets."""
 

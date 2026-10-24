@@ -540,6 +540,36 @@ class TestContextExpansionPlanning(unittest.TestCase):
         self.assertEqual([r.chunk.identifier for r in unchanged],
                          ["t1", "s1", "t2", "s2"])
 
+    def test_demote_documentation_unless_asked_about_it(self) -> None:
+        """Prose and notebook results follow source code by default.
+
+        """
+        results = [
+            ranked(chunk("n", path="tut/a.ipynb", kind="notebook_code")),
+            ranked(chunk("s1", path="pkg/a.py")),
+            ranked(chunk("m", path="docs/a.md", kind="markdown_section")),
+            ranked(chunk("s2", path="pkg/b.m", kind="matlab_function")),
+            ranked(chunk("p", path="ref/a.pdf", kind="pdf_page")),
+        ]
+        demoted = context_expansion.demote_documentation(
+            results, "How does a work?"
+        )
+        self.assertEqual([r.chunk.identifier for r in demoted],
+                         ["s1", "s2", "n", "m", "p"])
+        for question in ("What do the tutorials say?", "Is it in the docs?",
+                         "Show the README"):
+            with self.subTest(question=question):
+                unchanged = context_expansion.demote_documentation(
+                    results, question
+                )
+                self.assertEqual([r.chunk.identifier for r in unchanged],
+                                 ["n", "s1", "m", "s2", "p"])
+        notebooks = results[:1]
+        self.assertEqual(
+            context_expansion.demote_documentation(notebooks, "How?"),
+            notebooks,
+        )
+
     def test_identifier_words_split_code_names(self) -> None:
         """Split snake_case and camelCase identifiers into words.
 

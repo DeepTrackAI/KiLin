@@ -276,6 +276,10 @@ class Intent:
     include_related_evidence: bool
         When searching, also supply the evidence cited by the earlier turns
         the router marked as related, so follow-ups keep their sources.
+    prefer_source_code: bool
+        When searching, rank documentation and notebook passages after
+        source code unless the question asks about documentation (see
+        ``kilin.retrievals.context_expansion.demote_documentation``).
     max_tokens: int
         Evidence budget in estimated tokens for ``document`` reading; a
         longer document keeps its parts most relevant to the question.
@@ -294,6 +298,7 @@ class Intent:
     retrieval_strategy: RetrievalStrategy
     shortcuts: tuple[re.Pattern[str], ...] = ()
     include_related_evidence: bool = False
+    prefer_source_code: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
 
@@ -533,7 +538,13 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     reject_unknown(
         f"{where}.retrieval",
         retrieval,
-        ("mode", "strategy", "include_related_evidence", "max_tokens"),
+        (
+            "mode",
+            "strategy",
+            "include_related_evidence",
+            "prefer_source_code",
+            "max_tokens",
+        ),
     )
 
     policy = history.get("policy", HISTORY_POLICY_RELEVANT)
@@ -574,6 +585,13 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "true or false."
         )
 
+    prefer_source = retrieval.get("prefer_source_code", False)
+    if type(prefer_source) is not bool:
+        raise ValueError(
+            f"Intent {where!r} retrieval.prefer_source_code must be "
+            "true or false."
+        )
+
     max_tokens = retrieval.get("max_tokens", DOCUMENT_MAX_TOKENS)
     if (
         type(max_tokens) is not int
@@ -611,6 +629,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         retrieval_strategy=strategy,
         shortcuts=tuple(shortcuts),
         include_related_evidence=related,
+        prefer_source_code=prefer_source,
         max_tokens=max_tokens,
         tool=tool,
     )

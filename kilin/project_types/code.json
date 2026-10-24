@@ -29,7 +29,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "fact_finding": {
@@ -72,7 +73,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "file_reading": {

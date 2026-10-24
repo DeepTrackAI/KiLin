@@ -231,6 +231,18 @@
     "CLASS_METHOD_EXPANSION_MAX": 4,
     "NAME_WORD_EXPANSION_MAX": 2,
     "RELATED_CHUNKS_MAX": 2,
+    "DOCUMENTATION_WORDS": [
+      "doc",
+      "docs",
+      "documentation",
+      "documented",
+      "example",
+      "guide",
+      "manual",
+      "markdown",
+      "readme",
+      "tutorial"
+    ],
     "RELATION_PHRASES": [
       "call",
       "called by",
