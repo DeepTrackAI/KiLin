@@ -181,6 +181,26 @@
     "UNCITED_RELATED_EVIDENCE": 3,
     "MAX_EARLIER_TURNS": 6
   },
+  "CHAT": {
+    "CJK_REQUEST_WORDS": [
+      "asian",
+      "cantonese",
+      "chinese",
+      "cjk",
+      "hangul",
+      "hanja",
+      "hanzi",
+      "hiragana",
+      "japanese",
+      "kana",
+      "kanji",
+      "katakana",
+      "korean",
+      "mandarin",
+      "pinyin",
+      "taiwanese"
+    ]
+  },
   "PROJECT_PROFILE": {
     "ALLOW_DOWNLOAD": true,
     "TARGET_TOKENS": 300,
@@ -189,6 +209,7 @@
     "RETRIEVAL_COUNT": 5,
     "THINKING": true,
     "TEMPERATURE": 0.0,
+    "BLOCK_UNREQUESTED_CJK": true,
     "MAX_NEW_TOKENS": 8192
   },
   "CHUNKING": {

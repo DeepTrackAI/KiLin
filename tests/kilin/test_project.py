@@ -494,6 +494,27 @@ class TestProjectProfileValidation(ProjectFixture):
             with self.assertRaisesRegex(ValueError, "true or false"):
                 project.open_project(root)
 
+    def test_cjk_blocking_setting_is_optional(self) -> None:
+        """New profiles write the flag; older profiles use the default."""
+
+        root = self._profile("cjk")
+        text = (root / "profile.ini").read_text(encoding="utf-8")
+        self.assertIn("block_unrequested_cjk = true", text)
+        self.assertTrue(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", "false")
+        self.assertFalse(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", None)
+        self.assertTrue(
+            project.open_project(root).profile.block_unrequested_cjk
+        )
+        self._edit(root, "generation", "block_unrequested_cjk", "possibly")
+        with self.assertRaisesRegex(ValueError, "true or false"):
+            project.open_project(root)
+
     def test_generation_temperature_boundaries(self) -> None:
         """Allow zero/positive temperatures and reject negative/invalid."""
 

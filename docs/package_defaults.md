@@ -107,6 +107,14 @@ positive integers.
 Progress throttling does not impose a checkpoint or event-retention policy.
 The tracing system retains its single enabled trace-detail behavior.
 
+## `CHAT` — model replies
+
+Owned by `kilin/chat.py`.
+
+| Key | Current value | Meaning |
+| --- | --- | --- |
+| `CJK_REQUEST_WORDS` | `["asian", "cantonese", "chinese", "cjk", "hangul", "hanja", "hanzi", "hiragana", "japanese", "kana", "kanji", "katakana", "korean", "mandarin", "pinyin", "taiwanese"]` | Lowercase words that, when present in the conversation (also with a final "s"), allow Chinese, Japanese, and Korean tokens even though the input contains no such character ("the kanji for river"). Matching ignores case and requires whole words. |
+
 ## `PROJECT_PROFILE` — values for newly created projects
 
 Owned by `kilin/project.py`. These settings are rendered into a new
@@ -124,6 +132,7 @@ intentionally different from the new-project profile settings.
 | `THINKING` | `true` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
 | `TEMPERATURE` | `0.0` | Initial model generation temperature; must be a finite, nonnegative number. |
 | `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
+| `BLOCK_UNREQUESTED_CJK` | `true` | Initial `generation.block_unrequested_cjk` flag: block Chinese, Japanese, and Korean tokens in replies unless the input contains such characters or a word from `CHAT.CJK_REQUEST_WORDS`. Profiles without the setting use this value. Must be a JSON boolean. |
 
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be

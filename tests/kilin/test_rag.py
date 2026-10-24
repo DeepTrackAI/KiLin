@@ -67,6 +67,7 @@ def _profile() -> SimpleNamespace:
         thinking=False,
         temperature=0.2,
         max_new_tokens=128,
+        block_unrequested_cjk=True,
         extensions=(".py",),
         max_file_bytes=10000,
         target_tokens=100,
@@ -1625,6 +1626,9 @@ class TestRAGLifecycle(unittest.TestCase):
                          BACKEND_MLX)
         self.assertEqual(constructor.call_args.kwargs["temperature"], 0.6)
         self.assertFalse(constructor.call_args.kwargs["allow_download"])
+        self.assertTrue(
+            constructor.call_args.kwargs["block_unrequested_cjk"]
+        )
 
     def test_usage_counters_include_distinct_router_only(self) -> None:
         """Avoid double-counting token usage for a shared router."""

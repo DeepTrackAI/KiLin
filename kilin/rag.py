@@ -874,6 +874,7 @@ class RAGSession:
                 system_prompt=project_type(profile.type_id).system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
+                block_unrequested_cjk=profile.block_unrequested_cjk,
             )
             self._emit_progress(
                 "loading_conversation",
@@ -3786,6 +3787,9 @@ class RAGSession:
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
             trace=self.trace,
+            block_unrequested_cjk=(
+                self.project.profile.block_unrequested_cjk
+            ),
             **settings,
         )
 

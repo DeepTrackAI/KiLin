@@ -21,7 +21,7 @@
   "default_intent": "code_explanation",
   "intents": {
     "code_explanation": {
-      "description": "Explain existing code, or how parts of the repository work and connect.",
+      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files).",
       "system_prompt": "Explain the code clearly, including its role and how it relates to other parts of the repository.",
       "history": {
         "policy": "relevant"
@@ -94,7 +94,7 @@
       }
     },
     "project_inventory": {
-      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing).",
+      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing). Not for how the code itself selects, reads, or skips files ('where does the code decide which files to index?', 'how does the loader skip hidden files?'): that is code_explanation.",
       "history": {
         "policy": "none"
       },
