@@ -216,7 +216,7 @@ from kilin.retrievals import (
     save_indexes,
     semantic_search,
 )
-from kilin.retrievals.routing import demote_test_results
+from kilin.retrievals.context_expansion import demote_test_results
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from kilin.sources import (
     SourceFile,

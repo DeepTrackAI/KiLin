@@ -406,7 +406,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
         ):
             with self.subTest(setting=name):
                 self.assertEqual(
-                    getattr(routing, f"_{name}"), settings[name]
+                    getattr(context_expansion, f"_{name}"), settings[name]
                 )
 
 

@@ -346,7 +346,7 @@ class TestContextExpansionPlanning(unittest.TestCase):
         ):
             with self.subTest(depth=depth):
                 self.assertEqual(
-                    routing._ranked_callees(
+                    context_expansion._ranked_callees(
                         ("m.split_text",), graph, question, 5, depth
                     ),
                     expected,
@@ -373,21 +373,23 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ),
             relations=(),
         )
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "How does `Lock` stop two writers?", graph
         )
         self.assertEqual(result.related_functions, tuple(sorted(small)))
         self.assertIn("exact class", result.signals)
         self.assertEqual(
-            routing._class_methods(
+            context_expansion._class_methods(
                 ("m.Session",), graph,
                 "How does Session decide to reuse the retrieval indexes?", 2,
             ),
             ("m.Session._index_metadata", "m.Session._prepare_retrieval"),
         )
-        result = routing.plan_retrieval("What is in a Chunk?", graph)
+        result = context_expansion.plan_context_expansion(
+            "What is in a Chunk?", graph
+        )
         self.assertEqual(result.related_functions, ())
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "What is in the Chunk class?", graph
         )
         self.assertEqual(result.related_functions, ("m.Chunk.text",))
@@ -396,10 +398,14 @@ class TestContextExpansionPlanning(unittest.TestCase):
         """Simple plurals share words with singular identifier parts.
 
         """
-        words = routing._identifier_words("saved indexes and policies")
-        self.assertEqual(routing._shared_words(words, "_index_metadata"), 1)
-        self.assertEqual(routing._shared_words(words, "policy"), 1)
-        self.assertEqual(routing._shared_words(words, "_save"), 0)
+        words = context_expansion._identifier_words(
+            "saved indexes and policies"
+        )
+        self.assertEqual(context_expansion._shared_words(
+            words, "_index_metadata"), 1
+        )
+        self.assertEqual(context_expansion._shared_words(words, "policy"), 1)
+        self.assertEqual(context_expansion._shared_words(words, "_save"), 0)
 
     def test_word_variants_match(self) -> None:
         """Close variants match; short or distant words do not.
@@ -416,12 +422,14 @@ class TestContextExpansionPlanning(unittest.TestCase):
         ):
             with self.subTest(first=first, second=second):
                 self.assertEqual(
-                    routing._words_match(first, second), expected
+                    context_expansion._words_match(first, second), expected
                 )
                 self.assertEqual(
-                    routing._words_match(second, first), expected
+                    context_expansion._words_match(second, first), expected
                 )
-        self.assertEqual(routing._identifier_words("PyTorch"), ["py", "torch"])
+        self.assertEqual(context_expansion._identifier_words(
+            "PyTorch"), ["py", "torch"]
+        )
 
     def test_named_words_do_not_rank_candidates(self) -> None:
         """Words of the named function do not favor its callees.
@@ -440,13 +448,13 @@ class TestContextExpansionPlanning(unittest.TestCase):
                 for name in callees
             ),
         )
-        result = routing.plan_retrieval(
+        result = context_expansion.plan_context_expansion(
             "How does prepare_workspace refresh its snapshot?", graph
         )
         self.assertEqual(result.related_functions[0], "m._update_snapshot")
         self.assertEqual(len(result.related_functions), 4)
         self.assertEqual(
-            routing._without_names(
+            context_expansion._without_names(
                 "Does `m.prepare_workspace` prepare a Workspace?",
                 ("m.prepare_workspace",),
             ),
@@ -470,7 +478,9 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            routing._ranked_callees(("m.run",), graph, "Explain run.", 2),
+            context_expansion._ranked_callees(
+                ("m.run",), graph, "Explain run.", 2
+            ),
             ("m.b_worker", "m.a_leaf"),
         )
 
@@ -496,17 +506,19 @@ class TestContextExpansionPlanning(unittest.TestCase):
             "Explain how choose_backend works, and which PyTorch device "
             "is used."
         )
-        result = routing.plan_retrieval(question, graph)
+        result = context_expansion.plan_context_expansion(question, graph)
         self.assertEqual(result.related_functions, ("m.torch_device",))
         self.assertEqual(result.signals, ("exact function", "name words"))
         self.assertEqual(
-            routing._described_functions(
+            context_expansion._described_functions(
                 question, graph, {"m.choose_backend"}, 5, True
             ),
             ("m.torch_device", "tests.helpers.torch_device"),
         )
         self.assertEqual(
-            routing._described_functions(question, graph, set(), 0, True),
+            context_expansion._described_functions(
+                question, graph, set(), 0, True
+            ),
             (),
         )
 
@@ -520,10 +532,14 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ranked(chunk("t2", path="pkg/a_test.py")),
             ranked(chunk("s2", path="pkg/b.py")),
         ]
-        demoted = routing.demote_test_results(results, "How does a work?")
+        demoted = context_expansion.demote_test_results(
+            results, "How does a work?"
+        )
         self.assertEqual([r.chunk.identifier for r in demoted],
                          ["s1", "s2", "t1", "t2"])
-        unchanged = routing.demote_test_results(results, "Which tests?")
+        unchanged = context_expansion.demote_test_results(
+            results, "Which tests?"
+        )
         self.assertEqual([r.chunk.identifier for r in unchanged],
                          ["t1", "s1", "t2", "s2"])
 
@@ -634,13 +650,14 @@ class TestRetrievalExpansion(unittest.TestCase):
             chunk("p4", "save the cache", path="pkg.py", start=40,
                   symbol="caller"),
         ]
-        kept = routing._focused_chunks(parts, {"run"}, ("cache",), 2)
+        kept = context_expansion._focused_chunks(parts, {"run"}, ("cache",), 2)
         self.assertEqual([c.identifier for c in kept], ["p3", "p4"])
         self.assertEqual(
-            routing._focused_chunks(parts, {"run"}, (), 0), parts
+            context_expansion._focused_chunks(parts, {"run"}, (), 0), parts
         )
         self.assertEqual(
-            routing._focused_chunks(parts[:2], {"run"}, (), 2), parts[:2]
+            context_expansion._focused_chunks(parts[:2], {"run"}, (), 2),
+            parts[:2],
         )
 
     def test_missing_function_and_missing_symbol(self) -> None:
