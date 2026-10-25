@@ -1,0 +1,674 @@
+{
+  "date": "2026-10-24T16:59:30+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.8",
+    "os_version": "26.6.2",
+    "model": "Mac16,7",
+    "chip": "Apple M4 Pro",
+    "memory_gb": 48,
+    "mlx": "0.32.3"
+  },
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "8bd20824c42c12d8a09cf6ba9cdc2bc8724f9d45",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "use_router": true,
+  "question_sets": [
+    "held_out_1",
+    "held_out_2"
+  ],
+  "retrieval_count": null,
+  "corpus": {
+    "source_files": 316,
+    "chunks": 5296,
+    "graph_entities": 4464,
+    "graph_relations": 26841
+  },
+  "index_status": "reused",
+  "questions": [
+    {
+      "id": "backend_choice",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 18.76,
+      "answer": "The `choose_backend` function selects the computation backend based on the requested value and platform. If the requested backend is `\"auto\"`, it defaults to `\"mlx\"` on Apple Silicon (Darwin/arm64) and `\"torch\"` otherwise. Explicit `\"mlx\"` requests are rejected on non-Apple Silicon platforms [3]. When PyTorch (`\"torch\"`) is selected, the `torch_device` function determines the device: it prioritizes CUDA if available, then MPS (Apple Silicon), and defaults to CPU if neither is available [7]. This device selection relies on caller-supplied availability flags, not hardware probing [1]. The `choose_backend` output directly influences which device `torch_device` uses, ensuring compatibility with the selected backend's capabilities.",
+      "trace_file": "conversation_2026-10-24T16-59-30.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "choose_backend"
+        ],
+        "lexical": [],
+        "code": [
+          "choose_backend"
+        ],
+        "hybrid": [
+          "choose_backend"
+        ],
+        "evidence": [
+          "choose_backend",
+          "torch_device"
+        ],
+        "cited": [
+          "choose_backend",
+          "torch_device"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 8,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/runtime.py",
+          "symbol": "runtime",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/runtime.py",
+          "symbol": "choose_backend",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/runtime.py",
+          "symbol": "torch_device",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool_confirmation",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 21.53,
+      "answer": "The `needs_confirmation` function determines if a tool requires user confirmation based on its confirmation policy and the plan's parameters. It returns `True` if the policy is `\"always\"` or if the plan's batch count exceeds the threshold (`large_batches`) when the policy is `\"when_large\"`. Otherwise, it returns `False` [6]. \n\nThe `confirm_plan` function uses `needs_confirmation` to decide whether to prompt the user. If confirmation is required, it calls `context.confirm(plan)` to retrieve the user's answer. The answer is validated against allowed choices (`PLAN_CHOICE_CHOICES`). If valid, it maps to a `PlanChoice` (e.g., `\"continue\"`, `\"quick\"`, or `\"cancel\"`); otherwise, it defaults to `\"cancel\"` [2]. The function traces the decision and whether the user was asked, returning the choice and confirmation status [2]. \n\nThe user's answer is processed through `context.confirm`, which interacts with the user via a UI (e.g., buttons) and returns an index or `None` for cancellation. Invalid answers result in cancellation, while valid choices dictate the tool's next action [8]. This workflow ensures tools only prompt users when required by policy and handle responses appropriately.",
+      "trace_file": "conversation_2026-10-24T16-59-55.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "confirm_plan"
+        ],
+        "lexical": [
+          "confirm_plan"
+        ],
+        "code": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "hybrid": [
+          "confirm_plan"
+        ],
+        "evidence": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "cited": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "code_only": [
+          "needs_confirmation"
+        ]
+      },
+      "evidence_count": 8,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "confirm_plan",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "needs_confirmation",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "ask_choice",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ask_choice_callers",
+      "kind": "dependency",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 26.37,
+      "answer": "The `ask_choice` function is called by two functions: `offer_export` and `choose_document`.  \n\n- **`offer_export`** asks the user to choose between saving a long list as a Markdown file or viewing a subset of it. The options are:  \n  - \"Save all [count] to outputs/ as Markdown\"  \n  - \"Show the first [CHAT_LIST_LIMIT] here\" [4].  \n\n- **`choose_document`** asks the user to select a specific document (e.g., \"Which paper should I turn into a research briefing?\") from a list of options, though the exact options depend on the context [6].  \n\nThese calls use `ask_choice` to present users with choices, tracing interactions and handling user input according to the `ToolContext` configuration. No other functions explicitly call `ask_choice` in the provided evidence.",
+      "trace_file": "conversation_2026-10-24T17-00-22.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "choose_document"
+        ],
+        "lexical": [
+          "choose_document"
+        ],
+        "code": [
+          "offer_export"
+        ],
+        "hybrid": [
+          "offer_export",
+          "choose_document"
+        ],
+        "evidence": [
+          "offer_export",
+          "choose_document"
+        ],
+        "cited": [
+          "offer_export",
+          "choose_document"
+        ],
+        "code_only": [
+          "offer_export"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/tools/_shared/long_lists.py",
+          "symbol": "offer_export",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/tools/_shared/choose_document.py",
+          "symbol": "choose_document",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "readable_trace",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 27.12,
+      "answer": "TraceLogger rewrites the human-readable trace file when events are appended, specifically on progress updates (at most once per configured interval) or immediately for other events [8]. It avoids leaving a partially written file by using a temporary JSON file during the rewrite process. While the exclusive companion-file lock is held, the temporary file replaces the target file, ensuring the original file is only replaced after the write completes [4]. This lock prevents concurrent writes from other processes, and the temporary file guarantees the target file is fully written before replacement, avoiding partial writes [5]. The rewrite merges current events with a deep copy of the baseline, preserving prior data and preventing nested mappings from being altered [4].",
+      "trace_file": "conversation_2026-10-24T17-00-54.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "TraceLogger._write_readable_trace"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [
+          "TraceLogger._write_readable_trace"
+        ],
+        "evidence": [
+          "TraceLogger._write_readable_trace",
+          "TraceLogger._write_event"
+        ],
+        "cited": [
+          "TraceLogger._write_readable_trace",
+          "TraceLogger._write_event"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 17,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_readable_trace",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/trace_logging.py",
+          "symbol": "trace_logging",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_event",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "workspace_sync",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 35.21,
+      "answer": "The `synchronize_project_workspace` function keeps its copy of a source folder up to date by comparing the current state of the source directory with a saved snapshot stored in the project workspace. It first validates the source and project directories, ensuring the source is outside the workspace [2]. It then reads a saved manifest (from `source_snapshot.json`) and scans the source directory to generate a current manifest [6]. \n\nIf the manifests differ, the function identifies changes (added, removed, or modified files) and updates the workspace snapshot accordingly. It removes files no longer present in the source and copies new or modified files to the workspace, using safe copying routines to avoid overwriting existing snapshots unless explicitly allowed [19]. The process also ensures the snapshot matches the source's manifest, preserving file integrity [6]. By reconciling the current source state with the saved snapshot, the function maintains the workspace copy in sync with the original folder. This approach ensures the workspace reflects the latest state of the source while handling potential conflicts or errors during synchronization.",
+      "trace_file": "conversation_2026-10-24T17-01-26.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "lexical": [],
+        "code": [
+          "synchronize_project_workspace"
+        ],
+        "hybrid": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "evidence": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "cited": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 24,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/project.py",
+          "symbol": "synchronize_project_workspace",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/project.py",
+          "symbol": "_synchronize_snapshot",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 19,
+          "path": "kilin/workspace.py",
+          "symbol": "_copy_file",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cached_model_callers",
+      "kind": "dependency",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 27.94,
+      "answer": "The function `cached_model_snapshot` is called by two main functions:  \n1. `ChatSession._load` (source [6]) uses it when `allow_download` is `False` and the model source is not a local directory. It resolves the cached snapshot without downloading.  \n2. `_model_source` (source [8]) uses it when `allow_download` is `False`, ensuring the model is loaded from the cached snapshot instead of downloading.  \n\nThese functions prioritize using the cached model to avoid network requests, but only if the cached snapshot is complete (e.g., contains `config.json`). The test function `_cached_snapshot` (source [5]) also calls `cached_model_snapshot` during validation, but this is part of test logic rather than core functionality.  \n\nNo other functions explicitly call `cached_model_snapshot` based on the evidence.",
+      "trace_file": "conversation_2026-10-24T17-02-07.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "ChatSession._load",
+          "_model_source"
+        ],
+        "cited": [
+          "ChatSession._load",
+          "_model_source"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 16,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 5,
+          "path": "tests/kilin/test_chat__models.py",
+          "symbol": "TestDefaultPretrainedChatModels._cached_snapshot",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/chat.py",
+          "symbol": "ChatSession._load",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/embeddings.py",
+          "symbol": "_model_source",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "file_selection",
+      "kind": "location",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 24.64,
+      "answer": "KíLín determines which files are indexed by cross-referencing the **source manifest** (which lists all selected files and their sizes) and the **index** (which identifies files with searchable text) [1]. Files not in the index, such as scanned PDFs, are marked as unsearchable and excluded from indexing [3]. The selection process filters files based on **file types** (e.g., PDFs, markdown) and **top-level folders** specified in the query [5]. Files left out are those in the source manifest but not indexed, or excluded by path rules in `scan_repository` [13]. The decision is implemented in `project_inventory` [1], with unsearchable files explicitly listed [3].",
+      "trace_file": "conversation_2026-10-24T17-02-40.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "scan_repository"
+        ],
+        "cited": [
+          "scan_repository"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 14,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/project_inventory/tool.py",
+          "symbol": "tool",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._unsearchable_sources",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/tools/project_inventory/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 13,
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "query_format",
+      "kind": "location",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 22.21,
+      "answer": "A question is transformed into text for semantic search by being embedded using the `embedding_session.embed_query` method, with the exact formatting handled by the caller. The query text is passed directly to the embedding model, and model-specific formatting (e.g., adding instructions) is the caller's responsibility [1]. For example, the `format_qwen3_query` function structures the query with an instruction and question [9], but this formatting is not inherently tied to the project type. However, the project type may influence retrieval strategies (e.g., hybrid search) or how queries are contextualized [7]. The embedding process itself does not directly depend on the project type, as the `semantic_search` function uses a generic embedding session [3]. Thus, while the project type might affect higher-level retrieval strategies, the core text-to-embedding transformation is model-specific and not project-type dependent.",
+      "trace_file": "conversation_2026-10-24T17-03-10.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "format_qwen3_query"
+        ],
+        "cited": [
+          "format_qwen3_query"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 9,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "semantic_search",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "semantic_search",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/project_type.py",
+          "symbol": "project_type",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/query_formats.py",
+          "symbol": "format_qwen3_query",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_delete",
+      "kind": "mechanism",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 29.36,
+      "answer": "When `ChatEngine.delete_conversation` is called, the saved conversation is **archived** rather than immediately deleted. The conversation file is moved to a `logs/traces/deleted` directory, where it is renamed with a suffix (e.g., `_2`, `_3`) if a file with the same name already exists there [3]. This ensures the file remains recoverable. The conversation is removed from the active catalog, and if it was the active conversation, the most recently updated conversation becomes active [2]. The file is not permanently deleted but stored in a \"deleted\" folder, making it non-current but potentially recoverable. The process also detaches the conversation's trace to avoid rewriting the JSON file [4]. Thus, the conversation file is **not truly deleted** but moved to an archived state.",
+      "trace_file": "conversation_2026-10-24T17-03-37.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "lexical": [],
+        "code": [
+          "ChatEngine.delete_conversation"
+        ],
+        "hybrid": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "evidence": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "cited": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 20,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine.delete_conversation",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.archive",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine._detach_project_trace",
+          "retrieved_by": [
+            "code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "torch_embedding",
+      "kind": "mechanism",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 27.76,
+      "answer": "The `EmbeddingSession` computes vectors with the PyTorch backend by using the model's `last_hidden_state` output, which represents the final hidden states of the tokens after processing [7]. It identifies the relevant token by applying the `attention_mask` to determine the last unmasked token in each sequence. Specifically, it calculates the maximum position where the mask is active, effectively selecting the last token's hidden state [7]. \n\nBefore returning, vectors are checked using `_check_vectors` [10], which verifies:  \n1. The count matches the expected number of inputs.  \n2. All vectors have consistent dimensions.  \n3. All values are finite (not NaN or infinity).  \n4. Each vector has at least one non-zero element (non-zero norm).  \n\nThese checks ensure validity and consistency of the output vectors. The PyTorch implementation also applies L2 normalization to the selected token's hidden state before validation [7].",
+      "trace_file": "conversation_2026-10-24T17-04-12.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "EmbeddingSession._embed_torch"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [
+          "EmbeddingSession._embed_torch"
+        ],
+        "evidence": [
+          "EmbeddingSession._embed_torch",
+          "_check_vectors"
+        ],
+        "cited": [
+          "EmbeddingSession._embed_torch",
+          "_check_vectors"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 16,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 7,
+          "path": "kilin/embeddings.py",
+          "symbol": "EmbeddingSession._embed_torch",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/embeddings.py",
+          "symbol": "_check_vectors",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "backend_choice": {
+      "answer": "The `choose_backend` function in the KíLín Python package is designed to select a computation backend (e.g., PyTorch, TensorFlow) based on the availability of the required libraries and user configuration. Here's how it typically works:\n\n1. **Backend Selection Logic**:\n   - The function checks for the presence of required dependencies (e.g., PyTorch or TensorFlow).\n   - If multiple backends are available, the user may explicitly specify the desired backend (e.g., via a configuration file, environment variable, or function argument).\n   - If no explicit choice is made, it may default to the first available backend (e.g., PyTorch if installed, or TensorFlow if installed).\n\n2. **PyTorch Device Usage**:\n   - When PyTorch is selected as the backend, the computation device (CPU/GPU) is determined by:\n     - **CUDA availability**: If a CUDA-enabled GPU is detected, PyTorch typically defaults to using the first available GPU (`device=0`).\n     - **User override**: The user can explicitly set the device using `torch.device(\"cuda\")` or `torch.device(\"cpu\")` in their code.\n   - KíLín may not directly control the device selection but relies on PyTorch's default behavior unless explicitly configured otherwise.\n\n**Note**: The exact behavior of `choose_backend` and device selection depends on the specific implementation of KíLín. If you are using a version of KíLín with custom logic, consult its documentation or source code for precise details.",
+      "wall_s": 18.64
+    },
+    "tool_confirmation": {
+      "answer": "In the KíLín Python package, the `needs_confirmation` and `confirm_plan` parameters work together to determine whether a tool requires user input before execution. Here's how they function:\n\n1. **`needs_confirmation` (per-tool):**  \n   This boolean flag specifies whether a tool inherently requires user confirmation before running. If set to `True`, the tool will prompt the user for input (e.g., \"Proceed with this action?\"). If `False`, the tool executes without user intervention.\n\n2. **`confirm_plan` (global setting):**  \n   This parameter controls whether the agent enforces confirmation for all steps in the plan. If `confirm_plan` is `True`, the agent will **always** ask for confirmation for every tool in the plan, regardless of the individual tool's `needs_confirmation` value. If `confirm_plan` is `False`, the agent will only ask for confirmation if the tool's `needs_confirmation` is explicitly `True`.\n\n### Behavior Summary:\n- **If `confirm_plan` is `True`:**  \n  All tools in the plan will prompt the user for confirmation, even if their `needs_confirmation` is `False`.  \n  - Example: A tool with `needs_confirmation=False` will still ask the user if `confirm_plan=True`.\n\n- **If `confirm_plan` is `False`:**  \n  The agent will only ask for confirmation if the tool's `needs_confirmation` is `True`.  \n  - Example: A tool with `needs_confirmation=False` will execute without user input.\n\n### User's Answer:\nWhen a tool requires confirmation, the agent prompts the user (e.g., via a CLI or API). The user's response (e.g., \"yes\" or \"no\") determines whether the tool proceeds. If the user confirms, the tool runs; otherwise, it is skipped or the plan halts, depending on the agent's configuration. \n\nThis mechanism allows fine-grained control over when user input is required, balancing safety and automation.",
+      "wall_s": 48.29
+    },
+    "ask_choice_callers": {
+      "answer": "The KíLín Python package uses the `ask_choice` function to prompt users for selections during interactive data analysis tasks. While the exact implementation details may vary, here is a plausible explanation of functions that call `ask_choice` and the choices they present:\n\n1. **`load_data()`**  \n   - **Asks the user to choose a dataset format** (e.g., \"CSV\", \"Excel\", \"JSON\") or a specific file path.  \n   - Example: \"Select the file type to load: [CSV, Excel, JSON]\".\n\n2. **`analyze_data()`**  \n   - **Asks the user to choose an analysis method** (e.g., \"Descriptive Statistics\", \"Regression\", \"Clustering\").  \n   - Example: \"Choose the analysis type: [Descriptive Statistics, Regression, Clustering]\".\n\n3. **`visualize_data()`**  \n   - **Asks the user to select a visualization type** (e.g., \"Bar Chart\", \"Line Chart\", \"Pie Chart\").  \n   - Example: \"Select the visualization: [Bar Chart, Line Chart, Pie Chart]\".\n\n4. **`filter_data()`**  \n   - **Asks the user to choose a filtering criterion** (e.g., \"Date Range\", \"Value Range\", \"Category\").  \n   - Example: \"Select the filter type: [Date Range, Value Range, Category]\".\n\n5. **`select_columns()`**  \n   - **Asks the user to choose columns for analysis** from a list of available columns.  \n   - Example: \"Select the columns to include: [Column1, Column2, Column3]\".\n\nThese functions use `ask_choice` to provide interactive prompts, allowing users to make selections that guide the data analysis workflow. The exact options and functions depend on the package's design, but the pattern of using `ask_choice` for user input is consistent with interactive tools like KíLín. Always refer to the package's documentation for precise details.",
+      "wall_s": 26.26
+    },
+    "readable_trace": {
+      "answer": "The **TraceLogger** in the **KíLín Python package** rewrites the human-readable trace file **when the logger is finalized or when the buffer reaches a threshold** (e.g., size or time-based rotation). To avoid leaving a partially written file, it employs a **temporary file strategy**:\n\n1. **Rewriting Process**:  \n   - The TraceLogger writes trace data to a **temporary file** (e.g., `trace_temp_12345.tmp`) instead of directly to the final destination.  \n   - When the logger needs to finalize the trace (e.g., on shutdown, rotation, or buffer flush), it **moves the temporary file** to the final location (e.g., `trace.log`) using an **atomic rename operation**. This ensures the final file is only updated once all data is fully written.\n\n2. **Avoiding Partial Writes**:  \n   - The temporary file is **not accessible** until the rename operation completes, preventing partial writes.  \n   - The rename operation is **atomic** on most filesystems, ensuring the final file is either fully written or remains in its previous state, avoiding corruption.  \n   - Additionally, the TraceLogger may use **buffering** and **flushing** mechanisms to ensure all data is committed to the temporary file before the rename.\n\nThis approach guarantees the human-readable trace file is always complete and consistent, even if the process is interrupted during logging.",
+      "wall_s": 22.21
+    },
+    "workspace_sync": {
+      "answer": "The `synchronize_project_workspace` function in the KíLín Python package ensures that its copy of a source folder remains up to date with the original by employing a combination of **file system monitoring** and **version control integration**. Here's how it works:\n\n1. **File System Monitoring**:  \n   KíLín likely uses tools like `inotify` (on Linux/macOS) or `ReadDirectoryChangesW` (on Windows) to monitor the source folder for changes (e.g., file additions, modifications, or deletions). When changes are detected, the function updates the corresponding files in the workspace copy to reflect these changes.\n\n2. **Version Control Integration**:  \n   If the source folder is under version control (e.g., Git), KíLín may synchronize the workspace by pulling the latest changes from the repository. This ensures the workspace matches the source folder's state, even if the source is managed via a version control system.\n\n3. **Periodic Checks**:  \n   In some cases, the function might periodically scan the source folder for discrepancies (e.g., comparing timestamps or checksums) and update the workspace accordingly, ensuring consistency without constant monitoring.\n\n4. **Build/Task Runner Integration**:  \n   KíLín might integrate with build systems (e.g., `Make`, `pip`, or `poetry`) or task runners (e.g., `invoke`, `nox`) to re-synchronize the workspace when dependencies or project structure changes, ensuring the workspace reflects the latest state of the source.\n\nThis approach ensures the workspace remains aligned with the source folder, either through real-time updates, version control, or periodic reconciliation. For precise details, refer to KíLín's documentation or source code.",
+      "wall_s": 18.25
+    },
+    "cached_model_callers": {
+      "answer": "In the KíLín Python package, the `cached_model_snapshot` function is typically used by functions responsible for loading or retrieving models. Here's how it works:\n\n1. **`load_model` or `get_model` Functions**:  \n   These are the primary functions that call `cached_model_snapshot`. When you invoke them with a model identifier (e.g., a model name or path), the function first checks if the model is already cached locally.  \n   - **If cached**: It uses `cached_model_snapshot` to retrieve the pre-downloaded model, avoiding redundant downloads.  \n   - **If not cached**: It downloads the model from a remote source (e.g., a model repository), saves it as a snapshot, and then uses `cached_model_snapshot` to reference this cached version for subsequent calls.\n\n2. **When `cached_model_snapshot` is Used Instead of Downloading**:  \n   - **On Subsequent Calls**: After the first download, `cached_model_snapshot` is used to access the model directly from the local cache, bypassing the download step.  \n   - **When Model Path is Local**: If the model is already stored locally (e.g., via a previous download or manual placement), `cached_model_snapshot` retrieves it without re-downloading.\n\nThis mechanism ensures efficient model management by minimizing redundant downloads and leveraging local storage for faster access. The exact implementation details may vary, but the core behavior aligns with standard caching patterns in machine learning libraries.",
+      "wall_s": 23.07
+    },
+    "file_selection": {
+      "answer": "KíLín uses a configuration file (typically `kilin.yaml` or `kilin.json`) to determine which files in a source folder are indexed and which are excluded. The configuration allows you to specify:\n\n1. **Source directories**: The folders to scan for files.\n2. **Inclusion/exclusion patterns**: You can define patterns (e.g., using glob syntax) to include or exclude specific files or directories. For example, you might include `.py` files or exclude `.log` files.\n3. **Default exclusions**: By default, KíLín may exclude common non-source files (e.g., hidden files like `.git`, directories like `node_modules`, or files with extensions like `.pyc` or `.bak`), but this behavior is customizable.\n\nThe exact rules depend on your configuration, so you can tailor the indexing behavior to your project's needs. If you don't specify a configuration, KíLín may use default settings, but it's recommended to explicitly define inclusion/exclusion rules for clarity.",
+      "wall_s": 14.82
+    },
+    "query_format": {
+      "answer": "In the KíLín Python package, a question is converted into text for semantic search by generating **embeddings** using a pre-trained transformer model (e.g., BERT, RoBERTa, or similar). This process involves the following steps:\n\n1. **Tokenization**: The question is tokenized into subwords using a tokenizer associated with the model.\n2. **Embedding Generation**: The tokenized input is passed through the model to produce a contextualized embedding vector that represents the semantic meaning of the question.\n3. **Normalization/Scaling**: The embedding may be normalized or scaled to ensure consistency with document embeddings.\n\nThis process **does depend on the project type** in the following ways:\n- **Model Choice**: Different project types (e.g., document retrieval, chatbots, or classification) may use different pre-trained models or fine-tuned versions tailored to specific tasks.\n- **Pipeline Configuration**: KíLín allows customization of the embedding pipeline (e.g., using `kilt.models` for different tasks) to align with the project's requirements (e.g., multilingual support, domain-specific knowledge, or efficiency).\n\nFor example, a document retrieval project might use a model optimized for similarity matching, while a chatbot might use a model fine-tuned for dialogue understanding. The core embedding generation step remains consistent, but the model and configuration adapt to the project's goals. \n\nIf you're using KíLín, refer to its documentation for specific model and pipeline configurations relevant to your use case.",
+      "wall_s": 15.4
+    },
+    "conversation_delete": {
+      "answer": "The behavior of `ChatEngine.delete_conversation` in the KíLín Python package depends on how the underlying storage system is implemented. Here's a general explanation:\n\n1. **Intended Purpose**: The method is designed to remove a conversation from the active state, typically by marking it as deleted or removing it from the active conversation list.\n\n2. **File Deletion**: If the conversation is stored in a file (e.g., a JSON or pickle file), the method may delete the file from the filesystem. However, this is not guaranteed unless explicitly stated in the documentation.\n\n3. **Soft Delete vs. Hard Delete**: Some systems use a \"soft delete\" approach, where the conversation is marked as deleted in the database or storage (e.g., a flag in a file or database row) but the physical file remains. Others perform a \"hard delete,\" permanently removing the file.\n\n4. **KíLín-Specific Behavior**: Without explicit documentation or source code reference, the exact behavior of `delete_conversation` in KíLín is unclear. You should consult the [KíLín documentation](https://kiln.readthedocs.io/) or its source code for confirmation.\n\n**Recommendation**: If you need to ensure data is permanently removed, verify the implementation details or test the method in your environment. Always back up important data before performing deletions.",
+      "wall_s": 15.62
+    },
+    "torch_embedding": {
+      "answer": "The `EmbeddingSession` in the KíLín Python package, when using the PyTorch backend, computes vectors by leveraging a pre-trained language model (e.g., BERT, RoBERTa, etc.) and its associated tokenization. Here's a breakdown of the process:\n\n1. **Vector Computation with PyTorch Backend**:\n   - **Tokenization**: Input text is tokenized into subword units (e.g., using BPE or WordPiece). These tokens are converted into integer IDs.\n   - **Model Forward Pass**: The tokenized input is passed through the PyTorch model. The model processes the tokens through its layers, generating hidden states for each token at each layer.\n   - **Hidden State Extraction**: The `EmbeddingSession` typically uses the **[CLS] token's hidden state** (a special token added at the beginning of sequences) as the final embedding vector. This is common in models like BERT, where the [CLS] token's representation is used for classification tasks. Alternatively, it might use the **last token's hidden state** (e.g., for sentence-level embeddings) or the **average of all token hidden states** (for document-level embeddings), depending on the model's configuration.\n\n2. **Vector Validation**:\n   - **Normalization**: The computed vectors are often normalized to unit length (L2 normalization) to ensure consistency.\n   - **NaN/Inf Checks**: The system checks for invalid values (e.g., `NaN` or `inf`) in the vectors and may raise errors or log warnings if detected.\n   - **Shape Verification**: The vectors are validated to ensure they match the expected dimensionality (e.g., matching the model's embedding size).\n\nIf the exact implementation details of KíLín are not publicly documented, these steps are based on common practices in NLP libraries using PyTorch. For precise behavior, refer to KíLín's documentation or source code.",
+      "wall_s": 24.62
+    }
+  }
+}

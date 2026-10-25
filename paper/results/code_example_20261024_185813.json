@@ -1,0 +1,345 @@
+{
+  "date": "2026-10-24T16:54:21+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.8",
+    "os_version": "26.6.2",
+    "model": "Mac16,7",
+    "chip": "Apple M4 Pro",
+    "memory_gb": 48,
+    "mlx": "0.32.3"
+  },
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "8bd20824c42c12d8a09cf6ba9cdc2bc8724f9d45",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "use_router": true,
+  "question_sets": [
+    "held_out_3"
+  ],
+  "retrieval_count": null,
+  "corpus": {
+    "source_files": 316,
+    "chunks": 5296,
+    "graph_entities": 4464,
+    "graph_relations": 26841
+  },
+  "index_status": "reused",
+  "questions": [
+    {
+      "id": "notebook_extraction",
+      "kind": "location",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 19.87,
+      "answer": "KíLín converts a Jupyter notebook into searchable text via the `_notebook_units` function in `kilin/sources/extensions/sources_ipynb.py` [2]. This function extracts **code** and **Markdown cells**, omitting stored outputs (e.g., execution results) and metadata (e.g., cell tags, execution counts) [4]. It processes each cell’s `source` content, joining multiline entries into a single string and stripping empty lines. For Markdown cells, it identifies section headers to associate text with logical sections. Cells of other types (e.g., raw, video) are skipped. The resulting `SourceUnit` objects represent the searchable text, excluding non-code/non-Markdown content and execution artifacts. The environment setup in `setup/notebook.py` [1] ensures the notebook uses the correct Python interpreter but does not directly handle content conversion.",
+      "trace_file": "conversation_2026-10-24T16-54-21.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "_notebook_units"
+        ],
+        "code": [],
+        "hybrid": [
+          "_notebook_units"
+        ],
+        "evidence": [
+          "_notebook_units"
+        ],
+        "cited": [
+          "_notebook_units"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 6,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "setup/notebook.py",
+          "symbol": "notebook",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units",
+          "retrieved_by": [
+            "lexical"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "atomic_files",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 21.63,
+      "answer": "Both `atomic_write_text` and `atomic_create_text` use temporary files to ensure files are never left half-written by performing atomic operations that complete the write or fail cleanly. `atomic_write_text` creates a uniquely named temporary file in the destination directory, writes the content, and then atomically replaces the target file with the temporary one using `temporary.replace(path)`. If the write fails, the temporary file is deleted, preserving the prior destination [6]. `atomic_create_text` similarly uses a temporary file, writes content, and creates a hard link to the destination path (`os.link(temporary, path)`), ensuring the destination is fully written before the link is made. If the destination already exists, it raises an error, preventing overwrite [2]. \n\nThe key difference is that `atomic_write_text` replaces an existing file, while `atomic_create_text` fails if the destination exists, ensuring no overwrite. Additionally, `atomic_create_text` uses a hard link for atomic publication, whereas `atomic_write_text` relies on a replace operation. Both avoid partial writes by completing the operation (write + link/replace) before modifying the destination, but `atomic_create_text` enforces exclusivity for new entries [1].",
+      "trace_file": "conversation_2026-10-24T16-54-48.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [
+          "atomic_create_text"
+        ],
+        "hybrid": [
+          "atomic_create_text"
+        ],
+        "evidence": [
+          "atomic_write_text",
+          "atomic_create_text"
+        ],
+        "cited": [
+          "atomic_write_text",
+          "atomic_create_text"
+        ],
+        "code_only": [
+          "atomic_create_text"
+        ]
+      },
+      "evidence_count": 9,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_writes",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_create_text",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_write_text",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim_passages_callers",
+      "kind": "dependency",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 25.31,
+      "answer": "The function `claim_passages` is called by `_verify` in `kilin/tools/reference_check/tool.py` [4] and by `run` in `kilin/tools/suggest_reference/tool.py` [9].  \n\nIn `_verify`, `claim_passages` is used to retrieve the most relevant passages from a cited file that relate to a claim. These passages are then passed to `verify_claim` to determine if the cited work supports, contradicts, or is unrelated to the claim [4]. The selected passages provide evidence for assessing the claim's validity.  \n\nIn `run`, `claim_passages` identifies passages from a paper that are relevant to a given statement. These passages are used by `judge_support` to evaluate whether the paper supports the statement, aiding in suggesting appropriate references [9]. The passages serve as evidence to determine the strength of the paper's support for the statement.  \n\nBoth uses rely on `claim_passages` to filter and prioritize passages based on their relevance, ensuring that only the most pertinent evidence is considered for verification or reference suggestions.",
+      "trace_file": "conversation_2026-10-24T16-55-15.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [
+          "_verify"
+        ],
+        "hybrid": [
+          "_verify"
+        ],
+        "evidence": [
+          "_verify",
+          "run"
+        ],
+        "cited": [
+          "_verify",
+          "run"
+        ],
+        "code_only": [
+          "_verify"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/tools/reference_check/tool.py",
+          "symbol": "_verify",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/tools/suggest_reference/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "model_identity",
+      "kind": "location",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 18.55,
+      "answer": "KíLín identifies the embedding model for a saved index by associating it with the selected computational backend (e.g., \"mlx\" or \"torch\") during project configuration [1]. The embedding model is stored separately for each backend in the `ProjectProfile` (e.g., `embedding_mlx` or `embedding_torch`) [1]. When loading an index, KíLín first resolves the backend from the project configuration, then selects the corresponding embedding model [3]. This linkage ensures that the model used to build the index matches the backend used during indexing, preventing mismatches between models and backends [4]. If the backend or model changes in the project configuration, KíLín detects this discrepancy by comparing the stored backend with the current configuration, ensuring consistency between the index and its associated model [1]. The model is explicitly stored in the project profile, allowing KíLín to validate and track changes when the project is reopened [5].",
+      "trace_file": "conversation_2026-10-24T16-55-46.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 7,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/project.py",
+          "symbol": "ProjectProfile.embedding_model",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "tutorials/100_persistent_indexes.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "tutorials/60_embeddings.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "tutorials/150_project_types.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "lexical"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_branch",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 24.31,
+      "answer": "ConversationStore creates a branch by copying non-metadata fields from the parent's resume state, such as turns and operational data, while recording the parent's identifier and checkpoint reference in the new branch's metadata [5]. The branch is named by appending \" branch\" and a sequential number to the parent's display name, ensuring uniqueness by checking against existing names in the registry [6]. To avoid overwriting existing files, the new branch's filename is selected through a process that locks and checks each candidate path before creation, raising an error if a collision is detected after selection [5]. This approach uses atomic writes and cross-process locks to prevent concurrent modifications, ensuring file names remain unique without manual intervention [2].",
+      "trace_file": "conversation_2026-10-24T16-56-09.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "ConversationStore.create"
+        ],
+        "lexical": [
+          "ConversationStore.create"
+        ],
+        "code": [],
+        "hybrid": [
+          "ConversationStore.create"
+        ],
+        "evidence": [
+          "ConversationStore.create",
+          "ConversationStore._branch_name"
+        ],
+        "cited": [
+          "ConversationStore.create",
+          "ConversationStore._branch_name"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.create",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.create",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore._branch_name",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "notebook_extraction": {
+      "answer": "KíLín converts a Jupyter notebook into searchable text by extracting **text content from markdown cells** and **code cells** (e.g., Python scripts). It processes these elements into a plain-text format, making them searchable. However, the following parts of the notebook are typically **left out** during this conversion:\n\n1. **Output cells**: Results of code execution (e.g., printed outputs, plots, or error messages) are excluded, as they are dynamic and environment-dependent.\n2. **Images and binary data**: Embedded images, figures, or other non-text content are not converted into searchable text.\n3. **Metadata**: Fields like notebook creation time, author, or other metadata are omitted unless explicitly included in the processing configuration.\n4. **Attachments**: Files attached to the notebook (e.g., external data files) are not included.\n\nThis approach ensures the resulting text is lightweight and focused on the static content of the notebook. For precise details, refer to the [KíLín documentation](https://kilin.readthedocs.io/).",
+      "wall_s": 14.39
+    },
+    "atomic_files": {
+      "answer": "The `atomic_write_text` and `atomic_create_text` functions in the KíLín Python package both ensure that a file is written atomically, preventing partial writes by using a temporary file and a rename operation. Here's how they work and differ:\n\n### **Atomic Writing Process**\n1. **Temporary File Creation**: Both functions create a temporary file in the same directory as the target file.\n2. **Content Writing**: They write the provided content to the temporary file.\n3. **Atomic Rename**: The temporary file is renamed to the target file path. This rename operation is atomic on most filesystems, meaning the original file remains unchanged until the rename is complete. If the process is interrupted, the original file is not corrupted, and the new content is only visible if the rename succeeds.\n\n### **Key Differences**\n- **`atomic_write_text`**:\n  - **Overwrites the target file**: If the target file already exists, it is replaced by the new content.\n  - **Behavior**: Ensures the target file is updated with the new content, even if it already exists.\n\n- **`atomic_create_text`**:\n  - **Creates a new file**: If the target file exists, the function may fail or behave differently (e.g., not overwrite). The exact behavior depends on the implementation, but it typically avoids overwriting existing files.\n  - **Purpose**: Designed to create a new file without modifying existing ones, ensuring the original file remains untouched.\n\n### **Summary**\nBoth functions prevent partial writes by using a temporary file and atomic renaming. The critical difference lies in how they handle the target file: `atomic_write_text` overwrites it, while `atomic_create_text` ensures a new file is created without overwriting existing content. This distinction is crucial for scenarios where data integrity or file existence checks are required.",
+      "wall_s": 28.94
+    },
+    "claim_passages_callers": {
+      "answer": "The KíLín Python package is designed for information retrieval and natural language processing tasks, including claim verification. While the exact implementation details may vary, here's a general explanation of how functions might interact with `claim_passages`:\n\n1. **`verify_claim(claim, passages)`**  \n   - **Purpose**: Verifies whether a given claim is supported by the provided passages.  \n   - **Use of `claim_passages`**: This function likely uses the output of `claim_passages` (a list of relevant passages) to assess the claim's validity by checking if the passages contain evidence that supports or contradicts the claim.\n\n2. **`evaluate_claim(claim, documents)`**  \n   - **Purpose**: Evaluates the truthfulness of a claim against a set of documents.  \n   - **Use of `claim_passages`**: This function might first call `claim_passages` to retrieve relevant passages from the documents, then use those passages to determine the claim's accuracy.\n\n3. **`retrieval_pipeline(claim)`**  \n   - **Purpose**: A pipeline that combines retrieval and verification steps.  \n   - **Use of `claim_passages`**: This function could internally call `claim_passages` to fetch relevant passages, which are then passed to a verification function (e.g., `verify_claim`) for further analysis.\n\n### Key Note:\nIf you are using a specific version of KíLín, the exact function names and workflows may differ. For precise details, consult the [KíLín documentation](https://kilin.readthedocs.io/) or its source code. If you have access to the package, inspecting its source or API reference would clarify the exact interactions.",
+      "wall_s": 19.16
+    },
+    "model_identity": {
+      "answer": "KíLín identifies the embedding model used to build a saved index by storing metadata about the model alongside the index. This metadata typically includes details such as the model's name, version, or a checksum of its parameters. When the index is loaded, KíLín compares this stored metadata with the current model's configuration to detect changes. If discrepancies are found (e.g., a different model version or parameters), it alerts the user that the model has changed, ensuring compatibility and preventing mismatches between the index and the embedding model. This mechanism relies on explicit tracking of the model's state during index creation and verification during loading.",
+      "wall_s": 11.8
+    },
+    "conversation_branch": {
+      "answer": "The `ConversationStore` in the KíLín Python package manages conversations and their branches by creating copies of the parent conversation's state while ensuring uniqueness and avoiding conflicts. Here's how it works:\n\n1. **What is copied from the parent?**  \n   When a branch is created, the `ConversationStore` copies the entire state of the parent conversation, including all messages, metadata (e.g., timestamps, user IDs), and any associated data structures. This ensures the branch starts with a complete snapshot of the parent's state.\n\n2. **How is the branch named?**  \n   The branch is typically named using a unique identifier, such as a UUID or a timestamp, appended to a base name (e.g., `branch/12345678-90ab-cdef-ghij-klmnopqrst`). This ensures the name is unique and avoids collisions. Alternatively, it might use a versioning scheme (e.g., `v1`, `v2`) if the parent conversation has a versioned structure.\n\n3. **How does it avoid overwriting existing files?**  \n   Before creating a new branch, the `ConversationStore` checks if a file with the proposed branch name already exists. If it does, it appends a suffix (e.g., `_1`, `_2`) or uses a hash to generate a new, unique name. This ensures the new branch's file does not overwrite existing data.\n\n**Note:** The exact implementation details (e.g., naming conventions, file-checking logic) may vary depending on the specific version of KíLín and its internal design. For precise behavior, consult the package's documentation or source code.",
+      "wall_s": 19.18
+    }
+  }
+}
