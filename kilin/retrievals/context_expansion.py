@@ -167,6 +167,11 @@ _TEST_SUBJECT_EXPANSION_MAX = require_default_nonnegative_int(
 SOURCE_SEARCH_DEPTH = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_DEPTH", "RETRIEVAL"
 )
+# Fused results kept when an intent prefers source code (at least the
+# retrieval count): the source code found deeper needs room after fusion.
+SOURCE_SEARCH_RESULTS = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_RESULTS", "RETRIEVAL"
+)
 # Overall best results a channel keeps besides its best source code.
 _SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"

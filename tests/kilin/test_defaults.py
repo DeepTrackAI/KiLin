@@ -417,6 +417,10 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             context_expansion.SOURCE_SEARCH_DEPTH,
             settings["SOURCE_SEARCH_DEPTH"],
         )
+        self.assertEqual(
+            context_expansion.SOURCE_SEARCH_RESULTS,
+            settings["SOURCE_SEARCH_RESULTS"],
+        )
 
 
 class TestDefaultDocumentation(unittest.TestCase):

@@ -218,6 +218,7 @@ from kilin.retrievals import (
 )
 from kilin.retrievals.context_expansion import (
     SOURCE_SEARCH_DEPTH,
+    SOURCE_SEARCH_RESULTS,
     demote_documentation,
     demote_test_results,
     names_code,
@@ -2987,8 +2988,10 @@ class RAGSession:
             Let each channel rank ``SOURCE_SEARCH_DEPTH`` times deeper and
             keep its best source-code results (``prefer_source_results``),
             then rank documentation and notebook passages after source code
-            before keeping the top results, unless the question asks about
-            documentation (``demote_documentation``). Defaults to ``False``.
+            (unless the question asks about documentation;
+            ``demote_documentation``) and keep ``SOURCE_SEARCH_RESULTS``
+            fused results (at least the retrieval count). Defaults to
+            ``False``.
 
         Returns
         -------
@@ -3167,7 +3170,10 @@ class RAGSession:
         )
         if prefer_source_code:
             candidates = demote_documentation(candidates, question)
-        combined = demote_test_results(candidates, question)[:count]
+        kept = (
+            max(count, SOURCE_SEARCH_RESULTS) if prefer_source_code else count
+        )
+        combined = demote_test_results(candidates, question)[:kept]
         trace.emit(
             "retrieval.hybrid.ranked",
             component="retrieval",

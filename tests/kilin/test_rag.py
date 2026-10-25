@@ -578,8 +578,9 @@ class TestRAGRetrieval(unittest.TestCase):
         guide = ranked(chunk("g", path="docs/a.md", kind="markdown_section"))
         test = ranked(chunk("x", path="tests/test_a.py"))
         source = ranked(chunk("s", path="pkg/a.py"))
+        # Preferring source code keeps SOURCE_SEARCH_RESULTS fused results.
         for prefer, expected in (
-            (True, [source, tutorial]),
+            (True, [source, tutorial, guide, test]),
             (False, [tutorial, guide]),
         ):
             with self.subTest(prefer=prefer), _search_patches() as mocks:
