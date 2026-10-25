@@ -34,6 +34,14 @@ text, model-specific embedding query format and the original user question.
 The Qwen3 query formatter is applied by the relevant semantic-search path,
 not by modifying original source files.
 
+Indexed text is not always the displayed passage. A Python or MATLAB code
+passage is embedded and lexically indexed with its file path in front and,
+for Python, the first line of its module docstring (`_retrieval_text` in
+`rag.py`), so a function can be found by what its module is about even when
+its own name and code use other words. Evidence, citations and the answering
+model keep the passage text itself. The format is recorded in the index
+settings (`retrieval_text`); changing it rebuilds saved indexes.
+
 ## Lexical channel
 
 `retrieval_lexical.py` tokenizes text into lowercase words, source-oriented
@@ -57,6 +65,12 @@ related chunks. `retrievals/context_expansion.py` can detect explicit
 file/function references and expand retrieved context accordingly. Graph structure and
 chunk provenance must agree: a stale graph can misdirect named-function
 context even when semantic vectors remain readable.
+
+Passages of related functions (callees, neighbors, methods of named classes,
+and functions reached from retrieved documentation, module headers and tests)
+compete for `RETRIEVAL.RELATED_PASSAGES_MAX` places, ranked by the cosine
+similarity of their saved embedding to the query's. Explicit files and named
+functions are always added in full.
 
 ## Hybrid combination: ranks rather than scores
 

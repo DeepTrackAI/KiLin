@@ -406,6 +406,7 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             "MODULE_FUNCTION_EXPANSION_MAX",
             "TEST_SUBJECT_EXPANSION_MAX",
             "RELATED_CHUNKS_MAX",
+            "RELATED_PASSAGES_MAX",
         ):
             with self.subTest(setting=name):
                 self.assertEqual(

@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 from kilin.retrievals import context_expansion
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
@@ -752,6 +753,40 @@ class TestRetrievalExpansion(unittest.TestCase):
             [], self.chunks, self.graph, plan
         )
         self.assertEqual([c.identifier for c in result], ["a", "b"])
+
+    def test_related_passages_compete_by_relevance(self) -> None:
+        """The most relevant related passages fill a limited budget.
+
+        """
+        graph = CodeGraph(
+            entities=tuple(
+                CodeEntity(f"pkg.{name}", "python_function", Path("pkg.py"))
+                for name in ("run", "low", "mid", "high")
+            ),
+            relations=(),
+        )
+        named = chunk("r", "run", path="pkg.py", start=1, symbol="run")
+        parts = [
+            chunk(name, name, path="pkg.py", start=index + 2, symbol=name)
+            for index, name in enumerate(("low", "mid", "high"))
+        ]
+        plan = context_expansion.ContextExpansionPlan(
+            (), ("pkg.run",), False, ("pkg.low", "pkg.mid", "pkg.high"),
+            ("exact function", "callees"),
+        )
+        scores = {"low": 0.1, "mid": 0.5, "high": 0.9}
+        with patch.object(context_expansion, "_RELATED_PASSAGES_MAX", 2):
+            ranked_result = context_expansion.expand_retrieval_context(
+                [], [named, *parts], graph, plan,
+                lambda item: scores.get(item.identifier, 0.0),
+            )
+            plan_order = context_expansion.expand_retrieval_context(
+                [], [named, *parts], graph, plan
+            )
+        self.assertEqual([c.identifier for c in ranked_result],
+                         ["r", "high", "mid"])
+        self.assertEqual([c.identifier for c in plan_order],
+                         ["r", "low", "mid"])
 
     def test_long_related_function_keeps_relevant_chunks(self) -> None:
         """Only the call site and the most relevant chunks are kept.

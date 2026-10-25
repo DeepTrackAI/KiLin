@@ -791,6 +791,61 @@ class TestRAGRetrieval(unittest.TestCase):
                     )
 
 
+class TestRetrievalText(unittest.TestCase):
+    """Index code passages with their file path and module summary."""
+
+    def test_code_passages_get_path_and_module_summary(self) -> None:
+        """Only code passages are prefixed; the header keeps its text."""
+        header = chunk(
+            "h", '"""Extract natural units from Python files.\n\nMore."""\n'
+            "import ast\n", path="pkg/py_ext.py",
+            kind="python_module_context",
+        )
+        function = chunk("f", "def _units():\n    pass\n",
+                         path="pkg/py_ext.py", start=5)
+        guide = chunk("g", "Read the guide.", path="docs/a.md",
+                      kind="markdown_section")
+        broken = chunk("b", "def (", path="pkg/bad.py",
+                       kind="python_module_context")
+        summaries = rag._module_summaries([header, function, guide, broken])
+        self.assertEqual(
+            summaries,
+            {
+                Path("pkg/py_ext.py"):
+                    "Extract natural units from Python files."
+            },
+        )
+        self.assertEqual(
+            rag._retrieval_text(function, summaries),
+            "pkg/py_ext.py\nExtract natural units from Python files.\n\n"
+            "def _units():\n    pass\n",
+        )
+        self.assertEqual(
+            rag._retrieval_text(header, summaries),
+            f"pkg/py_ext.py\n\n{header.text}",
+        )
+        self.assertEqual(rag._retrieval_text(guide, summaries), guide.text)
+
+    def test_passage_relevance_uses_saved_embeddings(self) -> None:
+        """Score passages by cosine similarity to the embedded query."""
+        session = _session()
+        near, far, missing = chunk("n"), chunk("f"), chunk("m")
+        session.indexes = SimpleNamespace(
+            semantic=SimpleNamespace(
+                chunks=(near, far), embeddings=((1.0, 0.0), (0.0, 1.0))
+            )
+        )
+        session.embedding_session = Mock()
+        session.embedding_session.embed_query.return_value = [0.8, 0.6]
+        score = session._passage_relevance("query")
+        self.assertAlmostEqual(score(near), 0.8)
+        self.assertAlmostEqual(score(far), 0.6)
+        self.assertEqual(score(missing), float("-inf"))
+        session.embedding_session.embed_query.assert_called_once_with(
+            "query"
+        )
+
+
 class TestRAGProgress(unittest.TestCase):
     """Verify progress counts, callback delivery, and trace throttling."""
 
@@ -2969,7 +3024,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
             )
         self.assertEqual(status, "rebuilt")
         self.assertEqual(chunks, [self.current])
-        self.assertEqual(self.embedding.calls, [["alpha beta"]])
+        self.assertEqual(self.embedding.calls, [["a.py\n\nalpha beta"]])
 
     def test_removed_file_vectors_are_not_reused(self) -> None:
         """Exclude vectors belonging to source files that were removed."""

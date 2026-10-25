@@ -66,7 +66,7 @@ Examples
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import os
@@ -127,6 +127,12 @@ _CLASS_METHOD_EXPANSION_MAX = require_default_nonnegative_int(
 # Most chunks kept from one long related function; zero keeps all.
 _RELATED_CHUNKS_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "RELATED_CHUNKS_MAX", "RETRIEVAL"
+)
+# Most passages of related functions (callees, neighbors, methods, and
+# functions reached from retrieved results) added in total, the most
+# relevant first; zero keeps all.
+_RELATED_PASSAGES_MAX = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "RELATED_PASSAGES_MAX", "RETRIEVAL"
 )
 # Most functions added because every word of their name occurs in the
 # question ("its HTML templates" adds ``html_template``); zero disables it.
@@ -402,6 +408,7 @@ def expand_retrieval_context(
     chunks: Sequence[Chunk],
     graph: CodeGraph,
     plan: ContextExpansionPlan,
+    relevance: Callable[[Chunk], float] | None = None,
 ) -> list[Chunk]:
     """Add complete requested context after normal RRF retrieval.
 
@@ -419,6 +426,10 @@ def expand_retrieval_context(
         Current repository code graph.
     plan: ContextExpansionPlan
         Deterministic expansion plan for the question.
+    relevance: Callable[[Chunk], float] | None, optional
+        Scores a passage's relevance to the question, such as the cosine
+        similarity of its embedding to the query's. ``None`` keeps the
+        plan's order. Defaults to ``None``.
 
     Returns
     -------
@@ -432,8 +443,11 @@ def expand_retrieval_context(
     methods of named classes) follow. A related function longer than
     ``RELATED_CHUNKS_MAX`` chunks contributes only its most relevant chunks:
     those that mention a named function (such as a call site), then those
-    sharing most words with the question. Deduplication is by chunk
-    identifier. No overall output-count or token-budget limit is applied.
+    sharing most words with the question. The passages of all related
+    functions together are limited to ``RELATED_PASSAGES_MAX``: the most
+    relevant by ``relevance`` (otherwise the first in plan order), added
+    most relevant first. Explicit files and named functions are always
+    added in full. Deduplication is by chunk identifier.
 
     """
 
@@ -462,13 +476,15 @@ def expand_retrieval_context(
         named_leaves = {
             name.rsplit(".", 1)[-1].casefold() for name in plan.functions
         }
+        related: list[Chunk] = []
+        related_seen = set(seen)
         for function in plan.related_functions:
             related_chunks = _chunks_for_functions(
                 chunks, graph, (function,)
             )
             _append_unique(
-                expanded,
-                seen,
+                related,
+                related_seen,
                 _focused_chunks(
                     related_chunks,
                     named_leaves,
@@ -476,6 +492,14 @@ def expand_retrieval_context(
                     _RELATED_CHUNKS_MAX,
                 ),
             )
+        if relevance is not None:
+            order = {id(chunk): index for index, chunk in enumerate(related)}
+            related.sort(
+                key=lambda chunk: (-relevance(chunk), order[id(chunk)])
+            )
+        if _RELATED_PASSAGES_MAX:
+            related = related[:_RELATED_PASSAGES_MAX]
+        _append_unique(expanded, seen, related)
 
     return expanded
 

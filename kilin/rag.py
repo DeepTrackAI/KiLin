@@ -318,6 +318,15 @@ _SYSTEM_PROMPT = (
 # SHA-256 of its bytes, so unchanged files (slow PDFs above all) are not read
 # again when sources are re-indexed.
 _TEXT_CACHE: Final[str] = "source_text.json"
+# How indexed text is built from passages (``_retrieval_text``); a change
+# rebuilds saved indexes.
+RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
+# Longest module summary put in front of a code passage for searching.
+_SUMMARY_MAX_CHARACTERS: Final[int] = 200
+# Opening of a module docstring, after optional comment lines.
+_MODULE_DOCSTRING: Final[re.Pattern[str]] = re.compile(
+    r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*[rRuU]?(\"\"\"|\'\'\')"
+)
 # Most items a reused-evidence answer keeps; oldest evidence is dropped.
 _MAX_REUSED_EVIDENCE: Final[int] = require_default_int(
     _RAG_DEFAULTS, "MAX_REUSED_EVIDENCE", "RAG"
@@ -2780,10 +2789,18 @@ class RAGSession:
                 "batch_size": _EMBEDDING_PROGRESS_BATCH_SIZE,
             },
         ):
+            # Code passages are embedded with their file path and module
+            # summary in front, so a function is found by what its module
+            # is about even when its own name and code do not say it.
+            summaries = _module_summaries(chunks)
             fresh_semantic = (
                 build_semantic_index(
                     pending_chunks,
                     embedding_session,
+                    texts=[
+                        _retrieval_text(chunk, summaries)
+                        for chunk in pending_chunks
+                    ],
                     batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
                     progress_callback=(
                         lambda current, total: self._emit_count_progress(
@@ -2835,7 +2852,10 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            lexical = build_lexical_index(chunks)
+            lexical = build_lexical_index(
+                chunks,
+                texts=[_retrieval_text(chunk, summaries) for chunk in chunks],
+            )
         indexes = prepare_persistent_indexes(
             semantic,
             lexical,
@@ -3168,11 +3188,19 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         report("Expanding related context")
+        # Related passages compete for a fixed number of places, by the
+        # similarity of their embedding to the query's.
+        relevance = (
+            self._passage_relevance(query_text)
+            if plan.related_functions
+            else None
+        )
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
             self.indexes.code_graph,
             plan,
+            relevance,
         )
         expansion_data: dict[str, object] = {
             "rrf_count": len(combined),
@@ -3810,6 +3838,56 @@ class RAGSession:
             **settings,
         )
 
+    def _passage_relevance(
+        self: RAGSession, query_text: str
+    ) -> Callable[[Chunk], float]:
+        """Return a scorer of indexed passages by similarity to a query.
+
+        Parameters
+        ----------
+        query_text: str
+            Query formatted for the embedding model.
+
+        Returns
+        -------
+        Callable[[Chunk], float]
+            Cosine similarity between a passage's saved embedding and the
+            query's (both vectors are unit length); minus infinity for a
+            passage without an embedding.
+
+        """
+
+        query = self.embedding_session.embed_query(query_text)
+        vectors = dict(
+            zip(
+                (chunk.identifier for chunk in self.indexes.semantic.chunks),
+                self.indexes.semantic.embeddings,
+                strict=True,
+            )
+        )
+
+        def score(chunk: Chunk) -> float:
+            """Score one passage against the query.
+
+            Parameters
+            ----------
+            chunk: Chunk
+                Indexed passage.
+
+            Returns
+            -------
+            float
+                Cosine similarity, or minus infinity without an embedding.
+
+            """
+
+            vector = vectors.get(chunk.identifier)
+            if vector is None:
+                return float("-inf")
+            return float(sum(a * b for a, b in zip(query, vector)))
+
+        return score
+
     def _index_metadata(self: RAGSession) -> dict[str, object]:
         """Return settings that determine reusable index compatibility.
 
@@ -3842,6 +3920,8 @@ class RAGSession:
         # Recorded only when off, so existing indexes stay valid by default.
         if project_type(profile.type_id).code_graph is False:
             metadata["code_graph"] = False
+        # Indexes built from plain chunk text are rebuilt once.
+        metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
         # Projects that read PDFs re-index when the PDF text extractor
         # changes; other projects are unaffected.
         if ".pdf" in profile.extensions:
@@ -4792,3 +4872,75 @@ def _ranked_trace_data(
                 row[name] = getattr(result, name)
         rows.append(row)
     return {"count": len(rows), "results": rows}
+
+
+def _module_summaries(chunks: Sequence[Chunk]) -> dict[Path, str]:
+    """Return the first docstring line of each Python module.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        All indexed passages.
+
+    Returns
+    -------
+    dict[pathlib.Path, str]
+        For each file whose first passage is Python module context that
+        starts with a docstring (after optional comment lines), the
+        docstring's first nonblank line (at most
+        ``_SUMMARY_MAX_CHARACTERS`` characters).
+
+    """
+
+    summaries: dict[Path, str] = {}
+    for chunk in chunks:
+        if (
+            chunk.kind != "python_module_context"
+            or chunk.start_line != 1
+            or chunk.path in summaries
+        ):
+            continue
+        # A long docstring can continue in the next passage, so the text is
+        # matched rather than parsed.
+        match = _MODULE_DOCSTRING.match(chunk.text)
+        if match is None:
+            continue
+        body = chunk.text[match.end():].split(match.group(1), 1)[0]
+        lines = [line.strip() for line in body.splitlines()]
+        first = next((line for line in lines if line), "")
+        if first:
+            summaries[chunk.path] = first[:_SUMMARY_MAX_CHARACTERS]
+    return summaries
+
+
+def _retrieval_text(chunk: Chunk, summaries: dict[Path, str]) -> str:
+    """Return the text indexed for one passage.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        Indexed passage.
+    summaries: dict[pathlib.Path, str]
+        First docstring lines of Python modules (``_module_summaries``).
+
+    Returns
+    -------
+    str
+        For Python and MATLAB code, the file path, then the module summary
+        when there is one, then the passage text; for other passages, the
+        passage text.
+
+    Notes
+    -----
+    Only searching sees this text: evidence, citations, and the answering
+    model keep the passage text itself.
+
+    """
+
+    if not str(chunk.kind).startswith(("python_", "matlab_")):
+        return chunk.text
+    header = [chunk.path.as_posix()]
+    summary = summaries.get(chunk.path)
+    if summary and chunk.kind != "python_module_context":
+        header.append(summary)
+    return "\n".join([*header, "", chunk.text])
