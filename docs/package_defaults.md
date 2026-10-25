@@ -193,13 +193,16 @@ corresponding function defaults.
 | `MODULE_FUNCTION_EXPANSION_MAX` | `4` | Most top-level functions added from modules whose header (docstring and imports) was retrieved: all of a module's functions when it has at most this many, otherwise those sharing most words with the question. Zero disables this expansion. |
 | `TEST_SUBJECT_EXPANSION_MAX` | `2` | Most source functions added because a retrieved test calls them; those of the best-ranked test come first, then those sharing most words with the question. Zero disables this expansion. |
 | `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
-| `RELATED_PASSAGES_MAX` | `8` | Most passages of related functions (callees, neighbors, class methods, and functions reached from retrieved documentation, module headers, and tests) added in total, ranked by the similarity of their embedding to the query; explicit files and named functions are not counted. Zero keeps all. |
+| `RELATED_PASSAGES_MAX` | `8` | Most passages of related functions (callees, neighbors, class methods, and functions reached from retrieved documentation, module headers, and tests) added in total, ranked by the similarity of their embedding to the query; explicit files, named functions, and the neighbors asked for in a relationship question are not counted. Zero keeps all. |
+| `SOURCE_SEARCH_DEPTH` | `6` | For an intent with `retrieval.prefer_source_code`, each search channel ranks this many times the retrieval count and keeps its best source-code results (neither documentation nor test code, unless the question asks about them), so code ranked below tutorials and tests is reached. Values below 1 rank only the retrieval count. |
+| `SOURCE_SEARCH_OTHERS` | `2` | Overall best results a channel keeps besides its best source code when `SOURCE_SEARCH_DEPTH` applies, so a relevant guide still takes part in fusion. |
 | `DOCUMENTATION_WORDS` | `["doc", "docs", "documentation", "documented", "example", "guide", "manual", "markdown", "readme", "tutorial"]` | Lowercase words (also in plural) that mark a question as being about documentation. For an intent with `retrieval.prefer_source_code`, Markdown, notebook-cell, plain-text, and PDF passages are ranked after source code unless the question contains one of them. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` and the nine expansion limits are
-nonnegative exact integers.
+integers. `CODE_MAX_DISTANCE`, the nine expansion limits,
+`SOURCE_SEARCH_DEPTH`, and `SOURCE_SEARCH_OTHERS` are nonnegative exact
+integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.
 The original vocabulary is preserved in the JSON, and the code-graph entity

@@ -599,6 +599,33 @@ class TestRAGRetrieval(unittest.TestCase):
                 [source, tutorial, test],
             )
 
+    def test_source_code_preference_searches_deeper(self) -> None:
+        """Channels rank deeper and keep their best source code."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        guides = [
+            ranked(chunk(f"g{i}", path=f"docs/{i}.md",
+                         kind="markdown_section"))
+            for i in range(3)
+        ]
+        source = ranked(chunk("s", path="pkg/a.py"))
+        with _search_patches() as mocks:
+            mocks["lexical_search"].return_value = [*guides, source]
+            session._retrieve("question", 1, prefer_source_code=True)
+            depth = rag.SOURCE_SEARCH_DEPTH
+            self.assertEqual(
+                mocks["lexical_search"].call_args.kwargs["count"], depth
+            )
+            self.assertIn(
+                source, mocks["hybrid_search"].call_args.kwargs["lexical"]
+            )
+        with _search_patches() as mocks:
+            mocks["lexical_search"].return_value = [*guides, source]
+            session._retrieve("question", 1)
+            self.assertEqual(
+                mocks["lexical_search"].call_args.kwargs["count"], 1
+            )
+
     def test_single_document_scope_uses_full_ranking(self) -> None:
         """Apply full ranking to evidence scoped to a single document."""
         session = _session()

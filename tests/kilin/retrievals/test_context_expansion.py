@@ -661,6 +661,30 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ("pkg.m.cut_text",),
         )
 
+    def test_prefer_source_results_keeps_buried_code(self) -> None:
+        """A channel keeps its best code and its overall best few.
+
+        """
+        results = [
+            ranked(chunk("t1", path="tut/a.ipynb", kind="notebook_markdown")),
+            ranked(chunk("x1", path="tests/test_a.py")),
+            ranked(chunk("d1", path="docs/a.md", kind="markdown_section")),
+            ranked(chunk("s1", path="pkg/a.py")),
+            ranked(chunk("s2", path="pkg/b.py")),
+            ranked(chunk("s3", path="pkg/c.py")),
+        ]
+        with patch.object(context_expansion, "_SOURCE_SEARCH_OTHERS", 2):
+            kept = context_expansion.prefer_source_results(
+                results, "How is text split?", 2
+            )
+            self.assertEqual([r.chunk.identifier for r in kept],
+                             ["t1", "x1", "s1", "s2"])
+            kept = context_expansion.prefer_source_results(
+                results, "Which tests check the docs?", 2
+            )
+            self.assertEqual([r.chunk.identifier for r in kept],
+                             ["t1", "x1"])
+
     def test_identifier_words_split_code_names(self) -> None:
         """Split snake_case and camelCase identifiers into words.
 
@@ -787,6 +811,37 @@ class TestRetrievalExpansion(unittest.TestCase):
                          ["r", "high", "mid"])
         self.assertEqual([c.identifier for c in plan_order],
                          ["r", "low", "mid"])
+
+    def test_asked_neighbors_are_not_budgeted(self) -> None:
+        """In a relationship question, every neighbor is added.
+
+        """
+        names = ("run", "a", "b", "c", "extra")
+        graph = CodeGraph(
+            entities=tuple(
+                CodeEntity(f"pkg.{name}", "python_function", Path("pkg.py"))
+                for name in names
+            ),
+            relations=tuple(
+                CodeRelation(f"pkg.{name}", "calls", "pkg.run")
+                for name in ("a", "b", "c")
+            ),
+        )
+        parts = [
+            chunk(name, name, path="pkg.py", start=index + 1, symbol=name)
+            for index, name in enumerate(names)
+        ]
+        plan = context_expansion.ContextExpansionPlan(
+            (), ("pkg.run",), True,
+            ("pkg.a", "pkg.b", "pkg.c", "pkg.extra"),
+            ("exact function", "relationship"),
+        )
+        with patch.object(context_expansion, "_RELATED_PASSAGES_MAX", 1):
+            result = context_expansion.expand_retrieval_context(
+                [], parts, graph, plan, lambda item: 0.0
+            )
+        self.assertEqual([c.identifier for c in result],
+                         ["run", "a", "b", "c", "extra"])
 
     def test_long_related_function_keeps_relevant_chunks(self) -> None:
         """Only the call site and the most relevant chunks are kept.

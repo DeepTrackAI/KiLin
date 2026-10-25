@@ -44,6 +44,10 @@ Module Structure
 
     Rank documentation and notebook results after source code.
 
+- ``prefer_source_results``
+
+    Keep a channel's best source-code results and its overall best few.
+
 - ``expand_retrieval_context``
 
     Add complete requested context after normal RRF retrieval.
@@ -86,6 +90,7 @@ __all__ = [
     "ContextExpansionPlan",
     "demote_documentation",
     "demote_test_results",
+    "prefer_source_results",
     "expand_retrieval_context",
     "plan_context_expansion",
 ]
@@ -151,6 +156,15 @@ _MODULE_FUNCTION_EXPANSION_MAX = require_default_nonnegative_int(
 # Most functions added because a retrieved test calls them.
 _TEST_SUBJECT_EXPANSION_MAX = require_default_nonnegative_int(
     _RETRIEVAL_DEFAULTS, "TEST_SUBJECT_EXPANSION_MAX", "RETRIEVAL"
+)
+# How many times the retrieval count each channel ranks when an intent
+# prefers source code, so source code buried under prose is reached.
+SOURCE_SEARCH_DEPTH = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_DEPTH", "RETRIEVAL"
+)
+# Overall best results a channel keeps besides its best source code.
+_SOURCE_SEARCH_OTHERS = require_default_nonnegative_int(
+    _RETRIEVAL_DEFAULTS, "SOURCE_SEARCH_OTHERS", "RETRIEVAL"
 )
 _MODULE_CONTEXT_KINDS = {"python_module_context", "matlab_file_context"}
 # Dotted code references in prose ("lexical_terms", "kilin.lexical_search").
@@ -443,11 +457,12 @@ def expand_retrieval_context(
     methods of named classes) follow. A related function longer than
     ``RELATED_CHUNKS_MAX`` chunks contributes only its most relevant chunks:
     those that mention a named function (such as a call site), then those
-    sharing most words with the question. The passages of all related
+    sharing most words with the question. The passages of the other related
     functions together are limited to ``RELATED_PASSAGES_MAX``: the most
     relevant by ``relevance`` (otherwise the first in plan order), added
-    most relevant first. Explicit files and named functions are always
-    added in full. Deduplication is by chunk identifier.
+    most relevant first. Explicit files, named functions, and, in a
+    relationship question, the named functions' direct neighbors are always
+    added. Deduplication is by chunk identifier.
 
     """
 
@@ -476,9 +491,30 @@ def expand_retrieval_context(
         named_leaves = {
             name.rsplit(".", 1)[-1].casefold() for name in plan.functions
         }
+        # In a relationship question the neighbors are the answer, so they
+        # are added in full; other related passages compete for places.
+        asked = (
+            set(_direct_function_neighbors(plan.functions, graph))
+            if plan.relationship
+            else set()
+        )
+        for function in plan.related_functions:
+            if function in asked:
+                _append_unique(
+                    expanded,
+                    seen,
+                    _focused_chunks(
+                        _chunks_for_functions(chunks, graph, (function,)),
+                        named_leaves,
+                        plan.focus_terms,
+                        _RELATED_CHUNKS_MAX,
+                    ),
+                )
         related: list[Chunk] = []
         related_seen = set(seen)
         for function in plan.related_functions:
+            if function in asked:
+                continue
             related_chunks = _chunks_for_functions(
                 chunks, graph, (function,)
             )
@@ -737,6 +773,71 @@ def demote_documentation(
     source = [r for r in results if not _is_documentation(r.chunk)]
     prose = [r for r in results if _is_documentation(r.chunk)]
     return source + prose
+
+
+def prefer_source_results(
+    results: Sequence[HybridResult], query_text: str, count: int
+) -> list[HybridResult]:
+    """Keep a channel's best source-code results and its overall best few.
+
+    Parameters
+    ----------
+    results: Sequence[HybridResult]
+        One channel's results, best first, ranked deeper than ``count``.
+    query_text: str
+        Question text; documentation or tests count as wanted results when
+        it asks about them (see ``demote_documentation`` and
+        ``demote_test_results``).
+    count: int
+        Number of wanted results to keep.
+
+    Returns
+    -------
+    list[HybridResult]
+        The first ``count`` results that are neither documentation nor
+        test code, plus the overall first ``SOURCE_SEARCH_OTHERS``, in their
+        original order.
+
+    Notes
+    -----
+    Tutorials, documentation, and tests use the words of a question about
+    how code works more often than the code does, so a channel's top
+    results can hold no code at all while the implementing function ranks
+    a little lower. Keeping the overall best few lets a relevant guide
+    still take part in fusion.
+
+    """
+
+    words = set()
+    for word in _identifier_words(query_text):
+        words |= _word_forms(word)
+    documentation_ok = bool(words & set(_DOCUMENTATION_WORDS))
+    tests_ok = _mentions_tests(query_text)
+
+    def wanted(result: HybridResult) -> bool:
+        """Return whether a result is source code or a wanted kind.
+
+        Parameters
+        ----------
+        result: HybridResult
+            One channel result.
+
+        Returns
+        -------
+        bool
+            Whether the result counts toward ``count``.
+
+        """
+
+        chunk = result.chunk
+        return (documentation_ok or not _is_documentation(chunk)) and (
+            tests_ok or not _is_test_path(chunk.path)
+        )
+
+    keep = {id(result) for result in results[:_SOURCE_SEARCH_OTHERS]}
+    preferred = [result for result in results if wanted(result)][:count]
+    keep |= {id(result) for result in preferred}
+    return [result for result in results if id(result) in keep]
 
 
 def _is_documentation(chunk: Chunk) -> bool:

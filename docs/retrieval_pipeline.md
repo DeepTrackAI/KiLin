@@ -69,8 +69,17 @@ context even when semantic vectors remain readable.
 Passages of related functions (callees, neighbors, methods of named classes,
 and functions reached from retrieved documentation, module headers and tests)
 compete for `RETRIEVAL.RELATED_PASSAGES_MAX` places, ranked by the cosine
-similarity of their saved embedding to the query's. Explicit files and named
-functions are always added in full.
+similarity of their saved embedding to the query's. Explicit files, named
+functions and, in a relationship question, the neighbors asked for are always
+added in full.
+
+For intents with `retrieval.prefer_source_code` (code explanation and
+debugging), each channel ranks `SOURCE_SEARCH_DEPTH` times the retrieval count
+and keeps its best source-code results plus its overall best
+`SOURCE_SEARCH_OTHERS`, before fusion; documentation and tests count as wanted
+results when the question asks about them. Tutorials and tests often use a
+question's words more than the implementing code does, so the code can rank
+just below a channel's usual cut.
 
 ## Hybrid combination: ranks rather than scores
 

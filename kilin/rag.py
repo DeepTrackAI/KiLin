@@ -217,8 +217,10 @@ from kilin.retrievals import (
     semantic_search,
 )
 from kilin.retrievals.context_expansion import (
+    SOURCE_SEARCH_DEPTH,
     demote_documentation,
     demote_test_results,
+    prefer_source_results,
 )
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from kilin.sources import (
@@ -1485,6 +1487,11 @@ class RAGSession:
                     "intent": intent.intent_id,
                     "query_extended": search_text not in (None, question),
                     "prefer_source_code": intent.prefer_source_code,
+                    "source_search_depth": (
+                        SOURCE_SEARCH_DEPTH
+                        if intent.prefer_source_code
+                        else None
+                    ),
                 },
                 turn_id=turn_id,
             )
@@ -2976,7 +2983,9 @@ class RAGSession:
             are kept (if it has any); otherwise every document is searched.
             Defaults to ``()``.
         prefer_source_code: bool, optional
-            Rank documentation and notebook passages after source code
+            Let each channel rank ``SOURCE_SEARCH_DEPTH`` times deeper and
+            keep its best source-code results (``prefer_source_results``),
+            then rank documentation and notebook passages after source code
             before keeping the top results, unless the question asks about
             documentation (``demote_documentation``). Defaults to ``False``.
 
@@ -3034,18 +3043,45 @@ class RAGSession:
             data=query_data,
             turn_id=trace_turn_id,
         )
+        # When the intent prefers source code, each channel ranks deeper and
+        # keeps its best source-code results (``prefer_source_results``).
+        depth = count * SOURCE_SEARCH_DEPTH if prefer_source_code else count
+        depth = max(depth, count)
+
+        def keep(results: list) -> list:
+            """Keep a channel's results for fusion.
+
+            Parameters
+            ----------
+            results: list
+                One channel's results, ranked to ``depth``.
+
+            Returns
+            -------
+            list
+                Its best source-code results and overall best few when the
+                intent prefers source code; otherwise the results.
+
+            """
+
+            if depth == count:
+                return results
+            return prefer_source_results(results, question, count)
+
         with trace.span(
             "retrieval.semantic",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
-            semantic = semantic_search(
-                self.indexes.semantic,
-                query_text,
-                self.embedding_session,
-                count=count,
-                trace_turn_id=trace_turn_id,
+            semantic = keep(
+                semantic_search(
+                    self.indexes.semantic,
+                    query_text,
+                    self.embedding_session,
+                    count=depth,
+                    trace_turn_id=trace_turn_id,
+                )
             )
         trace.emit(
             "retrieval.semantic.ranked",
@@ -3063,10 +3099,12 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Running lexical search")
-            lexical = lexical_search(
-                self.indexes.lexical,
-                question,
-                count=count,
+            lexical = keep(
+                lexical_search(
+                    self.indexes.lexical,
+                    question,
+                    count=depth,
+                )
             )
         trace.emit(
             "retrieval.lexical.ranked",
@@ -3085,11 +3123,13 @@ class RAGSession:
         ):
             if self.indexes.code_graph.entities:
                 report("Searching relationships between source entities")
-                code = code_search(
-                    self.indexes.code_graph,
-                    self.chunks,
-                    question,
-                    count=count,
+                code = keep(
+                    code_search(
+                        self.indexes.code_graph,
+                        self.chunks,
+                        question,
+                        count=depth,
+                    )
                 )
                 report(
                     "Relationship search ranked "

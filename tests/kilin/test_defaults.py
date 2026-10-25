@@ -407,11 +407,16 @@ class TestCoreDefaultIntegration(unittest.TestCase):
             "TEST_SUBJECT_EXPANSION_MAX",
             "RELATED_CHUNKS_MAX",
             "RELATED_PASSAGES_MAX",
+            "SOURCE_SEARCH_OTHERS",
         ):
             with self.subTest(setting=name):
                 self.assertEqual(
                     getattr(context_expansion, f"_{name}"), settings[name]
                 )
+        self.assertEqual(
+            context_expansion.SOURCE_SEARCH_DEPTH,
+            settings["SOURCE_SEARCH_DEPTH"],
+        )
 
 
 class TestDefaultDocumentation(unittest.TestCase):
