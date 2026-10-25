@@ -1,0 +1,2309 @@
+{
+  "date": "2026-10-25T08:22:13+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.8",
+    "os_version": "26.6.2",
+    "model": "Mac16,7",
+    "chip": "Apple M4 Pro",
+    "memory_gb": 48,
+    "mlx": "0.32.3"
+  },
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "ba57213a18f38021f7fbebbfc9f93af13a551add",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "use_router": true,
+  "question_sets": [
+    "development",
+    "evaluation",
+    "held_out_1",
+    "held_out_2",
+    "held_out_3"
+  ],
+  "retrieval_count": null,
+  "corpus": {
+    "source_files": 316,
+    "chunks": 5306,
+    "graph_entities": 4473,
+    "graph_relations": 26911
+  },
+  "index_status": "rebuilt",
+  "questions": [
+    {
+      "id": "routing",
+      "kind": "mechanism",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 27.48,
+      "answer": "The `route_question` function assigns a question to an intent by first checking if the question matches any intent's predefined shortcuts. If a shortcut matches, it immediately returns a `RouteDecision` with that intent and marks it as standalone [1]. If no shortcut matches, it constructs a prompt using `_router_prompt`, which includes the project's intents and relevant conversation history, then queries a router model via `side_reply` to classify the question [3]. The model's response is parsed by `_parse_route`, which validates the JSON output and ensures the intent exists in the project. If the reply is invalid (e.g., malformed JSON or unknown intent), it falls back to the project's default intent, setting a `fallback` message explaining the failure [9]. When the router reply cannot be used, the function defaults to the project's default intent, ensuring the question is still addressed, with `fallback` indicating the router's failure [3]. This fallback mechanism prevents the system from breaking when the router model fails or returns unusable results.",
+      "trace_file": "conversation_2026-10-25T08-22-13.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "route_question"
+        ],
+        "lexical": [],
+        "code": [
+          "route_question"
+        ],
+        "hybrid": [
+          "route_question"
+        ],
+        "evidence": [
+          "route_question",
+          "_parse_route",
+          "side_reply"
+        ],
+        "cited": [
+          "route_question",
+          "_parse_route"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/answering.py",
+          "symbol": "route_question",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/answering.py",
+          "symbol": "route_question",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/answering.py",
+          "symbol": "_parse_route",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "index_reuse",
+      "kind": "mechanism",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 26.48,
+      "answer": "The `RAGSession` decides to reuse or rebuild retrieval indexes by comparing saved metadata with current project configuration and source state. It first checks if the saved indexes' metadata (e.g., embedding model, chunking parameters, source files) matches the current setup [5]. If they match, indexes are reused [10]. If not, or if source files have changed, indexes are rebuilt [11]. The metadata is generated using `_index_metadata`, which captures configured settings like `embedding_model` and `query_format` [6]. Additionally, the system verifies the loaded model's identity against saved indexes to ensure compatibility [10]. If discrepancies exist (e.g., configuration changes, updated source files), indexes are rebuilt, and the status is set to \"rebuilt\" [5]. This ensures indexes reflect the current project state without unnecessary recomputation.",
+      "trace_file": "conversation_2026-10-25T08-28-04.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "RAGSession._prepare_retrieval"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [
+          "RAGSession._prepare_retrieval"
+        ],
+        "evidence": [
+          "RAGSession._prepare_retrieval"
+        ],
+        "cited": [
+          "RAGSession._prepare_retrieval"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 5,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._index_metadata",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 11,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._source_files",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "index_storage",
+      "kind": "mechanism",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 29.28,
+      "answer": "The `build_semantic_index` function embeds chunks by using the provided `embedding_session` to generate vector representations. It processes chunks in batches, as specified by the `batch_size` parameter, and embeds each batch's text (either from the chunks or provided `texts`). The resulting vectors are validated for correctness (e.g., non-finite values, zero norms) and stored in a `SemanticIndex` object, which pairs chunks with their embeddings [1][2].  \n\nThe `save_indexes` and `load_indexes` functions protect the saved index through integrity checks. `save_indexes` serializes the index data (including checksums) to a JSON file, ensuring the source fingerprint matches the current repository state before saving [9]. `load_indexes` verifies the checksum, validates the structure of the saved data, and ensures the embedding model identity matches the current model, preventing incompatible or corrupted data from being loaded [7]. These steps ensure the saved index remains consistent and secure against tampering or version mismatches.",
+      "trace_file": "conversation_2026-10-25T08-28-35.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "build_semantic_index"
+        ],
+        "lexical": [],
+        "code": [
+          "build_semantic_index"
+        ],
+        "hybrid": [
+          "build_semantic_index"
+        ],
+        "evidence": [
+          "build_semantic_index",
+          "save_indexes",
+          "load_indexes"
+        ],
+        "cited": [
+          "build_semantic_index",
+          "save_indexes",
+          "load_indexes"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 17,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "build_semantic_index",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "load_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/retrievals/persistence.py",
+          "symbol": "save_indexes",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "strip_thinking_callers",
+      "kind": "dependency",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 19.7,
+      "answer": "The function `strip_thinking` is called by three functions: `history_messages` [3], `side_reply` [5], and `turn_representation` [4]. Each uses it to remove the model's reasoning steps from the output, ensuring only the final answer is retained. \n\n- `history_messages` strips thinking text to generate a clean history of user and assistant messages, excluding internal reasoning.  \n- `side_reply` removes thinking text to deliver a direct reply without the model's internal process, as side questions use greedy sampling.  \n- `turn_representation` eliminates thinking to focus on the answer's content for summaries, ensuring citations and sources are based solely on the final output.  \n\nThese calls ensure outputs are concise, free from model-specific artifacts, and aligned with user-facing requirements.",
+      "trace_file": "conversation_2026-10-25T08-29-10.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "hybrid": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "evidence": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "cited": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ],
+        "code_only": [
+          "turn_representation",
+          "side_reply",
+          "history_messages"
+        ]
+      },
+      "evidence_count": 7,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/answering.py",
+          "symbol": "history_messages",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/answering.py",
+          "symbol": "turn_representation",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/answering.py",
+          "symbol": "side_reply",
+          "retrieved_by": [
+            "code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "hybrid_callers",
+      "kind": "dependency",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 25.56,
+      "answer": "The `RAGSession` methods that call `hybrid_search` are `_rank_everything` [2] and `_retrieve` [6]. Both use the fused ranking generated by `hybrid_search` to combine semantic, lexical, and code results. \n\nIn `_rank_everything`, `hybrid_search` is called with semantic, lexical, and code results derived from the session’s indexes, using a count equal to the total number of chunks. This fused ranking merges the three channels using reciprocal-rank fusion (RRF), where each channel contributes `1 / (rank_constant + rank)` to chunk scores, with duplicates removed within channels [1]. The results are sorted by descending score and chunk identifier [3].\n\nIn `_retrieve`, `hybrid_search` is called with semantic, lexical, and code results, with a count set to the maximum of the input lengths. The fused ranking is used to combine evidence, and additional filtering (e.g., demoting documentation or test results) is applied post-ranking [6]. Both methods rely on `hybrid_search` to aggregate and prioritize chunks across retrieval channels, ensuring the final output reflects the fused ranking’s weighted, deduplicated scores.",
+      "trace_file": "conversation_2026-10-25T08-29-35.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "lexical": [
+          "RAGSession._rank_everything"
+        ],
+        "code": [
+          "hybrid_search"
+        ],
+        "hybrid": [
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "evidence": [
+          "RAGSession._retrieve",
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "cited": [
+          "RAGSession._retrieve",
+          "RAGSession._rank_everything",
+          "hybrid_search"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 10,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/retrievals/strategies/retrieval_hybrid.py",
+          "symbol": "hybrid_search",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._rank_everything",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/retrievals/strategies/retrieval_hybrid.py",
+          "symbol": "hybrid_search",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "citation_check",
+      "kind": "location",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 17.29,
+      "answer": "KíLín checks citation validity in two main places. First, the `_invalid_citations` function in `rag.py` [2] identifies citation numbers in the answer that are absent from the supplied evidence by comparing them against a set of valid citations from the evidence. It returns a tuple of invalid identifiers, ensuring the answer only references existing evidence. Second, `answer_citations` [3] checks if citations fall within the range of valid passage numbers, returning invalid numbers outside this range. When citations do not match, these functions flag them as invalid, preventing answers from referencing non-existent or out-of-range evidence. The `_evidence` function [5] prepares valid citations by numbering passages, which these checks then reference.",
+      "trace_file": "conversation_2026-10-25T08-30-06.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "_invalid_citations"
+        ],
+        "lexical": [
+          "_invalid_citations"
+        ],
+        "code": [],
+        "hybrid": [
+          "_invalid_citations"
+        ],
+        "evidence": [
+          "_invalid_citations"
+        ],
+        "cited": [
+          "_invalid_citations"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 5,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/rag.py",
+          "symbol": "_invalid_citations",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/tools/_shared/document_notes.py",
+          "symbol": "answer_citations",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/tools/find_passages/tool.py",
+          "symbol": "_evidence",
+          "retrieved_by": [
+            "code"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "chunking",
+      "kind": "mechanism",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 24.17,
+      "answer": "The `chunk_source_units` function handles source units longer than `max_tokens` by splitting them into smaller chunks while preserving their structure. If a unit's text exceeds `max_tokens`, the `_split_unit` function (called via `_chunk_source_unit`) divides it line-by-line, ensuring each chunk does not exceed `max_tokens` [4]. \n\nOverlap between consecutive chunks is maintained by calculating the starting position of the next chunk using `_overlap_start`, which ensures the new chunk overlaps with the previous one by `overlap_tokens` [8]. This prevents gaps and maintains contextual continuity. For example, if the last chunk ends at a certain line, the next chunk starts near that line, overlapping by the specified amount. This mechanism ensures adjacent chunks share a portion of their content, preserving coherence across splits. The overlap is enforced during chunk creation, directly tied to the `overlap_tokens` parameter.",
+      "trace_file": "conversation_2026-10-25T08-30-29.json",
+      "gold_count": 4,
+      "gold_found": {
+        "semantic": [
+          "chunk_source_units",
+          "_chunk_source_unit"
+        ],
+        "lexical": [],
+        "code": [
+          "chunk_source_units"
+        ],
+        "hybrid": [
+          "chunk_source_units",
+          "_chunk_source_unit"
+        ],
+        "evidence": [
+          "chunk_source_units",
+          "_chunk_source_unit",
+          "_split_unit"
+        ],
+        "cited": [
+          "_chunk_source_unit",
+          "_split_unit"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/chunking.py",
+          "symbol": "_chunk_source_unit",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/chunking.py",
+          "symbol": "_split_unit",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "rank_everything_callers",
+      "kind": "dependency",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 25.63,
+      "answer": "The `RAGSession._read_document` and `RAGSession._retrieve` methods call `_rank_everything`. \n\n- `_read_document` uses `_rank_everything` to rank all chunks of a single document, ensuring the most relevant passages are selected even if they are not among the top results globally. This is necessary when the document exceeds the evidence budget, allowing the system to prioritize critical sections [9]. \n\n- `_retrieve` invokes `_rank_everything` in a one-document scope to find the best passages within that document, independent of project-wide rankings. This ensures document-specific relevance, especially when the question references a specific file [10]. \n\nBoth methods require full chunk ranking to combine semantic, lexical, and code-graph signals, enabling precise selection of relevant evidence while accounting for local document context. The comprehensive ranking ensures no critical chunk is overlooked, even if it ranks lower in broader searches.",
+      "trace_file": "conversation_2026-10-25T08-30-59.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "RAGSession._retrieve",
+          "RAGSession._read_document"
+        ],
+        "cited": [
+          "RAGSession._retrieve",
+          "RAGSession._read_document"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 9,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._read_document",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "history_selection",
+      "kind": "location",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 22.09,
+      "answer": "KíLín decides which earlier turns are included as history in two key steps. First, the `select_history` function [1] determines the selection based on the `HistoryPolicy` (none, recent, or relevant) and the `recent_turns` parameter, which specifies how many recent turns to include. If the policy is \"recent,\" it returns the last `recent_turns` turns. If \"relevant,\" it combines recent turns with related turns identified by the router's `RouteDecision`, ensuring standalone questions include the previous turn. Second, the `RAGSession._earlier_turns` method [2] and [6] gathers turns the new question refers back to, following related turns through the conversation. It ensures the last turn is always included and limits the total to `_MAX_EARLIER_TURNS`. The number of turns is thus determined by `recent_turns`, the router's decision (e.g., standalone or related turns), and the `_MAX_EARLIER_TURNS` cap. These mechanisms work together to balance context retention and relevance.",
+      "trace_file": "conversation_2026-10-25T08-31-30.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "select_history"
+        ],
+        "lexical": [
+          "select_history",
+          "RAGSession.ask"
+        ],
+        "code": [],
+        "hybrid": [
+          "select_history",
+          "RAGSession.ask"
+        ],
+        "evidence": [
+          "select_history",
+          "RAGSession.ask"
+        ],
+        "cited": [
+          "select_history"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 9,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/answering.py",
+          "symbol": "select_history",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._earlier_turns",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._earlier_turns",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_lock",
+      "kind": "mechanism",
+      "set": "development",
+      "intent": "code_explanation",
+      "wall_s": 23.45,
+      "answer": "ConversationFileLock prevents concurrent writes by using an operating-system advisory lock on a companion `.lock` file and a registry to track active paths. When a session attempts to acquire a lock (via `acquire()` [7][9]), it first checks if the target path is already in `_ACTIVE_PATHS` [7]. If so, it raises `ConversationLockedError`, blocking the second session. The lock is enforced via `fcntl.flock` (POSIX) or `msvcrt.locking` (Windows) [9], ensuring only one process holds the lock at a time. The `_ACTIVE_PATHS` set [3] acts as a global registry, preventing duplicate ownership across threads, processes, or sessions. When a session releases the lock (via `release()` [8]), it removes the path from `_ACTIVE_PATHS` and unlocks the file, allowing others to acquire it. This combination of OS-level locking and process-local tracking ensures exclusive write access, preventing collisions [4][6].",
+      "trace_file": "conversation_2026-10-25T08-31-57.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "ConversationFileLock.acquire",
+          "conversation_write_ownership"
+        ],
+        "cited": [
+          "ConversationFileLock.acquire",
+          "conversation_write_ownership"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 6,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "conversation_ownership",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "conversation_ownership",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "conversation_write_ownership",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "ConversationFileLock.acquire",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "ConversationFileLock.release",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/conversation_ownership.py",
+          "symbol": "ConversationFileLock.acquire",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "backend_choice",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 19.56,
+      "answer": "The `choose_backend` function selects the computation backend based on the requested value and platform. If the requested backend is `\"auto\"`, it defaults to `\"mlx\"` on Apple Silicon (Darwin/arm64) and `\"torch\"` otherwise. Explicit `\"mlx\"` requests are rejected on non-Apple platforms [3]. When PyTorch is selected (via `\"torch\"` or auto-selection on non-Apple systems), the `torch_device` function determines the PyTorch device. It prioritizes CUDA if available, then MPS (Apple MPS), and defaults to CPU if neither is available [7]. The device selection relies on caller-supplied availability flags, not direct hardware probing [2]. Thus, PyTorch uses the best available device (cuda, mps, or cpu) based on these flags.",
+      "trace_file": "conversation_2026-10-25T08-32-26.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "choose_backend"
+        ],
+        "lexical": [
+          "torch_device"
+        ],
+        "code": [
+          "choose_backend"
+        ],
+        "hybrid": [
+          "choose_backend"
+        ],
+        "evidence": [
+          "choose_backend",
+          "torch_device"
+        ],
+        "cited": [
+          "choose_backend",
+          "torch_device"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 8,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/runtime.py",
+          "symbol": "runtime",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/runtime.py",
+          "symbol": "choose_backend",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/runtime.py",
+          "symbol": "torch_device",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tool_confirmation",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 20.65,
+      "answer": "The `needs_confirmation` function determines if a tool requires user confirmation based on its confirmation policy and the plan's parameters. It returns `False` if the policy is `\"never\"` or the plan has zero items. For `\"always\"`, it returns `True`. For `\"when_large\"`, it checks if the plan's `batches_to_run` exceeds the `large_batches` threshold [4]. \n\nThe `confirm_plan` function uses `needs_confirmation` to decide whether to prompt the user. If confirmation is needed, it calls `context.confirm(plan)` to retrieve the user's answer. The answer is validated against allowed choices (`\"continue\"`, `\"quick\"`, `\"cancel\"`). If valid, it updates the plan's choice; otherwise, it defaults to `\"cancel\"` [1]. The user's response is traced, and the outcome (whether the user was asked and the choice made) is logged [1]. \n\nThe user's answer directly influences the tool's execution: valid choices proceed with the plan, while invalid or cancellation responses halt it. The `confirm_plan` function ensures the user is only asked when required by policy, and the answer is properly interpreted and recorded.",
+      "trace_file": "conversation_2026-10-25T08-32-51.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "lexical": [
+          "confirm_plan"
+        ],
+        "code": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "hybrid": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "evidence": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "cited": [
+          "needs_confirmation",
+          "confirm_plan"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 7,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "confirm_plan",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/tools/_shared/planning.py",
+          "symbol": "needs_confirmation",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ask_choice_callers",
+      "kind": "dependency",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 34.32,
+      "answer": "The function `ask_choice` is called by `offer_export` [3] and `choose_document` [5].  \n\n- **`offer_export`** asks the user to choose between saving all items of a long list as a Markdown file or showing a subset. The options are:  \n  - \"Save all [count] to outputs/ as Markdown\"  \n  - \"Show the first [CHAT_LIST_LIMIT] here\"  \n\n- **`choose_document`** asks the user to select a file from a list of options, where each option includes the file name and a reason (e.g., \"in this project\"). The options are dynamically generated based on context, such as matching the user's question or preferences.  \n\nThese calls use `ask_choice` to prompt the user for a choice, with the selected index returned as an integer or `None` for cancellation. Other evidence does not show additional callers of `ask_choice`.",
+      "trace_file": "conversation_2026-10-25T08-33-17.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "choose_document"
+        ],
+        "lexical": [
+          "choose_document"
+        ],
+        "code": [
+          "offer_export",
+          "choose_document"
+        ],
+        "hybrid": [
+          "offer_export",
+          "choose_document"
+        ],
+        "evidence": [
+          "offer_export",
+          "choose_document"
+        ],
+        "cited": [
+          "offer_export",
+          "choose_document"
+        ],
+        "code_only": [
+          "offer_export"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/tools/_shared/long_lists.py",
+          "symbol": "offer_export",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/tools/_shared/choose_document.py",
+          "symbol": "choose_document",
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "readable_trace",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 23.92,
+      "answer": "TraceLogger rewrites the human-readable trace file when events are emitted, particularly progress updates, and immediately after other events [7]. It avoids leaving a partially written file by using a temporary JSON file during the rewrite process, replacing the target file only after the write is complete [6]. This ensures atomicity, as the temporary file is swapped in while an exclusive companion-file lock is held, preventing other processes from accessing the file during the operation [2]. The lock also serializes writes within a single logger, ensuring no concurrent modifications [2]. Additionally, the rewrite uses a fixed numbering offset to prevent duplicates and merges events into a deep copy to maintain consistency [6]. This approach guarantees the final file is fully written before being considered valid, avoiding partial writes.",
+      "trace_file": "conversation_2026-10-25T08-33-57.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "TraceLogger._write_readable_trace"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "TraceLogger._write_readable_trace",
+          "TraceLogger._write_event"
+        ],
+        "cited": [
+          "TraceLogger._write_readable_trace",
+          "TraceLogger._write_event"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/trace_logging.py",
+          "symbol": "trace_logging",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_readable_trace",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/trace_logging.py",
+          "symbol": "TraceLogger._write_event",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "workspace_sync",
+      "kind": "mechanism",
+      "set": "held_out_1",
+      "intent": "code_explanation",
+      "wall_s": 27.4,
+      "answer": "The `synchronize_project_workspace` function keeps its copy of a source folder up to date by comparing the current state of the original source directory with a saved snapshot manifest and applying changes to the project's mirrored copy. It first validates the source and project directories, ensuring the source is outside the project workspace [3]. It then scans the source directory, generating a current manifest of files and metadata [2]. This manifest is compared with a previously saved snapshot manifest (stored as `source_snapshot.json` in the project root) [9]. \n\nIf differences are detected (e.g., new files, deletions, or modifications), the function updates the mirrored copy by removing outdated files, copying new/modified files, and rebuilding the snapshot [9]. The process ensures the mirrored copy reflects the original source's current state. The saved manifest is updated with the new state, allowing future synchronizations to detect further changes. This approach avoids overwriting user edits in the mirrored copy and ensures the snapshot aligns with the original source [1].",
+      "trace_file": "conversation_2026-10-25T08-34-26.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "lexical": [],
+        "code": [
+          "synchronize_project_workspace"
+        ],
+        "hybrid": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "evidence": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "cited": [
+          "synchronize_project_workspace",
+          "_synchronize_snapshot"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/project.py",
+          "symbol": "synchronize_project_workspace",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/project.py",
+          "symbol": "_synchronize_snapshot",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/project.py",
+          "symbol": "synchronize_project_workspace",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/project.py",
+          "symbol": "_synchronize_snapshot",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cached_model_callers",
+      "kind": "dependency",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 25.23,
+      "answer": "The function `cached_model_snapshot` is called by two specific functions in the repository:  \n1. `_model_source` in `kilin/embeddings.py` [7], which uses it when `allow_download=False` and the model identifier points to a cached snapshot (not a local directory).  \n2. `ChatSession._load` in `kilin/chat.py` [12], which invokes it when `allow_download=False` and the model source is not a local directory, to resolve a cached Hugging Face snapshot instead of downloading.  \n\nIn both cases, `cached_model_snapshot` bypasses downloading by reusing an existing cached snapshot, ensuring no network interaction occurs. It relies on `huggingface_hub.snapshot_download` with `local_files_only=True` to locate the cached directory. If the snapshot lacks critical files like `config.json`, it raises an error [3]. These calls occur only when the model is already cached and downloading is explicitly disallowed.",
+      "trace_file": "conversation_2026-10-25T08-34-59.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "ChatSession._load",
+          "_model_source"
+        ],
+        "cited": [
+          "ChatSession._load",
+          "_model_source"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/huggingface.py",
+          "symbol": "cached_model_snapshot",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/embeddings.py",
+          "symbol": "_model_source",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 12,
+          "path": "kilin/chat.py",
+          "symbol": "ChatSession._load",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "file_selection",
+      "kind": "location",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 26.08,
+      "answer": "KíLín decides which files are indexed and which are left out through a combination of filtering rules and exclusion lists. The core logic for selecting files to index is in `tool.py:run` [4], where files are filtered by allowed types (e.g., PDFs, markdown) and named folders (e.g., \"papers\"). Files not matching these criteria are excluded. The exclusion of specific file types (e.g., scanned PDFs) is handled by `RAGSession._unsearchable_sources` [2], which identifies selected files not present in the index. Additionally, `source_scan_exclusions` [5] excludes managed project folders (like \"templates\") during scans, but this applies to folder-level exclusion, not individual files. Files are always left out if they exceed size limits or fail to meet inclusion criteria in `scan_repository` [7]. The exact exclusion list is determined by the intersection of these rules, with the final indexed files derived from the source manifest [6].",
+      "trace_file": "conversation_2026-10-25T08-35-29.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "scan_repository"
+        ],
+        "cited": [
+          "scan_repository"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 5,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._unsearchable_sources",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/tools/project_inventory/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/project_layout.py",
+          "symbol": "source_scan_exclusions",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._source_files",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "query_format",
+      "kind": "location",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 21.06,
+      "answer": "The question is transformed into the text embedded for semantic search through the `_format_query` method in `RAGSession._retrieve` [3], which formats the question according to the project's configuration (e.g., `query_format` in `project.profile`). This formatted text is then embedded using the `embedding_session.embed_query` method [4], producing a vector used for cosine similarity comparisons against indexed chunks. The project type may influence the formatting rules (e.g., `query_format` settings) but does not directly alter the embedding process itself. The semantic search function uses the preformatted query text, and the embedding model/backend (e.g., \"loop\" or \"numpy\") affects ranking but not the initial text transformation. Evidence does not explicitly link project type settings to the query formatting logic, so the dependency remains indirect [3][4][5].",
+      "trace_file": "conversation_2026-10-25T08-36-01.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 8,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._retrieve",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/retrievals/strategies/retrieval_semantic.py",
+          "symbol": "semantic_search",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "tutorials/140_logging_trace.ipynb",
+          "symbol": null,
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_delete",
+      "kind": "mechanism",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 22.64,
+      "answer": "When `ChatEngine.delete_conversation` is called, the saved conversation is **archived** rather than permanently deleted. The conversation file is moved to a `deleted` subdirectory within the logs/traces folder, retaining its original name with a suffix (e.g., `_2`, `_3`) if conflicts exist [3]. This process ensures the file remains recoverable. The conversation is removed from the active catalog, but its data persists in the `deleted` folder [2]. The method also updates the conversation store to reflect the archive, and if the deleted conversation was active, it switches to another conversation [4]. The file is not truly deleted but relocated, and the original path is no longer referenced in the active session [3]. Thus, the conversation file is not permanently erased but stored in a recoverable state.",
+      "trace_file": "conversation_2026-10-25T08-36-27.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "lexical": [],
+        "code": [
+          "ChatEngine.delete_conversation"
+        ],
+        "hybrid": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "evidence": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "cited": [
+          "ChatEngine.delete_conversation",
+          "ConversationStore.archive"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine.delete_conversation",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.archive",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.archive",
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "torch_embedding",
+      "kind": "mechanism",
+      "set": "held_out_2",
+      "intent": "code_explanation",
+      "wall_s": 25.52,
+      "answer": "The `EmbeddingSession` computes vectors with the PyTorch backend by using the **last unmasked hidden-state token** from the model's output. Specifically, during the `_embed_torch` method [8], the model's `last_hidden_state` is retrieved, and the attention mask is applied to identify the final position of each token. The hidden state of the last valid token (i.e., the last token not masked by the attention mask) is selected for vectorization. These vectors are then normalized using L2 normalization [8]. \n\nBefore returning, vectors are checked via the `_check_vectors` method [10], which verifies:  \n1. The count matches the expected number of input texts.  \n2. All vectors have consistent dimensions.  \n3. All numeric values are finite and non-zero.  \n4. Each vector contains at least one non-zero element.  \n\nThis ensures the returned vectors are valid, normalized, and dimensionally consistent. The PyTorch backend's computation relies on the model's `last_hidden_state` and attention mask to extract the final token's hidden state [8].",
+      "trace_file": "conversation_2026-10-25T08-36-55.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "EmbeddingSession._embed_torch"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [
+          "EmbeddingSession._embed_torch"
+        ],
+        "evidence": [
+          "EmbeddingSession._embed_torch",
+          "_check_vectors"
+        ],
+        "cited": [
+          "EmbeddingSession._embed_torch",
+          "_check_vectors"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 8,
+          "path": "kilin/embeddings.py",
+          "symbol": "EmbeddingSession._embed_torch",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/embeddings.py",
+          "symbol": "_check_vectors",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "notebook_extraction",
+      "kind": "location",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 20.43,
+      "answer": "KíLín converts a Jupyter notebook into searchable text via the `_notebook_units` function in `kilin/sources/extensions/sources_ipynb.py` [3]. This function extracts code and Markdown cells, stripping outputs and metadata, and structures their text into searchable `SourceUnit` objects [5]. It processes the notebook’s JSON content, skipping cells with types other than \"code\" or \"markdown\" [3], and excludes stored outputs, metadata, and empty cells. The resulting text includes line numbers and section headers from Markdown cells, enabling searchability. Parts left out include outputs (e.g., execution results), metadata (e.g., cell tags), and non-code/Markdown cells (e.g., raw cells). The `extract_source_units` function [6] acts as a wrapper for this process.",
+      "trace_file": "conversation_2026-10-25T08-37-26.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "_notebook_units"
+        ],
+        "code": [],
+        "hybrid": [
+          "_notebook_units"
+        ],
+        "evidence": [
+          "_notebook_units",
+          "extract_source_units"
+        ],
+        "cited": [
+          "_notebook_units",
+          "extract_source_units"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 7,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "_notebook_units",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/sources/extensions/sources_ipynb.py",
+          "symbol": "extract_source_units",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "atomic_files",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 22.48,
+      "answer": "Atomic_write_text and atomic_create_text ensure files are never left half-written by using temporary files and atomic operations. Both create a temporary file with `NamedTemporaryFile`, write the content to it, and then atomically replace the destination file or create a new one. If writing fails, the temporary file is deleted, preventing partial writes [6][2]. \n\n**atomic_write_text** replaces an existing destination file by renaming the temporary file to the target path (`temporary.replace(path)`), ensuring the destination is only updated once the write is complete [6]. It does not check if the destination exists beforehand. \n\n**atomic_create_text** publishes a new file only if the destination does not exist, raising `FileExistsError` otherwise. It uses `os.link()` to create a hard link from the temporary file to the target path, avoiding a \"check-then-replace\" race condition [2]. This ensures the destination is either created anew or left untouched, preserving existing files. \n\nThe key difference is: `atomic_write_text` replaces existing files, while `atomic_create_text` creates new entries without overwriting existing ones. Additionally, `atomic_create_text` uses hard links for atomic publication, whereas `atomic_write_text` uses file renaming. Both ensure temporary files are cleaned up on failure, avoiding partial writes [1][2][6].",
+      "trace_file": "conversation_2026-10-25T08-37-52.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "atomic_create_text"
+        ],
+        "lexical": [],
+        "code": [
+          "atomic_create_text"
+        ],
+        "hybrid": [
+          "atomic_create_text"
+        ],
+        "evidence": [
+          "atomic_write_text",
+          "atomic_create_text"
+        ],
+        "cited": [
+          "atomic_write_text",
+          "atomic_create_text"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 9,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_writes",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_create_text",
+          "retrieved_by": [
+            "code",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/atomic_writes.py",
+          "symbol": "atomic_write_text",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim_passages_callers",
+      "kind": "dependency",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 23.36,
+      "answer": "VERDICT: The functions `_verify` in `reference_check/tool.py` and `run` in `suggest_reference/tool.py` call `claim_passages`.  \n[2] `_verify` uses the selected passages to verify if a claim is supported by the cited work, determining verdicts like \"supported\" or \"contradicted\" via `verify_claim`.  \n[11] `run` uses the passages to assess how well a statement is supported by papers, determining citation suggestions and verdicts like \"background\" or \"not found\" via `judge_support`.  \nEach uses the passages to evaluate alignment between the claim/sentence and the cited work's content.",
+      "trace_file": "conversation_2026-10-25T08-38-20.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "_verify"
+        ],
+        "code": [
+          "_verify"
+        ],
+        "hybrid": [
+          "_verify"
+        ],
+        "evidence": [
+          "_verify",
+          "run"
+        ],
+        "cited": [
+          "_verify",
+          "run"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/tools/reference_check/tool.py",
+          "symbol": "_verify",
+          "retrieved_by": [
+            "code",
+            "lexical"
+          ]
+        },
+        {
+          "citation": 11,
+          "path": "kilin/tools/suggest_reference/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "model_identity",
+      "kind": "location",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 18.46,
+      "answer": "KíLín identifies the embedding model for a saved index by associating it with the backend (e.g., \"mlx\" or \"torch\") and using a unique manifest file generated from the model's directory path. The `embedding_model` method in `project.py` [1] selects the appropriate model based on the backend, ensuring consistency between the index and the model. When a model is saved, its directory path is hashed into a unique identifier (via `_manifest_path` in `model_identity.py` [2]), creating a manifest file (e.g., a `.json` file). This manifest uniquely identifies the model's location, and any change to the model's files would alter the hash, signaling a change. The backend selection ensures the model is paired with the correct computational framework, preventing mismatches. Thus, KíLín detects model changes by comparing the saved manifest's hash against the current model's directory hash, leveraging both the backend configuration and the manifest's uniqueness.",
+      "trace_file": "conversation_2026-10-25T08-38-49.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 7,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/project.py",
+          "symbol": "ProjectProfile.embedding_model",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/retrievals/model_identity.py",
+          "symbol": "_manifest_path",
+          "retrieved_by": [
+            "lexical"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "conversation_branch",
+      "kind": "mechanism",
+      "set": "held_out_3",
+      "intent": "code_explanation",
+      "wall_s": 23.48,
+      "answer": "ConversationStore creates a branch by copying non-metadata fields from the parent's resume state, excluding metadata fields like `ConversationInfo.__dataclass_fields__` [1]. The branch name is generated by appending \"branch\" and a sequential number to the parent's name, ensuring uniqueness by checking against existing registry names [6]. To avoid overwriting, the new filename is chosen to avoid existing paths at the moment of selection; each candidate path is locked and checked before creation, and collisions raise an error instead of overwriting [1]. The process uses atomic writes and file locks to prevent concurrent modifications [2].",
+      "trace_file": "conversation_2026-10-25T08-39-13.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "ConversationStore.create"
+        ],
+        "lexical": [
+          "ConversationStore.create"
+        ],
+        "code": [],
+        "hybrid": [
+          "ConversationStore.create"
+        ],
+        "evidence": [
+          "ConversationStore.create",
+          "ConversationStore._branch_name"
+        ],
+        "cited": [
+          "ConversationStore.create",
+          "ConversationStore._branch_name"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore.create",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/conversations.py",
+          "symbol": "conversations",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/conversations.py",
+          "symbol": "ConversationStore._branch_name",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "python_units",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 23.16,
+      "answer": "KíLín divides a Python file into parts by splitting it into \"natural units\" such as functions, classes, or code blocks using the `extract_source_units` function [6]. This function processes the file's text line by line, passing the lines to `_python_units`, which likely identifies structural boundaries (e.g., def/ class statements) to segment the code. For invalid Python files, the evidence does not explicitly describe error handling. However, if a file lacks valid syntax (e.g., missing colons, incorrect indentation), `extract_source_units` might return an empty list or fail to parse, as the code does not include explicit syntax validation logic. The repository scanning tools [9][10] focus on file selection and metadata, not syntax checks, so invalid Python files would likely be treated as unprocessable content without specific error reporting.",
+      "trace_file": "conversation_2026-10-25T08-39-41.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 6,
+          "path": "kilin/sources/extensions/sources_py.py",
+          "symbol": "extract_source_units",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pdf_text",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 25.46,
+      "answer": "KíLín extracts text from a PDF using a combination of `pdfminer.six` and `pypdf`. The `read_source_file` function [8] first checks if the PDF is encrypted or invalid, then uses `_layout_pages` [6] to extract text via `pdfminer.six`'s layout analysis. If this fails, it falls back to `pypdf`'s plain text extraction. The extracted text is cleaned of malformed Unicode and normalized [7]. If no text is found after cleaning, the function raises an error indicating the PDF requires OCR [8]. When a PDF contains no text, KíLín explicitly rejects it, noting that scanned PDFs without extractable text cannot be processed without OCR. The text extraction process caches results [1] but does not handle empty files or non-PDFs, which return empty strings [4].",
+      "trace_file": "conversation_2026-10-25T08-40-10.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "read_source_file",
+          "_layout_pages",
+          "extract_source_units"
+        ],
+        "cited": [
+          "read_source_file",
+          "_layout_pages"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 5,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/_shared/references.py",
+          "symbol": "_pdf_text",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/tools/_shared/references.py",
+          "symbol": "pdf_text",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "_layout_pages",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "_clean_extracted_text",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/sources/extensions/sources_pdf.py",
+          "symbol": "read_source_file",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "call_relations",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 24.58,
+      "answer": "KíLín determines function call relationships using a `CodeGraph` that explicitly tracks \"calls\" relations between functions [2]. When analyzing which functions call others, it queries this graph for direct and indirect call chains, up to a specified depth [2]. The graph is populated with function entities and their relationships, likely derived from static analysis of the codebase. \n\nWhen a called name could refer to multiple functions, KíLín resolves ambiguity by prioritizing matches that share words with the query text, prefer nearer call steps, and prioritize functions that call more repository functions (indicating higher relevance) [2]. For plain-word names, unambiguity is enforced by checking if the name is unique, not a method, and longer than two letters [3]. If ambiguity persists, the system may default to ranking by name order or exclude ambiguous candidates, though the evidence does not explicitly describe fallback mechanisms for fully ambiguous cases. The graph's structure ensures explicit tracking of call relationships, but disambiguation relies on textual and contextual heuristics.",
+      "trace_file": "conversation_2026-10-25T08-40-41.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 11,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/retrievals/context_expansion.py",
+          "symbol": "_ranked_callees",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/retrievals/context_expansion.py",
+          "symbol": "_explicit_functions",
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "keyword_scoring",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 25.84,
+      "answer": "Passages in KíLín's keyword search are scored using **TF-IDF cosine similarity** between the query and indexed chunks. The `lexical_search` function computes this by:  \n1. Extracting lowercase one-word and two-word terms from the query using `lexical_terms` [2].  \n2. Creating a TF-IDF vector for the query based on the inverse document frequency (IDF) of terms in the lexical index [11].  \n3. Calculating cosine similarity between the query vector and each chunk's vector, then ranking results by score and chunk identifier [10].  \n\nCode identifiers are broken into searchable words via the `_identifier_words` function:  \n1. Text is normalized by inserting spaces before uppercase letters and replacing underscores with spaces (e.g., `_parse_route` becomes `parse route`) [6].  \n2. Words are extracted as lowercase tokens using `_WORD.findall`, ensuring letters and digits are split from punctuation [6].  \n\nThese processes are distinct: `lexical_search` focuses on general text, while `_identifier_words` handles code identifiers specifically. The scoring mechanism is tied to the TF-IDF framework, and identifier splitting uses regex-based normalization.",
+      "trace_file": "conversation_2026-10-25T08-41-11.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [],
+        "hybrid": [],
+        "evidence": [
+          "lexical_search"
+        ],
+        "cited": [
+          "lexical_search"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/retrievals/strategies/__init__.py",
+          "symbol": "__init__",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/retrievals/context_expansion.py",
+          "symbol": "_identifier_words",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "lexical_search",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 11,
+          "path": "kilin/retrievals/strategies/retrieval_lexical.py",
+          "symbol": "build_lexical_index",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "follow_up_query",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 20.35,
+      "answer": "The `refers_back` function determines if a question depends on earlier conversation by checking for patterns like pronouns (\"it\"), ordinal references, or explicit pointers to prior turns [2]. It also considers short questions (≤ 2 words) as implicitly referencing history. If these conditions are met, it returns `True`, indicating the question relies on prior context. \n\nThe `search_text` function uses this flag (`refers_back`) and the `related_turn_ids` from the routing decision to build a search query. If `refers_back` is `True` and there are related turns, it appends the text from those earlier turns (oldest first) to the current question [1]. This ensures the search query includes context from prior conversation, enabling the model to retrieve relevant information tied to the historical discussion. The `related_turn_ids` are determined during routing, where `refers_back` influences which turns are marked as relevant [5]. Thus, `refers_back` directly enables `search_text` to contextualize the query by incorporating prior dialogue.",
+      "trace_file": "conversation_2026-10-25T08-41-42.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "refers_back",
+          "search_text"
+        ],
+        "lexical": [
+          "refers_back",
+          "search_text"
+        ],
+        "code": [],
+        "hybrid": [
+          "refers_back",
+          "search_text"
+        ],
+        "evidence": [
+          "refers_back",
+          "search_text"
+        ],
+        "cited": [
+          "refers_back",
+          "search_text"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 8,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/answering.py",
+          "symbol": "search_text",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/answering.py",
+          "symbol": "refers_back",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "tests/kilin/test_answering.py",
+          "symbol": "TestRelatedTurnChecks.test_pointing_back_adds_related_questions_to_search",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "download_progress",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 23.87,
+      "answer": "The `download_model` function reports progress to its caller via a callback mechanism. When invoked, it accepts a `progress_callback` parameter, which is a callable that receives completed and expected byte counts during the download [3]. This callback is linked to a custom `tqdm`-like progress bar (`_progress_tqdm`) that aggregates byte counts and forwards them to the callback [8]. The progress updates are then emitted to the frontend through the `ChatEngine`'s `send_progress` method, which sends events like `model_download_progress` to the GUI [6]. \n\nThe downloaded model files are stored in the Hugging Face cache directory, determined by the `huggingface_hub` library. The exact path is returned as a `Path` object by `download_model`, which is derived from the snapshot download location [3]. This path is not copied or owned by KíLín; instead, it reuses existing cached files if available [3]. The files are stored in a directory managed by Hugging Face, with the specific location dependent on the user's cache configuration.",
+      "trace_file": "conversation_2026-10-25T08-42-08.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "download_model"
+        ],
+        "code": [
+          "download_model"
+        ],
+        "hybrid": [
+          "download_model"
+        ],
+        "evidence": [
+          "download_model",
+          "_progress_tqdm"
+        ],
+        "cited": [
+          "download_model",
+          "_progress_tqdm"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 11,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/huggingface.py",
+          "symbol": "download_model",
+          "retrieved_by": [
+            "code",
+            "lexical"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/gui/engine.py",
+          "symbol": "ChatEngine._download_with_progress",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/huggingface.py",
+          "symbol": "_progress_tqdm",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "reference_matching",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 28.72,
+      "answer": "The `match_reference` function determines which project file a reference entry points to by evaluating matches against candidate files (papers) based on three criteria: DOI, author, and content (title or page). It uses the `rules` to set thresholds for what constitutes a \"found\" or \"probable\" match. \n\n1. **DOI Match**: If the entry's DOI matches the paper's DOI exactly (after normalization), it is marked as a **found** match with a score of 1.0 [9].  \n2. **Author and Citation Match**: If the first author and journal citation match, it is also a **found** match [9].  \n3. **Content Match**: If the entry's distinctive words (after filtering common words) overlap with the paper's title or first page, the score determines if it is **found** (if it meets the threshold) or **probable** [10].  \n\nA match is **only probable** when:  \n- The score is below the \"found\" threshold but meets the \"probable\" threshold, or  \n- The author does not match, even if the content aligns [10].  \n\nThe function prioritizes DOI matches first, then author/citation, then content. If multiple entries match the same file, only the highest-scoring match is marked as **found**, while others are labeled **probable** with a reason [8]. This ensures the best possible match is selected, with uncertainty flagged when the match is not definitive.",
+      "trace_file": "conversation_2026-10-25T08-42-37.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "match_reference"
+        ],
+        "lexical": [],
+        "code": [
+          "match_reference"
+        ],
+        "hybrid": [
+          "match_reference"
+        ],
+        "evidence": [
+          "match_reference",
+          "_candidate"
+        ],
+        "cited": [
+          "_candidate"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 14,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 8,
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "settle_duplicates",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "_candidate",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/tools/reference_check/_matching.py",
+          "symbol": "_candidate",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "term_hits_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 28.56,
+      "answer": "The functions that call `term_hits` are `find_fact` [5], `find_passages` [12], and `batch_review` [10]. Each uses the returned passage indices (`hits`) to filter or prioritize content:  \n- **`find_fact`** uses `hits` to identify passages containing terms, then filters parts of files to focus on relevant sections [5].  \n- **`find_passages`** uses `hits` to select only passages mentioning terms for quick review, bypassing non-matching content [12].  \n- **`batch_review`** uses `hits` to split and process only the relevant passages into reviewable parts, improving efficiency [10].  \n\nEach function leverages `term_hits` to narrow scope, ensuring model calls or processing targets only passages with exact terms, as per the question’s requirements.",
+      "trace_file": "conversation_2026-10-25T08-43-11.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "run"
+        ],
+        "lexical": [
+          "run"
+        ],
+        "code": [
+          "run",
+          "run",
+          "run"
+        ],
+        "hybrid": [
+          "run",
+          "run"
+        ],
+        "evidence": [
+          "run",
+          "run",
+          "run"
+        ],
+        "cited": [
+          "run",
+          "run",
+          "run"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 5,
+          "path": "kilin/tools/find_fact/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/tools/batch_review/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 12,
+          "path": "kilin/tools/find_passages/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "explicit_imports_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 24.28,
+      "answer": "The function `include_explicit_imports` is called by `RAGSession._prepare_source` [4] and `RAGSession._prepare_retrieval` [7]. Both functions need it to ensure explicitly imported files are included in the scan report, overriding default exclusion rules like file extensions or protected names. This is critical for building accurate code graphs and embeddings, as these files are directly referenced in the project’s source management. The test case in [5] also uses `include_explicit_imports` to validate its behavior, confirming its role in selecting explicitly imported files for indexing. The function adjusts the scan report to include these files, ensuring they are processed despite not meeting standard criteria.",
+      "trace_file": "conversation_2026-10-25T08-43-45.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "RAGSession._prepare_source"
+        ],
+        "code": [],
+        "hybrid": [
+          "RAGSession._prepare_source"
+        ],
+        "evidence": [
+          "RAGSession._prepare_retrieval",
+          "RAGSession._prepare_source"
+        ],
+        "cited": [
+          "RAGSession._prepare_retrieval",
+          "RAGSession._prepare_source"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_source",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "tests/kilin/test_workspace_source_management.py",
+          "symbol": "TestWorkspaceSourceManagement.test_explicit_suffix_and_protected_file_are_imported",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/rag.py",
+          "symbol": "RAGSession._prepare_retrieval",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "extension_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 28.14,
+      "answer": "The function `normalize_extensions` is called by three main functions: `scan_repository` [2], `_read_profile` [3][7][8], and `_parse_project_type` [4]. Each uses it to validate and normalize file extensions according to specific rules.  \n\n1. **`scan_repository`** [2] checks that extensions are valid literal suffixes (e.g., `.py`, `.md`), ensuring they are lowercase, lack wildcards, and follow the regex pattern `\\.[a-z0-9_-]+(?:\\.[a-z0-9_-]+)*`. It also ensures extensions are not empty or whitespace.  \n2. **`_read_profile`** [3][7][8] validates extensions in project profiles, ensuring they start with a period and conform to the same regex pattern. It also checks for missing or malformed entries.  \n3. **`_parse_project_type`** [4] ensures project type configurations have valid extensions, rejecting empty lists or entries without a leading period. It re-raises errors with context about invalid formats.  \n\nEach caller uses `normalize_extensions` to enforce consistent, valid extension formats across configuration files, repository scans, and project type definitions.",
+      "trace_file": "conversation_2026-10-25T08-44-15.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "_parse_project_type"
+        ],
+        "code": [
+          "_read_profile",
+          "scan_repository"
+        ],
+        "hybrid": [
+          "_read_profile",
+          "_parse_project_type",
+          "scan_repository"
+        ],
+        "evidence": [
+          "_read_profile",
+          "_parse_project_type",
+          "scan_repository"
+        ],
+        "cited": [
+          "_read_profile",
+          "_parse_project_type",
+          "scan_repository"
+        ],
+        "code_only": [
+          "_read_profile",
+          "scan_repository"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 5,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 2,
+          "path": "kilin/repository.py",
+          "symbol": "scan_repository",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/project.py",
+          "symbol": "_read_profile",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 4,
+          "path": "kilin/project_type.py",
+          "symbol": "_parse_project_type",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/project.py",
+          "symbol": "_read_profile",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/project.py",
+          "symbol": "_read_profile",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "routing": {
+      "answer": "The `route_question` function in the KíLín Python package is responsible for mapping a user's question to a specific intent. Here's how it works:\n\n1. **Intent Assignment**:  \n   - The function analyzes the input question and matches it to a predefined intent based on **keywords**, **patterns**, or **machine learning models** (e.g., trained classifiers).  \n   - It evaluates the question against a set of intent definitions (e.g., \"greet,\" \"ask_weather,\" \"request_help\") and selects the most appropriate intent based on confidence scores or rule-based logic.\n\n2. **Fallback Handling**:  \n   - If the router (the component responsible for intent classification) cannot find a matching intent, KíLín typically uses a **fallback mechanism**. This could involve:  \n     - Returning a predefined **fallback intent** (e.g., \"unknown_intent\") to handle ambiguous or unmatched queries.  \n     - Triggering a **default response** (e.g., \"I don't understand that. Can you rephrase?\") to inform the user of the mismatch.  \n     - Logging the unmatched question for further analysis or training.  \n\nThe exact behavior depends on the configuration of the KíLín pipeline, but the core idea is to ensure the system gracefully handles unclassified queries without crashing. For precise details, refer to the KíLín documentation or source code.",
+      "wall_s": 16.98
+    },
+    "index_reuse": {
+      "answer": "The `RAGSession` in the KíLín Python package determines whether to reuse saved retrieval indexes or rebuild them based on the following logic:\n\n1. **Index Existence Check**: When initializing or using a `RAGSession`, it first checks if pre-existing retrieval indexes (e.g., vector stores or inverted indices) are available in the specified storage location (e.g., a directory or database).\n\n2. **Timestamp/Version Comparison**: If indexes exist, the system compares their timestamps or version metadata with the current state of the data or model. If the indexes are up-to-date (e.g., the data hasn't changed, or the model hasn't been retrained), they are reused.\n\n3. **Forced Rebuild Option**: If the user explicitly specifies a flag (e.g., `rebuild=True` in configuration) or the data/model has changed, the system will rebuild the indexes from scratch, overriding any existing ones.\n\n4. **Configuration Parameters**: The behavior can be controlled via parameters like `use_saved_index` or `rebuild_index`, which allow users to force reuse, rebuild, or skip index creation based on their workflow needs.\n\nThis ensures efficiency by avoiding redundant computations while maintaining freshness of the retrieval components. If you're using KíLín, consult the documentation for specific parameter names and usage examples.",
+      "wall_s": 14.8
+    },
+    "index_storage": {
+      "answer": "The **KíLín** Python package is designed for building and querying semantic indexes, typically using embeddings to represent text chunks. Here's how the mentioned functions work:\n\n---\n\n### **`build_semantic_index` and Embedding Chunks**\n1. **Embedding Process**:\n   - The `build_semantic_index` function takes a list of text chunks and converts them into **vector embeddings** using a pre-trained model (e.g., BERT, SentenceTransformer, or a custom model).\n   - Each chunk is transformed into a numerical vector (embedding) that captures its semantic meaning. This is done via a model's `encode` method, which maps text to a fixed-dimensional space.\n\n2. **Index Construction**:\n   - After embedding, the function builds a **semantic index** (e.g., using FAISS, HNSW, or other vector similarity search structures) to store these embeddings. This index allows efficient retrieval of similar chunks based on query embeddings.\n\n---\n\n### **`save_indexes` and `load_indexes` for Protection**\n1. **Saving the Index**:\n   - The `save_indexes` function serializes the semantic index and saves it to disk (e.g., as a file or database). This ensures the index is stored in a format that can be later retrieved.\n   - **Protection Mechanisms**:\n     - **Encryption**: The index might be saved in an encrypted format to prevent unauthorized access.\n     - **Permissions**: The saved files are stored in a directory with restricted permissions (e.g., only readable by the owner).\n     - **Integrity Checks**: The function may include checksums or metadata to verify the index's integrity during saving.\n\n2. **Loading the Index**:\n   - The `load_indexes` function retrieves the saved index and reconstructs it in memory. It ensures:\n     - **Consistency**: The loaded index matches the saved version (e.g., via versioning or schema validation).\n     - **Security**: The index is loaded in a secure environment, and any tampering is detected (e.g., via checksum verification).\n\n---\n\n### **Key Protection Features**\n- **Isolation**: Saved indexes are stored separately from the model or other data to prevent accidental modification.\n- **Versioning**: The package may track versions of the index to ensure compatibility with the model used during embedding.\n- **Secure Storage**: Files are saved in a secure location (e.g., a protected directory or encrypted volume).\n\n---\n\n### **Note**\nIf you're referring to specific implementation details (e.g., encryption methods or file formats), the exact behavior may depend on the version of KíLín or its integration with external libraries (e.g., FAISS, SentenceTransformer). Always consult the package's documentation for precise details.",
+      "wall_s": 21.63
+    },
+    "strip_thinking_callers": {
+      "answer": "The KíLín Python package is designed to evaluate and debug large language models (LLMs), including tools to analyze their outputs. The `strip_thinking` function is used to remove the model's internal reasoning steps from its responses, typically to isolate the final answer. Here's an explanation of which functions might call `strip_thinking` and why:\n\n---\n\n### **1. `strip_thinking` Function**\n- **Purpose**: Removes the model's internal reasoning (e.g., \"Let me think...\", \"Step 1:...\", etc.) from its output, leaving only the final answer.\n- **Why it's used**: \n  - To extract the **direct answer** for evaluation or comparison with ground truth.\n  - To eliminate **redundant or irrelevant steps** in the response (e.g., verbose explanations, self-talk).\n  - To ensure the output is **concise** and user-friendly.\n\n---\n\n### **2. `process_model_output`**\n- **Functionality**: Processes raw model outputs (e.g., from `generate()` or `predict()`) to clean and structure the response.\n- **Why it calls `strip_thinking`**:\n  - The model's output often includes internal reasoning (e.g., \"Okay, I need to calculate...\"). Stripping this ensures the final answer is clean and ready for use.\n  - Example: If the model outputs `\"Let me think... The answer is 42\"`, `strip_thinking` would return `\"The answer is 42\"`.\n\n---\n\n### **3. `extract_answer`**\n- **Functionality**: Extracts the final answer from a model's response, typically after removing reasoning steps.\n- **Why it calls `strip_thinking`**:\n  - To ensure the answer is **isolated** for tasks like automated testing, benchmarking, or comparison with reference answers.\n  - For example, in a QA task, the model might output `\"Step 1: Read the question. Step 2: Find the answer. Answer: 42\"`. Stripping the reasoning leaves `\"Answer: 42\"`.\n\n---\n\n### **4. `evaluate_answer`**\n- **Functionality**: Evaluates the correctness of a model's answer against a reference or ground truth.\n- **Why it calls `strip_thinking`**:\n  - The model's reasoning might contain errors or hallucinations. By removing it, the evaluation focuses only on the final answer, ensuring accuracy.\n  - Example: If the model writes `\"I think the answer is 42, but I'm not sure\"`, stripping the reasoning leaves `\"42\"` for comparison.\n\n---\n\n### **5. `clean_response`**\n- **Functionality**: Cleans up the model's output by removing unnecessary elements (e.g., markdown, formatting, or internal monologue).\n- **Why it calls `strip_thinking`**:\n  - To standardize the output format for downstream tasks (e.g., logging, summarization, or integration with other systems).\n  - Ensures the response is **free of artifacts** that could interfere with analysis.\n\n---\n\n### **Why Each Function Needs to Remove Reasoning**\n1. **Accuracy**: The model's reasoning might contain errors or hallucinations. Removing it ensures the final answer is evaluated independently.\n2. **Conciseness**: Users or systems often only need the final answer, not the model's internal steps.\n3. **Consistency**: Standardizing the output format (e.g., removing \"Let me think...\") ensures uniformity across evaluations.\n4. **Automation**: Automated tools (e.g., benchmarking scripts) require clean, structured answers to function correctly.\n\n---\n\n### **Note**\nIf you're using KíLín, the exact functions and their usage may depend on the version of the package. Always refer to the latest documentation for precise details. If you don't have access to the documentation, the above explanation is based on common patterns in LLM evaluation tools.",
+      "wall_s": 28.64
+    },
+    "hybrid_callers": {
+      "answer": "The KíLín Python package's `RAGSession` class provides methods for building Retrieval-Augmented Generation (RAG) systems. The `hybrid_search` method is a core component of the retrieval phase, combining semantic and keyword-based search strategies. Here's how it is used:\n\n### **Methods that Call `hybrid_search`**\n1. **`search(query)`**  \n   - This is the primary method for performing retrieval. It internally calls `hybrid_search` to combine results from two retrieval strategies:  \n     - **Semantic search** (e.g., using embeddings for similarity).  \n     - **Keyword-based search** (e.g., BM25 or TF-IDF).  \n   - The `hybrid_search` method fuses these results by **fused ranking**, which typically involves combining scores from both strategies (e.g., averaging or weighted sum) to prioritize documents that are relevant to both semantic and keyword criteria.\n\n2. **`retrieve(query)`**  \n   - This method may also use `hybrid_search` directly, depending on the implementation. It focuses on retrieving documents but leverages the fused ranking to ensure high-quality, contextually relevant results.\n\n### **How Fused Ranking Works**\n- **Input**: Results from semantic and keyword-based searches (each with their own relevance scores).  \n- **Process**:  \n  - The `hybrid_search` method calculates a **combined score** for each document by integrating scores from both strategies.  \n  - For example, it might use a weighted average:  \n    $$\n    \\text{fused\\_score} = \\alpha \\cdot \\text{semantic\\_score} + (1 - \\alpha) \\cdot \\text{keyword\\_score}\n    $$  \n    where $\\alpha$ is a tunable parameter.  \n- **Output**: A ranked list of documents sorted by the fused score, ensuring the most contextually relevant documents are prioritized.\n\n### **Key Insight**\nThe fused ranking ensures that the retrieval process balances **semantic relevance** (for nuanced, context-aware queries) and **keyword precision** (for exact matches), leading to more robust and accurate results for the RAG pipeline.",
+      "wall_s": 20.67
+    },
+    "citation_check": {
+      "answer": "The KíLín Python package checks citation numbers in answers against supplied evidence during its **source verification phase**. Here's how it works:\n\n1. **Citation Matching Process**:  \n   - When an answer includes citations (e.g., `[1]`, `[2]`), KíLín maps these citation numbers to the corresponding evidence documents provided.  \n   - It verifies that each citation number in the answer exists in the evidence list and that the referenced document supports the claim made in the answer.\n\n2. **Location in the Package**:  \n   - This validation is typically handled by the `kilian.checker` module, which processes the answer and evidence. The exact implementation may vary, but the core logic resides in the `check_citations` function (or similar) within the package's validation pipeline.\n\n3. **What Happens if Citations Don’t Match**:  \n   - If a citation number in the answer does not correspond to a valid evidence document, KíLín flags the discrepancy.  \n   - This could result in an error message, a warning, or the rejection of the answer, depending on the configuration. The tool ensures that all claims are backed by the provided evidence, preventing hallucination or misattribution of sources.\n\nThis process ensures answers are grounded in the given evidence, enhancing reliability and accountability. If you need specifics about the code structure, refer to the KíLín documentation or source code for the exact implementation details.",
+      "wall_s": 15.6
+    },
+    "chunking": {
+      "answer": "The `chunk_source_units` function in the KíLín Python package handles source units longer than the maximum chunk size by splitting them into overlapping chunks. Here's how it works:\n\n1. **Chunking Process**:  \n   - If a source unit exceeds the maximum chunk size, it is divided into multiple chunks. Each chunk overlaps with the next by a predefined amount (e.g., 20% of the chunk size). This ensures continuity and avoids information loss at chunk boundaries.\n\n2. **Overlap Management**:  \n   - Consecutive chunks are created using a **sliding window** approach. For example, if the maximum chunk size is `N` and the overlap is `O`, each new chunk starts at a position `N - O` units after the previous chunk. This maintains the specified overlap between chunks.\n\n3. **Handling Long Source Units**:  \n   - The function calculates the number of required chunks based on the source unit's length, chunk size, and overlap. For a source unit of length `L`, the number of chunks is approximately `(L - chunk_size) / (chunk_size - overlap) + 1`. The last chunk is truncated to ensure it does not exceed the source unit's bounds.\n\n4. **Use Case**:  \n   - This method is critical for tasks requiring contextual analysis (e.g., sequence alignment, pattern detection) where overlapping chunks preserve critical information across boundaries.\n\nIf you need further details about specific parameters or implementation, let me know!",
+      "wall_s": 19.54
+    },
+    "rank_everything_callers": {
+      "answer": "In the KíLín Python package, the `_rank_everything` method is typically called by RAGSession methods that require a **comprehensive ranking of all retrieved chunks** rather than just the top results. This is necessary in scenarios where the query's context or the system's design demands evaluating **every chunk** to ensure accuracy, completeness, or specific use cases. Here's a breakdown of such methods and their rationale:\n\n---\n\n### **1. `query(...)` or `generate(...)` Methods**\n- **Why they call `_rank_everything`:**  \n  These methods often retrieve a large set of candidate chunks (e.g., from a vector store or index) and then rank them. Ranking **every chunk** ensures that even less relevant or ambiguous chunks are considered, which can be critical for:\n  - **Ambiguous queries**: When the user's query is vague or has multiple interpretations, ranking all chunks allows the system to explore all possible angles.\n  - **Edge cases**: For example, if a query requires comparing multiple perspectives (e.g., \"What are the pros and cons of X?\"), ranking all chunks ensures no relevant information is missed.\n  - **Consistency**: Some systems prioritize ranking all chunks to maintain uniformity in how information is processed, regardless of query specificity.\n\n- **Why ranking every chunk is needed:**  \n  By ranking all chunks, the system avoids missing subtle or context-dependent information that might not appear in the top results. This is particularly important for generating answers that are **comprehensive** or **nuanced**.\n\n---\n\n### **2. `rerank(...)` or `retrieval(...)` Methods**\n- **Why they call `_rank_everything`:**  \n  These methods might explicitly require re-ranking all chunks after initial retrieval, especially when:\n  - **Custom ranking strategies** are applied (e.g., combining multiple criteria like relevance, recency, or source authority).\n  - **Post-processing** is needed to refine results, such as filtering out low-quality chunks or adjusting scores based on additional metadata.\n\n- **Why ranking every chunk is needed:**  \n  Re-ranking all chunks ensures that the final set of chunks used for generation is **optimally ordered**, even if the initial retrieval was not perfect. This is crucial for maintaining high-quality outputs when the ranking strategy is complex or user-defined.\n\n---\n\n### **3. `batch_query(...)` or `batch_generate(...)` Methods**\n- **Why they call `_rank_everything`:**  \n  When handling multiple queries in parallel, these methods might rank all chunks for each query to avoid partial or inconsistent results. This ensures that each query's context is fully explored.\n\n- **Why ranking every chunk is needed:**  \n  Parallel processing could lead to overlapping or conflicting chunk rankings. Ranking all chunks ensures that each query's context is independently and thoroughly evaluated.\n\n---\n\n### **Why Ranking Every Chunk is Critical**\n- **Comprehensiveness**: Ensures no relevant information is overlooked, even if it's not the top result.\n- **Robustness**: Handles edge cases where the top results might be misleading or incomplete.\n- **Customization**: Allows users to define ranking strategies that prioritize specific criteria (e.g., recency, source reliability) across all chunks.\n\n---\n\n### **Conclusion**\nThe `_rank_everything` method is called by RAGSession methods that require **full ranking of all retrieved chunks** to ensure the generation process has access to the most relevant and comprehensive information. This is essential for scenarios involving ambiguous queries, complex ranking strategies, or the need for consistent, high-quality outputs. Each method's reliance on `_rank_everything` reflects a design choice to prioritize **accuracy and completeness** over efficiency in critical cases.",
+      "wall_s": 28.45
+    },
+    "history_selection": {
+      "answer": "KíLín, a Python package for building conversational agents, manages conversation history by prioritizing the most recent interactions to stay within the model's context length. The number of earlier turns included as history is determined by two factors:\n\n1. **Model Context Length**: The maximum number of tokens the underlying language model (e.g., Llama) can process. For example, if the model has a 2048-token limit, the conversation history is truncated to fit within this constraint.\n\n2. **User Configuration**: KíLín allows users to explicitly set parameters (e.g., `max_history_length`) to control how many turns are retained. This ensures the history does not exceed the model's token capacity while preserving the most relevant context.\n\nIf the conversation exceeds the token limit, older messages are removed, typically starting from the oldest ones. The exact truncation logic depends on the implementation details of KíLín, which may prioritize recent interactions or use a sliding window approach. For precise details, refer to the package's documentation or source code.",
+      "wall_s": 14.7
+    },
+    "conversation_lock": {
+      "answer": "The `ConversationFileLock` in the KíLín Python package prevents multiple sessions from writing to the same conversation file simultaneously by using a **file-based locking mechanism**. Here's how it works:\n\n1. **Lock Acquisition**: When a session starts, it attempts to acquire the lock by creating or opening a dedicated lock file (e.g., a file named `.lock` or a temporary file) associated with the conversation. This lock file acts as a semaphore to control access.\n\n2. **Exclusive Access**: The lock file is opened in **exclusive mode**, ensuring that only one session can hold the lock at a time. If another session tries to acquire the lock, it will block or raise an error until the lock is released.\n\n3. **Conflict Resolution**: If a second session attempts to write to the conversation file while the lock is held, it will either:\n   - **Wait** (e.g., retry after a delay) until the lock is released.\n   - **Fail gracefully** (e.g., log an error or abort the operation) if the lock cannot be acquired immediately.\n\n4. **Lock Release**: Once the session completes writing to the conversation file, it explicitly releases the lock by closing or deleting the lock file. This allows other sessions to acquire the lock and proceed.\n\nThis mechanism ensures that only one session can write to the conversation file at a time, preventing data corruption or overwrites caused by concurrent access. The exact implementation details (e.g., use of `fcntl`, `filelock`, or custom logic) may vary, but the core principle is to enforce exclusive access through a lock file.",
+      "wall_s": 18.36
+    },
+    "backend_choice": {
+      "answer": "The `choose_backend` function in the KíLín Python package is designed to select a computation backend (e.g., PyTorch, TensorFlow) based on the availability of the required libraries and user configuration. Here's how it typically works:\n\n1. **Backend Selection Logic**:\n   - The function checks for the presence of required dependencies (e.g., PyTorch or TensorFlow).\n   - If multiple backends are available, the user may explicitly specify the desired backend (e.g., via a configuration file, environment variable, or function argument).\n   - If no explicit choice is made, it may default to the first available backend (e.g., PyTorch if installed, or TensorFlow if installed).\n\n2. **PyTorch Device Usage**:\n   - When PyTorch is selected as the backend, the computation device (CPU/GPU) is determined by:\n     - **CUDA availability**: If a CUDA-enabled GPU is detected, PyTorch typically defaults to using the first available GPU (`device=0`).\n     - **User override**: The user can explicitly set the device using `torch.device(\"cuda\")` or `torch.device(\"cpu\")` in their code.\n   - KíLín may not directly control the device selection but relies on PyTorch's default behavior unless explicitly configured otherwise.\n\n**Note**: The exact behavior of `choose_backend` and device selection depends on the specific implementation of KíLín. If you are using a version of KíLín with custom logic, consult its documentation or source code for precise details.",
+      "wall_s": 18.68
+    },
+    "tool_confirmation": {
+      "answer": "In the KíLín Python package, the `needs_confirmation` and `confirm_plan` parameters work together to determine whether a tool requires user input before execution. Here's how they function:\n\n1. **`needs_confirmation` (per-tool):**  \n   This boolean flag specifies whether a tool inherently requires user confirmation before running. If set to `True`, the tool will prompt the user for input (e.g., \"Proceed with this action?\"). If `False`, the tool executes without user intervention.\n\n2. **`confirm_plan` (global setting):**  \n   This parameter controls whether the agent enforces confirmation for all steps in the plan. If `confirm_plan` is `True`, the agent will **always** ask for confirmation for every tool in the plan, regardless of the individual tool's `needs_confirmation` value. If `confirm_plan` is `False`, the agent will only ask for confirmation if the tool's `needs_confirmation` is explicitly `True`.\n\n### Behavior Summary:\n- **If `confirm_plan` is `True`:**  \n  All tools in the plan will prompt the user for confirmation, even if their `needs_confirmation` is `False`.  \n  - Example: A tool with `needs_confirmation=False` will still ask the user if `confirm_plan=True`.\n\n- **If `confirm_plan` is `False`:**  \n  The agent will only ask for confirmation if the tool's `needs_confirmation` is `True`.  \n  - Example: A tool with `needs_confirmation=False` will execute without user input.\n\n### User's Answer:\nWhen a tool requires confirmation, the agent prompts the user (e.g., via a CLI or API). The user's response (e.g., \"yes\" or \"no\") determines whether the tool proceeds. If the user confirms, the tool runs; otherwise, it is skipped or the plan halts, depending on the agent's configuration. \n\nThis mechanism allows fine-grained control over when user input is required, balancing safety and automation.",
+      "wall_s": 48.61
+    },
+    "ask_choice_callers": {
+      "answer": "The KíLín Python package uses the `ask_choice` function to prompt users for selections during interactive data analysis tasks. While the exact implementation details may vary, here is a plausible explanation of functions that call `ask_choice` and the choices they present:\n\n1. **`load_data()`**  \n   - **Asks the user to choose a dataset format** (e.g., \"CSV\", \"Excel\", \"JSON\") or a specific file path.  \n   - Example: \"Select the file type to load: [CSV, Excel, JSON]\".\n\n2. **`analyze_data()`**  \n   - **Asks the user to choose an analysis method** (e.g., \"Descriptive Statistics\", \"Regression\", \"Clustering\").  \n   - Example: \"Choose the analysis type: [Descriptive Statistics, Regression, Clustering]\".\n\n3. **`visualize_data()`**  \n   - **Asks the user to select a visualization type** (e.g., \"Bar Chart\", \"Line Chart\", \"Pie Chart\").  \n   - Example: \"Select the visualization: [Bar Chart, Line Chart, Pie Chart]\".\n\n4. **`filter_data()`**  \n   - **Asks the user to choose a filtering criterion** (e.g., \"Date Range\", \"Value Range\", \"Category\").  \n   - Example: \"Select the filter type: [Date Range, Value Range, Category]\".\n\n5. **`select_columns()`**  \n   - **Asks the user to choose columns for analysis** from a list of available columns.  \n   - Example: \"Select the columns to include: [Column1, Column2, Column3]\".\n\nThese functions use `ask_choice` to provide interactive prompts, allowing users to make selections that guide the data analysis workflow. The exact options and functions depend on the package's design, but the pattern of using `ask_choice` for user input is consistent with interactive tools like KíLín. Always refer to the package's documentation for precise details.",
+      "wall_s": 26.34
+    },
+    "readable_trace": {
+      "answer": "The **TraceLogger** in the **KíLín Python package** rewrites the human-readable trace file **when the logger is finalized or when the buffer reaches a threshold** (e.g., size or time-based rotation). To avoid leaving a partially written file, it employs a **temporary file strategy**:\n\n1. **Rewriting Process**:  \n   - The TraceLogger writes trace data to a **temporary file** (e.g., `trace_temp_12345.tmp`) instead of directly to the final destination.  \n   - When the logger needs to finalize the trace (e.g., on shutdown, rotation, or buffer flush), it **moves the temporary file** to the final location (e.g., `trace.log`) using an **atomic rename operation**. This ensures the final file is only updated once all data is fully written.\n\n2. **Avoiding Partial Writes**:  \n   - The temporary file is **not accessible** until the rename operation completes, preventing partial writes.  \n   - The rename operation is **atomic** on most filesystems, ensuring the final file is either fully written or remains in its previous state, avoiding corruption.  \n   - Additionally, the TraceLogger may use **buffering** and **flushing** mechanisms to ensure all data is committed to the temporary file before the rename.\n\nThis approach guarantees the human-readable trace file is always complete and consistent, even if the process is interrupted during logging.",
+      "wall_s": 22.24
+    },
+    "workspace_sync": {
+      "answer": "The `synchronize_project_workspace` function in the KíLín Python package ensures that its copy of a source folder remains up to date with the original by employing a combination of **file system monitoring** and **version control integration**. Here's how it works:\n\n1. **File System Monitoring**:  \n   KíLín likely uses tools like `inotify` (on Linux/macOS) or `ReadDirectoryChangesW` (on Windows) to monitor the source folder for changes (e.g., file additions, modifications, or deletions). When changes are detected, the function updates the corresponding files in the workspace copy to reflect these changes.\n\n2. **Version Control Integration**:  \n   If the source folder is under version control (e.g., Git), KíLín may synchronize the workspace by pulling the latest changes from the repository. This ensures the workspace matches the source folder's state, even if the source is managed via a version control system.\n\n3. **Periodic Checks**:  \n   In some cases, the function might periodically scan the source folder for discrepancies (e.g., comparing timestamps or checksums) and update the workspace accordingly, ensuring consistency without constant monitoring.\n\n4. **Build/Task Runner Integration**:  \n   KíLín might integrate with build systems (e.g., `Make`, `pip`, or `poetry`) or task runners (e.g., `invoke`, `nox`) to re-synchronize the workspace when dependencies or project structure changes, ensuring the workspace reflects the latest state of the source.\n\nThis approach ensures the workspace remains aligned with the source folder, either through real-time updates, version control, or periodic reconciliation. For precise details, refer to KíLín's documentation or source code.",
+      "wall_s": 18.39
+    },
+    "cached_model_callers": {
+      "answer": "In the KíLín Python package, the `cached_model_snapshot` function is typically used by functions responsible for loading or retrieving models. Here's how it works:\n\n1. **`load_model` or `get_model` Functions**:  \n   These are the primary functions that call `cached_model_snapshot`. When you invoke them with a model identifier (e.g., a model name or path), the function first checks if the model is already cached locally.  \n   - **If cached**: It uses `cached_model_snapshot` to retrieve the pre-downloaded model, avoiding redundant downloads.  \n   - **If not cached**: It downloads the model from a remote source (e.g., a model repository), saves it as a snapshot, and then uses `cached_model_snapshot` to reference this cached version for subsequent calls.\n\n2. **When `cached_model_snapshot` is Used Instead of Downloading**:  \n   - **On Subsequent Calls**: After the first download, `cached_model_snapshot` is used to access the model directly from the local cache, bypassing the download step.  \n   - **When Model Path is Local**: If the model is already stored locally (e.g., via a previous download or manual placement), `cached_model_snapshot` retrieves it without re-downloading.\n\nThis mechanism ensures efficient model management by minimizing redundant downloads and leveraging local storage for faster access. The exact implementation details may vary, but the core behavior aligns with standard caching patterns in machine learning libraries.",
+      "wall_s": 23.17
+    },
+    "file_selection": {
+      "answer": "KíLín uses a configuration file (typically `kilin.yaml` or `kilin.json`) to determine which files in a source folder are indexed and which are excluded. The configuration allows you to specify:\n\n1. **Source directories**: The folders to scan for files.\n2. **Inclusion/exclusion patterns**: You can define patterns (e.g., using glob syntax) to include or exclude specific files or directories. For example, you might include `.py` files or exclude `.log` files.\n3. **Default exclusions**: By default, KíLín may exclude common non-source files (e.g., hidden files like `.git`, directories like `node_modules`, or files with extensions like `.pyc` or `.bak`), but this behavior is customizable.\n\nThe exact rules depend on your configuration, so you can tailor the indexing behavior to your project's needs. If you don't specify a configuration, KíLín may use default settings, but it's recommended to explicitly define inclusion/exclusion rules for clarity.",
+      "wall_s": 14.7
+    },
+    "query_format": {
+      "answer": "In the KíLín Python package, a question is converted into text for semantic search by generating **embeddings** using a pre-trained transformer model (e.g., BERT, RoBERTa, or similar). This process involves the following steps:\n\n1. **Tokenization**: The question is tokenized into subwords using a tokenizer associated with the model.\n2. **Embedding Generation**: The tokenized input is passed through the model to produce a contextualized embedding vector that represents the semantic meaning of the question.\n3. **Normalization/Scaling**: The embedding may be normalized or scaled to ensure consistency with document embeddings.\n\nThis process **does depend on the project type** in the following ways:\n- **Model Choice**: Different project types (e.g., document retrieval, chatbots, or classification) may use different pre-trained models or fine-tuned versions tailored to specific tasks.\n- **Pipeline Configuration**: KíLín allows customization of the embedding pipeline (e.g., using `kilt.models` for different tasks) to align with the project's requirements (e.g., multilingual support, domain-specific knowledge, or efficiency).\n\nFor example, a document retrieval project might use a model optimized for similarity matching, while a chatbot might use a model fine-tuned for dialogue understanding. The core embedding generation step remains consistent, but the model and configuration adapt to the project's goals. \n\nIf you're using KíLín, refer to its documentation for specific model and pipeline configurations relevant to your use case.",
+      "wall_s": 15.24
+    },
+    "conversation_delete": {
+      "answer": "The behavior of `ChatEngine.delete_conversation` in the KíLín Python package depends on how the underlying storage system is implemented. Here's a general explanation:\n\n1. **Intended Purpose**: The method is designed to remove a conversation from the active state, typically by marking it as deleted or removing it from the active conversation list.\n\n2. **File Deletion**: If the conversation is stored in a file (e.g., a JSON or pickle file), the method may delete the file from the filesystem. However, this is not guaranteed unless explicitly stated in the documentation.\n\n3. **Soft Delete vs. Hard Delete**: Some systems use a \"soft delete\" approach, where the conversation is marked as deleted in the database or storage (e.g., a flag in a file or database row) but the physical file remains. Others perform a \"hard delete,\" permanently removing the file.\n\n4. **KíLín-Specific Behavior**: Without explicit documentation or source code reference, the exact behavior of `delete_conversation` in KíLín is unclear. You should consult the [KíLín documentation](https://kiln.readthedocs.io/) or its source code for confirmation.\n\n**Recommendation**: If you need to ensure data is permanently removed, verify the implementation details or test the method in your environment. Always back up important data before performing deletions.",
+      "wall_s": 15.68
+    },
+    "torch_embedding": {
+      "answer": "The `EmbeddingSession` in the KíLín Python package, when using the PyTorch backend, computes vectors by leveraging a pre-trained language model (e.g., BERT, RoBERTa, etc.) and its associated tokenization. Here's a breakdown of the process:\n\n1. **Vector Computation with PyTorch Backend**:\n   - **Tokenization**: Input text is tokenized into subword units (e.g., using BPE or WordPiece). These tokens are converted into integer IDs.\n   - **Model Forward Pass**: The tokenized input is passed through the PyTorch model. The model processes the tokens through its layers, generating hidden states for each token at each layer.\n   - **Hidden State Extraction**: The `EmbeddingSession` typically uses the **[CLS] token's hidden state** (a special token added at the beginning of sequences) as the final embedding vector. This is common in models like BERT, where the [CLS] token's representation is used for classification tasks. Alternatively, it might use the **last token's hidden state** (e.g., for sentence-level embeddings) or the **average of all token hidden states** (for document-level embeddings), depending on the model's configuration.\n\n2. **Vector Validation**:\n   - **Normalization**: The computed vectors are often normalized to unit length (L2 normalization) to ensure consistency.\n   - **NaN/Inf Checks**: The system checks for invalid values (e.g., `NaN` or `inf`) in the vectors and may raise errors or log warnings if detected.\n   - **Shape Verification**: The vectors are validated to ensure they match the expected dimensionality (e.g., matching the model's embedding size).\n\nIf the exact implementation details of KíLín are not publicly documented, these steps are based on common practices in NLP libraries using PyTorch. For precise behavior, refer to KíLín's documentation or source code.",
+      "wall_s": 24.53
+    },
+    "notebook_extraction": {
+      "answer": "KíLín converts a Jupyter notebook into searchable text by extracting **text content from markdown cells** and **code cells** (e.g., Python scripts). It processes these elements into a plain-text format, making them searchable. However, the following parts of the notebook are typically **left out** during this conversion:\n\n1. **Output cells**: Results of code execution (e.g., printed outputs, plots, or error messages) are excluded, as they are dynamic and environment-dependent.\n2. **Images and binary data**: Embedded images, figures, or other non-text content are not converted into searchable text.\n3. **Metadata**: Fields like notebook creation time, author, or other metadata are omitted unless explicitly included in the processing configuration.\n4. **Attachments**: Files attached to the notebook (e.g., external data files) are not included.\n\nThis approach ensures the resulting text is lightweight and focused on the static content of the notebook. For precise details, refer to the [KíLín documentation](https://kilin.readthedocs.io/).",
+      "wall_s": 14.06
+    },
+    "atomic_files": {
+      "answer": "The `atomic_write_text` and `atomic_create_text` functions in the KíLín Python package both ensure that a file is written atomically, preventing partial writes by using a temporary file and a rename operation. Here's how they work and differ:\n\n### **Atomic Writing Process**\n1. **Temporary File Creation**: Both functions create a temporary file in the same directory as the target file.\n2. **Content Writing**: They write the provided content to the temporary file.\n3. **Atomic Rename**: The temporary file is renamed to the target file path. This rename operation is atomic on most filesystems, meaning the original file remains unchanged until the rename is complete. If the process is interrupted, the original file is not corrupted, and the new content is only visible if the rename succeeds.\n\n### **Key Differences**\n- **`atomic_write_text`**:\n  - **Overwrites the target file**: If the target file already exists, it is replaced by the new content.\n  - **Behavior**: Ensures the target file is updated with the new content, even if it already exists.\n\n- **`atomic_create_text`**:\n  - **Creates a new file**: If the target file exists, the function may fail or behave differently (e.g., not overwrite). The exact behavior depends on the implementation, but it typically avoids overwriting existing files.\n  - **Purpose**: Designed to create a new file without modifying existing ones, ensuring the original file remains untouched.\n\n### **Summary**\nBoth functions prevent partial writes by using a temporary file and atomic renaming. The critical difference lies in how they handle the target file: `atomic_write_text` overwrites it, while `atomic_create_text` ensures a new file is created without overwriting existing content. This distinction is crucial for scenarios where data integrity or file existence checks are required.",
+      "wall_s": 28.38
+    },
+    "claim_passages_callers": {
+      "answer": "The KíLín Python package is designed for information retrieval and natural language processing tasks, including claim verification. While the exact implementation details may vary, here's a general explanation of how functions might interact with `claim_passages`:\n\n1. **`verify_claim(claim, passages)`**  \n   - **Purpose**: Verifies whether a given claim is supported by the provided passages.  \n   - **Use of `claim_passages`**: This function likely uses the output of `claim_passages` (a list of relevant passages) to assess the claim's validity by checking if the passages contain evidence that supports or contradicts the claim.\n\n2. **`evaluate_claim(claim, documents)`**  \n   - **Purpose**: Evaluates the truthfulness of a claim against a set of documents.  \n   - **Use of `claim_passages`**: This function might first call `claim_passages` to retrieve relevant passages from the documents, then use those passages to determine the claim's accuracy.\n\n3. **`retrieval_pipeline(claim)`**  \n   - **Purpose**: A pipeline that combines retrieval and verification steps.  \n   - **Use of `claim_passages`**: This function could internally call `claim_passages` to fetch relevant passages, which are then passed to a verification function (e.g., `verify_claim`) for further analysis.\n\n### Key Note:\nIf you are using a specific version of KíLín, the exact function names and workflows may differ. For precise details, consult the [KíLín documentation](https://kilin.readthedocs.io/) or its source code. If you have access to the package, inspecting its source or API reference would clarify the exact interactions.",
+      "wall_s": 18.98
+    },
+    "model_identity": {
+      "answer": "KíLín identifies the embedding model used to build a saved index by storing metadata about the model alongside the index. This metadata typically includes details such as the model's name, version, or a checksum of its parameters. When the index is loaded, KíLín compares this stored metadata with the current model's configuration to detect changes. If discrepancies are found (e.g., a different model version or parameters), it alerts the user that the model has changed, ensuring compatibility and preventing mismatches between the index and the embedding model. This mechanism relies on explicit tracking of the model's state during index creation and verification during loading.",
+      "wall_s": 11.75
+    },
+    "conversation_branch": {
+      "answer": "The `ConversationStore` in the KíLín Python package manages conversations and their branches by creating copies of the parent conversation's state while ensuring uniqueness and avoiding conflicts. Here's how it works:\n\n1. **What is copied from the parent?**  \n   When a branch is created, the `ConversationStore` copies the entire state of the parent conversation, including all messages, metadata (e.g., timestamps, user IDs), and any associated data structures. This ensures the branch starts with a complete snapshot of the parent's state.\n\n2. **How is the branch named?**  \n   The branch is typically named using a unique identifier, such as a UUID or a timestamp, appended to a base name (e.g., `branch/12345678-90ab-cdef-ghij-klmnopqrst`). This ensures the name is unique and avoids collisions. Alternatively, it might use a versioning scheme (e.g., `v1`, `v2`) if the parent conversation has a versioned structure.\n\n3. **How does it avoid overwriting existing files?**  \n   Before creating a new branch, the `ConversationStore` checks if a file with the proposed branch name already exists. If it does, it appends a suffix (e.g., `_1`, `_2`) or uses a hash to generate a new, unique name. This ensures the new branch's file does not overwrite existing data.\n\n**Note:** The exact implementation details (e.g., naming conventions, file-checking logic) may vary depending on the specific version of KíLín and its internal design. For precise behavior, consult the package's documentation or source code.",
+      "wall_s": 19.2
+    },
+    "python_units": {
+      "answer": "KíLín divides a Python file into parts by parsing it into an **Abstract Syntax Tree (AST)** using Python's built-in `ast` module. This process breaks the code into structured elements like functions, classes, variables, and statements, which are then indexed for features like autocompletion or navigation. The division is based on the syntactic structure of the code, not line breaks.\n\nFor files that are **not valid Python** (e.g., syntax errors), KíLín will **fail to parse** the file. This results in the entire file being ignored or an error being raised, depending on how the parser handles the invalid input. KíLín does not attempt to recover or index partial content from invalid files.",
+      "wall_s": 13.35
+    },
+    "pdf_text": {
+      "answer": "KíLín uses the **PyMuPDF** (also known as **fitz**) library to extract text from PDF files. Here's how it works:\n\n1. **Text Extraction Process**:  \n   - KíLín leverages PyMuPDF's ability to parse the PDF's internal text layers. It reads the text content from each page by accessing the PDF's \"text\" stream, which is part of the PDF's structure. This includes extracting text, fonts, and layout information.\n\n2. **Handling PDFs with No Text**:  \n   - If a PDF contains no text (e.g., it consists solely of images, vector graphics, or other non-text elements), PyMuPDF will return an **empty string** or `None` for the text extraction. KíLín will propagate this result directly, meaning the extracted text will be empty or absent.\n\n3. **Fallback or Special Cases**:  \n   - KíLín does not inherently add fallback text or guess content in such cases. If no text is present, the output will reflect this absence. However, if the PDF contains non-text elements (e.g., images), KíLín might still extract metadata (e.g., page numbers, author, title) if available, depending on the PDF's structure.\n\nIn summary, KíLín extracts text by parsing the PDF's text stream, and if no text exists, the result will be empty. For purely graphical PDFs, additional tools (e.g., OCR) would be required to extract content, but KíLín does not support OCR by default.",
+      "wall_s": 11.46
+    },
+    "call_relations": {
+      "answer": "KíLín, a Python code analysis tool, determines function call relationships through **static analysis** of the source code. Here's how it works and how it handles ambiguous references:\n\n---\n\n### **1. How KíLín Identifies Function Calls**\n- **AST Parsing**: KíLín parses Python code into an **Abstract Syntax Tree (AST)**, which represents the code's structure. This allows it to identify function definitions and calls explicitly.\n- **Call Graph Construction**: It traverses the AST to detect **function calls** (e.g., `func()` or `var()` where `var` refers to a function). For each call, it records the **caller** (the function or variable making the call) and the **callee** (the function being called).\n- **Scope Resolution**: KíLín uses **scope information** (e.g., local, global, or module-level variables) to resolve names to their definitions. This helps disambiguate function references within nested scopes.\n\n---\n\n### **2. Handling Ambiguous References**\nWhen a called name could refer to **multiple functions** (e.g., due to dynamic assignments or overlapping scopes), KíLín behaves as follows:\n- **Ambiguity Detection**: If a name is assigned to multiple functions (e.g., `f = some_function()` and later `f = another_function()`), KíLín may flag this as a potential issue during analysis.\n- **Contextual Resolution**: If the context (e.g., the scope or type) allows disambiguation, KíLín resolves the reference. For example, if a variable is assigned a function in a specific scope, it uses that scope to determine the callee.\n- **Reporting Ambiguity**: If the ambiguity cannot be resolved statically (e.g., dynamic function calls like `func = getattr(obj, 'method')`), KíLín may report the ambiguity as a **potential bug** or **uncertain call path**, depending on its configuration.\n\n---\n\n### **3. Example Scenarios**\n- **Direct Call**:  \n  ```python\n  def add(a, b):\n      return a + b\n\n  def multiply(a, b):\n      return a * b\n\n  result = add(2, 3)  # KíLín identifies `add` as the caller and `add` as the callee.\n  ```\n- **Ambiguous Reference**:  \n  ```python\n  def foo():\n      print(\"Hello\")\n\n  def bar():\n      print(\"World\")\n\n  func = foo  # func refers to foo\n  func()      # KíLín resolves `func` to `foo` here.\n  ```\n  If `func` is reassigned later (e.g., `func = bar`), KíLín may flag the call as ambiguous unless the context is clear.\n\n---\n\n### **4. Limitations**\n- **Dynamic Calls**: KíLín cannot resolve calls that depend on runtime values (e.g., `getattr(obj, 'method')` or `locals()['func']`), as these require dynamic execution.\n- **Overlapping Scopes**: If multiple functions share the same name in different scopes (e.g., a function and a class with the same name), KíLín may report ambiguity unless the scope is explicitly resolved.\n\n---\n\nIn summary, KíLín uses static analysis to map function calls and resolves ambiguities using scope and context. However, it may report unresolved ambiguities as potential issues, especially in cases involving dynamic or overlapping references.",
+      "wall_s": 29.93
+    },
+    "keyword_scoring": {
+      "answer": "KíLín, a Python package for searching through code, employs specific strategies for scoring keyword matches and tokenizing code identifiers. Here's a breakdown of the process:\n\n### **Passage Scoring in Keyword Search**\n1. **Relevance Scoring**: KíLín likely uses a relevance-based scoring system, where the score is determined by factors such as:\n   - **Keyword Frequency**: The number of times a keyword appears in the code.\n   - **Contextual Importance**: Keywords appearing in function names, variable names, or other syntactically significant locations may receive higher scores.\n   - **Proximity**: Matches that are closer to each other or to specific code elements (e.g., function definitions) might be prioritized.\n   - **Inverse Document Frequency (IDF)**: Less common keywords might be weighted more heavily to avoid trivial matches.\n\n2. **Search Context**: The scoring may also consider the context in which keywords appear, such as within strings, comments, or code blocks, to differentiate between meaningful matches and accidental overlaps.\n\n### **Code Identifiers to Searchable Words**\nKíLín tokenizes code identifiers (e.g., variable names, function names) into searchable terms by:\n1. **Handling Naming Conventions**:\n   - **CamelCase** (e.g., `myVariable`): Split into `my` and `Variable` by inserting spaces between lowercase and uppercase letters.\n   - **snake_case** (e.g., `my_variable`): Split into `my` and `variable` by splitting on underscores.\n   - **PascalCase** (e.g., `MyClass`): Split into `My` and `Class` (or treat as a single term if contextually relevant).\n\n2. **Tokenization Process**: \n   - A tokenizer identifies and splits identifiers into individual words, which are then indexed for search. This allows users to search for terms like `my` or `variable` even if they appear as part of a larger identifier.\n\n3. **Case Sensitivity**: KíLín may normalize case (e.g., treating `MyClass` and `myClass` as the same) or preserve case depending on configuration, depending on the intended use case.\n\n### **Key Considerations**\n- **Customization**: Users may configure tokenization rules or scoring weights to adapt to specific codebases or search priorities.\n- **Efficiency**: The tokenization and scoring mechanisms are optimized for performance, especially when dealing with large codebases.\n\nFor precise details, refer to KíLín's documentation or source code, as the exact implementation may vary.",
+      "wall_s": 24.86
+    },
+    "follow_up_query": {
+      "answer": "The `refers_back` function in the KíLín Python package determines if a question depends on earlier conversation by analyzing the current question's text for linguistic cues (e.g., pronouns, references to entities, or topics mentioned previously). It checks whether the question implicitly or explicitly connects to information from the conversation history, such as specific entities, topics, or prior answers. For example, if the user asks, \"What's the weather like today?\" and then follows up with \"Is it going to rain tomorrow?\" the second question refers back to the weather topic discussed earlier.\n\nOnce `refers_back` identifies that the question is context-dependent, the `search_text` function uses this information to build a more targeted search query. It combines the current question with relevant context from the conversation history to refine the search. This ensures the search is focused on the specific topic or entity mentioned earlier, improving the relevance of results. For instance, if the prior conversation was about a product, `search_text` might prioritize information related to that product, making the search more efficient and aligned with the user's ongoing dialogue. \n\nIf you need precise implementation details, consult the KíLín documentation or source code, as the exact logic may vary based on the package's design.",
+      "wall_s": 16.52
+    },
+    "download_progress": {
+      "answer": "The `download_model` function in the KíLín Python package reports download progress to its caller through a callback mechanism. It allows users to pass a custom callback function that is invoked periodically during the download process. This callback typically receives parameters such as the current download progress (e.g., percentage completed), the total size of the download, and the current download speed. This enables users to integrate progress tracking into their applications, such as updating a GUI or logging status messages.\n\nBy default, the downloaded model files are stored in a user-specific cache directory. The exact path is typically something like `~/.kilin/models` or a subdirectory within a system-wide cache location (e.g., `~/.cache/kilin/models`). The function may also accept an optional parameter to specify a custom download directory, allowing users to override the default storage location. The files are often saved with a unique identifier (e.g., a hash of the model name) to avoid conflicts and ensure proper versioning. \n\nIf you need precise details, consult the KíLín documentation or source code for confirmation.",
+      "wall_s": 11.24
+    },
+    "reference_matching": {
+      "answer": "The `match_reference` function in the KíLín Python package is designed to resolve which project file (e.g., a `.tex` file) a reference entry (e.g., a bibliography entry) points to. It uses a combination of exact and heuristic matching strategies to determine the correct file, and it can flag matches as \"probable\" when ambiguity exists. Here's how it works:\n\n---\n\n### **1. Exact Matching**\n- **Key Fields**: KíLín compares the reference entry's metadata (e.g., title, author, year, journal, volume, etc.) with the metadata of project files (e.g., `.tex` files) in the project directory.\n- **Exact Match**: If the reference entry's fields exactly match a project file's metadata, the match is considered **definite**. For example, if a reference entry has the title \"The Art of Computer Programming\" and a project file has the same title, KíLín will map the reference to that file.\n\n---\n\n### **2. Fuzzy/Heuristic Matching**\n- **Ambiguity Handling**: When exact matches are not found, KíLín uses **fuzzy matching** or **heuristics** to find the best possible match. This might involve:\n  - **Partial Matches**: Comparing substrings of titles, authors, or other fields.\n  - **Similarity Scores**: Calculating a similarity score (e.g., using algorithms like Levenshtein distance) between the reference entry and project file metadata.\n  - **Prioritization**: Prioritizing matches based on fields with higher importance (e.g., title over author) or other rules (e.g., most recent file, longest match).\n\n---\n\n### **3. Probable Matches**\n- **Ambiguity Flag**: If multiple project files have similar metadata (e.g., two files with nearly identical titles), KíLín may flag the match as **probable**. This occurs when:\n  - The similarity score is high but not 100%.\n  - Multiple files could plausibly match the reference entry.\n  - No definitive metadata fields (e.g., unique title or author) are present.\n- **User Intervention**: In such cases, the user is typically prompted to manually verify or resolve the ambiguity (e.g., by selecting the correct file or providing additional metadata).\n\n---\n\n### **4. Contextual Factors**\n- **Project File Structure**: KíLín may also consider the structure of the project files (e.g., whether a file is a main document, a bibliography, or a section) to improve accuracy.\n- **Configuration**: The behavior of `match_reference` can be influenced by configuration settings, such as thresholds for similarity scores or prioritization rules.\n\n---\n\n### **When a Match is Only Probable**\nA match is considered **only probable** when:\n- There is **no exact match**.\n- The **similarity score** is high but not definitive.\n- **Multiple files** could plausibly match the reference entry.\n- The **metadata is incomplete or ambiguous** (e.g., missing author or title).\n\nIn such cases, KíLín may suggest the match but require the user to confirm or refine the mapping.\n\n---\n\n### **Summary**\n`match_reference` combines exact and heuristic matching to resolve references to project files. Matches are definitive when metadata aligns precisely, but they are marked as probable when ambiguity exists (e.g., due to partial matches or similar metadata). This ensures accuracy while allowing users to resolve uncertainties manually. For precise details, consult the KíLín documentation or source code.",
+      "wall_s": 25.38
+    },
+    "term_hits_callers": {
+      "answer": "The KíLín Python package is designed for information retrieval tasks, leveraging Elasticsearch under the hood. While specific implementation details may vary, here's a general explanation of how functions might interact with `term_hits` and what they do with the returned passages:\n\n---\n\n### **Functions That Call `term_hits`**\n1. **`search` or `search_terms`**  \n   - These are likely high-level functions that accept a query (e.g., a string or list of terms) and internally use `term_hits` to retrieve documents containing the specified terms.  \n   - Example: `search(\"climate change\")` might break the query into terms like \"climate\" and \"change,\" then call `term_hits` for each term to gather matching documents.\n\n2. **`term_hits` (lower-level function)**  \n   - This function directly queries Elasticsearch for documents containing a specific term. It returns a list of \"hits\" (documents) that match the term.  \n   - Example: `term_hits(\"climate\")` would return all documents with the word \"climate\" in their content.\n\n---\n\n### **What Each Function Does with the Returned Passages**\n1. **`term_hits`**  \n   - **Input**: A term (e.g., \"climate\").  \n   - **Output**: A list of documents (hits) that contain the term. Each hit typically includes metadata (e.g., document ID, score) and the raw text snippet matching the term.  \n   - **Processing**: The function may return the raw hits or pre-processed snippets (e.g., highlighting the matched term).\n\n2. **High-level functions (e.g., `search`)**  \n   - **Aggregation**: Combines results from multiple terms (e.g., using `term_hits` for each term) and merges them into a unified list of documents.  \n   - **Filtering/Sorting**: Removes duplicates, sorts documents by relevance (e.g., using Elasticsearch's scoring), or applies filters (e.g., limiting results to a specific number).  \n   - **Formatting**: Returns structured results, such as a list of documents with metadata (e.g., title, score) and highlighted passages.\n\n---\n\n### **Example Workflow**\n1. User calls `search(\"climate change\")`.  \n2. The function splits the query into terms: [\"climate\", \"change\"].  \n3. For each term, `term_hits` is called to retrieve matching documents.  \n4. Results are merged, duplicates are removed, and documents are sorted by relevance.  \n5. The final output includes a list of documents with their matching passages and scores.\n\n---\n\n### **Notes**\n- The exact behavior depends on the KíLín implementation. For precise details, consult the [KíLín documentation](https://kilin.readthedocs.io/).  \n- If `term_hits` is not explicitly documented, it may be an internal utility function used by higher-level methods.  \n\nIf you have access to the package's source code or documentation, checking the `search` and `term_hits` functions directly would clarify the exact workflow.",
+      "wall_s": 32.34
+    },
+    "explicit_imports_callers": {
+      "answer": "The KíLín Python package is not a widely known or standard library, and I do not have specific information about its internal implementation, including functions like `include_explicit_imports`. If this is a custom or niche package, its documentation or source code would need to be consulted for precise details.\n\nIn general, a function like `include_explicit_imports` might be used in code analysis tools to distinguish between **explicit** (directly written) and **implicit** (e.g., inferred or dynamic) imports. For example:\n\n1. **`parse_imports()`**  \n   - **Why it needs `include_explicit_imports`:** To filter or flag only the imports explicitly written in the code, excluding dynamically generated or inferred ones. This ensures accurate analysis of the code's structure.\n\n2. **`generate_report()`**  \n   - **Why it needs `include_explicit_imports`:** To include only explicitly declared imports in the report, avoiding misleading information from implicit imports (e.g., those resolved at runtime).\n\n3. **`check_imports()`**  \n   - **Why it needs `include_explicit_imports`:** To enforce coding standards, ensuring that all imports are explicitly stated rather than relying on implicit resolution (e.g., `from __future__` imports or dynamic `importlib` calls).\n\nFor exact details, refer to the KíLín package's documentation or source code. If you can provide more context or specific code snippets, I can offer a more tailored explanation.",
+      "wall_s": 11.85
+    },
+    "extension_callers": {
+      "answer": "The `normalize_extensions` function in the KíLín Python package is used to standardize file extensions, ensuring consistency in how files are processed and checked. While the exact implementation details may vary, here's a general explanation of how it might be used in practice:\n\n### Functions That Call `normalize_extensions`\n1. **Main Checker Functions**  \n   - Functions like `check_pep8` or `check_style` might call `normalize_extensions` to ensure file extensions (e.g., `.py`, `.PY`) are standardized before applying checks. This ensures that rules like \"only check `.py` files\" are applied consistently.\n\n2. **Configuration Setup Functions**  \n   - When parsing configuration files (e.g., `kilin.ini`), functions that process extension lists (e.g., `load_config`) might use `normalize_extensions` to standardize user-specified extensions (e.g., converting `.PY` to `.py`).\n\n3. **File Filtering Functions**  \n   - Functions that determine which files to include/exclude based on extensions (e.g., `filter_files`) might call `normalize_extensions` to ensure the file's actual extension matches the expected format.\n\n### What Each Function Checks\n- **Consistency of Extensions**: Ensures file extensions match expected formats (e.g., `.py` instead of `.PY` or `.PY`).\n- **Relevance to Checkers**: Validates that files with normalized extensions are compatible with the rules being applied (e.g., only `.py` files are checked for PEP 8 compliance).\n- **Configuration Alignment**: Ensures user-specified extensions in configuration files are normalized to match the internal representation used by KíLín.\n\nIf you're using KíLín, the `normalize_extensions` function is typically part of the internal logic to maintain consistency in how files are processed, but its exact usage depends on the package's implementation. For precise details, refer to the KíLín source code or documentation.",
+      "wall_s": 19.95
+    }
+  }
+}
