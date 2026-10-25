@@ -220,6 +220,7 @@ from kilin.retrievals.context_expansion import (
     SOURCE_SEARCH_DEPTH,
     demote_documentation,
     demote_test_results,
+    names_code,
     prefer_source_results,
 )
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
@@ -3121,7 +3122,17 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
-            if self.indexes.code_graph.entities:
+            if not self.indexes.code_graph.entities:
+                code = []
+                report(
+                    "No source relationships indexed; skipping graph search"
+                )
+            elif not names_code(question, self.indexes.code_graph):
+                # The graph channel follows named code; matching the words
+                # of a prose question to identifiers only adds noise.
+                code = []
+                report("No code named in the question; skipping graph search")
+            else:
                 report("Searching relationships between source entities")
                 code = keep(
                     code_search(
@@ -3134,11 +3145,6 @@ class RAGSession:
                 report(
                     "Relationship search ranked "
                     f"{len(code)} results"
-                )
-            else:
-                code = []
-                report(
-                    "No source relationships indexed; skipping graph search"
                 )
         trace.emit(
             "retrieval.code.ranked",

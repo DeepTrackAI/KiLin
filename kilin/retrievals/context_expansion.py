@@ -48,6 +48,10 @@ Module Structure
 
     Keep a channel's best source-code results and its overall best few.
 
+- ``names_code``
+
+    Tell whether a question names a file, function, or class.
+
 - ``expand_retrieval_context``
 
     Add complete requested context after normal RRF retrieval.
@@ -92,6 +96,7 @@ __all__ = [
     "demote_test_results",
     "prefer_source_results",
     "expand_retrieval_context",
+    "names_code",
     "plan_context_expansion",
 ]
 
@@ -795,8 +800,9 @@ def prefer_source_results(
     -------
     list[HybridResult]
         The first ``count`` results that are neither documentation nor
-        test code, plus the overall first ``SOURCE_SEARCH_OTHERS``, in their
-        original order.
+        test code, in their order, then those of the overall first
+        ``SOURCE_SEARCH_OTHERS`` not already kept. Fusion scores ranks, so
+        the source code keeps the places it earned.
 
     Notes
     -----
@@ -834,10 +840,49 @@ def prefer_source_results(
             tests_ok or not _is_test_path(chunk.path)
         )
 
-    keep = {id(result) for result in results[:_SOURCE_SEARCH_OTHERS]}
     preferred = [result for result in results if wanted(result)][:count]
-    keep |= {id(result) for result in preferred}
-    return [result for result in results if id(result) in keep]
+    kept = {id(result) for result in preferred}
+    others = [
+        result
+        for result in results[:_SOURCE_SEARCH_OTHERS]
+        if id(result) not in kept
+    ]
+    return [*preferred, *others]
+
+
+def names_code(query_text: str, graph: CodeGraph) -> bool:
+    """Tell whether a question names a file, function, or class.
+
+    Parameters
+    ----------
+    query_text: str
+        Question text.
+    graph: CodeGraph
+        Graph supplying the repository's entities.
+
+    Returns
+    -------
+    bool
+        Whether the question names a repository file, function, or class,
+        recognized as in ``plan_context_expansion`` (plain words such as
+        "valid" or "words" name nothing unless marked as code).
+
+    Notes
+    -----
+    The code-graph channel follows named entities. For a question in prose,
+    it would match ordinary words to identifiers ("valid" to a ``valid``
+    method) and add unrelated code, so it is skipped.
+
+    """
+
+    if not isinstance(query_text, str) or not query_text.strip():
+        return False
+    paths = _explicit_paths(query_text, graph)
+    return bool(
+        paths
+        or _explicit_functions(query_text, graph, paths)
+        or _explicit_classes(query_text, graph, paths)
+    )
 
 
 def _is_documentation(chunk: Chunk) -> bool:

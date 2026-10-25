@@ -791,12 +791,13 @@ class TestRAGRetrieval(unittest.TestCase):
         for available in (False, True):
             with self.subTest(available=available):
                 session.indexes.code_graph = (
-                    graph("func") if available else CodeGraph((), ())
+                    graph("pkg.func_name") if available else CodeGraph((), ())
                 )
                 messages = []
                 with _search_patches() as mocks:
                     session._retrieve(
-                        "hello", status_callback=messages.append
+                        "How does func_name work?",
+                        status_callback=messages.append,
                     )
                 if available:
                     mocks["code_search"].assert_called_once()
@@ -817,6 +818,23 @@ class TestRAGRetrieval(unittest.TestCase):
                         messages,
                     )
 
+
+    def test_prose_question_skips_the_code_graph_channel(self) -> None:
+        """Without named code, graph search is not run."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        session.indexes.code_graph = graph(
+            "pkg.Check.valid", kind="python_method"
+        )
+        messages = []
+        with _search_patches() as mocks:
+            session._retrieve(
+                "Which files are valid?", status_callback=messages.append
+            )
+        mocks["code_search"].assert_not_called()
+        self.assertIn(
+            "No code named in the question; skipping graph search", messages
+        )
 
 class TestRetrievalText(unittest.TestCase):
     """Index code passages with their file path and module summary."""

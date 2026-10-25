@@ -661,6 +661,21 @@ class TestContextExpansionPlanning(unittest.TestCase):
             ("pkg.m.cut_text",),
         )
 
+    def test_names_code_needs_a_recognized_name(self) -> None:
+        """Only named files, functions, or classes count as code names.
+
+        """
+        self.assertTrue(
+            context_expansion.names_code("Explain loader.read.", self.graph)
+        )
+        self.assertTrue(
+            context_expansion.names_code("What is in loader.py?", self.graph)
+        )
+        self.assertFalse(
+            context_expansion.names_code("How do files get read?", self.graph)
+        )
+        self.assertFalse(context_expansion.names_code(" ", self.graph))
+
     def test_prefer_source_results_keeps_buried_code(self) -> None:
         """A channel keeps its best code and its overall best few.
 
@@ -678,7 +693,7 @@ class TestContextExpansionPlanning(unittest.TestCase):
                 results, "How is text split?", 2
             )
             self.assertEqual([r.chunk.identifier for r in kept],
-                             ["t1", "x1", "s1", "s2"])
+                             ["s1", "s2", "t1", "x1"])
             kept = context_expansion.prefer_source_results(
                 results, "Which tests check the docs?", 2
             )

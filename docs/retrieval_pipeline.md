@@ -61,7 +61,9 @@ uses text patterns. These are useful structured hints, **not complete
 semantic call graphs** and not a code execution or static type checker.
 
 `retrieval_code.py` resolves likely code entities in a question and finds
-related chunks. `retrievals/context_expansion.py` can detect explicit
+related chunks. The channel runs only when the question names a file, function
+or class (`names_code` in `context_expansion.py`); for a question in prose it
+would match ordinary words to identifiers and add unrelated code. `retrievals/context_expansion.py` can detect explicit
 file/function references and expand retrieved context accordingly. Graph structure and
 chunk provenance must agree: a stale graph can misdirect named-function
 context even when semantic vectors remain readable.
@@ -75,8 +77,8 @@ added in full.
 
 For intents with `retrieval.prefer_source_code` (code explanation and
 debugging), each channel ranks `SOURCE_SEARCH_DEPTH` times the retrieval count
-and keeps its best source-code results plus its overall best
-`SOURCE_SEARCH_OTHERS`, before fusion; documentation and tests count as wanted
+and keeps its best source-code results, listed first so they keep the ranks
+they earned, followed by its overall best `SOURCE_SEARCH_OTHERS`, before fusion; documentation and tests count as wanted
 results when the question asks about them. Tutorials and tests often use a
 question's words more than the implementing code does, so the code can rank
 just below a channel's usual cut.
