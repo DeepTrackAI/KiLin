@@ -640,7 +640,9 @@ class TestRAGRetrieval(unittest.TestCase):
                 focused.chunk
             ]
             session._retrieve("question", 1, scope=[Path("target.py")])
-        session._rank_everything.assert_called_once_with("question", None)
+        session._rank_everything.assert_called_once_with(
+            "question", None, semantic_results=[]
+        )
         self.assertEqual(
             mocks["expand_retrieval_context"].call_args.args[0],
             [focused],
@@ -883,7 +885,10 @@ class TestRetrievalText(unittest.TestCase):
         )
         session.embedding_session = Mock()
         session.embedding_session.embed_query.return_value = [0.8, 0.6]
-        score = session._passage_relevance("query")
+        results = rag.semantic_search(
+            session.indexes.semantic, "query", session.embedding_session
+        )
+        score = session._passage_relevance(results)
         self.assertAlmostEqual(score(near), 0.8)
         self.assertAlmostEqual(score(far), 0.6)
         self.assertEqual(score(missing), float("-inf"))
@@ -1741,9 +1746,9 @@ class TestRAGLifecycle(unittest.TestCase):
                                                   max_new_tokens=12), "yes")
             self.assertEqual(session._ask_router("s", "q", 9), "yes")
         self.assertEqual(side.call_args_list[0].kwargs,
-                         {"max_new_tokens": 12})
+                         {"max_new_tokens": 12, "language_context": ()})
         self.assertEqual(side.call_args_list[1].kwargs,
-                         {"max_new_tokens": 9})
+                         {"max_new_tokens": 9, "language_context": ()})
 
     def test_new_chat_session_uses_project_backend_and_trace(self) -> None:
         """Construct new chat models with the project runtime and trace."""
@@ -1980,10 +1985,12 @@ class TestRAGRoutingAndTools(unittest.TestCase):
             self.assertEqual(context.ask_model("s", "q", 5), "reply")
             self.assertEqual(context.write("s", "q", 6), "reply")
         self.assertEqual(side.call_args_list[0].kwargs,
-                         {"max_new_tokens": 5})
+                         {"max_new_tokens": 5,
+                          "language_context": ("Question",)})
         self.assertEqual(side.call_args_list[1].kwargs,
                          {"max_new_tokens": 6,
-                          "token_callback": tokens})
+                          "token_callback": tokens,
+                          "language_context": ("Question",)})
 
 
 class TestRAGConversationPersistence(unittest.TestCase):

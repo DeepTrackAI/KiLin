@@ -61,28 +61,60 @@ uses text patterns. These are useful structured hints, **not complete
 semantic call graphs** and not a code execution or static type checker.
 
 `retrieval_code.py` resolves likely code entities in a question and finds
-related chunks. The channel runs only when the question names a file, function
-or class (`names_code` in `context_expansion.py`); for a question in prose it
-would match ordinary words to identifiers and add unrelated code. `retrievals/context_expansion.py` can detect explicit
-file/function references and expand retrieved context accordingly. Graph structure and
-chunk provenance must agree: a stale graph can misdirect named-function
-context even when semantic vectors remain readable.
+related chunks. The channel runs only when the question names a file,
+function, or class (`names_code` in `context_expansion.py`). For ordinary
+prose, it would match common words to identifiers and introduce noise.
+Graph structure and chunk provenance must agree: a stale graph can misdirect
+named-function context even when semantic vectors remain readable.
 
-Passages of related functions (callees, neighbors, methods of named classes,
-and functions reached from retrieved documentation, module headers and tests)
-compete for `RETRIEVAL.RELATED_PASSAGES_MAX` places, ranked by the cosine
-similarity of their saved embedding to the query's. Explicit files, named
-functions and, in a relationship question, the neighbors asked for are always
-added in full.
+Expansion also follows retrieved documentation, module headers, and test
+calls to implementing functions. Exact qualified names and uniquely resolved
+suffixes are preferred. An unresolved qualified name can still suggest a
+unique leaf-name alternative. Supported matches consume the documentation
+bridge budget first; ambiguous leaf names are not guessed. Alternatives
+remain labeled as such rather than being asserted to identify the named code.
 
-For intents with `retrieval.prefer_source_code` (code explanation and
-debugging), each channel ranks `SOURCE_SEARCH_DEPTH` times the retrieval count
-and keeps its best source-code results, listed first so they keep the ranks
-they earned, followed by its overall best `SOURCE_SEARCH_OTHERS`, before fusion, and
-`SOURCE_SEARCH_RESULTS` fused results are kept instead of the retrieval count; documentation and tests count as wanted
-results when the question asks about them. Tutorials and tests often use a
-question's words more than the implementing code does, so the code can rank
-just below a channel's usual cut.
+Related functions compete for `RETRIEVAL.RELATED_PASSAGES_MAX` passages,
+using the **same validated cosine scores** already computed by semantic
+search. Non-unit embeddings retain the ordinary cosine contract. No extra
+query embedding, vector conversion, or rescoring is performed for expansion.
+The current loop backend already sorts all chunks; RAG retains that ranking
+and slices each channel's intended depth before fusion, so reuse does not
+silently deepen the fused semantic channel. Scores live only for one query.
+
+Explicit files and named functions are included in full. Every direct
+neighbor requested by a relationship question contributes context outside
+the shared passage budget, but each long related function is still limited
+to `RELATED_CHUNKS_MAX` chunks (currently two). Those chunks prioritize call
+sites and question terms. Zero means unlimited for either passage cap;
+these settings are not a promise that every related function is included
+in full. Alternatives follow supported related passages in the shared budget.
+
+For source-preferring intents, each channel ranks `SOURCE_SEARCH_DEPTH`
+times the retrieval count. Its best source-code results retain their order,
+followed by its overall best `SOURCE_SEARCH_OTHERS`, before fusion.
+`SOURCE_SEARCH_RESULTS` fused results are kept, or the retrieval count when
+larger. Documentation and tests count as wanted results when asked for.
+Tutorials and tests can otherwise outrank the implementing code merely
+because they use a question's words more often.
+
+### Requested targets and broader evidence
+
+A named-file scope is a **focus**, not a hard exclusion of other files.
+The requested file's best passages seed retrieval; expansion can still find
+helpers, tests, documentation, and plausible alternatives elsewhere. The
+full semantic ranking is reused when ranking a focused file, preserving
+passages outside the original top results without another embedding call.
+
+Final RAG evidence prioritizes requested targets, retains the existing
+ordering within each relevance group, and labels `context_role` as `direct`,
+`related`, or `alternative`. Direct targets win over other labels. The prompt
+instructs the model to attribute alternatives to their actual paths and
+symbols, not to equate differently qualified names without evidence. The
+optional label is persisted with evidence and included in traces; older
+records without it load as unclassified (`None`). When evidence is reused
+from an earlier turn, its old direct-target label becomes related; an
+alternative warning is retained. Source text is unchanged.
 
 ## Hybrid combination: ranks rather than scores
 

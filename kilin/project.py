@@ -513,9 +513,10 @@ class ProjectProfile:
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
     block_unrequested_cjk: bool
-        Whether replies may not contain Chinese, Japanese, or Korean
-        characters unless the input contains or asks for them. Profiles
-        without this setting use ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
+        Whether to suppress unsolicited Chinese, Japanese, and Korean
+        script tokens on a best-effort basis, using original user text for
+        permission. Profiles without the setting use
+        ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Attributes
     ----------
@@ -556,9 +557,10 @@ class ProjectProfile:
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
     block_unrequested_cjk: bool
-        Whether replies may not contain Chinese, Japanese, or Korean
-        characters unless the input contains or asks for them. Profiles
-        without this setting use ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
+        Whether to suppress unsolicited Chinese, Japanese, and Korean
+        script tokens on a best-effort basis, using original user text for
+        permission. Profiles without the setting use
+        ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Methods
     -------

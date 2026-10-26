@@ -75,28 +75,69 @@ exact default IDs and validation.
 ## Chat generation lifecycle
 
 `ChatSession(model_id, *, backend, thinking, temperature, max_new_tokens,
-system_prompt, allow_download, revision, trace)` constructs a model session
-and records its effective settings. `configure_generation()` validates
-updates to `thinking`, `temperature` and `max_new_tokens` before applying
-any values; unsupported fields are rejected. Settings persist on the loaded
-session until changed, not necessarily just for one reply.
+system_prompt, allow_download, revision, trace, block_unrequested_cjk)`
+constructs a model session and records its effective settings.
+`configure_generation()` validates updates to `thinking`, `temperature` and
+`max_new_tokens` before applying any values; unsupported fields are rejected.
+Settings persist on the loaded session until changed.
 
-`reply(message, *, max_new_tokens, trace_turn_id, token_callback)`:
+`reply(message, *, max_new_tokens, trace_turn_id, token_callback,
+language_context)` validates the request, renders the chat template, generates
+an answer, and commits the messages only on success. Tracing records timing,
+token statistics, and the requested/effective CJK token policy.
 
-1. Validates the nonblank user message and effective limit.
-2. Builds the tokenizer's chat template using the retained message history.
-3. Executes the backend's generation function. Unless the history or the
-   message contains a Chinese, Japanese, or Korean character, or a word
-   asking for those scripts (`CHAT.CJK_REQUEST_WORDS`, such as "Chinese" or
-   "kanji"), vocabulary tokens containing them are blocked (an MLX logits
-   processor, or `suppress_tokens` with PyTorch), so bilingual models such
-   as Qwen3 cannot switch language mid-sentence. The trace records this as
-   `cjk_tokens_blocked`. `ChatSession(block_unrequested_cjk=False)`, or
-   `block_unrequested_cjk = false` in a project's `[generation]` profile
-   section, turns the block off.
-4. Returns a complete nonblank reply and appends the user/assistant messages
-   to in-memory history only on success.
-5. Records generation timing and token statistics if tracing is enabled.
+### Best-effort suppression of unsolicited CJK output
+
+Suppression is enabled by default. It aims to prevent unsolicited Chinese,
+Japanese, or Korean script in answers, not to prevent legitimate multilingual
+requests. Only **original user messages** authorize output, by using script
+characters or positively asking for them. Later explicit negative requests
+or switches to English take precedence over earlier authorization. Ordinary
+mentions such as "Explain Japanese culture" or "avoid Korean text" do not
+authorize CJK output. Pinyin and romaji requests do not request Han or kana.
+The detector is a deterministic heuristic for common English directives,
+not a complete multilingual intent parser. The mask treats the supported
+scripts as a group, not as independently enforceable language preferences.
+
+For direct chat, `language_context=None` uses user-role history and the
+current message, excluding system and assistant content. For constructed
+prompts, supply the original user messages explicitly, in chronological
+order, ending with the current question. An empty sequence grants no script
+permission. RAG supplies selected earlier user questions and the original
+current question, not evidence, resolved guidance, or generated wrappers.
+Tool answer adapters do the same; internal side requests default to no
+user authorization. No extra model call is made to decide this policy.
+
+```python
+answer = chat.reply(
+    prompt_with_retrieved_material,
+    language_context=(original_question,),
+)
+```
+
+Tokens whose individual decoded text contains covered characters are
+suppressed with an MLX logits processor or PyTorch `suppress_tokens`.
+The cached scan runs once per loaded tokenizer on the first blocked reply.
+It may add cold latency and does not cover characters assembled across
+multiple byte-level tokens. A tokenizer without a usable vocabulary cannot
+provide this suppression. This is **best-effort**, not an absolute guarantee
+about generated language. Special tokens, general punctuation, and fullwidth
+Latin letters are not suppressed.
+
+The curated ranges follow Unicode 17.0's Han ideographs (including extensions
+A-J and compatibility ideographs), kana and supplementary/halfwidth kana,
+Hangul syllables and Jamo, Bopomofo, and CJK radicals. They are fixed code-point
+ranges, including reserved positions within those ranges, not an exhaustive
+Unicode script-property classifier. The reference block definitions are in
+[Unicode 17.0 Blocks.txt](https://www.unicode.org/Public/17.0.0/ucd/Blocks.txt).
+
+The input trace reports `cjk_blocking_requested`, `cjk_tokens_blocked`
+(whether any standalone token IDs were selected), and
+`cjk_suppressed_token_count`. These describe the mask, not proof that no CJK
+character can appear. `ChatSession(block_unrequested_cjk=False)`, or
+`block_unrequested_cjk = false` in a project's `[generation]` section,
+disables suppression. Existing profiles retain explicit values; profiles
+without the setting use the packaged default.
 
 A tokenizer template, model context length, thinking tags, EOS behavior and
 backend streaming granularity can vary across models. A `max_new_tokens`

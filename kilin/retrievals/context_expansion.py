@@ -1,16 +1,17 @@
-"""Expand retrieval context from explicit source references in a question.
+"""Expand ranked context through source references and retrieved evidence.
 
-Context expansion recognizes file paths and function names, and uses a
-configurable vocabulary of relationship requests. It produces a
-``ContextExpansionPlan`` and adds matching file or function chunks and
-eligible graph neighbors to an
-existing ranking.
-This is deterministic text matching over the supplied source metadata, not a
-language-model router or a complete interpretation of the question.
+Deterministic path and symbol matching, graph neighbors, documentation
+references, retrieved module headers, and test calls lead from an initial
+ranking to implementation passages. ``ContextExpansionPlan`` distinguishes
+supported matches from unique leaf-name alternatives whose qualifier could
+not be resolved. An alternative is useful search context, not proof that
+one symbol denotes another. No additional language-model call is made.
 
-Expansion deduplicates chunk identifiers while preserving the initial ranked
-results. The expansion itself has no token or result-count ceiling, so callers
-must account for the full expanded context before generating an answer.
+Expansion preserves initial rankings and deduplicates chunk identifiers.
+Explicit files and functions are included completely; related functions
+have per-function and shared passage budgets. RAG then prioritizes requested
+targets and labels supporting and alternative evidence for answer generation.
+There is no global token ceiling: callers must account for expanded context.
 
 Key Features
 ------------
@@ -24,10 +25,15 @@ Key Features
     Recognize selected relationship phrases and include matching neighboring
     functions.
 
-- **Ordered expansion**
+- **Evidence bridges**
 
-    Keep ranked evidence first and append source-ordered matches without
-    duplicate chunk identifiers.
+    Follow documentation names, module context, and test calls to source
+    implementations, retaining uncertain name matches as alternatives.
+
+- **Bounded related context**
+
+    Preserve ranked evidence and exact targets, then choose related
+    passages with explicit budgets and reusable semantic scores.
 
 Module Structure
 ----------------
@@ -58,7 +64,7 @@ Module Structure
 
 - ``plan_context_expansion``
 
-    Detect exact repository context requested by one question.
+    Plan requested, supporting, and alternative repository context.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
@@ -215,6 +221,10 @@ class ContextExpansionPlan:
         Words of the question and leaf names of the named functions, used to
         choose the most relevant chunks of a long related function.
         Defaults to ``()``.
+    alternative_functions: tuple[str, ...], optional
+        Related functions found only by a unique leaf-name fallback for an
+        unresolved qualified documentation reference. These are candidates,
+        not verified identities. Defaults to ``()``.
 
     Attributes
     ----------
@@ -234,6 +244,9 @@ class ContextExpansionPlan:
     focus_terms: tuple[str, ...]
         Words of the question and leaf names of the named functions, used to
         choose the most relevant chunks of a long related function.
+    alternative_functions: tuple[str, ...]
+        Lower-confidence documentation-name candidates, also included in
+        ``related_functions``. No qualified-name equivalence is implied.
 
     """
 
@@ -243,6 +256,7 @@ class ContextExpansionPlan:
     related_functions: tuple[str, ...]
     signals: tuple[str, ...]
     focus_terms: tuple[str, ...] = ()
+    alternative_functions: tuple[str, ...] = ()
 
 
 def plan_context_expansion(
@@ -250,10 +264,10 @@ def plan_context_expansion(
     graph: CodeGraph,
     results: Sequence[HybridResult] = (),
 ) -> ContextExpansionPlan:
-    """Detect exact repository context requested by one question.
+    """Plan requested, supporting, and alternative repository context.
 
-    The plan does not change Reciprocal Rank Fusion. It only records context
-    that should be guaranteed in addition to the normal RRF top results.
+    The plan does not change Reciprocal Rank Fusion. It identifies requested
+    targets and candidates added within the related-context budgets.
 
     Parameters
     ----------
@@ -269,7 +283,8 @@ def plan_context_expansion(
     Returns
     -------
     ContextExpansionPlan
-        Exact files, functions, and direct related functions to include.
+        Explicit targets, related functions, and lower-confidence
+        alternative name matches to include.
 
     Raises
     ------
@@ -310,7 +325,9 @@ def plan_context_expansion(
 
     Search results that describe code lead to that code, each with its own
     cap: functions named in retrieved documentation or notebooks (as code:
-    ``lexical_terms``, unique in the graph;
+    ``lexical_terms``, unique in the graph; unresolved qualifiers permit a
+    unique leaf-name alternative after supported names, without asserting
+    identity;
     ``DOCUMENTATION_NAME_EXPANSION_MAX``); the top-level functions of a
     module whose header was retrieved (all of them when there are at most
     ``MODULE_FUNCTION_EXPANSION_MAX``, otherwise those sharing most words
@@ -365,14 +382,14 @@ def plan_context_expansion(
         results, graph, ranking_text, planned, _MODULE_FUNCTION_EXPANSION_MAX
     )
     planned |= set(module_functions)
-    documented = _documented_functions(
+    documented, alternatives = _documented_functions(
         results,
         graph,
         ranking_text,
         planned,
         _DOCUMENTATION_NAME_EXPANSION_MAX,
     )
-    bridged = (*tested, *module_functions, *documented)
+    bridged = (*tested, *module_functions, *documented, *alternatives)
     related_functions = tuple(
         dict.fromkeys(
             name
@@ -406,6 +423,8 @@ def plan_context_expansion(
         signals.append("module functions")
     if documented:
         signals.append("documentation names")
+    if alternatives:
+        signals.append("alternative documentation names")
     if not signals:
         signals.append("none")
 
@@ -424,6 +443,9 @@ def plan_context_expansion(
         related_functions=related_functions,
         signals=tuple(signals),
         focus_terms=focus_terms,
+        alternative_functions=tuple(
+            name for name in alternatives if name in related_functions
+        ),
     )
 
 
@@ -453,7 +475,8 @@ def expand_retrieval_context(
     relevance: Callable[[Chunk], float] | None, optional
         Scores a passage's relevance to the question, such as the cosine
         similarity of its embedding to the query's. ``None`` keeps the
-        plan's order. Defaults to ``None``.
+        plan's order within supported and alternative groups; alternatives
+        still follow supported passages. Defaults to ``None``.
 
     Returns
     -------
@@ -472,7 +495,9 @@ def expand_retrieval_context(
     relevant by ``relevance`` (otherwise the first in plan order), added
     most relevant first. Explicit files, named functions, and, in a
     relationship question, the named functions' direct neighbors are always
-    added. Deduplication is by chunk identifier.
+    represented, subject to the per-function chunk cap. Alternative
+    name matches rank after supported related passages. Zero disables either
+    passage cap. Deduplication is by chunk identifier.
 
     """
 
@@ -501,8 +526,8 @@ def expand_retrieval_context(
         named_leaves = {
             name.rsplit(".", 1)[-1].casefold() for name in plan.functions
         }
-        # In a relationship question the neighbors are the answer, so they
-        # are added in full; other related passages compete for places.
+        # Every requested neighbor contributes bounded context, outside
+        # the shared budget for other related passages.
         asked = (
             set(_direct_function_neighbors(plan.functions, graph))
             if plan.relationship
@@ -538,10 +563,20 @@ def expand_retrieval_context(
                     _RELATED_CHUNKS_MAX,
                 ),
             )
-        if relevance is not None:
+        if relevance is not None or plan.alternative_functions:
             order = {id(chunk): index for index, chunk in enumerate(related)}
+            alternatives = {
+                chunk.identifier
+                for chunk in _chunks_for_functions(
+                    chunks, graph, plan.alternative_functions
+                )
+            }
             related.sort(
-                key=lambda chunk: (-relevance(chunk), order[id(chunk)])
+                key=lambda chunk: (
+                    chunk.identifier in alternatives,
+                    -relevance(chunk) if relevance is not None else 0.0,
+                    order[id(chunk)],
+                )
             )
         if _RELATED_PASSAGES_MAX:
             related = related[:_RELATED_PASSAGES_MAX]
@@ -1644,8 +1679,8 @@ def _documented_functions(
     query_text: str,
     exclude: set[str],
     limit: int,
-) -> tuple[str, ...]:
-    """Return functions named as code in retrieved documentation.
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Find supported and alternative code references in documentation.
 
     Parameters
     ----------
@@ -1656,57 +1691,71 @@ def _documented_functions(
     query_text: str
         Question text without the names it states.
     exclude: set[str]
-        Qualified names already in the plan.
+        Qualified names already supported elsewhere in the plan.
     limit: int
-        Most functions returned; zero returns none.
+        Combined maximum of supported and alternative functions; zero
+        returns no functions.
 
     Returns
     -------
-    tuple[str, ...]
-        Named functions sharing most words with the question first, then
-        those mentioned most often, then in order of first mention.
+    tuple[tuple[str, ...], tuple[str, ...]]
+        Supported names, then lower-confidence alternatives. Within each
+        group, shared question words, frequency, and first mention rank
+        candidates. Supported matches consume the budget first.
 
     Notes
     -----
-    A name counts when it looks like code (an underscore, digit, or inner
-    capital) and identifies one function outside test code, by its leaf
-    name or a dotted suffix. Plain words ("count", "run") never count, even
-    when one function has that name.
+    An exact qualified name or dotted suffix must resolve uniquely. A
+    unique leaf name is also supported when no qualifier was supplied.
+    An unresolved qualifier may still suggest a unique leaf-name candidate,
+    but only as an alternative. Ambiguous leaf names are not guessed.
+    A supported occurrence promotes a candidate even if other references
+    use an unresolved qualifier. Plain words do not form code bridges.
 
     """
 
     if limit <= 0:
-        return ()
+        return (), ()
     documents = [
         result.chunk for result in results if _is_documentation(result.chunk)
     ]
     if not documents:
-        return ()
-    functions = _bridge_candidates(graph)
+        return (), ()
     by_leaf: dict[str, list[str]] = {}
-    for name in functions:
+    for name in _bridge_candidates(graph):
         by_leaf.setdefault(name.rsplit(".", 1)[-1], []).append(name)
     counts: Counter[str] = Counter()
     first: dict[str, tuple[int, int]] = {}
+    supported: set[str] = set()
     for position, chunk in enumerate(documents):
         for match in _CODE_REFERENCE.finditer(chunk.text):
             reference = match.group()
             leaf = reference.rsplit(".", 1)[-1]
-            options = by_leaf.get(leaf, [])
-            if "." in reference:
-                options = [
-                    name
-                    for name in options
-                    if name == reference or name.endswith(f".{reference}")
-                ] or options
-            if len(options) != 1 or options[0] in exclude:
-                continue
             if not _looks_like_code(leaf):
                 continue
-            counts[options[0]] += 1
-            first.setdefault(options[0], (position, match.start()))
-    ranked = {name: (-counts[name], *first[name]) for name in counts}
-    return _rank_bridged(ranked, query_text, limit)
+            options = by_leaf.get(leaf, [])
+            qualified = [
+                name for name in options
+                if name == reference or name.endswith(f".{reference}")
+            ] if "." in reference else options
+            candidates = qualified or options
+            if len(candidates) != 1 or candidates[0] in exclude:
+                continue
+            name = candidates[0]
+            counts[name] += 1
+            first.setdefault(name, (position, match.start()))
+            if qualified:
+                supported.add(name)
+    ranks = {name: (-counts[name], *first[name]) for name in counts}
+    exact = _rank_bridged(
+        {name: ranks[name] for name in supported}, query_text, limit
+    )
+    alternatives = _rank_bridged(
+        {name: rank for name, rank in ranks.items() if name not in supported},
+        query_text,
+        limit - len(exact),
+    )
+    return exact, alternatives
 
 
 def _without_names(query_text: str, names: Sequence[str]) -> str:

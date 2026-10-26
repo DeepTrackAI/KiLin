@@ -183,7 +183,6 @@
   },
   "CHAT": {
     "CJK_REQUEST_WORDS": [
-      "asian",
       "cantonese",
       "chinese",
       "cjk",
@@ -197,7 +196,6 @@
       "katakana",
       "korean",
       "mandarin",
-      "pinyin",
       "taiwanese"
     ]
   },

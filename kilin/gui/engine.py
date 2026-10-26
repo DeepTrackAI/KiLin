@@ -2125,6 +2125,7 @@ class ChatEngine:
             "the title.",
             f"{prompt}Title:",
             max_new_tokens=24,
+            language_context=(question,),
         )
         title = title.splitlines()[0] if title.splitlines() else ""
         title = re.sub(r"^(?:title\s*:\s*)", "", title, flags=re.I)

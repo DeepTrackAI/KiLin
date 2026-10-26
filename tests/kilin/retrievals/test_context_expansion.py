@@ -99,14 +99,20 @@ class TestContextExpansionPlanning(unittest.TestCase):
         """Relationship language expands named functions to direct neighbors.
 
         """
-        result = context_expansion.plan_context_expansion(
-            "Which function calls parse()?", self.graph
-        )
-        self.assertEqual(result.functions, ("pkg.loader.parse",))
-        self.assertTrue(result.relationship)
-        self.assertEqual(result.related_functions, ("pkg.loader.read",))
-        self.assertEqual(result.signals,
-                         ("exact function", "relationship"))
+        for question in (
+            "Which function calls parse?", "Which function calls parse()?"
+        ):
+            with self.subTest(question=question):
+                result = context_expansion.plan_context_expansion(
+                    question, self.graph
+                )
+                self.assertEqual(result.functions, ("pkg.loader.parse",))
+                self.assertTrue(result.relationship)
+                self.assertEqual(
+                    result.related_functions, ("pkg.loader.read",)
+                )
+                self.assertEqual(result.signals,
+                                 ("exact function", "relationship"))
 
     def test_name_inside_filename_does_not_match_function(self) -> None:
         """Do not misidentify functions merely because a path contains them.

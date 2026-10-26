@@ -202,6 +202,7 @@ from kilin.retrievals import (
     LexicalIndex,
     PersistentIndexes,
     SemanticIndex,
+    SemanticResult,
     build_code_graph,
     build_lexical_index,
     build_semantic_index,
@@ -219,6 +220,7 @@ from kilin.retrievals import (
 from kilin.retrievals.context_expansion import (
     SOURCE_SEARCH_DEPTH,
     SOURCE_SEARCH_RESULTS,
+    _chunks_for_functions,
     demote_documentation,
     demote_test_results,
     names_code,
@@ -427,6 +429,11 @@ class Evidence:
         ``.ipynb`` source. None for every other source type. Required to tell
         two notebook cells apart when they happen to share the same local
         start_line/end_line range. Defaults to ``None``.
+    context_role: "direct" | "related" | "alternative" | None, optional
+        Retrieval provenance: a requested target, supporting context, or an
+        unresolved name-match alternative. ``None`` denotes unclassified
+        evidence, including records saved before this field was added.
+        Defaults to ``None``.
 
     Attributes
     ----------
@@ -453,6 +460,8 @@ class Evidence:
         ``.ipynb`` source. None for every other source type. Required to tell
         two notebook cells apart when they happen to share the same local
         start_line/end_line range.
+    context_role: "direct" | "related" | "alternative" | None
+        Retrieval provenance, not an assessment of factual correctness.
 
     Notes
     -----
@@ -471,6 +480,7 @@ class Evidence:
     symbol: str | None
     text: str
     cell: int | None = None
+    context_role: Literal["direct", "related", "alternative"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1669,7 +1679,19 @@ class RAGSession:
                     message="Generating answer",
                     evidence_count=len(evidence),
                 )
-                reply_options: dict[str, object] = {"trace_turn_id": turn_id}
+                reply_options: dict[str, object] = {
+                    "trace_turn_id": turn_id,
+                    "language_context": (
+                        *(
+                            message["content"]
+                            for message in history_messages(
+                                self.turns, history_ids
+                            )
+                            if message["role"] == USER_ROLE
+                        ),
+                        question,
+                    ),
+                }
                 if token_callback is not None:
                     reply_options["token_callback"] = token_callback
                 answer = self.chat_session.reply(prompt, **reply_options)
@@ -2150,7 +2172,8 @@ class RAGSession:
         self.router_model = model_id
 
     def router_reply(
-        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int
+        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int,
+        language_context: Sequence[str] = (),
     ) -> str:
         """Ask the router model a side question, such as a chat title.
 
@@ -2162,6 +2185,9 @@ class RAGSession:
             The side question.
         max_new_tokens: int
             Maximum length of the reply.
+        language_context: Sequence[str], optional
+            Original user messages for CJK permission, not generated prompt
+            or answer text. Defaults to ``()`` for internal side requests.
 
         Returns
         -------
@@ -2175,6 +2201,7 @@ class RAGSession:
             system,
             prompt,
             max_new_tokens=max_new_tokens,
+            language_context=language_context,
         )
 
     def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
@@ -2980,10 +3007,10 @@ class RAGSession:
             Receives a short message before and after each search step, for
             progress display. Defaults to ``None``.
         scope: Sequence[pathlib.Path], optional
-            Documents the question is limited to, from ``document_scope``.
-            When it holds exactly one path, only that document's passages
-            are kept (if it has any); otherwise every document is searched.
-            Defaults to ``()``.
+            Preferred documents from ``document_scope``. A single path
+            supplies the initial passages when available, but cross-file
+            expansion remains allowed. Requested sources are prioritized
+            and evidence provenance is labeled. Defaults to ``()``.
         prefer_source_code: bool, optional
             Let each channel rank ``SOURCE_SEARCH_DEPTH`` times deeper and
             keep its best source-code results (``prefer_source_results``),
@@ -3006,9 +3033,12 @@ class RAGSession:
         capped by retrieval_count. Trace details use previews; the evidence
         records keep full chunk text.
 
-        A one-document scope ranks every chunk again (see
-        ``_rank_everything``) so that document's best passages are found even
-        when they are outside the project-wide top results.
+        The semantic loop already scores every chunk. Retain that complete
+        ranking for related-passage scoring and for ``_rank_everything``
+        when focusing on one document, without an additional query embedding.
+        This keeps the document's best passages available even when outside
+        the project-wide top results. Query scores are local to this call;
+        they are never reused across different queries or indexes.
 
         """
 
@@ -3078,15 +3108,16 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
-            semantic = keep(
-                semantic_search(
-                    self.indexes.semantic,
-                    query_text,
-                    self.embedding_session,
-                    count=depth,
-                    trace_turn_id=trace_turn_id,
-                )
+            # The loop scorer already ranks every chunk. Retain its scores
+            # for focused retrieval and expansion, without embedding again.
+            semantic_results = semantic_search(
+                self.indexes.semantic,
+                query_text,
+                self.embedding_session,
+                count=max(depth, len(self.chunks)),
+                trace_turn_id=trace_turn_id,
             )
+            semantic = keep(semantic_results[:depth])
         trace.emit(
             "retrieval.semantic.ranked",
             component="retrieval",
@@ -3185,13 +3216,16 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
-        # A question about one document ("in this paper", "in smith2020")
-        # ranks that document's passages only.
+        # A named document supplies the primary passages; expansion may
+        # still add useful context from elsewhere in the repository.
         named = list(scope)
         if len(named) == 1:
             focused = [
                 result
-                for result in self._rank_everything(question, trace_turn_id)
+                for result in self._rank_everything(
+                    question, trace_turn_id,
+                    semantic_results=semantic_results,
+                )
                 if result.chunk.path == named[0]
             ][:count]
             if focused:
@@ -3243,7 +3277,7 @@ class RAGSession:
         # Related passages compete for a fixed number of places, by the
         # similarity of their embedding to the query's.
         relevance = (
-            self._passage_relevance(query_text)
+            self._passage_relevance(semantic_results)
             if plan.related_functions
             else None
         )
@@ -3254,6 +3288,46 @@ class RAGSession:
             plan,
             relevance,
         )
+        direct_paths = set(plan.paths) | set(scope)
+        direct_ids = {
+            chunk.identifier for chunk in _chunks_for_functions(
+                self.chunks, self.indexes.code_graph, plan.functions
+            )
+        }
+        alternative_ids = {
+            chunk.identifier for chunk in _chunks_for_functions(
+                self.chunks, self.indexes.code_graph,
+                plan.alternative_functions,
+            )
+        }
+
+        def context_role(
+            chunk: Chunk,
+        ) -> Literal["direct", "related", "alternative"]:
+            """Describe a chunk's relationship to the requested target.
+
+            Parameters
+            ----------
+            chunk: Chunk
+                Retrieved or expanded source passage.
+
+            Returns
+            -------
+            "direct" | "related" | "alternative"
+                Provenance category; an explicit target takes precedence.
+
+            """
+
+            if chunk.path in direct_paths or chunk.identifier in direct_ids:
+                return "direct"
+            if chunk.identifier in alternative_ids:
+                return "alternative"
+            return "related"
+
+        # Preserve ranking inside each group, but never let an alternative
+        # displace the explicitly requested target in the answer context.
+        priorities = {"direct": 0, "related": 1, "alternative": 2}
+        expanded.sort(key=lambda chunk: priorities[context_role(chunk)])
         expansion_data: dict[str, object] = {
             "rrf_count": len(combined),
             "expanded_count": len(expanded),
@@ -3285,6 +3359,7 @@ class RAGSession:
                 symbol=chunk.symbol,
                 text=chunk.text,
                 cell=chunk.cell,
+                context_role=context_role(chunk),
             )
             for index, chunk in enumerate(expanded, start=1)
         )
@@ -3300,6 +3375,7 @@ class RAGSession:
                         "start_line": item.start_line,
                         "end_line": item.end_line,
                         "symbol": item.symbol,
+                        "context_role": item.context_role,
                         "text_sha256": sha256(
                             item.text.encode("utf-8")
                         ).hexdigest(),
@@ -3365,6 +3441,13 @@ class RAGSession:
         """
 
         trace = getattr(self, "trace", NullTraceLogger())
+        language_context = (
+            *(
+                turn.question
+                for turn in reversed(self._earlier_turns(decision))
+            ),
+            question,
+        )
 
         def ask(chat: object) -> Callable[[str, str, int], str]:
             """Adapt a chat session to the tools' side-question callback.
@@ -3384,7 +3467,8 @@ class RAGSession:
             """
 
             return lambda system, prompt, tokens: side_reply(
-                chat, system, prompt, max_new_tokens=tokens
+                chat, system, prompt, max_new_tokens=tokens,
+                language_context=language_context,
             )
 
         # ``ask_model`` answers silently; ``write`` streams a tool's final
@@ -3405,6 +3489,7 @@ class RAGSession:
                 prompt,
                 max_new_tokens=tokens,
                 token_callback=token_callback,
+                language_context=language_context,
             ),
             model_id=str(getattr(self.chat_session, "model_id", "")),
             progress=lambda message, **details: report_phase(
@@ -3547,7 +3632,11 @@ class RAGSession:
         return [path for path in self._source_files() if path not in known]
 
     def _rank_everything(
-        self: RAGSession, text: str, trace_turn_id: str | None = None
+        self: RAGSession,
+        text: str,
+        trace_turn_id: str | None = None,
+        *,
+        semantic_results: Sequence[SemanticResult] | None = None,
     ) -> list[HybridResult]:
         """Rank every chunk for a text with the fused search channels.
 
@@ -3557,6 +3646,10 @@ class RAGSession:
             Text to rank chunks against.
         trace_turn_id: str | None, optional
             Turn identifier for trace events. Defaults to ``None``.
+        semantic_results: Sequence[SemanticResult] | None, optional
+            Complete semantic ranking already computed for this same query
+            and index. ``None`` performs semantic search. This private reuse
+            boundary avoids another model call. Defaults to ``None``.
 
         Returns
         -------
@@ -3569,12 +3662,15 @@ class RAGSession:
         if not self.chunks:
             return []
         everything = len(self.chunks)
-        semantic = semantic_search(
-            self.indexes.semantic,
-            self._format_query(text),
-            self.embedding_session,
-            count=everything,
-            trace_turn_id=trace_turn_id,
+        semantic = (
+            semantic_search(
+                self.indexes.semantic,
+                self._format_query(text),
+                self.embedding_session,
+                count=everything,
+                trace_turn_id=trace_turn_id,
+            )
+            if semantic_results is None else list(semantic_results)
         )
         lexical = lexical_search(self.indexes.lexical, text, count=everything)
         code = (
@@ -3891,35 +3987,27 @@ class RAGSession:
         )
 
     def _passage_relevance(
-        self: RAGSession, query_text: str
+        self: RAGSession, results: Sequence[SemanticResult]
     ) -> Callable[[Chunk], float]:
-        """Return a scorer of indexed passages by similarity to a query.
+        """Reuse validated cosine scores from the current semantic search.
 
         Parameters
         ----------
-        query_text: str
-            Query formatted for the embedding model.
+        results: Sequence[SemanticResult]
+            Complete semantic ranking for the current query and index.
 
         Returns
         -------
         Callable[[Chunk], float]
-            Cosine similarity between a passage's saved embedding and the
-            query's (both vectors are unit length); minus infinity for a
-            passage without an embedding.
+            The existing cosine similarity, or minus infinity for a passage
+            absent from the ranking. No embedding or vector rescoring occurs.
 
         """
 
-        query = self.embedding_session.embed_query(query_text)
-        vectors = dict(
-            zip(
-                (chunk.identifier for chunk in self.indexes.semantic.chunks),
-                self.indexes.semantic.embeddings,
-                strict=True,
-            )
-        )
+        scores = {result.chunk.identifier: result.score for result in results}
 
         def score(chunk: Chunk) -> float:
-            """Score one passage against the query.
+            """Look up one passage's semantic score.
 
             Parameters
             ----------
@@ -3929,14 +4017,11 @@ class RAGSession:
             Returns
             -------
             float
-                Cosine similarity, or minus infinity without an embedding.
+                Cosine similarity, or minus infinity without a saved score.
 
             """
 
-            vector = vectors.get(chunk.identifier)
-            if vector is None:
-                return float("-inf")
-            return float(sum(a * b for a, b in zip(query, vector)))
+            return scores.get(chunk.identifier, float("-inf"))
 
         return score
 
@@ -4588,7 +4673,13 @@ def _add_related_evidence(
                 extra.append(item)
     start = len(fresh) + 1
     return fresh + tuple(
-        replace(item, citation=number)
+        replace(
+            item, citation=number,
+            context_role=(
+                "related" if item.context_role == "direct"
+                else item.context_role
+            ),
+        )
         for number, item in enumerate(extra, start)
     )
 
@@ -4626,7 +4717,14 @@ def _merge_evidence(
                 ordered.append(item)
     kept = ordered[-_MAX_REUSED_EVIDENCE:]
     return tuple(
-        replace(item, citation=number) for number, item in enumerate(kept, 1)
+        replace(
+            item, citation=number,
+            context_role=(
+                "related" if item.context_role == "direct"
+                else item.context_role
+            ),
+        )
+        for number, item in enumerate(kept, 1)
     )
 
 
@@ -4656,8 +4754,9 @@ def _answer_prompt(
     Notes
     -----
     Evidence text is inserted without semantic validation. The current label
-    includes path, line range, and optional symbol, but not notebook cell or
-    PDF page metadata. This is prompt construction, not instruction isolation
+    includes path, line range, optional symbol and context role, but not
+    notebook cell or PDF page metadata. This is prompt construction, not
+    instruction isolation
     for untrusted source text.
 
     """
@@ -4676,8 +4775,18 @@ def _answer_prompt(
             f"{item.start_line}-{item.end_line}"
         )
         symbol = f" ({item.symbol})" if item.symbol else ""
-        sections.append(f"[{item.citation}] {location}{symbol}\n{item.text}")
+        role = (
+            f" [context: {item.context_role}]" if item.context_role else ""
+        )
+        sections.append(
+            f"[{item.citation}] {location}{symbol}{role}\n{item.text}"
+        )
     sections.append(
+        "Prioritize direct evidence about the requested target. "
+        "Related evidence can explain dependencies or alternatives. "
+        "An alternative name match is not proof of identity: attribute it to "
+        "its actual source and do not equate differently qualified symbols "
+        "without supporting evidence. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
         "after the claims they support. Do not repeat the source text or "
         "write a bibliography."
@@ -4769,6 +4878,7 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
             ),
             text=str(item["text"]),
             cell=(int(item["cell"]) if item.get("cell") is not None else None),
+            context_role=_evidence_context_role(item.get("context_role")),
         )
         for item in evidence_data
     )
@@ -4782,6 +4892,33 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
         evidence=evidence,
         parameters=parameters,
     )
+
+
+def _evidence_context_role(
+    value: object,
+) -> Literal["direct", "related", "alternative"] | None:
+    """Validate optional evidence provenance when restoring saved turns.
+
+    Parameters
+    ----------
+    value: object
+        Stored context role, or ``None`` for older evidence records.
+
+    Returns
+    -------
+    "direct" | "related" | "alternative" | None
+        Recognized provenance category.
+
+    Raises
+    ------
+    ValueError
+        If the saved category is unknown.
+
+    """
+
+    if value is None or value in ("direct", "related", "alternative"):
+        return value
+    raise ValueError("Saved evidence has an invalid context_role.")
 
 
 def _resume_checkpoint_id(snapshot: dict[str, object]) -> str:
