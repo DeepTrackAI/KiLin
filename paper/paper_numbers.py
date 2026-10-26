@@ -13,10 +13,10 @@ measures, through the public Python API:
 5. peak memory of the process and of the computation backend.
 
 Each opening writes its own trace file, so measurements of earlier runs are
-never mixed in. Results are written as timing-only JSON under
-``sandbox/paper_numbers/`` and printed as the values to copy into the
-manuscript. Prompts, answers and
-retrieved passages are not exported; they stay in the sandbox trace.
+never mixed in. Results are written as timing-only JSON to
+``paper/results/`` and printed as the values to copy into the manuscript.
+Prompts, answers and retrieved passages are not exported; they stay in the
+trace of the sandbox workspace under ``sandbox/paper_numbers/``.
 
 Usage, from the repository root::
 
@@ -56,7 +56,10 @@ from assets.trace_benchmark import (  # noqa: E402
     summarize_trace_turns,
 )
 
-RESULTS_DIRECTORY = REPOSITORY_ROOT / "sandbox" / "paper_numbers"
+# The sandbox workspace (project, indexes and traces) stays out of version
+# control; the timing results are kept with the other paper results.
+WORKSPACE_DIRECTORY = REPOSITORY_ROOT / "sandbox" / "paper_numbers"
+RESULTS_DIRECTORY = REPOSITORY_ROOT / "paper" / "results"
 
 # Each question names code entities, so the code graph can take part, and
 # has an answer that can be checked against the indexed source:
@@ -286,8 +289,8 @@ def prepare_code_project(
         shutil.rmtree(source)
     source.mkdir()
     revision = export_revision(ref, source, excludes)
-    RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    workspace = RESULTS_DIRECTORY / f"project_{source.name}"
+    WORKSPACE_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    workspace = WORKSPACE_DIRECTORY / f"project_{source.name}"
     project = None
     if workspace.exists():
         try:
@@ -302,7 +305,7 @@ def prepare_code_project(
             workspace.rename(retired)
     if project is None:
         project = kilin.prepare_project_workspace(
-            source, kilin.PROJECT_TYPE_ID_CODE, RESULTS_DIRECTORY
+            source, kilin.PROJECT_TYPE_ID_CODE, WORKSPACE_DIRECTORY
         )
         if project.root != workspace:
             raise RuntimeError(
@@ -641,7 +644,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     results["peak_memory_gb"] = peak_memory_gb()
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output = RESULTS_DIRECTORY / f"results_{stamp}.json"
+    output = RESULTS_DIRECTORY / f"paper_numbers_{stamp}.json"
     output.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print_summary(results)
     print(f"\nFull results: {output}")
