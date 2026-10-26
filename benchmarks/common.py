@@ -516,18 +516,52 @@ _ABSTENTION_PATTERN = re.compile(
     r"insufficient evidence"
     r"|evidence is insufficient"
     r"|not enough evidence"
-    r"|cannot answer (?:this|that) from the (?:supplied|available) evidence",
+    r"|cannot answer"
+    r"|(?:evidence|code|documentation|sources?) (?:provided |supplied )?"
+    r"(?:does|do) not (?:directly )?"
+    r"(?:confirm|address|mention|state|show|indicate|describe|contain|specify)"
+    r"|\bno (?:explicit |direct )?(?:\w+[\s-]){0,4}(?:is|are) "
+    r"(?:stated|mentioned|present|described|specified|found)"
+    r"|\bnot (?:explicitly )?(?:stated|mentioned|specified|documented)\b"
+    r"|\bno (?:mention|evidence|indication) of\b",
     re.IGNORECASE,
 )
 
+# A contrast after the abstention phrase ("Insufficient evidence is provided
+# to confirm X, but ...") marks a hedge on an answer, not an abstention.
+_HEDGE_PATTERN = re.compile(
+    r"\b(?:but|however|although|though|yet)\b", re.IGNORECASE
+)
 
-_ABSTENTION_DOMINANCE_RATIO = 0.5
+# Quoted text, such as a quoted system prompt, is not the answer's own claim.
+_QUOTATION_PATTERN = re.compile(r'"[^"]*"|\u201c[^\u201d]*\u201d')
 
-_ABSTENTION_TRAILING_CHARS = re.compile(r"^[\s.:;,!\"'()\[\]]*$")
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
+
+
+def _states_insufficient_evidence(sentence: str) -> bool:
+    """Return whether one sentence concludes that evidence is missing.
+
+    Parameters
+    ----------
+    sentence: str
+        One sentence of the final answer.
+
+    Returns
+    -------
+    bool
+        Whether an abstention phrase occurs with no contrast after it.
+
+    """
+
+    match = _ABSTENTION_PATTERN.search(sentence)
+    return match is not None and not _HEDGE_PATTERN.search(
+        sentence[match.end():]
+    )
 
 
 def abstains(answer: str) -> bool:
-    """Detect explicit abstention wording without claiming semantic accuracy.
+    """Detect whether an answer concludes that the evidence is insufficient.
 
     Parameters
     ----------
@@ -537,35 +571,37 @@ def abstains(answer: str) -> bool:
     Returns
     -------
     bool
-        Whether a recognized abstention phrase dominates the answer or
-        appears at the end with only punctuation after it.
+        Whether the first or last sentence of the final answer states that
+        the evidence does not answer the question.
 
     Notes
     -----
-    The current KíLín benchmark may request the exact phrase
-    ``Insufficient evidence.`` through the public answer-guidance setting.
-    This recognizer cannot judge whether the question was in fact
-    answerable, and other valid paraphrases may be missed. Interpret the
-    result alongside the human Tier-2 worksheet.
+    Reasoning before a closing ``</think>`` tag and quoted text are ignored.
+    The opening and closing sentences carry an answer's conclusion. Either
+    counts as an abstention when it uses the requested phrase
+    ``Insufficient evidence.`` or a common paraphrase ("the evidence does
+    not confirm", "no ... is stated", "not explicitly mentioned"), unless a
+    contrast follows ("..., but ..."), which marks a hedged answer. This
+    recognizer cannot judge whether the question was in fact answerable,
+    and unusual paraphrases may be missed. Interpret the result alongside
+    the human Tier-2 worksheet.
 
     """
 
-    stripped = answer.strip()
-    if not stripped:
+    text = answer.split("</think>")[-1].strip()
+    text = _QUOTATION_PATTERN.sub('""', text)
+    sentences = [
+        sentence
+        for sentence in _SENTENCE_BREAK.split(text)
+        if sentence.strip()
+    ]
+    if not sentences:
         return False
 
-    matches = list(_ABSTENTION_PATTERN.finditer(stripped))
-    if not matches:
-        return False
-
-    last_match = matches[-1]
-    matched_chars = last_match.end() - last_match.start()
-    dominates = matched_chars / len(stripped) >= _ABSTENTION_DOMINANCE_RATIO
-
-    trailing = stripped[last_match.end():]
-    anchored_at_end = bool(_ABSTENTION_TRAILING_CHARS.match(trailing))
-
-    return dominates or anchored_at_end
+    return any(
+        _states_insufficient_evidence(sentence)
+        for sentence in (sentences[0], sentences[-1])
+    )
 
 
 def verbatim_overlap_chars(answer: str, evidence) -> int:
