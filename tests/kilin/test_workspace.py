@@ -199,6 +199,7 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             [{
                 "original": str(original.resolve()),
                 "name": "code.py",
+                "kind": "file",
                 "files": ["code.py"],
                 "stamps": {"code.py": {
                     "size": status.st_size, "mtime_ns": status.st_mtime_ns,
