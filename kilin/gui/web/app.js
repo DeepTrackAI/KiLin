@@ -292,7 +292,7 @@ function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
     const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources? It could take a while.\n\n${names}\n\nKíLín copies them into sources and updates the index, which may take a while. A file added again replaces its old copy.`)) return;
+    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources and updates the index; this may take a while.`)) return;
     error.classList.add("hidden");
     setBusy(true, "Adding sources and updating the index…");
     bridge.addProjectSources(JSON.stringify(paths));
@@ -1478,7 +1478,7 @@ function showFolderMenu(x, y, folder, path, isFile) {
  */
 function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nIt is deleted permanently, not moved to the Trash.`)) return;
+  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nKíLín deletes it permanently; it does not go to the Trash.`)) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1545,7 +1545,7 @@ function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
   const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nOnly the project's copy is deleted; your original stays.`)) return;
+  if (!confirm(`Delete ${what} from sources?\n\n${path}\n\nKíLín deletes only the project's copy; your original stays.`)) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
