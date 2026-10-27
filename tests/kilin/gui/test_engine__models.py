@@ -20,6 +20,7 @@ from kilin.gui.engine import ChatEngine
 from kilin.gui.model_settings import read_effort_levels
 from kilin.gui.preferences import default_effort_levels
 from kilin.project import open_project
+from kilin.project_files import list_project_files
 from kilin.workspace import prepare_sources_workspace
 
 
@@ -335,6 +336,28 @@ class TestEngineModelTransitions(unittest.TestCase):
         ]
         self.assertEqual("".join(deltas), "Hello streamed world.")
         self.assertLess(names.index("answer_delta"), names.index("answered"))
+
+    def test_every_answer_refreshes_the_workspace_tree(self):
+        """Send the current project files with each answer, tool or not."""
+        from kilin.rag import ConversationTurn
+
+        session = self.engine.session
+        session.turns = []
+
+        def answer(question, **options):
+            """Save a plain answer that used no tool."""
+            session.turns.append(
+                ConversationTurn("now", question, "Plain answer.", (), {})
+            )
+
+        with patch.object(session, "ask", side_effect=answer):
+            self.engine.ask("question")
+        answered = [e for e in self.events if e["event"] == "answered"]
+        self.assertEqual(len(answered), 1)
+        self.assertEqual(
+            answered[0]["workspace_files"],
+            list_project_files(session.project),
+        )
 
     def test_new_chat_is_named_after_its_first_answer(self):
         """Name a new conversation only after its answer is available."""
