@@ -46,7 +46,8 @@ function extract(name) {
 }
 
 const names = [
-  "isOversizedSkippedFile", "selectedFileSizeLimit", "renderPreview"
+  "isOversizedSkippedFile", "skippedReason", "selectedFileSizeLimit",
+  "renderPreview",
 ];
 const functions = names.map(extract).join("\n");
 // Every relevant decision must use the same code-only classifier.

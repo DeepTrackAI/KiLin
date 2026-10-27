@@ -464,6 +464,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
                 "x = " + "a" * 100, encoding="utf-8"
             )
             (sources / "empty.py").touch()
+            # A type outside the project's list cannot be ticked.
+            (sources / "settings.json").write_text("{}", encoding="utf-8")
             (sources / ".env").write_text(
                 "FAKE_SECRET=not-real", encoding="utf-8"
             )
@@ -473,7 +475,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             events: list[dict[str, object]] = []
             worker = engine.ChatEngine(root, events.append)
             try:
-                worker.preview([str(sources)], [], 40)
+                worker.preview([str(sources)], [".py"], 40)
             finally:
                 worker.close()
 
@@ -488,6 +490,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
                 ".env": "protected_file",
                 "empty.py": "empty_file",
                 "oversized.py": "file_too_large",
+                "settings.json": "file_type_not_selected",
                 "weight.safetensors": "blocked_file_type",
             },
         )
