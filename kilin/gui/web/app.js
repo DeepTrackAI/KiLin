@@ -42,6 +42,8 @@ const shell = document.querySelector(".app-shell");
 let bridge = null;
 let busy = false;
 let ready = false;
+// The Settings status text that showError last wrote, cleared with it.
+let shownErrorStatus = "";
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
@@ -53,6 +55,8 @@ const expandedFolders = new Set();
 const collapsedWorkspaceFolders = new Set();
 // Paths shown in the workspace tree, to warn before replacing files.
 let workspacePaths = new Set();
+// The user's last show/hide choice for the side panels; null before any.
+let sidePanelChoice = null;
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -215,6 +219,19 @@ function showWorkspace(visible) {
 }
 
 /**
+ * Show or hide the side panels because the user asked, and remember it.
+ *
+ * Automatic layout changes (opening a project, a new chat) then follow
+ * this choice instead of overriding it.
+ *
+ * @param visible Whether the user wants the side panels shown.
+ */
+function chooseSidePanels(visible) {
+  sidePanelChoice = visible;
+  showWorkspace(visible);
+}
+
+/**
  * Show or hide the conversations panel and synchronize its toggle.
  *
  * @param visible Whether the conversations panel should be visible.
@@ -290,7 +307,7 @@ function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
     const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources to this project?\n\n${names}\n\nKíLín will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
+    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources and updates the index; this may take a while.`)) return;
     error.classList.add("hidden");
     setBusy(true, "Adding sources and updating the index…");
     bridge.addProjectSources(JSON.stringify(paths));
@@ -357,9 +374,12 @@ function showFolderCount(folder) {
  * @param depth Nesting depth; the top-level branch starts expanded.
  * @param enabled Allowed paths, or null to enable every path.
  * @param reasons Path-to-explanation mapping for skipped entries.
+ * @param selectable True gives each row a checkbox (the source preview).
+ *   False gives plain rows (the workspace tree), so clicking a file's
+ *   name does not also click its delete button.
  * @returns New details element containing the branch.
  */
-function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}) {
+function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}, selectable = true) {
   const details = document.createElement("details");
   details.className = "tree-folder";
   const key = `${name}|${paths[0] || ""}`;
@@ -374,37 +394,44 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   details.dataset.folders = String(children.directories.size);
   details.dataset.files = String(children.files.length);
   const summary = document.createElement("summary");
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
-  checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
-  checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
-  checkbox.disabled = available.length === 0;
-  checkbox.addEventListener("click", (event) => event.stopPropagation());
-  checkbox.addEventListener("change", () => {
-    available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
-    renderPreview();
-  });
-  summary.append(checkbox, document.createTextNode(name));
+  if (selectable) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
+    checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
+    checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
+    checkbox.disabled = available.length === 0;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
+      renderPreview();
+    });
+    summary.append(checkbox);
+  }
+  summary.append(document.createTextNode(name));
   details.append(summary);
   const content = document.createElement("div");
   content.className = "tree-children";
   for (const [folder, node] of [...children.directories].sort()) {
-    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons));
+    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons, selectable));
   }
   for (const file of children.files.sort()) {
-    const row = document.createElement("label");
+    // A label forwards clicks to its first control, so plain rows are divs.
+    const row = document.createElement(selectable ? "label" : "div");
     row.className = "tree-file";
     row.dataset.path = file;
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.checked = selection.has(file);
-    check.disabled = enabled !== null && !enabled.has(file);
-    check.addEventListener("change", () => {
-      check.checked ? selection.add(file) : selection.delete(file);
-      renderPreview();
-    });
-    row.append(check, document.createTextNode(file.split("/").pop()));
+    if (selectable) {
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = selection.has(file);
+      check.disabled = enabled !== null && !enabled.has(file);
+      check.addEventListener("change", () => {
+        check.checked ? selection.add(file) : selection.delete(file);
+        renderPreview();
+      });
+      row.append(check);
+    }
+    row.append(document.createTextNode(file.split("/").pop()));
     if (reasons[file]) {
       const reason = document.createElement("small");
       reason.className = "skip-reason";
@@ -1142,6 +1169,19 @@ function collectSettings() {
 }
 
 /**
+ * Tell whether the workspace tree shows a file.
+ *
+ * The core keeps a lock file next to each open conversation, so that only
+ * one window writes it. The lock is not the user's file, so it is hidden.
+ *
+ * @param path Workspace-relative file path reported by the backend.
+ * @returns False for a conversation lock under logs/, true otherwise.
+ */
+function shownInWorkspace(path) {
+  return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
+}
+
+/**
  * Render the saved workspace file tree without selection checkboxes.
  *
  * @param paths Workspace-relative file paths reported by the backend.
@@ -1150,12 +1190,14 @@ function renderWorkspace(paths) {
   workspacePaths = new Set(paths);
   const host = byId("workspace-tree");
   host.replaceChildren();
-  const root = fileTree(paths);
-  const selected = new Set(paths);
+  // The core lists every file; the tree leaves out conversation locks.
+  const root = fileTree(paths.filter(shownInWorkspace));
   // Every folder comes from the core's actual workspace inventory.
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
-    const item = branch(name, node, files, selected);
+    // Plain rows: the delete button added below must not act as a label's
+    // control, or clicking a file's name would also ask to delete it.
+    const item = branch(name, node, files, new Set(), 0, null, {}, false);
     // Sources and outputs start open; the other folders stay folded.
     const key = `${name}|${files[0] || ""}`;
     const startsOpen = name === "sources" || name === "outputs";
@@ -1164,7 +1206,6 @@ function renderWorkspace(paths) {
       if (!item.isConnected || !startsOpen) return;
       item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
     });
-    item.querySelectorAll("input").forEach((input) => input.remove());
     [item, ...item.querySelectorAll(".tree-folder")].forEach(showFolderCount);
     item.querySelectorAll(".tree-file").forEach((line) => {
       line.tabIndex = 0;
@@ -1257,6 +1298,24 @@ function renderWorkspace(paths) {
     line.addEventListener("click", () => openWorkspaceFile(file));
     host.append(line);
   }
+  markActiveConversationFile();
+}
+
+/**
+ * Bold the workspace entry of the conversation file now in use.
+ *
+ * The engine's trace path is the active conversation's JSON file, an
+ * absolute path; workspace rows carry project-relative paths.
+ */
+function markActiveConversationFile() {
+  const active = activeTracePath.replaceAll("\\", "/");
+  byId("workspace-tree").querySelectorAll(".tree-file").forEach((row) => {
+    const path = row.dataset.path;
+    row.classList.toggle(
+      "active-conversation",
+      Boolean(active && path && active.endsWith(`/${path}`)),
+    );
+  });
 }
 
 // Send the visible drop rectangle to Qt; all other workspace rows reject drops.
@@ -1434,7 +1493,7 @@ function showFolderMenu(x, y, folder, path, isFile) {
  */
 function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nThis folder is not indexed, so nothing is rebuilt. Continue?`)) return;
+  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nKíLín deletes it permanently; it does not go to the Trash.`)) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1501,7 +1560,7 @@ function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
   const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nThe copy in the workspace is deleted and the index is updated. Your original files outside the workspace are not changed. Saved chats are kept. Continue?`)) return;
+  if (!confirm(`Delete ${what} from sources?\n\n${path}\n\nKíLín deletes only the project's copy; your original stays.`)) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
@@ -1558,12 +1617,28 @@ function showError(message, tracePath = "") {
     byId("cancel-model-download").classList.add("hidden");
     downloadingModel = null;
   }
+  shownErrorStatus = byId("model-download-status").textContent;
   setBusy(false);
   if (!byId("first-run-setup").classList.contains("hidden")) {
     byId("install-required").disabled = !readinessEnvironmentReady;
   }
   byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
+}
+
+/**
+ * Hide an error that no longer applies, such as after a project opens.
+ *
+ * The Settings status line is cleared only while it still shows that
+ * error's text, so later messages there (such as download progress) stay.
+ */
+function clearError() {
+  const status = byId("model-download-status");
+  if (shownErrorStatus && status.textContent === shownErrorStatus) {
+    status.textContent = "";
+  }
+  shownErrorStatus = "";
+  error.classList.add("hidden");
 }
 
 /**
@@ -1899,7 +1974,7 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
       link.setAttribute("aria-label", `Show reference ${number}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
-        showWorkspace(true);
+        chooseSidePanels(true);
         selectTurn(item, turn, number);
       });
       superscript.append(link);
@@ -2072,13 +2147,13 @@ function addTurn(turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
   answer.addEventListener("click", () => {
-    showWorkspace(true);
+    chooseSidePanels(true);
     selectTurn(item, turn);
   });
   answer.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      showWorkspace(true);
+      chooseSidePanels(true);
       selectTurn(item, turn);
     }
   });
@@ -2760,7 +2835,7 @@ function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
   const choose = () => {
-    showWorkspace(true);
+    chooseSidePanels(true);
     selectTurn(item, turn);
   };
   answer.addEventListener("click", choose);
@@ -2958,6 +3033,7 @@ function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
+    markActiveConversationFile();
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
@@ -3217,6 +3293,8 @@ function onEvent(raw) {
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
+    // An error from an earlier attempt no longer applies to this project.
+    clearError();
     usageTotals = data.usage || usageTotals;
     renderUsage();
     ready = true;
@@ -3250,7 +3328,8 @@ function onEvent(raw) {
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
     renderWorkspace(data.workspace_files);
-    showWorkspace(Boolean(data.turns.length));
+    // Open with references only when there are answers, unless the user chose.
+    showWorkspace(sidePanelChoice ?? Boolean(data.turns.length));
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -3273,10 +3352,7 @@ function onEvent(raw) {
     renderConversations(data);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) {
-      renderConversationEmpty();
-      showWorkspace(false);
-    }
+    if (!data.turns.length) renderConversationEmpty();
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -3522,7 +3598,6 @@ byId("project-name").addEventListener("input", () => {
 });
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
-  showWorkspace(false);
   setBusy(true, "Starting a new conversation…");
   bridge.newConversation();
 });
@@ -3581,7 +3656,7 @@ byId("change-project").addEventListener("click", () => {
   refreshSavedProject();
 });
 byId("toggle-workspace").addEventListener("click", () => {
-  showWorkspace(!shell.classList.contains("sidebar-open"));
+  chooseSidePanels(!shell.classList.contains("sidebar-open"));
 });
 byId("toggle-conversations").addEventListener("click", () => {
   showConversations(shell.classList.contains("conversations-hidden"));
@@ -3795,7 +3870,7 @@ for (const side of ["left", "right"]) {
       if (startWidth) shell.style.setProperty(`--${side}-width`, startWidth);
       else shell.style.removeProperty(`--${side}-width`);
       if (side === "left") showConversations(false);
-      else showWorkspace(false);
+      else chooseSidePanels(false);
       positionPanelResizers();
       syncSourceDropTarget();
       return;
@@ -3820,3 +3895,61 @@ panelObserver.observe(shell);
 panelObserver.observe(byId("conversations-panel"));
 panelObserver.observe(document.querySelector(".side-panels"));
 window.addEventListener("resize", positionPanelResizers);
+
+// Draggable border between the Workspace and References panels.
+const WORKSPACE_SHARE_LIMITS = [15, 85];
+const sideDivider = byId("side-divider");
+
+/**
+ * Apply a remembered or dragged Workspace height, within its limits.
+ *
+ * @param share Requested percentage of the side column for Workspace;
+ *   null restores the default even split.
+ */
+function setWorkspaceShare(share) {
+  const panels = document.querySelector(".side-panels");
+  if (share === null) {
+    panels.style.removeProperty("--workspace-share");
+    return;
+  }
+  const [min, max] = WORKSPACE_SHARE_LIMITS;
+  panels.style.setProperty("--workspace-share", `${Math.round(Math.min(max, Math.max(min, share)))}%`);
+}
+
+let sideDividerPress = 0;
+sideDivider.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  // Detect double-clicks here: pointer capture can suppress dblclick.
+  if (event.timeStamp - sideDividerPress < 400) {
+    sideDividerPress = 0;
+    setWorkspaceShare(null);
+    try { localStorage.removeItem("kilin-workspace-share"); } catch {}
+    return;
+  }
+  sideDividerPress = event.timeStamp;
+  sideDivider.setPointerCapture(event.pointerId);
+  sideDivider.classList.add("dragging");
+  document.body.classList.add("resizing-panels", "resizing-rows");
+});
+sideDivider.addEventListener("pointermove", (event) => {
+  if (!sideDivider.hasPointerCapture(event.pointerId)) return;
+  sideDividerPress = 0;  // A drag is not the first half of a double-click.
+  const box = document.querySelector(".side-panels").getBoundingClientRect();
+  setWorkspaceShare(((event.clientY - box.top) / box.height) * 100);
+});
+const finishSideDivider = (event) => {
+  if (!sideDivider.hasPointerCapture(event.pointerId)) return;
+  sideDivider.releasePointerCapture(event.pointerId);
+  sideDivider.classList.remove("dragging");
+  document.body.classList.remove("resizing-panels", "resizing-rows");
+  try {
+    localStorage.setItem("kilin-workspace-share", document.querySelector(".side-panels").style.getPropertyValue("--workspace-share"));
+  } catch {}
+  syncSourceDropTarget();
+};
+sideDivider.addEventListener("pointerup", finishSideDivider);
+sideDivider.addEventListener("pointercancel", finishSideDivider);
+try {
+  const saved = parseFloat(localStorage.getItem("kilin-workspace-share"));
+  if (Number.isFinite(saved)) setWorkspaceShare(saved);
+} catch {}
