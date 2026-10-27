@@ -3417,6 +3417,7 @@ function onEvent(raw) {
     conversation.replaceChildren();
     clearReferences();
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
     if (!data.turns.length) renderConversationEmpty();
@@ -3428,6 +3429,7 @@ function onEvent(raw) {
     setBusy(false);
   } else if (data.event === "conversations") {
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     setBusy(false);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);

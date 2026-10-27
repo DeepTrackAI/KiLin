@@ -3013,7 +3013,7 @@ class ChatEngine:
         )
 
     def _send_conversations(self, event: str, **data: object) -> None:
-        """Send the catalog and active identity in one consistent shape.
+        """Send the catalog, active identity and project files together.
 
         Parameters
         ----------
@@ -3031,6 +3031,12 @@ class ChatEngine:
 
         if self.conversation_store is None or self.active_conversation is None:
             raise RuntimeError("Conversation store is not open.")
+        # Creating, branching or deleting a chat adds or removes its file,
+        # so the workspace tree is refreshed too.
+        if self.session is not None:
+            data.setdefault(
+                "workspace_files", list_project_files(self.session.project)
+            )
         self._send(
             event,
             active_conversation_id=(self.active_conversation.conversation_id),
