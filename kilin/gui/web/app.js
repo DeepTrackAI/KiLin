@@ -1152,6 +1152,19 @@ function collectSettings() {
 }
 
 /**
+ * Tell whether the workspace tree shows a file.
+ *
+ * The core keeps a lock file next to each open conversation, so that only
+ * one window writes it. The lock is not the user's file, so it is hidden.
+ *
+ * @param path Workspace-relative file path reported by the backend.
+ * @returns False for a conversation lock under logs/, true otherwise.
+ */
+function shownInWorkspace(path) {
+  return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
+}
+
+/**
  * Render the saved workspace file tree without selection checkboxes.
  *
  * @param paths Workspace-relative file paths reported by the backend.
@@ -1160,7 +1173,8 @@ function renderWorkspace(paths) {
   workspacePaths = new Set(paths);
   const host = byId("workspace-tree");
   host.replaceChildren();
-  const root = fileTree(paths);
+  // The core lists every file; the tree leaves out conversation locks.
+  const root = fileTree(paths.filter(shownInWorkspace));
   // Every folder comes from the core's actual workspace inventory.
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);

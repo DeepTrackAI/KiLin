@@ -90,3 +90,33 @@ console.log("workspace tree passed");
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("workspace tree passed", result.stdout)
+
+    def test_conversation_locks_are_hidden_from_the_tree(self):
+        """The tree leaves out conversation locks; other files stay."""
+
+        source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
+        start = source.index("function renderWorkspace(")
+        render = source[start : source.index("\n}\n", start)]
+        self.assertIn("fileTree(paths.filter(shownInWorkspace))", render)
+        start = source.index("function shownInWorkspace(")
+        function = source[start : source.index("\n}\n", start) + 3]
+        script = r"""
+const assert = require("node:assert/strict");
+"""
+        script += function
+        script += r"""
+assert.equal(shownInWorkspace("logs/traces/conversation_a.json.lock"), false);
+assert.equal(shownInWorkspace("logs/traces/conversation_a.json"), true);
+assert.equal(shownInWorkspace("sources/notes.json.lock"), true);
+assert.equal(shownInWorkspace("outputs/report.md"), true);
+console.log("lock filter passed");
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("lock filter passed", result.stdout)
