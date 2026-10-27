@@ -73,7 +73,7 @@ const selectionReasonCodes = {
 assert.deepEqual(projectFileTypes(), [".py", ".md", ".html"]);
 assert.equal(
   skippedReason({ reason_code: "file_type_not_selected", reason: "x" }),
-  "Not a file type of this project · add it under Additional file types",
+  "File type not included",
 );
 assert.equal(
   skippedReason({ reason_code: "file_too_large", reason: "x" }),
