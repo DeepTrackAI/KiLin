@@ -329,13 +329,22 @@ function fileTypes() {
 }
 
 /**
+ * List the file types the new project copies: its type's own and the extra
+ * types typed in Settings. The preview offers only these, so every file the
+ * user can tick is one project creation accepts.
+ */
+function projectFileTypes() {
+  return [...new Set([...profile.extensions, ...fileTypes()])];
+}
+
+/**
  * Request a backend metadata scan for the current source selection.
  */
 function previewSources() {
   if (bridge && selectedSources.length) {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
-      JSON.stringify(selectedSources), JSON.stringify(fileTypes()),
+      JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
       Number(byId("max-file-bytes").value), byId("workspace-path").value.trim(),
     );
   }
@@ -489,6 +498,21 @@ function isOversizedSkippedFile(item) {
 }
 
 /**
+ * Say why a preview file cannot be ticked, and how to include it if it can.
+ *
+ * @param item Skipped-file preview row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function skippedReason(item) {
+  if (isOversizedSkippedFile(item)) return "Above current limit · check to include";
+  if (selectionReasonCodes !== null
+      && item.reason_code === selectionReasonCodes.FILE_TYPE_NOT_SELECTED) {
+    return "Not a file type of this project · add it under Additional file types";
+  }
+  return item.reason;
+}
+
+/**
  * Rebuild source trees, counts, and removal controls from preview state.
  */
 function renderPreview() {
@@ -519,12 +543,7 @@ function renderPreview() {
       checkedFiles.delete(rootPath);
       renderPreview();
     });
-    const reasons = Object.fromEntries(skipped.map((item) => [
-      item.path,
-      isOversizedSkippedFile(item)
-        ? "Above current limit · check to include"
-        : item.reason,
-    ]));
+    const reasons = Object.fromEntries(skipped.map((item) => [item.path, skippedReason(item)]));
     const all = [...files, ...skipped.map((item) => item.path)];
     holder.append(branch(rootPath, fileTree(all), all, chosen, 0, offered, reasons), remove);
     tree.append(holder);
@@ -1158,7 +1177,7 @@ function collectSettings() {
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
-    extensions: [...new Set([...profile.extensions, ...fileTypes()])],
+    extensions: projectFileTypes(),
     max_file_bytes: selectedFileSizeLimit(),
     target_tokens: Number(byId("target-tokens").value),
     max_tokens: Number(byId("max-tokens").value),

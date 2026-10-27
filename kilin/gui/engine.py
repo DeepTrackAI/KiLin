@@ -1482,7 +1482,9 @@ class ChatEngine:
         sources: list[str]
             Files or folders the user selected.
         extensions: list[str]
-            Additional text file types requested by the user.
+            File types the new project copies: its type's own and any the
+            user added. Folder files of other types are listed as skipped,
+            so they cannot be ticked.
         max_file_bytes: int
             Largest file that may be copied.
         workspace: str, optional
@@ -1501,9 +1503,7 @@ class ChatEngine:
 
         try:
             roots = []
-            allowed_extensions = tuple(
-                dict.fromkeys((*DEFAULT_EXTENSIONS, *extensions))
-            )
+            allowed_extensions = tuple(dict.fromkeys(extensions))
             destination = _workspace_path(sources, self.sandbox, workspace)
             for value in sources:
                 original = Path(value).expanduser()
