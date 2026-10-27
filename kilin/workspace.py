@@ -2,7 +2,7 @@
 
 ``prepare_sources_workspace`` exclusively creates a new project, copies
 selected local inputs into ``sources``, and records origins in
-``sources.json``.
+``sources.json``, with each copy's size and modification time at import.
 An explicit destination must be nonexistent or empty. Default names are
 allocated without reusing occupied folders, even for identical sources.
 ``add_project_sources`` deliberately imports into a saved project, preserving
@@ -28,6 +28,11 @@ Key Features
 
     Keep source-origin records and allocate noncolliding names within one
     sources directory.
+
+- **Copy stamps**
+
+    Record each copy's size and modification time when it is imported, so
+    later changes to the original or to the copy can be told apart.
 
 - **Selected copying**
 
@@ -121,6 +126,15 @@ __all__ = [
 _COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
 
 
+class _CopyStamp(TypedDict):
+    """Size and modification time of one source copy when imported.
+
+    """
+
+    size: int
+    mtime_ns: int
+
+
 class _SourceRecord(TypedDict):
     """Persisted ownership and imported-file inventory of one source.
 
@@ -129,6 +143,7 @@ class _SourceRecord(TypedDict):
     original: str
     name: str
     files: NotRequired[list[str]]
+    stamps: NotRequired[dict[str, _CopyStamp]]
 
 
 def default_workspace_path(
@@ -501,6 +516,7 @@ def _prepare_sources_workspace(
                     for relative in inventory
                     if _is_regular_snapshot(destination, relative)
                 )
+            _stamp_copies(record, destination, copied)
             if record not in records:
                 records.append(record)
                 used.add(record["name"])
@@ -775,6 +791,59 @@ def _is_regular_snapshot(destination: Path, relative: str) -> bool:
     return True
 
 
+def _copy_stamp(path: Path) -> _CopyStamp:
+    """Read the size and modification time of one source copy.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Regular file inside the managed ``sources/`` folder.
+
+    Returns
+    -------
+    _CopyStamp
+        File size in bytes and modification time in nanoseconds.
+
+    """
+
+    status = path.stat()
+    return _CopyStamp(size=status.st_size, mtime_ns=status.st_mtime_ns)
+
+
+def _stamp_copies(
+    record: _SourceRecord, destination: Path, copied: Sequence[str]
+) -> None:
+    """Keep one stamp per tracked file, renewing those just copied.
+
+    Parameters
+    ----------
+    record: _SourceRecord
+        Source record whose ``files`` inventory is already up to date.
+    destination: pathlib.Path
+        The source's copy in ``sources/``: a file for a direct-file source,
+        otherwise a folder.
+    copied: Sequence[str]
+        Files written by this import; their stamps are renewed.
+
+    Notes
+    -----
+    Files kept from an earlier import keep their stamps. Files without one,
+    from manifests written before stamps existed, are stamped as they are
+    now. Stamps of files no longer tracked are dropped.
+
+    """
+
+    stamps = record.get("stamps", {})
+    renewed: dict[str, _CopyStamp] = {}
+    for relative in record.get("files", []):
+        path = destination if destination.is_file() else destination / relative
+        if relative in copied or relative not in stamps:
+            renewed[relative] = _copy_stamp(path)
+        else:
+            renewed[relative] = stamps[relative]
+    record["stamps"] = renewed
+
+
 def _read_records(path: Path) -> list[_SourceRecord]:
     """Validate persisted source ownership before using destination names.
 
@@ -797,8 +866,9 @@ def _read_records(path: Path) -> list[_SourceRecord]:
 
     Notes
     -----
-    A missing ``files`` list is accepted for older manifest records. Present
-    inventories must contain unique, normalized relative paths.
+    Missing ``files`` and ``stamps`` are accepted for older manifest
+    records. Present inventories must contain unique, normalized relative
+    paths, and every stamp must belong to a tracked file.
 
     """
 
@@ -850,6 +920,19 @@ def _read_records(path: Path) -> list[_SourceRecord]:
             ):
                 raise ValueError("Invalid workspace source files inventory.")
             seen_files.add(relative)
+        stamps = item.get("stamps", {})
+        if not isinstance(stamps, dict) or not set(stamps) <= seen_files:
+            raise ValueError("Invalid workspace source copy stamps.")
+        for stamp in stamps.values():
+            if (
+                not isinstance(stamp, dict)
+                or set(stamp) != {"size", "mtime_ns"}
+                or not all(
+                    type(value) is int and value >= 0
+                    for value in stamp.values()
+                )
+            ):
+                raise ValueError("Invalid workspace source copy stamps.")
     return cast("list[_SourceRecord]", records)
 
 
@@ -994,6 +1077,12 @@ def remove_workspace_sources(
                     ]
                 else:
                     continue
+                if "stamps" in record:
+                    record["stamps"] = {
+                        relative: stamp
+                        for relative, stamp in record["stamps"].items()
+                        if relative in record["files"]
+                    }
                 retained.append(record)
             _write_records(manifest, retained)
     return [target.relative_to(root).as_posix() for target in targets]
