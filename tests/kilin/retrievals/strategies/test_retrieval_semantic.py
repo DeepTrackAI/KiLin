@@ -69,6 +69,18 @@ class TestSemanticIndexConstruction(unittest.TestCase):
         )
         self.assertEqual(progress, [(2, 5), (4, 5), (5, 5)])
 
+    def test_custom_texts_are_embedded_instead_of_chunk_text(self) -> None:
+        """Embed supplied retrieval texts, one per chunk.
+
+        """
+        session = FakeEmbeddings()
+        texts = [f"path\n\n{item.text}" for item in self.chunks]
+        index = rs.build_semantic_index(self.chunks, session, texts=texts)
+        self.assertEqual(session.calls, [texts])
+        self.assertEqual(index.chunks, tuple(self.chunks))
+        with self.assertRaisesRegex(ValueError, "text count"):
+            rs.build_semantic_index(self.chunks, session, texts=texts[:1])
+
     def test_empty_input_is_rejected_before_embedding(self) -> None:
         """Reject an empty index without requesting model calculations.
 

@@ -67,6 +67,7 @@ def _profile() -> SimpleNamespace:
         thinking=False,
         temperature=0.2,
         max_new_tokens=128,
+        block_unrequested_cjk=True,
         extensions=(".py",),
         max_file_bytes=10000,
         target_tokens=100,
@@ -567,6 +568,65 @@ class TestRAGRetrieval(unittest.TestCase):
             session.chunks,
         )
 
+    def test_source_code_preference_ranks_documentation_later(self) -> None:
+        """Documentation follows source code only when the intent asks."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        tutorial = ranked(
+            chunk("t", path="tutorials/a.ipynb", kind="notebook_markdown")
+        )
+        guide = ranked(chunk("g", path="docs/a.md", kind="markdown_section"))
+        test = ranked(chunk("x", path="tests/test_a.py"))
+        source = ranked(chunk("s", path="pkg/a.py"))
+        # Preferring source code keeps SOURCE_SEARCH_RESULTS fused results.
+        for prefer, expected in (
+            (True, [source, tutorial, guide, test]),
+            (False, [tutorial, guide]),
+        ):
+            with self.subTest(prefer=prefer), _search_patches() as mocks:
+                mocks["hybrid_search"].return_value = [
+                    tutorial, guide, test, source
+                ]
+                session._retrieve("question", 2, prefer_source_code=prefer)
+                self.assertEqual(
+                    mocks["expand_retrieval_context"].call_args.args[0],
+                    expected,
+                )
+        with _search_patches() as mocks:
+            mocks["hybrid_search"].return_value = [tutorial, test, source]
+            session._retrieve("question", 3, prefer_source_code=True)
+            self.assertEqual(
+                mocks["expand_retrieval_context"].call_args.args[0],
+                [source, tutorial, test],
+            )
+
+    def test_source_code_preference_searches_deeper(self) -> None:
+        """Channels rank deeper and keep their best source code."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        guides = [
+            ranked(chunk(f"g{i}", path=f"docs/{i}.md",
+                         kind="markdown_section"))
+            for i in range(3)
+        ]
+        source = ranked(chunk("s", path="pkg/a.py"))
+        with _search_patches() as mocks:
+            mocks["lexical_search"].return_value = [*guides, source]
+            session._retrieve("question", 1, prefer_source_code=True)
+            depth = rag.SOURCE_SEARCH_DEPTH
+            self.assertEqual(
+                mocks["lexical_search"].call_args.kwargs["count"], depth
+            )
+            self.assertIn(
+                source, mocks["hybrid_search"].call_args.kwargs["lexical"]
+            )
+        with _search_patches() as mocks:
+            mocks["lexical_search"].return_value = [*guides, source]
+            session._retrieve("question", 1)
+            self.assertEqual(
+                mocks["lexical_search"].call_args.kwargs["count"], 1
+            )
+
     def test_single_document_scope_uses_full_ranking(self) -> None:
         """Apply full ranking to evidence scoped to a single document."""
         session = _session()
@@ -732,12 +792,13 @@ class TestRAGRetrieval(unittest.TestCase):
         for available in (False, True):
             with self.subTest(available=available):
                 session.indexes.code_graph = (
-                    graph("func") if available else CodeGraph((), ())
+                    graph("pkg.func_name") if available else CodeGraph((), ())
                 )
                 messages = []
                 with _search_patches() as mocks:
                     session._retrieve(
-                        "hello", status_callback=messages.append
+                        "How does func_name work?",
+                        status_callback=messages.append,
                     )
                 if available:
                     mocks["code_search"].assert_called_once()
@@ -757,6 +818,78 @@ class TestRAGRetrieval(unittest.TestCase):
                         "Searching relationships between source entities",
                         messages,
                     )
+
+
+    def test_prose_question_skips_the_code_graph_channel(self) -> None:
+        """Without named code, graph search is not run."""
+        session = _session()
+        session.chunks = [chunk("indexed")]
+        session.indexes.code_graph = graph(
+            "pkg.Check.valid", kind="python_method"
+        )
+        messages = []
+        with _search_patches() as mocks:
+            session._retrieve(
+                "Which files are valid?", status_callback=messages.append
+            )
+        mocks["code_search"].assert_not_called()
+        self.assertIn(
+            "No code named in the question; skipping graph search", messages
+        )
+
+class TestRetrievalText(unittest.TestCase):
+    """Index code passages with their file path and module summary."""
+
+    def test_code_passages_get_path_and_module_summary(self) -> None:
+        """Only code passages are prefixed; the header keeps its text."""
+        header = chunk(
+            "h", '"""Extract natural units from Python files.\n\nMore."""\n'
+            "import ast\n", path="pkg/py_ext.py",
+            kind="python_module_context",
+        )
+        function = chunk("f", "def _units():\n    pass\n",
+                         path="pkg/py_ext.py", start=5)
+        guide = chunk("g", "Read the guide.", path="docs/a.md",
+                      kind="markdown_section")
+        broken = chunk("b", "def (", path="pkg/bad.py",
+                       kind="python_module_context")
+        summaries = rag._module_summaries([header, function, guide, broken])
+        self.assertEqual(
+            summaries,
+            {
+                Path("pkg/py_ext.py"):
+                    "Extract natural units from Python files."
+            },
+        )
+        self.assertEqual(
+            rag._retrieval_text(function, summaries),
+            "pkg/py_ext.py\nExtract natural units from Python files.\n\n"
+            "def _units():\n    pass\n",
+        )
+        self.assertEqual(
+            rag._retrieval_text(header, summaries),
+            f"pkg/py_ext.py\n\n{header.text}",
+        )
+        self.assertEqual(rag._retrieval_text(guide, summaries), guide.text)
+
+    def test_passage_relevance_uses_saved_embeddings(self) -> None:
+        """Score passages by cosine similarity to the embedded query."""
+        session = _session()
+        near, far, missing = chunk("n"), chunk("f"), chunk("m")
+        session.indexes = SimpleNamespace(
+            semantic=SimpleNamespace(
+                chunks=(near, far), embeddings=((1.0, 0.0), (0.0, 1.0))
+            )
+        )
+        session.embedding_session = Mock()
+        session.embedding_session.embed_query.return_value = [0.8, 0.6]
+        score = session._passage_relevance("query")
+        self.assertAlmostEqual(score(near), 0.8)
+        self.assertAlmostEqual(score(far), 0.6)
+        self.assertEqual(score(missing), float("-inf"))
+        session.embedding_session.embed_query.assert_called_once_with(
+            "query"
+        )
 
 
 class TestRAGProgress(unittest.TestCase):
@@ -1625,6 +1758,9 @@ class TestRAGLifecycle(unittest.TestCase):
                          BACKEND_MLX)
         self.assertEqual(constructor.call_args.kwargs["temperature"], 0.6)
         self.assertFalse(constructor.call_args.kwargs["allow_download"])
+        self.assertTrue(
+            constructor.call_args.kwargs["block_unrequested_cjk"]
+        )
 
     def test_usage_counters_include_distinct_router_only(self) -> None:
         """Avoid double-counting token usage for a shared router."""
@@ -2934,7 +3070,7 @@ class TestRAGDefensiveFallbacks(unittest.TestCase):
             )
         self.assertEqual(status, "rebuilt")
         self.assertEqual(chunks, [self.current])
-        self.assertEqual(self.embedding.calls, [["alpha beta"]])
+        self.assertEqual(self.embedding.calls, [["a.py\n\nalpha beta"]])
 
     def test_removed_file_vectors_are_not_reused(self) -> None:
         """Exclude vectors belonging to source files that were removed."""

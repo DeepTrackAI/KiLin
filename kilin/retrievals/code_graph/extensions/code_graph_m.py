@@ -135,7 +135,7 @@ def extract_code_relations(
                 CodeRelation(
                     function,
                     "calls",
-                    _resolve_name(target, known),
+                    _resolve_name(target, known, function, module),
                 )
             )
 

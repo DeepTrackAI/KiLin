@@ -91,9 +91,14 @@ import gc
 from importlib import import_module
 from math import isfinite
 from pathlib import Path
+import re
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
+from kilin.defaults import (
+    load_defaults_section,
+    require_default_lowercase_words,
+)
 from kilin.huggingface import cached_model_snapshot
 from kilin.runtime import (
     BACKEND_AUTO,
@@ -126,6 +131,24 @@ ASSISTANT_ROLE: Final[Role] = "assistant"
 
 _ROLES: Final[frozenset[Role]] = frozenset(
     (SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE)
+)
+
+# Chinese, Japanese, and Korean characters and their punctuation. Bilingual
+# models such as Qwen3 occasionally switch to Chinese mid-sentence; tokens
+# containing these characters are blocked unless the input contains one.
+_CJK: Final[re.Pattern[str]] = re.compile(
+    "[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]"
+)
+# Words that ask for those scripts without containing them ("the kanji for
+# river", "translate it into Chinese"); any of them also allows the tokens.
+_CJK_REQUEST_WORDS: Final = require_default_lowercase_words(
+    load_defaults_section("CHAT"), "CJK_REQUEST_WORDS", "CHAT"
+)
+_CJK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, sorted(_CJK_REQUEST_WORDS)))
+    + r")s?\b",
+    re.IGNORECASE,
 )
 
 if TYPE_CHECKING:
@@ -184,6 +207,9 @@ class ChatSession:
     trace: TraceSink | None, optional
         Caller-owned trace sink. None selects a NullTraceLogger. Content
         retention depends on the sink and its flags. Defaults to ``None``.
+    block_unrequested_cjk: bool, optional
+        Block Chinese, Japanese, and Korean tokens unless the input contains
+        or asks for them. Defaults to ``True``.
 
     Attributes
     ----------
@@ -202,6 +228,8 @@ class ChatSession:
         Current sampling temperature.
     max_new_tokens: int | None
         Current session-level generation-length limit.
+    block_unrequested_cjk: bool
+        Whether unrequested Chinese, Japanese, and Korean tokens are blocked.
     messages: list[dict[str, str]]
         Ordered in-memory conversation history using the canonical roles.
     input_token_total: int
@@ -248,6 +276,12 @@ class ChatSession:
     do not create a separate security boundary. Backend and Hub errors may
     propagate without conversion to RuntimeError.
 
+    With ``block_unrequested_cjk``, tokens containing Chinese, Japanese,
+    or Korean characters cannot be generated unless the history or the new
+    message contains such a character or a word asking for those scripts
+    (``CHAT.CJK_REQUEST_WORDS``, such as "Chinese" or "kanji"), so a reply
+    cannot switch to those languages mid-sentence.
+
     """
 
     model_id: str
@@ -256,6 +290,7 @@ class ChatSession:
     thinking: bool
     temperature: float
     max_new_tokens: int | None
+    block_unrequested_cjk: bool
     messages: list[dict[str, str]]
     _system_prompt: str | None
     _model: Model | None
@@ -277,6 +312,7 @@ class ChatSession:
         allow_download: bool = True,
         revision: str | None = None,
         trace: TraceSink | None = None,
+        block_unrequested_cjk: bool = True,
     ) -> None:
         """Initialize and load one chat session.
 
@@ -317,6 +353,9 @@ class ChatSession:
         trace: TraceSink | None, optional
             Caller-owned trace sink. None selects a NullTraceLogger. Content
             retention depends on the sink and its flags. Defaults to ``None``.
+        block_unrequested_cjk: bool, optional
+            Block Chinese, Japanese, and Korean tokens unless the input
+            contains or asks for them. Defaults to ``True``.
 
         Raises
         ------
@@ -345,6 +384,11 @@ class ChatSession:
         self.messages = self._new_history()
         self._model = None
         self._tokenizer = None
+        self.block_unrequested_cjk = _check_bool(
+            block_unrequested_cjk, "block_unrequested_cjk"
+        )
+        self._cjk_token_ids: tuple[int, ...] | None = None
+        self._block_cjk = False
         self.device = ""
         self._load(
             allow_download=_check_bool(allow_download, "allow_download"),
@@ -627,6 +671,11 @@ class ChatSession:
         if token_budget is None:
             token_budget = self._remaining_context(len(tokens))
 
+        self._block_cjk = self.block_unrequested_cjk and not any(
+            _CJK.search(item["content"])
+            or _CJK_REQUEST.search(item["content"])
+            for item in messages
+        )
         input_data: dict[str, object] = {
             "call_id": self.trace.new_id("llm-call"),
             "call_count_for_question": 1,
@@ -645,6 +694,7 @@ class ChatSession:
                 "temperature": self.temperature,
                 "max_new_tokens": token_budget,
                 "sampling": self.temperature > 0,
+                "cjk_tokens_blocked": self._block_cjk,
             },
             "chat_template": {
                 "add_generation_prompt": True,
@@ -870,6 +920,11 @@ class ChatSession:
         sampling = import_module("mlx_lm.sample_utils")
         sampler = sampling.make_sampler(temp=self.temperature)
 
+        options: dict[str, object] = {}
+        blocked = self._blocked_token_ids()
+        if blocked:
+            options["logits_processors"] = [_mlx_token_blocker(blocked)]
+
         parts: list[str] = []
         generated = 0
         for response in mlx_lm.stream_generate(
@@ -878,6 +933,7 @@ class ChatSession:
             prompt=tokens,
             max_tokens=token_budget,
             sampler=sampler,
+            **options,
         ):
             # Each response is one generated token, even when its text is
             # empty (part of a character still being decoded).
@@ -935,6 +991,9 @@ class ChatSession:
         }
         if self.temperature > 0:
             options["temperature"] = self.temperature
+        blocked = self._blocked_token_ids()
+        if blocked:
+            options["suppress_tokens"] = list(blocked)
         with torch.inference_mode():
             output = model.generate(**options)
         generated = output[0, len(tokens) :].tolist()
@@ -1072,6 +1131,7 @@ class ChatSession:
 
         self._model = None
         self._tokenizer = None
+        self._cjk_token_ids = None
         self.reset()
         gc.collect()
         if self.backend == BACKEND_MLX:
@@ -1080,6 +1140,32 @@ class ChatSession:
             import_module("torch").cuda.empty_cache()
         elif self.device == "mps":
             import_module("torch").mps.empty_cache()
+
+    def _blocked_token_ids(self: ChatSession) -> tuple[int, ...]:
+        """Return the token IDs the next reply must not generate.
+
+        Returns
+        -------
+        tuple[int, ...]
+            IDs of vocabulary tokens containing Chinese, Japanese, or Korean
+            characters when blocking applies to the current input;
+            otherwise an empty tuple.
+
+        Notes
+        -----
+        The IDs are found once per loaded tokenizer by decoding every
+        vocabulary entry. A tokenizer without a ``get_vocab`` mapping
+        blocks nothing. Characters split across several byte-level tokens
+        are not blocked, but such tokens are rare compared with whole
+        characters.
+
+        """
+
+        if not getattr(self, "_block_cjk", False):
+            return ()
+        if getattr(self, "_cjk_token_ids", None) is None:
+            self._cjk_token_ids = _cjk_token_ids(self._tokenizer)
+        return self._cjk_token_ids
 
     def _new_history(self: ChatSession) -> list[dict[str, str]]:
         """Create the initial conversation history.
@@ -1265,3 +1351,83 @@ def _check_system_prompt(value: str | None) -> str | None:
         raise ValueError("system_prompt must be non-empty text or None.")
 
     return value.strip()
+
+
+def _cjk_token_ids(tokenizer: object) -> tuple[int, ...]:
+    """Find vocabulary tokens that contain Chinese, Japanese, or Korean text.
+
+    Parameters
+    ----------
+    tokenizer: object
+        Loaded tokenizer with ``get_vocab`` and ``decode``.
+
+    Returns
+    -------
+    tuple[int, ...]
+        Sorted token IDs whose decoded text contains such a character, or
+        an empty tuple when the vocabulary is unavailable.
+
+    """
+
+    get_vocab = getattr(tokenizer, "get_vocab", None)
+    vocabulary = get_vocab() if callable(get_vocab) else None
+    if not isinstance(vocabulary, dict):
+        return ()
+    found = []
+    for token_id in sorted(set(vocabulary.values())):
+        if not isinstance(token_id, int):
+            continue
+        text = tokenizer.decode([token_id])  # type: ignore[attr-defined]
+        if isinstance(text, str) and _CJK.search(text):
+            found.append(token_id)
+    return tuple(found)
+
+
+def _mlx_token_blocker(
+    token_ids: tuple[int, ...],
+) -> Callable[[object, object], object]:
+    """Return an MLX logits processor that blocks the given tokens.
+
+    Parameters
+    ----------
+    token_ids: tuple[int, ...]
+        Token IDs that must not be generated.
+
+    Returns
+    -------
+    Callable[[object, object], object]
+        Processor taking the tokens so far and the next-token logits, and
+        returning the logits with the blocked tokens set to minus infinity.
+
+    """
+
+    mx = import_module("mlx.core")
+    numpy = import_module("numpy")
+    penalties: dict[int, object] = {}
+
+    def block(tokens: object, logits: object) -> object:
+        """Set the logits of blocked tokens to minus infinity.
+
+        Parameters
+        ----------
+        tokens: object
+            Tokens generated so far (unused).
+        logits: object
+            Next-token logits of shape ``(..., vocabulary)``.
+
+        Returns
+        -------
+        object
+            Logits with the blocked tokens excluded.
+
+        """
+
+        size = int(logits.shape[-1])  # type: ignore[attr-defined]
+        if size not in penalties:
+            penalty = numpy.zeros(size, dtype=numpy.float32)
+            inside = [token for token in token_ids if token < size]
+            penalty[inside] = -numpy.inf
+            penalties[size] = mx.array(penalty)
+        return logits + penalties[size]  # type: ignore[operator]
+
+    return block

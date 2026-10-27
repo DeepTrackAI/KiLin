@@ -232,6 +232,9 @@ _PROFILE_RETRIEVAL_COUNT: Final[int] = require_default_int(
 _PROFILE_THINKING: Final[bool] = require_default_bool(
     _PROFILE_DEFAULTS, "THINKING", "PROJECT_PROFILE"
 )
+_PROFILE_BLOCK_UNREQUESTED_CJK: Final[bool] = require_default_bool(
+    _PROFILE_DEFAULTS, "BLOCK_UNREQUESTED_CJK", "PROJECT_PROFILE"
+)
 _PROFILE_TEMPERATURE: Final[float] = require_default_number(
     _PROFILE_DEFAULTS, "TEMPERATURE", "PROJECT_PROFILE", allow_zero=True
 )
@@ -275,6 +278,7 @@ count = {retrieval_count}
 thinking = {thinking}
 temperature = {temperature}
 max_new_tokens = {max_new_tokens}
+block_unrequested_cjk = {block_unrequested_cjk}
 """
 
 _EDITABLE_SETTINGS = {
@@ -294,6 +298,7 @@ _EDITABLE_SETTINGS = {
     "thinking": "generation",
     "temperature": "generation",
     "max_new_tokens": "generation",
+    "block_unrequested_cjk": "generation",
 }
 
 
@@ -334,6 +339,7 @@ def _default_profile_text(
         thinking=str(_PROFILE_THINKING).lower(),
         temperature=_PROFILE_TEMPERATURE,
         max_new_tokens=_PROFILE_MAX_NEW_TOKENS,
+        block_unrequested_cjk=str(_PROFILE_BLOCK_UNREQUESTED_CJK).lower(),
         backend=BACKEND_AUTO,
         chat_mlx=DEFAULT_CHAT_MODEL_MLX,
         chat_torch=DEFAULT_CHAT_MODEL_TORCH,
@@ -506,6 +512,10 @@ class ProjectProfile:
         Chat generation temperature.
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
+    block_unrequested_cjk: bool
+        Whether replies may not contain Chinese, Japanese, or Korean
+        characters unless the input contains or asks for them. Profiles
+        without this setting use ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Attributes
     ----------
@@ -545,6 +555,10 @@ class ProjectProfile:
         Chat generation temperature.
     max_new_tokens: int | None
         Optional maximum generated tokens per answer.
+    block_unrequested_cjk: bool
+        Whether replies may not contain Chinese, Japanese, or Korean
+        characters unless the input contains or asks for them. Profiles
+        without this setting use ``PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK``.
 
     Methods
     -------
@@ -580,6 +594,7 @@ class ProjectProfile:
     thinking: bool
     temperature: float
     max_new_tokens: int | None
+    block_unrequested_cjk: bool = _PROFILE_BLOCK_UNREQUESTED_CJK
 
     def chat_model(self, backend: SelectedBackend) -> str:
         """Return the chat model configured for one selected backend.
@@ -1460,6 +1475,12 @@ def _read_profile(parser: ConfigParser) -> ProjectProfile:
             parser,
             "generation",
             "max_new_tokens",
+        ),
+        # Optional, so profiles written before this setting stay valid.
+        block_unrequested_cjk=(
+            _boolean(parser, "generation", "block_unrequested_cjk")
+            if parser.has_option("generation", "block_unrequested_cjk")
+            else _PROFILE_BLOCK_UNREQUESTED_CJK
         ),
     )
 

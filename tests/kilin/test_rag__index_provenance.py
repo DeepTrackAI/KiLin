@@ -29,6 +29,9 @@ from kilin.retrievals.persistence import load_indexes
 from kilin.trace_logging import NullTraceLogger
 from tests.kilin.retrievals._support import FakeEmbeddings, chunk
 
+# Code passages are embedded with their file path in front.
+_CODE_TEXT = "src/example.py\n\nphysics diffusion"
+
 
 class TestRAGIndexProvenance(unittest.TestCase):
     """Exercise actual RAG reuse decisions without optional model libraries."""
@@ -210,7 +213,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         self.manifest = {"selected_files": ["src/example.py"]}
         _, _, status, _ = self._prepare(self._coordinator(), embedding)
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(embedding.calls, [["physics diffusion"]])
+        self.assertEqual(embedding.calls, [[_CODE_TEXT]])
         snapshot = {
             path.name: path.read_bytes()
             for path in self.index_directory.iterdir()
@@ -259,7 +262,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         first = self._embedding()
         _, original, status, _ = self._prepare(self._coordinator(), first)
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(first.calls, [["physics diffusion"]])
+        self.assertEqual(first.calls, [[_CODE_TEXT]])
         self.assertTrue(original.embedding_model_identity)
 
         second = self._embedding()
@@ -306,7 +309,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
             self._coordinator(), second
         )
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(second.calls, [["physics diffusion"]])
+        self.assertEqual(second.calls, [[_CODE_TEXT]])
         self.assertTrue(changes["configuration_changed"])
         self.assertNotEqual(
             rebuilt.embedding_model_identity, old.embedding_model_identity
@@ -326,7 +329,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         second = self._embedding()
         _, _, status, _ = self._prepare(self._coordinator(), second)
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(second.calls, [["physics diffusion"]])
+        self.assertEqual(second.calls, [[_CODE_TEXT]])
 
     def test_index_missing_integrity_fields_is_rebuilt(self) -> None:
         """Incomplete bundles do not recycle previously saved vectors.
@@ -344,7 +347,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
             self._coordinator(), second
         )
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(second.calls, [["physics diffusion"]])
+        self.assertEqual(second.calls, [[_CODE_TEXT]])
         self.assertTrue(rebuilt.embedding_model_identity)
         restored = json.loads(target.read_text(encoding="utf-8"))
         self.assertIn("payload_sha256", restored)
@@ -367,7 +370,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         second = self._embedding()
         _, _, status, _ = self._prepare(self._coordinator(), second)
         self.assertEqual(status, "rebuilt")
-        self.assertEqual(second.calls, [["physics diffusion"]])
+        self.assertEqual(second.calls, [[_CODE_TEXT]])
 
     def test_one_loaded_model_identity_is_calculated_only_once(self) -> None:
         """Source refresh must not reread large local weights repeatedly.
@@ -401,7 +404,7 @@ class TestRAGIndexProvenance(unittest.TestCase):
         )
         self.assertEqual(status, "rebuilt")
         self.assertFalse(changes["configuration_changed"])
-        self.assertEqual(second.calls, [["chemistry"]])
+        self.assertEqual(second.calls, [["src/new.py\n\nchemistry"]])
         self.assertEqual(len(result.semantic.embeddings), 2)
 
     def test_real_index_metadata_tracks_embedding_settings(self) -> None:

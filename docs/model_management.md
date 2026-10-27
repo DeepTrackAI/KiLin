@@ -85,7 +85,15 @@ session until changed, not necessarily just for one reply.
 
 1. Validates the nonblank user message and effective limit.
 2. Builds the tokenizer's chat template using the retained message history.
-3. Executes the backend's generation function.
+3. Executes the backend's generation function. Unless the history or the
+   message contains a Chinese, Japanese, or Korean character, or a word
+   asking for those scripts (`CHAT.CJK_REQUEST_WORDS`, such as "Chinese" or
+   "kanji"), vocabulary tokens containing them are blocked (an MLX logits
+   processor, or `suppress_tokens` with PyTorch), so bilingual models such
+   as Qwen3 cannot switch language mid-sentence. The trace records this as
+   `cjk_tokens_blocked`. `ChatSession(block_unrequested_cjk=False)`, or
+   `block_unrequested_cjk = false` in a project's `[generation]` profile
+   section, turns the block off.
 4. Returns a complete nonblank reply and appends the user/assistant messages
    to in-memory history only on success.
 5. Records generation timing and token statistics if tracing is enabled.

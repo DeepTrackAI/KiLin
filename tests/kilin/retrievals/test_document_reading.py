@@ -93,6 +93,55 @@ class TestDocumentPathMatching(unittest.TestCase):
             [Path("papers/lee25networks.pdf")],
         )
 
+    def test_author_names_without_year_need_author_use(self) -> None:
+        """Ordinary words do not select a file whose stem has no year.
+
+        """
+        paths = [
+            Path("docs/build_steps.md"),
+            Path("papers/smith_review.pdf"),
+            Path("papers/smith2020.pdf"),
+        ]
+        for question in (
+            "Which build options are supported?",
+            "How does the smith method work?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    dr.named_paths(question, paths[:2], authors=True), []
+                )
+        for question in (
+            "Summarize Smith's paper",
+            "summarize smith\u2019s review",
+            "what does the smith et al. paper say?",
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(
+                    dr.named_paths(question, paths[:2], authors=True),
+                    [Path("papers/smith_review.pdf")],
+                )
+        self.assertEqual(
+            dr.named_paths("How does the smith method work?", paths,
+                           authors=True),
+            [Path("papers/smith2020.pdf")],
+        )
+
+    def test_plain_word_stems_need_a_file_marker(self) -> None:
+        """A plain-word stem names its file only when marked as one.
+
+        """
+        paths = [Path("kilin/project.py"), Path("papers/hinton.pdf")]
+        for question, expected in (
+            ("How does the project type affect the query?", []),
+            ("What does the project module define?", [paths[0]]),
+            ("Explain `project` briefly.", [paths[0]]),
+            ("What does the hinton paper claim?", [paths[1]]),
+            ("Is project.py imported?", [paths[0]]),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(dr.named_paths(question, paths), expected)
+        self.assertTrue(dr._names_stem("see data_loader now", "data_loader"))
+
     def test_author_boundary_cases(self) -> None:
         """Do not match author prefixes inside unrelated words.
 

@@ -10,7 +10,7 @@
   ],
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
-  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
+  "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient. When you list functions, callers, or uses, do not claim that the list is complete unless the evidence shows it is; say that it covers the supplied evidence. If no passage shows the code that does what the question asks about, say so plainly and name the closest code you found; do not infer the mechanism from settings, names, or tests.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
     "code_graph": true
@@ -21,7 +21,7 @@
   "default_intent": "code_explanation",
   "intents": {
     "code_explanation": {
-      "description": "Explain existing code, or how parts of the repository work and connect.",
+      "description": "Explain existing code, or how parts of the repository work and connect, including where and how the code decides something (for example, how it selects, reads, or skips files).",
       "system_prompt": "Explain the code clearly, including its role and how it relates to other parts of the repository.",
       "history": {
         "policy": "relevant"
@@ -29,7 +29,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "fact_finding": {
@@ -72,7 +73,8 @@
       "retrieval": {
         "mode": "search",
         "strategy": "hybrid",
-        "include_related_evidence": true
+        "include_related_evidence": true,
+        "prefer_source_code": true
       }
     },
     "file_reading": {
@@ -94,7 +96,7 @@
       }
     },
     "project_inventory": {
-      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing).",
+      "description": "Questions about the repository's files themselves rather than what the code does: how many files or scripts it has, which files or types are included, which could not be read ('how many Python files are there?', 'list the notebooks', 'which files were not indexed?'). Not when files are filtered by what they are about ('how many of the files are related to X?' or 'which files use X?' read the files: topic_listing), and not for whether files mention or contain a name (mention_listing). Not for how the code itself selects, reads, or skips files ('where does the code decide which files to index?', 'how does the loader skip hidden files?'): that is code_explanation.",
       "history": {
         "policy": "none"
       },

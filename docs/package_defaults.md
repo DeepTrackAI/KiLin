@@ -107,6 +107,14 @@ positive integers.
 Progress throttling does not impose a checkpoint or event-retention policy.
 The tracing system retains its single enabled trace-detail behavior.
 
+## `CHAT` — model replies
+
+Owned by `kilin/chat.py`.
+
+| Key | Current value | Meaning |
+| --- | --- | --- |
+| `CJK_REQUEST_WORDS` | `["asian", "cantonese", "chinese", "cjk", "hangul", "hanja", "hanzi", "hiragana", "japanese", "kana", "kanji", "katakana", "korean", "mandarin", "pinyin", "taiwanese"]` | Lowercase words that, when present in the conversation (also with a final "s"), allow Chinese, Japanese, and Korean tokens even though the input contains no such character ("the kanji for river"). Matching ignores case and requires whole words. |
+
 ## `PROJECT_PROFILE` — values for newly created projects
 
 Owned by `kilin/project.py`. These settings are rendered into a new
@@ -124,6 +132,7 @@ intentionally different from the new-project profile settings.
 | `THINKING` | `true` | Initial thinking-mode flag in the new project profile. Must be a JSON boolean. |
 | `TEMPERATURE` | `0.0` | Initial model generation temperature; must be a finite, nonnegative number. |
 | `MAX_NEW_TOKENS` | `8192` | Initial cap for generated answer tokens, not for router decisions. |
+| `BLOCK_UNREQUESTED_CJK` | `true` | Initial `generation.block_unrequested_cjk` flag: block Chinese, Japanese, and Korean tokens in replies unless the input contains such characters or a word from `CHAT.CJK_REQUEST_WORDS`. Profiles without the setting use this value. Must be a JSON boolean. |
 
 The token targets, maximum, retrieval count, and new-token limit are
 positive exact integers. Overlap is a nonnegative exact integer and must be
@@ -176,10 +185,25 @@ corresponding function defaults.
 | `CODE_MAX_DISTANCE` | `1` | Maximum graph hops used by default in `code_search()`; zero permits only directly matched entities. |
 | `DOCUMENT_CHARACTERS_PER_TOKEN` | `4` | Approximate number of characters per token in document-budget estimation; not a tokenizer. |
 | `MIN_DOCUMENT_STEM_LENGTH` | `4` | Shortest file stem recognized as a named-document candidate. |
+| `CALLEE_EXPANSION_DEPTH` | `2` | Call steps followed from a named function when collecting its callees (1 = direct callees only). Zero disables callee expansion. |
+| `CALLEE_EXPANSION_MAX` | `4` | Most callees added to the evidence when a question names a function without asking about relationships; callees sharing words with the question come first, then nearer ones. Zero disables callee expansion. |
+| `CLASS_METHOD_EXPANSION_MAX` | `4` | Methods added when a question names a class: all of them if the class has at most this many, otherwise this many of those sharing most words with the question. Zero disables class expansion. |
+| `NAME_WORD_EXPANSION_MAX` | `2` | Most functions added because every word of their name occurs in the question, without the name itself ("its HTML templates" adds `html_template`). Only names with at least two words of four or more letters count. Zero disables this expansion. |
+| `DOCUMENTATION_NAME_EXPANSION_MAX` | `2` | Most functions added because retrieved documentation or notebook passages name them as code (an underscore, digit, or inner capital), when the name identifies one function outside test code. Zero disables this expansion. |
+| `MODULE_FUNCTION_EXPANSION_MAX` | `4` | Most top-level functions added from modules whose header (docstring and imports) was retrieved: all of a module's functions when it has at most this many, otherwise those sharing most words with the question. Zero disables this expansion. |
+| `TEST_SUBJECT_EXPANSION_MAX` | `2` | Most source functions added because a retrieved test calls them; those of the best-ranked test come first, then those sharing most words with the question. Zero disables this expansion. |
+| `RELATED_CHUNKS_MAX` | `2` | Most chunks kept from one long related function (a callee, neighbor, or class method): those mentioning a named function first, then those sharing most words with the question. Zero keeps every chunk. |
+| `RELATED_PASSAGES_MAX` | `5` | Most passages of related functions (callees, neighbors, class methods, and functions reached from retrieved documentation, module headers, and tests) added in total, ranked by the similarity of their embedding to the query; explicit files, named functions, and the neighbors asked for in a relationship question are not counted. Zero keeps all. |
+| `SOURCE_SEARCH_DEPTH` | `6` | For an intent with `retrieval.prefer_source_code`, each search channel ranks this many times the retrieval count and keeps its best source-code results (neither documentation nor test code, unless the question asks about them), so code ranked below tutorials and tests is reached. Values below 1 rank only the retrieval count. |
+| `SOURCE_SEARCH_OTHERS` | `2` | Overall best results a channel keeps besides its best source code when `SOURCE_SEARCH_DEPTH` applies, so a relevant guide still takes part in fusion. |
+| `SOURCE_SEARCH_RESULTS` | `8` | Fused results kept, instead of the retrieval count (but never fewer), for an intent with `retrieval.prefer_source_code`, so source code found deeper by the channels has room after fusion. |
+| `DOCUMENTATION_WORDS` | `["doc", "docs", "documentation", "documented", "example", "guide", "manual", "markdown", "readme", "tutorial"]` | Lowercase words (also in plural) that mark a question as being about documentation. For an intent with `retrieval.prefer_source_code`, Markdown, notebook-cell, plain-text, and PDF passages are ranked after source code unless the question contains one of them. |
 | `RELATION_PHRASES` | List of phrases | Lowercase phrases identifying questions about relationships, dependencies, or calls for deterministic context expansion. |
 
 The RRF constant and both document heuristics require positive exact
-integers. `CODE_MAX_DISTANCE` is a nonnegative exact integer.
+integers. `CODE_MAX_DISTANCE`, the nine expansion limits,
+`SOURCE_SEARCH_DEPTH`, `SOURCE_SEARCH_OTHERS`, and `SOURCE_SEARCH_RESULTS`
+are nonnegative exact integers.
 `RELATION_PHRASES` must be a nonempty list of nonempty, lowercase strings
 without leading or trailing whitespace; entries may contain spaces.
 The original vocabulary is preserved in the JSON, and the code-graph entity

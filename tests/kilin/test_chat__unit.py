@@ -1222,5 +1222,138 @@ class TestChatValidationHelpers(unittest.TestCase):
                     chat._check_system_prompt(value)
 
 
+
+class TestUnpromptedScriptBlocking(unittest.TestCase):
+    """Block Chinese, Japanese, and Korean tokens unless the input has them."""
+
+    @staticmethod
+    def _tokenizer() -> Mock:
+        """Create a tokenizer whose vocabulary mixes scripts."""
+
+        pieces = {0: "The", 1: " first", 2: "优先", 3: "、", 4: "é", 5: "の"}
+        tokenizer = Mock()
+        tokenizer.get_vocab.return_value = {
+            text: token for token, text in pieces.items()
+        }
+        tokenizer.decode.side_effect = lambda ids, **_: pieces.get(ids[0], "x")
+        tokenizer.apply_chat_template.return_value = [4, 5, 6]
+        return tokenizer
+
+    def test_finds_tokens_with_cjk_characters(self) -> None:
+        """Only tokens containing CJK characters or punctuation are found."""
+
+        self.assertEqual(chat._cjk_token_ids(self._tokenizer()), (2, 3, 5))
+        self.assertEqual(chat._cjk_token_ids(Mock()), ())
+
+    def test_reply_blocks_only_without_cjk_input(self) -> None:
+        """English input blocks the tokens; CJK input allows them."""
+
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            session.reply("Which device is used?")
+            self.assertEqual(session._blocked_token_ids(), (2, 3, 5))
+            session.reply("使用哪个设备?")
+            self.assertEqual(session._blocked_token_ids(), ())
+            session.reply("And now in English?")
+            self.assertEqual(session._blocked_token_ids(), ())
+
+    def test_request_words_allow_cjk_without_characters(self) -> None:
+        """Naming the language or script allows the tokens."""
+
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            for message in (
+                "What is the kanji for river?",
+                "Translate the abstract into Chinese.",
+                "Write it in KOREAN hangul.",
+            ):
+                session.reset()
+                session.reply(message)
+                self.assertEqual(session._blocked_token_ids(), ())
+            session.reset()
+            session.reply("Which chinesewall function is used?")
+            self.assertEqual(session._blocked_token_ids(), (2, 3, 5))
+
+    def test_blocking_can_be_turned_off(self) -> None:
+        """A session created without blocking never blocks tokens."""
+
+        session = _session(block_unrequested_cjk=False)
+        session._tokenizer = self._tokenizer()
+        with patch.object(
+            session, "_torch_reply", return_value="Answer"
+        ):
+            session.reply("Which device is used?")
+        self.assertEqual(session._blocked_token_ids(), ())
+        with patch.object(chat.ChatSession, "_load"):
+            with self.assertRaisesRegex(ValueError, "block_unrequested_cjk"):
+                chat.ChatSession(
+                    "group/model", backend="torch", block_unrequested_cjk=1
+                )
+
+    def test_torch_generation_suppresses_blocked_tokens(self) -> None:
+        """PyTorch generation receives the blocked IDs."""
+
+        session = _session()
+        torch, model, _ = TestTorchGeneration._torch_inputs([7, 99])
+        session._model = model
+        session._tokenizer = self._tokenizer()
+        session._tokenizer.eos_token_id = 99
+        session._block_cjk = True
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4, 5], 4)
+        self.assertEqual(
+            model.generate.call_args.kwargs["suppress_tokens"], [2, 3, 5]
+        )
+
+    def test_mlx_generation_uses_a_logits_processor(self) -> None:
+        """MLX generation masks the blocked IDs with minus infinity."""
+
+        numpy = __import__("numpy")
+        session = _session()
+        session._tokenizer = self._tokenizer()
+        session._block_cjk = True
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(
+            [SimpleNamespace(text="A", finish_reason="stop")]
+        )
+        modules = {
+            "mlx_lm": mlx_lm,
+            "mlx_lm.sample_utils": Mock(),
+            "mlx.core": SimpleNamespace(array=numpy.asarray),
+            "numpy": numpy,
+        }
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            session._mlx_reply([4, 5], 5)
+            (processor,) = mlx_lm.stream_generate.call_args.kwargs[
+                "logits_processors"
+            ]
+            logits = processor(None, numpy.zeros((1, 6), dtype="float32"))
+        self.assertEqual(
+            numpy.isinf(logits[0]).tolist(),
+            [False, False, True, True, False, True],
+        )
+
+    def test_nothing_blocked_keeps_generation_options(self) -> None:
+        """Without blocked tokens, MLX gets no logits processor."""
+
+        session = _session()
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(
+            [SimpleNamespace(text="A", finish_reason="stop")]
+        )
+        modules = {"mlx_lm": mlx_lm, "mlx_lm.sample_utils": Mock()}
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            session._mlx_reply([4, 5], 5)
+        self.assertNotIn(
+            "logits_processors", mlx_lm.stream_generate.call_args.kwargs
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

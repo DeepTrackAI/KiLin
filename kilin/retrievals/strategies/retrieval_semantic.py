@@ -136,6 +136,7 @@ def build_semantic_index(
     *,
     batch_size: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
+    texts: list[str] | None = None,
 ) -> SemanticIndex:
     """Embed chunks once and return their searchable semantic index.
 
@@ -151,6 +152,10 @@ def build_semantic_index(
     progress_callback: Callable[[int, int], None] | None, optional
         optional Called after each embedding batch with ``current`` and
         ``total``. Defaults to ``None``.
+    texts: list[str] | None, optional
+        Text embedded for each chunk, such as the chunk text with its file
+        path in front. ``None`` embeds the chunk texts. Defaults to
+        ``None``.
 
     Returns
     -------
@@ -175,7 +180,10 @@ def build_semantic_index(
     if progress_callback is not None and not callable(progress_callback):
         raise ValueError("progress_callback must be callable or None.")
 
-    texts = [chunk.text for chunk in chunks]
+    if texts is None:
+        texts = [chunk.text for chunk in chunks]
+    if len(texts) != len(chunks):
+        raise ValueError("Retrieval text count must match the chunks.")
     total = len(texts)
     effective_batch_size = total if batch_size is None else batch_size
     vectors: list[list[float]] = []
