@@ -307,7 +307,7 @@ function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
     const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources and updates the index; this may take a while.`)) return;
+    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources, replacing any earlier copy, and updates the index; this may take a while.`)) return;
     error.classList.add("hidden");
     setBusy(true, "Adding sources and updating the index…");
     bridge.addProjectSources(JSON.stringify(paths));
@@ -3328,8 +3328,8 @@ function onEvent(raw) {
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
     renderWorkspace(data.workspace_files);
-    // Open with references only when there are answers, unless the user chose.
-    showWorkspace(sidePanelChoice ?? Boolean(data.turns.length));
+    // Open by default, unless the user closed the panel.
+    showWorkspace(sidePanelChoice ?? true);
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -3338,6 +3338,8 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversation_opened") {
+    // An error from an earlier attempt no longer applies to this conversation.
+    clearError();
     usageTotals = data.usage || usageTotals;
     renderUsage();
     stopPhaseAnimation();
