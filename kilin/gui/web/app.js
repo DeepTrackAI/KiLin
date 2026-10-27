@@ -357,9 +357,12 @@ function showFolderCount(folder) {
  * @param depth Nesting depth; the top-level branch starts expanded.
  * @param enabled Allowed paths, or null to enable every path.
  * @param reasons Path-to-explanation mapping for skipped entries.
+ * @param selectable True gives each row a checkbox (the source preview).
+ *   False gives plain rows (the workspace tree), so clicking a file's
+ *   name does not also click its delete button.
  * @returns New details element containing the branch.
  */
-function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}) {
+function branch(name, children, paths, selection, depth = 0, enabled = null, reasons = {}, selectable = true) {
   const details = document.createElement("details");
   details.className = "tree-folder";
   const key = `${name}|${paths[0] || ""}`;
@@ -374,37 +377,44 @@ function branch(name, children, paths, selection, depth = 0, enabled = null, rea
   details.dataset.folders = String(children.directories.size);
   details.dataset.files = String(children.files.length);
   const summary = document.createElement("summary");
-  const checkbox = document.createElement("input");
-  checkbox.type = "checkbox";
-  const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
-  checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
-  checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
-  checkbox.disabled = available.length === 0;
-  checkbox.addEventListener("click", (event) => event.stopPropagation());
-  checkbox.addEventListener("change", () => {
-    available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
-    renderPreview();
-  });
-  summary.append(checkbox, document.createTextNode(name));
+  if (selectable) {
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    const available = enabled ? paths.filter((path) => enabled.has(path)) : paths;
+    checkbox.checked = available.length > 0 && available.every((path) => selection.has(path));
+    checkbox.indeterminate = available.some((path) => selection.has(path)) && !checkbox.checked;
+    checkbox.disabled = available.length === 0;
+    checkbox.addEventListener("click", (event) => event.stopPropagation());
+    checkbox.addEventListener("change", () => {
+      available.forEach((path) => checkbox.checked ? selection.add(path) : selection.delete(path));
+      renderPreview();
+    });
+    summary.append(checkbox);
+  }
+  summary.append(document.createTextNode(name));
   details.append(summary);
   const content = document.createElement("div");
   content.className = "tree-children";
   for (const [folder, node] of [...children.directories].sort()) {
-    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons));
+    content.append(branch(folder, node, allFiles(node), selection, depth + 1, enabled, reasons, selectable));
   }
   for (const file of children.files.sort()) {
-    const row = document.createElement("label");
+    // A label forwards clicks to its first control, so plain rows are divs.
+    const row = document.createElement(selectable ? "label" : "div");
     row.className = "tree-file";
     row.dataset.path = file;
-    const check = document.createElement("input");
-    check.type = "checkbox";
-    check.checked = selection.has(file);
-    check.disabled = enabled !== null && !enabled.has(file);
-    check.addEventListener("change", () => {
-      check.checked ? selection.add(file) : selection.delete(file);
-      renderPreview();
-    });
-    row.append(check, document.createTextNode(file.split("/").pop()));
+    if (selectable) {
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = selection.has(file);
+      check.disabled = enabled !== null && !enabled.has(file);
+      check.addEventListener("change", () => {
+        check.checked ? selection.add(file) : selection.delete(file);
+        renderPreview();
+      });
+      row.append(check);
+    }
+    row.append(document.createTextNode(file.split("/").pop()));
     if (reasons[file]) {
       const reason = document.createElement("small");
       reason.className = "skip-reason";
@@ -1151,11 +1161,12 @@ function renderWorkspace(paths) {
   const host = byId("workspace-tree");
   host.replaceChildren();
   const root = fileTree(paths);
-  const selected = new Set(paths);
   // Every folder comes from the core's actual workspace inventory.
   for (const [name, node] of [...root.directories].sort()) {
     const files = allFiles(node);
-    const item = branch(name, node, files, selected);
+    // Plain rows: the delete button added below must not act as a label's
+    // control, or clicking a file's name would also ask to delete it.
+    const item = branch(name, node, files, new Set(), 0, null, {}, false);
     // Sources and outputs start open; the other folders stay folded.
     const key = `${name}|${files[0] || ""}`;
     const startsOpen = name === "sources" || name === "outputs";
@@ -1164,7 +1175,6 @@ function renderWorkspace(paths) {
       if (!item.isConnected || !startsOpen) return;
       item.open ? collapsedWorkspaceFolders.delete(key) : collapsedWorkspaceFolders.add(key);
     });
-    item.querySelectorAll("input").forEach((input) => input.remove());
     [item, ...item.querySelectorAll(".tree-folder")].forEach(showFolderCount);
     item.querySelectorAll(".tree-file").forEach((line) => {
       line.tabIndex = 0;
