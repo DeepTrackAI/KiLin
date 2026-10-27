@@ -42,6 +42,8 @@ const shell = document.querySelector(".app-shell");
 let bridge = null;
 let busy = false;
 let ready = false;
+// The Settings status text that showError last wrote, cleared with it.
+let shownErrorStatus = "";
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
@@ -1600,12 +1602,28 @@ function showError(message, tracePath = "") {
     byId("cancel-model-download").classList.add("hidden");
     downloadingModel = null;
   }
+  shownErrorStatus = byId("model-download-status").textContent;
   setBusy(false);
   if (!byId("first-run-setup").classList.contains("hidden")) {
     byId("install-required").disabled = !readinessEnvironmentReady;
   }
   byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
+}
+
+/**
+ * Hide an error that no longer applies, such as after a project opens.
+ *
+ * The Settings status line is cleared only while it still shows that
+ * error's text, so later messages there (such as download progress) stay.
+ */
+function clearError() {
+  const status = byId("model-download-status");
+  if (shownErrorStatus && status.textContent === shownErrorStatus) {
+    status.textContent = "";
+  }
+  shownErrorStatus = "";
+  error.classList.add("hidden");
 }
 
 /**
@@ -3260,6 +3278,8 @@ function onEvent(raw) {
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
+    // An error from an earlier attempt no longer applies to this project.
+    clearError();
     usageTotals = data.usage || usageTotals;
     renderUsage();
     ready = true;
