@@ -1478,7 +1478,7 @@ function showFolderMenu(x, y, folder, path, isFile) {
  */
 function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nThis folder is not indexed, so nothing is rebuilt. Continue?`)) return;
+  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nIt is deleted permanently, not moved to the Trash.`)) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
