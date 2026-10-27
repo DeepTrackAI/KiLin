@@ -66,6 +66,7 @@ from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import re
+import shutil
 from zoneinfo import ZoneInfo
 
 from kilin.query_formats import format_qwen3_query
@@ -77,6 +78,7 @@ __all__ = [
     "format_query",
     "evaluate_retrieval",
     "corpus_already_written",
+    "open_or_initialize",
     "local_run_timestamp",
     "load_generation_tasks",
     "extract_cited_indices",
@@ -256,6 +258,41 @@ def corpus_already_written(directory: Path) -> bool:
     """
 
     return directory.exists() and any(directory.iterdir())
+
+
+def open_or_initialize(project_root: Path, type_id: str):
+    """Open a benchmark project, or create it in an empty folder.
+
+    Parameters
+    ----------
+    project_root: pathlib.Path
+        Benchmark project folder under ``sandbox/``.
+    type_id: str
+        Project type used when the project is created, such as ``"code"``
+        or ``"literature"``.
+
+    Returns
+    -------
+    kilin.project.QAProject
+        The existing project when ``profile.ini`` is present; otherwise a
+        new project.
+
+    Notes
+    -----
+    ``initialize_project`` only creates a project in a nonexistent or
+    empty folder, so a project from an earlier run is reopened. A folder
+    without ``profile.ini`` is left over from an interrupted run and is
+    deleted and created again.
+
+    """
+
+    from kilin.project import initialize_project, open_project
+
+    if (project_root / "profile.ini").is_file():
+        return open_project(project_root)
+    if project_root.exists():
+        shutil.rmtree(project_root)
+    return initialize_project(project_root, type_id)
 
 
 def local_run_timestamp() -> tuple[str, str]:
