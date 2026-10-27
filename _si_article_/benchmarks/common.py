@@ -275,8 +275,8 @@ def load_generation_tasks(path: Path) -> list[GenerationTask]:
     Parameters
     ----------
     path: pathlib.Path
-        A ``benchmarks/gold/*.json`` file: ``{"tasks": [...]}``, each item
-        matching ``GenerationTask``'s fields.
+        A ``_si_article_/benchmarks/gold/*.json`` file containing
+        ``{"tasks": [...]}`` entries matching ``GenerationTask``'s fields.
 
     Returns
     -------
@@ -321,7 +321,9 @@ def extract_cited_indices(answer: str) -> list[int]:
     return [int(match) for match in _CITATION_PATTERN.findall(answer)]
 
 
-def citation_validity(answer: str, evidence_count: int) -> tuple[bool, list[int]]:
+def citation_validity(
+    answer: str, evidence_count: int
+) -> tuple[bool, list[int]]:
     """Check that every ``[n]`` citation in an answer refers to real evidence.
 
     Parameters
@@ -365,8 +367,10 @@ def _parse_gold_citation(spec: str) -> tuple[str, int | None, int, int]:
     return path, cell, int(start_text), int(end_text)
 
 
-def gold_evidence_indices(evidence, gold_citations: tuple[str, ...]) -> list[int]:
-    """Which of a turn's real evidence citation numbers cover the gold citation(s).
+def gold_evidence_indices(
+    evidence, gold_citations: tuple[str, ...]
+) -> list[int]:
+    """Find evidence citations overlapping the supplied gold citations.
 
     Parameters
     ----------
@@ -403,7 +407,10 @@ def gold_evidence_indices(evidence, gold_citations: tuple[str, ...]) -> list[int
                 or item_path.endswith(gold_path)
             ):
                 continue
-            if gold_cell is not None and getattr(item, "cell", None) != gold_cell:
+            if (
+                gold_cell is not None
+                and getattr(item, "cell", None) != gold_cell
+            ):
                 continue
             if item.start_line <= gold_end and item.end_line >= gold_start:
                 matches.append(item.citation)
@@ -473,10 +480,11 @@ def abstains(answer: str) -> bool:
         default system prompt (``qachat/rag.py``'s ``_SYSTEM_PROMPT``) only
         loosely asks the model to "say when evidence is insufficient";
         some benchmark runs instead use a stronger, run-scoped override
-        (see e.g. ``benchmarks/notebooks/80_qachat_dogfood_code.ipynb``'s
-        ``_STRONGER_SYSTEM_PROMPT``) that asks for an exact "Insufficient
-        evidence." reply when the evidence *clearly* does not address the
-        question -- but even that instruction has a legitimate gap for a
+        (for example, in the ``60_qachat_dogfood_code.ipynb`` notebook,
+        under ``_si_article_/benchmarks/notebooks/``) that asks for an
+        exact "Insufficient evidence." reply when the evidence
+        *clearly* does not address the question -- but even that
+        instruction has a legitimate gap for a
         compound question the evidence only partially answers: a model
         that explains what it *does* know and then flags the unanswered
         part with that same closing phrase is abstaining correctly on that
