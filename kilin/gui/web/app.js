@@ -1545,7 +1545,7 @@ function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
   const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nThe copy in the workspace is deleted and the index is updated. Your original files outside the workspace are not changed. Saved chats are kept. Continue?`)) return;
+  if (!confirm(`Delete ${what} from this project's sources?\n\n${path}\n\nOnly the project's copy is deleted; your original stays.`)) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
