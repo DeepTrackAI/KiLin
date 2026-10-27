@@ -34,6 +34,12 @@ Key Features
     Record each copy's size and modification time when it is imported, so
     later changes to the original or to the copy can be told apart.
 
+- **Change detection**
+
+    Compare each original and its copy with the copy's stamp to tell which
+    originals changed or were deleted and which copies the user edited, and
+    update the copies on request without overwriting the user's edits.
+
 - **Selected copying**
 
     Use profile selection rules and optional per-source selections for
@@ -69,6 +75,14 @@ Module Structure
 
     Delete managed source copies and update provenance, never originals.
 
+- ``find_source_changes``
+
+    List copies whose originals changed or were deleted since import.
+
+- ``sync_project_sources``
+
+    Update or remove those copies, keeping copies the user edited.
+
 - ``include_explicit_imports``
 
     Preserve explicitly imported files during RAG source scanning.
@@ -99,7 +113,8 @@ import shutil
 from tempfile import NamedTemporaryFile
 from time import perf_counter
 from typing import (
-    Callable, Final, Mapping, NotRequired, Sequence, TypedDict, cast,
+    Callable, Final, Literal, Mapping, NotRequired, Sequence, TypedDict,
+    cast,
 )
 
 from kilin._project_creation import check_available, destination_path
@@ -118,6 +133,8 @@ __all__ = [
     "add_project_sources",
     "default_workspace_path",
     "remove_workspace_sources",
+    "find_source_changes",
+    "sync_project_sources",
     "include_explicit_imports",
 ]
 
@@ -133,6 +150,20 @@ class _CopyStamp(TypedDict):
 
     size: int
     mtime_ns: int
+
+
+class SourceChanges(TypedDict):
+    """Copies that differ from their originals, as workspace-relative paths.
+
+    ``changed`` copies can be updated from their originals and ``deleted``
+    copies removed; ``edited`` copies were changed in the project and are
+    kept even though their originals changed or were deleted.
+
+    """
+
+    changed: list[str]
+    deleted: list[str]
+    edited: list[str]
 
 
 class _SourceRecord(TypedDict):
@@ -1086,6 +1117,220 @@ def remove_workspace_sources(
                 retained.append(record)
             _write_records(manifest, retained)
     return [target.relative_to(root).as_posix() for target in targets]
+
+
+def find_source_changes(project: QAProject) -> SourceChanges:
+    """List source copies whose originals changed since they were imported.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project backed by the managed ``sources/`` directory.
+
+    Returns
+    -------
+    SourceChanges
+        Sorted workspace-relative copy paths, such as
+        ``sources/repository/main.py``, grouped as changed, deleted, or
+        edited.
+
+    Raises
+    ------
+    ValueError
+        If ``sources.json`` is invalid.
+    OSError
+        If reading the manifest or a file's metadata fails.
+
+    Notes
+    -----
+    Nothing is changed. A file counts as changed when its size or
+    modification time differs from its copy stamp, so a change that keeps
+    both is not noticed. A source whose original is missing, is an empty
+    folder, or is no longer the same kind of entry is skipped, as are files
+    without a stamp and links. Files added to an original folder after
+    import are not listed: they may have been left out on purpose.
+
+    """
+
+    root = _managed_root(project)
+    changes = SourceChanges(changed=[], deleted=[], edited=[])
+    if root is None:
+        return changes
+    records = _read_records(root / "sources.json")
+    for _record, group, _source, copy, _relative in _differences(
+        root, records
+    ):
+        changes[group].append(copy.relative_to(root).as_posix())
+    for paths in changes.values():
+        paths.sort()
+    return changes
+
+
+def sync_project_sources(project: QAProject) -> SourceChanges:
+    """Update source copies from originals that changed since import.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project backed by the managed ``sources/`` directory.
+
+    Returns
+    -------
+    SourceChanges
+        Copies updated (``changed``) and removed (``deleted``), and copies
+        kept because the user edited them (``edited``), as in
+        ``find_source_changes``.
+
+    Raises
+    ------
+    ValueError
+        If ``sources.json`` is invalid or a copy is reached through a link.
+    OSError
+        If copying, deleting, or saving ``sources.json`` fails.
+
+    Notes
+    -----
+    Changes are found again when this runs, so only what still differs is
+    touched. Originals are never changed. Updated copies get new stamps;
+    removed copies leave ``sources.json``, and folders they leave empty are
+    removed. ``sources.json`` is saved even if a later file fails. Index
+    refresh is left to the caller.
+
+    """
+
+    root = _managed_root(project)
+    done = SourceChanges(changed=[], deleted=[], edited=[])
+    if root is None:
+        return done
+    manifest = root / "sources.json"
+    records = _read_records(manifest)
+    try:
+        for record, group, source, copy, relative in _differences(
+            root, records
+        ):
+            if group == "changed":
+                _copy_file(source, copy, replace_existing=True)
+                record.setdefault("stamps", {})[relative] = _copy_stamp(copy)
+            elif group == "deleted":
+                copy.unlink()
+                record["files"] = [
+                    item for item in record.get("files", [])
+                    if item != relative
+                ]
+                record.get("stamps", {}).pop(relative, None)
+                folder = root / "sources" / record["name"]
+                parent = copy.parent
+                while parent != folder and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+            done[group].append(copy.relative_to(root).as_posix())
+    finally:
+        if any(done.values()):
+            _write_records(manifest, records)
+    for paths in done.values():
+        paths.sort()
+    return done
+
+
+def _managed_root(project: QAProject) -> Path | None:
+    """Return the project root when its sources are a managed folder.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project.
+
+    Returns
+    -------
+    pathlib.Path | None
+        Resolved project root, or None for external or linked sources.
+
+    """
+
+    if not isinstance(project, QAProject):
+        raise TypeError("Expected an opened QAProject.")
+    root = project.root.resolve(strict=True)
+    managed = root / "sources"
+    if (
+        managed.is_symlink()
+        or not managed.is_dir()
+        or project.source.resolve(strict=True) != managed
+    ):
+        return None
+    return root
+
+
+def _differences(
+    root: Path, records: list[_SourceRecord]
+) -> list[
+    tuple[
+        _SourceRecord,
+        Literal["changed", "deleted", "edited"],
+        Path,
+        Path,
+        str,
+    ]
+]:
+    """Compare each tracked original and copy with the copy's stamp.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Resolved project root with a managed ``sources/`` folder.
+    records: list[_SourceRecord]
+        Validated records from ``sources.json``.
+
+    Returns
+    -------
+    list[tuple]
+        For each differing file: its record, its group, the original file,
+        the copy, and its name relative to the source.
+
+    Notes
+    -----
+    The skipping rules are those described in ``find_source_changes``.
+
+    """
+
+    found = []
+    managed = root / "sources"
+    for record in records:
+        original = Path(record["original"])
+        destination = managed / record["name"]
+        if original.is_symlink() or destination.is_symlink():
+            continue
+        if original.is_file() and destination.is_file():
+            pairs = [
+                (original, destination, relative)
+                for relative in record.get("files", [])
+            ]
+        elif (
+            original.is_dir()
+            and destination.is_dir()
+            and any(original.iterdir())
+        ):
+            pairs = [
+                (original / relative, destination / relative, relative)
+                for relative in record.get("files", [])
+                if _is_regular_snapshot(destination, relative)
+            ]
+        else:
+            continue
+        for source, copy, relative in pairs:
+            group: Literal["changed", "deleted", "edited"]
+            stamp = record.get("stamps", {}).get(relative)
+            if stamp is None or source.is_symlink():
+                continue
+            if source.exists():
+                if not source.is_file() or _copy_stamp(source) == stamp:
+                    continue
+                group = "changed"
+            else:
+                group = "deleted"
+            if _copy_stamp(copy) != stamp:
+                group = "edited"
+            found.append((record, group, source, copy, relative))
+    return found
 
 
 def include_explicit_imports(
