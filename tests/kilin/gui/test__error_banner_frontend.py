@@ -1,10 +1,10 @@
 """Exercise clearing a stale error banner without native Qt.
 
 Run the production ``clearError`` function in Node with a minimal DOM
-adapter, and check that the ``opened`` event uses it: once a project opens,
-an error from an earlier attempt (such as a missing workspace folder) no
-longer applies. Rendering is covered only by the Qt/WebEngine smoke test
-and manual checks.
+adapter, and check that the ``opened`` and ``conversation_opened`` events
+use it: once a project or conversation opens, an error from an earlier
+attempt (such as a missing workspace folder) no longer applies. Rendering
+is covered only by the Qt/WebEngine smoke test and manual checks.
 
 """
 
@@ -24,13 +24,15 @@ _APP = _ROOT / "kilin/gui/web/app.js"
 class TestErrorBannerFrontend(unittest.TestCase):
     """Hide an error once it no longer applies."""
 
-    def test_opened_event_clears_the_error(self):
-        """The opened branch of onEvent calls clearError."""
+    def test_opened_events_clear_the_error(self):
+        """Opening a project or a conversation calls clearError."""
 
         source = _APP.read_text(encoding="utf-8")
-        start = source.index('data.event === "opened"')
-        end = source.index("} else if (data.event", start)
-        self.assertIn("clearError();", source[start:end])
+        for event in ("opened", "conversation_opened"):
+            with self.subTest(event=event):
+                start = source.index(f'data.event === "{event}"')
+                end = source.index("} else if (data.event", start)
+                self.assertIn("clearError();", source[start:end])
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_clear_error_keeps_newer_status_text(self):

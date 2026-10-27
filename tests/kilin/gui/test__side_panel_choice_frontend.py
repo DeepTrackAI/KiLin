@@ -3,8 +3,8 @@
 Run the production ``chooseSidePanels`` function in Node with a stub, and
 check the event handlers that used to close the panels on their own: a new
 chat and an empty conversation now leave them as the user left them, and
-opening a project follows the user's choice. Rendering is covered only by
-the Qt/WebEngine smoke test and manual checks.
+opening a project shows them unless the user closed them. Rendering is
+covered only by the Qt/WebEngine smoke test and manual checks.
 
 """
 
@@ -42,7 +42,7 @@ class TestSidePanelChoiceFrontend(unittest.TestCase):
         )
         self.assertNotIn("showWorkspace(false)", conversation)
         opened = _between(source, 'data.event === "opened"', "} else if")
-        self.assertIn("showWorkspace(sidePanelChoice ??", opened)
+        self.assertIn("showWorkspace(sidePanelChoice ?? true)", opened)
         toggle = _between(source, 'byId("toggle-workspace")', "});")
         self.assertIn("chooseSidePanels(", toggle)
 
