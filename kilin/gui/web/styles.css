@@ -200,7 +200,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .source-root > details { min-width: 0; }
 .source-remove { min-height: 24px; padding: 0 5px; border: 0; background: transparent; color: var(--control); font-size: 12px; font-weight: 400; }
 .side-panels { display: none; min-width: 0; max-height: 100vh; overflow: auto; border-left: 1px solid var(--line); background: var(--surface-soft); }
-.sidebar-open .side-panels { display: block; }
+.sidebar-open .side-panels { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .conversations-panel { position: sticky; top: 0; min-width: 0; height: 100vh; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--surface-soft); }
 .new-chat-button { width: 100%; min-height: 38px; border: 0; background: transparent; text-align: left; }
 .new-chat-button:hover:not(:disabled) { background: var(--hover); }
@@ -219,8 +219,20 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-panel-actions { position: absolute; right: 12px; bottom: 18px; left: 12px; display: flex; justify-content: space-between; gap: 4px; }
 .workspace-panel, .references-panel { min-width: 0; padding: 24px 16px; }
 .workspace-panel { border-bottom: 1px solid var(--line); }
+/* The divider splits the column; each panel scrolls on its own. */
+.workspace-panel { flex: 0 0 var(--workspace-share, 50%); min-height: 0; overflow: auto; }
+.references-panel { flex: 1 1 0; min-height: 0; overflow: auto; }
+/* A folded panel takes only its heading; the other gets the rest. */
+.workspace-panel:has(> details:not([open])) { flex: none; }
+.references-panel:has(> details:not([open])) { flex: none; }
+.side-panels:has(> .references-panel > details:not([open])) .workspace-panel { flex: 1 1 0; }
+.side-panels:has(> aside > details:not([open])) .side-divider { display: none; }
+.side-divider { position: relative; z-index: 1; flex: none; height: 7px; margin: -4px 0 -3px; cursor: row-resize; touch-action: none; }
+.side-divider::after { content: ""; position: absolute; right: 0; left: 0; top: 3px; height: 1px; background: transparent; transition: background 0.15s; }
+.side-divider:hover::after, .side-divider.dragging::after { top: 2px; height: 2px; background: var(--focus); }
 .workspace-panel summary, .references-panel summary { color: var(--text); cursor: pointer; font-size: 16px; font-weight: 650; }
-.workspace-panel .file-tree { max-height: 38vh; overflow: auto; font-size: 13px; line-height: 1.45; }
+/* The panel scrolls, so the tree is as tall as the divider allows. */
+.workspace-panel .file-tree { font-size: 13px; line-height: 1.45; }
 .workspace-panel .tree-folder summary, .workspace-panel .tree-file { font-size: 13px; font-weight: 400; }
 .workspace-panel .tree-file { width: fit-content; min-height: 0; padding: 1px 3px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; }
 .workspace-panel .tree-file:hover, .workspace-panel .tree-file:focus-visible { background: var(--highlight); }
@@ -376,6 +388,9 @@ button:disabled { opacity: .62; cursor: default; }
   .conversation-item { width: auto; max-width: 190px; flex: 0 0 auto; }
   .conversation-list-heading, .conversation-panel-actions { display: none; }
   .side-panels { max-height: none; border-left: 0; border-top: 1px solid var(--line); }
+  .sidebar-open .side-panels { display: block; height: auto; overflow: visible; }
+  .side-divider { display: none; }
+  .workspace-panel .file-tree { max-height: 38vh; overflow: auto; }
   .workspace { padding: 18px; }
   .chat-heading { display: block; }
   .folder-row { align-items: stretch; flex-direction: column; }
@@ -406,6 +421,7 @@ button:disabled { opacity: .62; cursor: default; }
 .panel-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background 0.15s; }
 .panel-resizer:hover::after, .panel-resizer.dragging::after { width: 2px; left: 2px; background: var(--focus); }
 body.resizing-panels { cursor: col-resize; user-select: none; }
+body.resizing-panels.resizing-rows { cursor: row-resize; }
 /* Effort levels in Settings: name, language model, reference count. */
 .level-row { display: grid; grid-template-columns: minmax(70px, 0.7fr) minmax(0, 2.4fr); gap: 8px; align-items: center; padding: 6px 0; }
 .depth-row { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; padding: 6px 0; }
