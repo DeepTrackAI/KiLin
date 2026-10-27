@@ -390,9 +390,7 @@ def expand_retrieval_context(
             name.rsplit(".", 1)[-1].casefold() for name in plan.functions
         }
         for function in plan.related_functions:
-            related_chunks = _chunks_for_functions(
-                chunks, graph, (function,)
-            )
+            related_chunks = _chunks_for_functions(chunks, graph, (function,))
             _append_unique(
                 expanded,
                 seen,
@@ -1024,9 +1022,9 @@ def _class_methods(
             for entity in graph.entities
             if entity.kind in _FUNCTION_KINDS
             and entity.name.startswith(prefix)
-            and "." not in entity.name[len(prefix):]
+            and "." not in entity.name[len(prefix) :]
             and not (
-                entity.name[len(prefix):].startswith("__")
+                entity.name[len(prefix) :].startswith("__")
                 and entity.name.endswith("__")
             )
         )
