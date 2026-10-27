@@ -157,6 +157,10 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "remove_project_sources",
             ),
             (
+                {"action": "sync_sources"},
+                "sync_sources",
+            ),
+            (
                 {"action": "edit_folder", "folder": "outputs",
                  "operation": "remove", "paths": ["report.md"]},
                 "edit_folder",
@@ -582,8 +586,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "model_download_progress", "model_download_started",
             "model_downloaded", "models_applied", "opened", "preview",
             "progress", "projects", "readiness", "reference_error",
-            "reference_preview", "reset", "settings", "status", "stopped",
-            "trace_ready", "usage_progress",
+            "reference_preview", "reset", "settings", "source_changes",
+            "status", "stopped", "trace_ready", "usage_progress",
         })
 
 

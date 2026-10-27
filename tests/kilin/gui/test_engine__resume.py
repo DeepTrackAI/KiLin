@@ -135,5 +135,65 @@ class TestEngineResume(unittest.TestCase):
                 )
 
 
+    def test_changed_originals_are_reported_after_resume(self) -> None:
+        """Send source_changes only when a copy can be updated."""
+
+        changes = {
+            "changed": ["sources/notes.md"],
+            "deleted": ["sources/repository/b.py"],
+            "edited": [],
+        }
+        with patch.object(
+            gui_engine, "find_source_changes", return_value=changes
+        ) as check:
+            self.engine.resume_project(str(self.root))
+        check.assert_called_once_with(self.project)
+        self.assertEqual(self.events, [{"event": "source_changes", **changes}])
+
+        # Nothing to update when only edited copies differ.
+        for edited in ([], ["sources/repository/a.py"]):
+            self.events.clear()
+            unchanged = {"changed": [], "deleted": [], "edited": edited}
+            with patch.object(
+                gui_engine, "find_source_changes", return_value=unchanged
+            ):
+                self.engine.resume_project(str(self.root))
+            self.assertEqual(self.events, [])
+
+    def test_failed_source_check_keeps_the_project_open(self) -> None:
+        """A failed check is not shown as an error."""
+
+        with patch.object(
+            gui_engine, "find_source_changes", side_effect=OSError("busy")
+        ):
+            self.engine.resume_project(str(self.root))
+        self.activate.assert_called_once()
+        self.assertIsNotNone(self.engine.active_conversation)
+        self.assertEqual(self.events, [])
+
+    def test_sync_updates_sources_then_reindexes(self) -> None:
+        """Syncing refreshes the index, even after a failed copy."""
+
+        session = SimpleNamespace(project=self.project)
+        self.engine.session = session
+        for failure in (None, OSError("disk full")):
+            with self.subTest(failure=failure):
+                self.events.clear()
+                with patch.object(
+                    gui_engine, "sync_project_sources", side_effect=failure,
+                    return_value={"changed": [], "deleted": [], "edited": []},
+                ) as sync, patch.object(
+                    self.engine, "_refresh_sources"
+                ) as refresh:
+                    self.engine.sync_sources()
+                sync.assert_called_once_with(self.project)
+                refresh.assert_called_once_with(self.project)
+                errors = [
+                    event for event in self.events
+                    if event["event"] == "error"
+                ]
+                self.assertEqual(len(errors), failure is not None)
+
+
 if __name__ == "__main__":
     unittest.main()

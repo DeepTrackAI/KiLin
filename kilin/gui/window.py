@@ -728,6 +728,12 @@ class ChatBridge(QObject):
             }
         )
 
+    @Slot()
+    def syncProjectSources(self) -> None:
+        """Update source copies from changed originals and reindex."""
+
+        self.commandRequested.emit({"action": "sync_sources"})
+
     @Slot(str)
     def renameProject(self, name: str) -> None:
         """Ask the backend to rename the active project directory.

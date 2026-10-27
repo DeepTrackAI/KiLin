@@ -1642,6 +1642,71 @@ function clearError() {
 }
 
 /**
+ * Count the files a sync would update or remove, and those it keeps.
+ *
+ * @param changes The ``source_changes`` event: lists of copy paths under
+ *   ``changed``, ``deleted`` and ``edited``.
+ * @returns The sentence at the top of the sync dialog.
+ */
+function sourceSyncSummary(changes) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const count = changes.changed.length + changes.deleted.length;
+  let text = `KíLín found ${files(count)} that changed in the original sources. Update the project's copies?`;
+  if (changes.edited.length) {
+    text += ` KíLín keeps the ${files(changes.edited.length)} you edited in the project.`;
+  }
+  return text;
+}
+
+/**
+ * Group the differing files under short headings, leaving out empty groups.
+ *
+ * @param changes The ``source_changes`` event.
+ * @returns Pairs of heading and paths, without the ``sources/`` prefix.
+ */
+function sourceSyncGroups(changes) {
+  return [
+    ["Changed in the original", changes.changed],
+    ["Deleted from the original", changes.deleted],
+    ["Edited in this project (kept)", changes.edited],
+  ].filter(([, paths]) => paths.length).map(([title, paths]) => [
+    title, paths.map((path) => path.replace(/^sources\//, "")),
+  ]);
+}
+
+/**
+ * Ask whether to update the project's copies from changed originals.
+ *
+ * @param changes The ``source_changes`` event.
+ */
+function showSourceSync(changes) {
+  byId("source-sync-summary").textContent = sourceSyncSummary(changes);
+  const list = byId("source-sync-files");
+  list.replaceChildren();
+  for (const [title, paths] of sourceSyncGroups(changes)) {
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    for (const path of paths) {
+      const item = document.createElement("li");
+      item.textContent = path;
+      items.append(item);
+    }
+    list.append(heading, items);
+  }
+  list.parentElement.open = false;
+  byId("source-sync").showModal();
+}
+
+byId("source-sync-keep").addEventListener("click", () => byId("source-sync").close());
+byId("source-sync-update").addEventListener("click", () => {
+  byId("source-sync").close();
+  if (busy || !bridge) return;
+  setBusy(true, "Updating sources and the index…");
+  bridge.syncProjectSources();
+});
+
+/**
  * Gate operation controls and update the visible activity state.
  *
  * @param value Whether a backend operation is active.
@@ -3371,6 +3436,8 @@ function onEvent(raw) {
         && data.citation === activeReference.citation) {
       activeReference.note.textContent = data.message;
     }
+  } else if (data.event === "source_changes") {
+    showSourceSync(data);
   } else if (data.event === "folder_changed") {
     renderWorkspace(data.workspace_files);
     setBusy(false);

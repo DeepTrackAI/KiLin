@@ -120,7 +120,9 @@ from kilin import RAGSession, prepare_sources_workspace
 from kilin.workspace import (
     add_project_sources,
     default_workspace_path,
+    find_source_changes,
     remove_workspace_sources,
+    sync_project_sources,
 )
 from kilin.project_files import (
     add_project_files,
@@ -1037,6 +1039,7 @@ class ChatEngine:
             )
             self._start_project_trace(project.root, conversation)
             self._activate_project(project, conversation)
+            self._report_source_changes(project)
         except Exception as error:
             self._report_error(
                 "gui.project.resume.failed",
@@ -1045,6 +1048,35 @@ class ChatEngine:
             )
             if self.session is None:
                 self._close_project_trace()
+
+    def _report_source_changes(self, project: QAProject) -> None:
+        """Tell the frontend which originals changed since their import.
+
+        Parameters
+        ----------
+        project: QAProject
+            Reopened project whose copies are compared with their originals.
+
+        Notes
+        -----
+        Sends ``source_changes`` only when a copy can be updated or removed,
+        so the user can choose to sync. A failed check is traced but not
+        shown: the project is already open and usable.
+
+        """
+
+        try:
+            changes = find_source_changes(project)
+        except Exception as error:
+            self.active_trace.exception(
+                "gui.sources.changes.failed", error, component="gui_engine"
+            )
+            return
+        self.active_trace.emit(
+            "gui.sources.changes.found", component="gui_engine", data=changes
+        )
+        if changes["changed"] or changes["deleted"]:
+            self._send("source_changes", **changes)
 
     def settings(self, type_id: str, workspace: str) -> None:
         """Return saved or default settings and cached model IDs.
@@ -1974,6 +2006,37 @@ class ChatEngine:
                 "gui.sources.remove.failed",
                 error,
                 f"Could not remove sources: {error}",
+            )
+
+    def sync_sources(self) -> None:
+        """Update source copies from changed originals and reindex.
+
+        Notes
+        -----
+        Copies the user edited in the project are kept. The index is
+        refreshed even if a file fails, so it matches the files on disk.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            project = self.session.project
+            self._send(
+                "status", message="Updating sources and the index…"
+            )
+            try:
+                done = sync_project_sources(project)
+                self.active_trace.emit(
+                    "gui.sources.synced", component="gui_engine", data=done
+                )
+            finally:
+                self._refresh_sources(open_project(project.root))
+        except Exception as error:
+            self._report_error(
+                "gui.sources.sync.failed",
+                error,
+                f"Could not update sources: {error}",
             )
 
     def edit_folder(
@@ -3737,6 +3800,8 @@ def main() -> None:
                         engine.add_project_sources(command["sources"])
                     elif action == "remove_project_sources":
                         engine.remove_project_sources(command["paths"])
+                    elif action == "sync_sources":
+                        engine.sync_sources()
                     elif action == "edit_folder":
                         arguments = dict(command)
                         del arguments["action"]

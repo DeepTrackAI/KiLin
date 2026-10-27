@@ -86,6 +86,7 @@ paths and source paths remain subject to downstream core validation.
 | `delete_conversation` | `conversation_id` | Archive/remove it from the visible catalog |
 | `add_project_sources` | `sources` | Add confirmed source paths and rebuild as needed |
 | `remove_project_sources` | `paths` | Remove confirmed copied project sources |
+| `sync_sources` | none | Update copies from changed originals, keep copies the user edited, and reindex |
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
@@ -143,7 +144,7 @@ can accompany an event.
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
-| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
+| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`changed`, `deleted`, `edited`), sent after a saved project reopens if copies can be updated |
 | Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
