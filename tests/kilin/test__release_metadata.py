@@ -96,7 +96,9 @@ class TestReleaseMetadata(unittest.TestCase):
         self.assertIsInstance(citation, dict)
         self.assertEqual(citation["cff-version"], "1.2.0")
         self.assertEqual(citation["type"], "software")
-        self.assertEqual(citation["title"], "KíLín")
+        self.assertEqual(
+            citation["title"], "KíLín: Your Own Private AI Assistant"
+        )
         self.assertTrue(citation["message"])
         self.assertEqual(citation["version"], project["version"])
         self.assertEqual(

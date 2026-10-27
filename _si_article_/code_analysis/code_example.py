@@ -2,7 +2,8 @@
 
 The script indexes a pinned revision of this repository as a ``code``
 project (see ``paper_numbers.prepare_code_project``) and asks the questions
-in ``paper/code_questions.json``, each in a fresh session. For every question
+in ``_si_article_/code_analysis/code_questions.json``, each in a fresh
+session. For every question
 it records, from the session trace:
 
 - the intent chosen by the router;
@@ -14,15 +15,18 @@ it records, from the session trace:
   it, or the context expansion.
 
 Each question is also put to the same chat model without any retrieval, as a
-control. Results are written to ``paper/results/`` as JSON, together with a
+control. Results are written to ``_si_article_/code_analysis/results/``
+as JSON, together with a
 Markdown worksheet for grading the answers by hand against the facts listed
 in the question file.
 
 Usage, from the repository root::
 
-    uv run --no-sync python paper/code_example.py
-    uv run --no-sync python paper/code_example.py --ref v0.1.0
-    uv run --no-sync python paper/code_example.py --sets evaluation
+    uv run --no-sync python _si_article_/code_analysis/code_example.py
+    uv run --no-sync python _si_article_/code_analysis/code_example.py \\
+        --ref v0.1.0
+    uv run --no-sync python _si_article_/code_analysis/code_example.py \\
+        --sets evaluation
 
 Models must already be in the local Hugging Face cache unless
 ``--allow-download`` is given.
@@ -41,11 +45,11 @@ import re
 import sys
 from time import perf_counter
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from paper.paper_numbers import (  # noqa: E402
+from _si_article_.code_analysis.paper_numbers import (  # noqa: E402
     DEFAULT_EXCLUDES,
     corpus_size,
     describe_environment,
@@ -54,8 +58,9 @@ from paper.paper_numbers import (  # noqa: E402
     routed_intent,
 )
 
-QUESTIONS_FILE = REPOSITORY_ROOT / "paper" / "code_questions.json"
-OUTPUT_DIRECTORY = REPOSITORY_ROOT / "paper" / "results"
+ANALYSIS_DIRECTORY = Path(__file__).resolve().parent
+QUESTIONS_FILE = ANALYSIS_DIRECTORY / "code_questions.json"
+OUTPUT_DIRECTORY = ANALYSIS_DIRECTORY / "results"
 
 # The control question goes to the same chat model without evidence.
 BASELINE_SYSTEM_PROMPT = (

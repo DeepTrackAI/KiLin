@@ -312,8 +312,12 @@ class TestCoreDefaultIntegration(unittest.TestCase):
 
         settings = defaults.load_defaults_section("RAG")
         values = {
-            "EMBEDDING_PROGRESS_BATCH_SIZE": rag._EMBEDDING_PROGRESS_BATCH_SIZE,
-            "PROGRESS_MIN_INTERVAL_SECONDS": rag._PROGRESS_MIN_INTERVAL_SECONDS,
+            "EMBEDDING_PROGRESS_BATCH_SIZE": (
+                rag._EMBEDDING_PROGRESS_BATCH_SIZE
+            ),
+            "PROGRESS_MIN_INTERVAL_SECONDS": (
+                rag._PROGRESS_MIN_INTERVAL_SECONDS
+            ),
             "PROGRESS_TRACE_PERCENT_STEP": rag._PROGRESS_TRACE_PERCENT_STEP,
             "MAX_REUSED_EVIDENCE": rag._MAX_REUSED_EVIDENCE,
             "MAX_RELATED_EVIDENCE": rag._MAX_RELATED_EVIDENCE,

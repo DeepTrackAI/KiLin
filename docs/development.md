@@ -28,10 +28,10 @@ assets/                # Maintenance/benchmark notebooks and helpers
 .github/workflows/     # CI tests, package and documentation validation
 tutorials/             # Progressive notebooks, some SVG examples
 docs/                  # Architecture and reference documentation
-_si_article_/          # Paper work, benchmarks and local source corpora
+_si_article_/          # Paper work, benchmarks and source corpora
     benchmarks/         # Tracked notebooks/gold; empty run workspaces
-    code_repo/          # Local-only contents, omitted from source ZIP
-    literature_repo/    # Local-only contents, omitted from source ZIP
+    code_repo/          # Git-tracked corpus; export directory empty
+    literature_repo/    # Git-tracked corpus; export directory empty
     code_analysis/      # Tracked code-analysis manuscript files
     reference_analysis/ # Placeholder .gitkeep for now
 sandbox/               # Local development workspaces; export empty
@@ -44,9 +44,14 @@ trace logging, project types and custom tools. Notebook examples are not a
 substitute for production API tests and must not rely on changes to hidden
 per-user files. `assets/clean_repository.ipynb` supports a controlled clean
 source export. Within `_si_article_/`, benchmark sources are included but
-benchmark run workspaces and the local code/literature corpora are exported
-empty. The `code_analysis/` directory includes Git-tracked paper files;
-move any existing untracked `paper/` content there and stage it explicitly.
+benchmark run workspaces and both code/literature corpus directories are
+exported empty. The populated `code_repo/` and `literature_repo/` folders
+may remain tracked in Git; ZIP exclusion is independent of `.gitignore`.
+Neither corpus needs a `.gitkeep`. The `code_analysis/` directory includes
+Git-tracked analysis scripts, questions and recorded results. Its scripts
+exclude `_si_article_/` from the indexed evaluation corpus by default;
+this is separate from the source ZIP export policy. See the
+[article guide](../_si_article_/README.md) for commands and paths.
 `reference_analysis/` contains only `.gitkeep` for now.
 `assets/benchmark_traces.ipynb` analyzes diagnostic traces without
 production timing hooks.

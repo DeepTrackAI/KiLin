@@ -14,18 +14,24 @@ measures, through the public Python API:
 
 Each opening writes its own trace file, so measurements of earlier runs are
 never mixed in. Results are written as timing-only JSON to
-``paper/results/`` and printed as the values to copy into the manuscript.
+``_si_article_/code_analysis/results/`` and printed as the values to copy
+into the manuscript.
 Prompts, answers and retrieved passages are not exported; they stay in the
 trace of the sandbox workspace under ``sandbox/paper_numbers/``.
 
 Usage, from the repository root::
 
-    uv run --no-sync python paper/paper_numbers.py
-    uv run --no-sync python paper/paper_numbers.py --ref v0.1.0 --repeats 3
+    uv run --no-sync python _si_article_/code_analysis/paper_numbers.py
+    uv run --no-sync python _si_article_/code_analysis/paper_numbers.py \\
+        --ref v0.1.0 --repeats 3
 
 Models must already be in the local Hugging Face cache unless
 ``--allow-download`` is given. The sandbox workspace is reused between runs;
-its saved indexes are deleted before the cold opening.
+its saved indexes are deleted before the cold opening. Evaluation
+materials, including ``_si_article_``, are excluded by default.
+``--include-examples`` disables those exclusions for exploratory runs;
+such runs can retrieve the questions or previous answers and must not
+be reported as uncontaminated evaluation.
 
 """
 
@@ -47,7 +53,7 @@ import shutil
 from tempfile import gettempdir
 from time import perf_counter
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
@@ -59,7 +65,7 @@ from assets.trace_benchmark import (  # noqa: E402
 # The sandbox workspace (project, indexes and traces) stays out of version
 # control; the timing results are kept with the other paper results.
 WORKSPACE_DIRECTORY = REPOSITORY_ROOT / "sandbox" / "paper_numbers"
-RESULTS_DIRECTORY = REPOSITORY_ROOT / "paper" / "results"
+RESULTS_DIRECTORY = Path(__file__).resolve().parent / "results"
 
 # Each question names code entities, so the code graph can take part, and
 # has an answer that can be checked against the indexed source:
@@ -172,19 +178,22 @@ def describe_environment() -> dict[str, object]:
 # Left out of the indexed corpus by default:
 # - example_repos: bundled third-party example corpora (about 66 MB of text),
 #   not part of the KíLín code base; indexing them would take hours;
-# - assets, benchmarks, paper: measurement, benchmark and paper scripts,
-#   which contain the evaluation questions themselves and would be
-#   retrieved as evidence.
+# - assets and _si_article_: measurement scripts, evaluation questions,
+#   previous results and source corpora must not become answer evidence;
+# - benchmarks and paper: legacy locations in older pinned revisions.
 DEFAULT_EXCLUDES: tuple[str, ...] = (
     "example_repos",
     "assets",
+    "_si_article_",
     "benchmarks",
     "paper",
 )
 
 
 def export_revision(
-    ref: str, destination: Path, excludes: Sequence[str] = ()
+    ref: str,
+    destination: Path,
+    excludes: Sequence[str] = DEFAULT_EXCLUDES,
 ) -> dict[str, object]:
     """Export one committed revision of this repository with git archive.
 
@@ -195,7 +204,10 @@ def export_revision(
     destination: pathlib.Path
         Empty directory that receives the exported files.
     excludes: Sequence[str], optional
-        Top-level folders left out of the export.
+        Top-level folders left out of the export. Defaults to
+        ``DEFAULT_EXCLUDES``, which omits evaluation materials and
+        supplementary corpora. An explicit empty sequence includes
+        them and is unsuitable for uncontaminated evaluation.
 
     Returns
     -------
@@ -533,7 +545,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--include-examples",
         action="store_true",
-        help="also index example_repos, assets, benchmarks and paper (slow)",
+        help=(
+            "also index example_repos, assets, _si_article_ and legacy "
+            "analysis folders (slow; includes evaluation material)"
+        ),
     )
     parser.add_argument(
         "--allow-download",

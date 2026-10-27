@@ -175,7 +175,7 @@ from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
 )
-from kilin.project import PROJECT_KIND_CODE, QAProject, open_project
+from kilin.project import QAProject, open_project
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
@@ -199,8 +199,10 @@ from kilin.retrievals import (
     CodeGraph,
     DocumentSelection,
     HybridResult,
+    LexicalIndex,
     PersistentIndexes,
     SemanticIndex,
+    SemanticResult,
     build_code_graph,
     build_lexical_index,
     build_semantic_index,
@@ -209,13 +211,21 @@ from kilin.retrievals import (
     hybrid_search,
     lexical_search,
     load_indexes,
-    plan_retrieval,
+    plan_context_expansion,
     prepare_persistent_indexes,
     read_document,
     save_indexes,
     semantic_search,
 )
-from kilin.retrievals.routing import demote_test_results
+from kilin.retrievals.context_expansion import (
+    SOURCE_SEARCH_DEPTH,
+    SOURCE_SEARCH_RESULTS,
+    _chunks_for_functions,
+    demote_documentation,
+    demote_test_results,
+    names_code,
+    prefer_source_results,
+)
 from kilin.runtime import BACKEND_MLX, SelectedBackend, choose_backend
 from kilin.sources import (
     SourceFile,
@@ -314,6 +324,15 @@ _SYSTEM_PROMPT = (
 # SHA-256 of its bytes, so unchanged files (slow PDFs above all) are not read
 # again when sources are re-indexed.
 _TEXT_CACHE: Final[str] = "source_text.json"
+# How indexed text is built from passages (``_retrieval_text``); a change
+# rebuilds saved indexes.
+RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
+# Longest module summary put in front of a code passage for searching.
+_SUMMARY_MAX_CHARACTERS: Final[int] = 200
+# Opening of a module docstring, after optional comment lines.
+_MODULE_DOCSTRING: Final[re.Pattern[str]] = re.compile(
+    r"\A(?:[ \t]*(?:#[^\n]*)?\n)*[ \t]*[rRuU]?(\"\"\"|\'\'\')"
+)
 # Most items a reused-evidence answer keeps; oldest evidence is dropped.
 _MAX_REUSED_EVIDENCE: Final[int] = require_default_int(
     _RAG_DEFAULTS, "MAX_REUSED_EVIDENCE", "RAG"
@@ -410,6 +429,11 @@ class Evidence:
         ``.ipynb`` source. None for every other source type. Required to tell
         two notebook cells apart when they happen to share the same local
         start_line/end_line range. Defaults to ``None``.
+    context_role: "direct" | "related" | "alternative" | None, optional
+        Retrieval provenance: a requested target, supporting context, or an
+        unresolved name-match alternative. ``None`` denotes unclassified
+        evidence, including records saved before this field was added.
+        Defaults to ``None``.
 
     Attributes
     ----------
@@ -436,6 +460,8 @@ class Evidence:
         ``.ipynb`` source. None for every other source type. Required to tell
         two notebook cells apart when they happen to share the same local
         start_line/end_line range.
+    context_role: "direct" | "related" | "alternative" | None
+        Retrieval provenance, not an assessment of factual correctness.
 
     Notes
     -----
@@ -454,6 +480,7 @@ class Evidence:
     symbol: str | None
     text: str
     cell: int | None = None
+    context_role: Literal["direct", "related", "alternative"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -599,7 +626,7 @@ class RAGSession:
     backend: "mlx" | "torch"
         Selected model backend.
     index_status: str
-        Either reused or rebuilt for this opening.
+        Either ``reused``, ``rebuilt``, or ``empty`` for this opening.
     turns: list[ConversationTurn]
         Previous and current persisted interactions.
     conversation_path: pathlib.Path
@@ -870,9 +897,10 @@ class RAGSession:
                 thinking=profile.thinking,
                 temperature=profile.temperature,
                 max_new_tokens=profile.max_new_tokens,
-                system_prompt=project_type(profile.kind).system_prompt,
+                system_prompt=project_type(profile.type_id).system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
+                block_unrequested_cjk=profile.block_unrequested_cjk,
             )
             self._emit_progress(
                 "loading_conversation",
@@ -1363,11 +1391,11 @@ class RAGSession:
 
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
-            kind = project_type(self.project.profile.kind)
+            config = project_type(self.project.profile.type_id)
             decision = self._route(
-                question, kind, use_router, turn_id, report_phase
+                question, config, use_router, turn_id, report_phase
             )
-            intent = kind.intents[decision.intent]
+            intent = config.intents[decision.intent]
             # Resolve once, including for tool-written answers. An explicit
             # empty string disables the project default, not intent guidance.
             if intent.answer_guidance:
@@ -1375,7 +1403,7 @@ class RAGSession:
             elif answer_guidance is not None:
                 resolved_guidance = answer_guidance
             else:
-                resolved_guidance = kind.answer_guidance
+                resolved_guidance = config.answer_guidance
             if resolved_guidance or answer_guidance is not None:
                 effective["answer_guidance"] = resolved_guidance
             mode = intent.retrieval_mode
@@ -1387,20 +1415,20 @@ class RAGSession:
                 component="rag",
                 data={
                     "policy": intent.history_policy,
-                    "recent_turns": kind.recent_turns,
+                    "recent_turns": config.recent_turns,
                 },
                 turn_id=turn_id,
             ):
                 history_ids = select_history(
                     len(self.turns),
                     intent.history_policy,
-                    kind.recent_turns,
+                    config.recent_turns,
                     decision,
                 )
             recent_ids = select_history(
                 len(self.turns),
                 HISTORY_POLICY_RECENT,
-                kind.recent_turns,
+                config.recent_turns,
                 decision,
             )
             trace.emit(
@@ -1470,6 +1498,12 @@ class RAGSession:
                     "strategy": intent.retrieval_strategy,
                     "intent": intent.intent_id,
                     "query_extended": search_text not in (None, question),
+                    "prefer_source_code": intent.prefer_source_code,
+                    "source_search_depth": (
+                        SOURCE_SEARCH_DEPTH
+                        if intent.prefer_source_code
+                        else None
+                    ),
                 },
                 turn_id=turn_id,
             )
@@ -1517,6 +1551,7 @@ class RAGSession:
                         ANSWER_PHASE_RETRIEVING, message=message
                     ),
                     scope=scope,
+                    prefer_source_code=intent.prefer_source_code,
                 )
                 found = len(evidence)
                 related_turns = [
@@ -1609,7 +1644,7 @@ class RAGSession:
                     token_callback(answer)
             else:
                 system_prompt = (
-                    f"{kind.system_prompt}\n\n{intent.system_prompt}"
+                    f"{config.system_prompt}\n\n{intent.system_prompt}"
                 )
                 # The model sees only the selected turns (questions and
                 # answers, without their evidence), so the history is
@@ -1628,7 +1663,7 @@ class RAGSession:
                     component="rag",
                     data={
                         "machine_state": MACHINE_STATE_ANSWERING,
-                        "project_type": kind.kind,
+                        "project_type_id": config.id,
                         "intent": intent.intent_id,
                         "history_turn_ids": history_ids,
                         "history_message_count": 2 * len(history_ids),
@@ -1644,7 +1679,19 @@ class RAGSession:
                     message="Generating answer",
                     evidence_count=len(evidence),
                 )
-                reply_options: dict[str, object] = {"trace_turn_id": turn_id}
+                reply_options: dict[str, object] = {
+                    "trace_turn_id": turn_id,
+                    "language_context": (
+                        *(
+                            message["content"]
+                            for message in history_messages(
+                                self.turns, history_ids
+                            )
+                            if message["role"] == USER_ROLE
+                        ),
+                        question,
+                    ),
+                }
                 if token_callback is not None:
                     reply_options["token_callback"] = token_callback
                 answer = self.chat_session.reply(prompt, **reply_options)
@@ -2125,7 +2172,8 @@ class RAGSession:
         self.router_model = model_id
 
     def router_reply(
-        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int
+        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int,
+        language_context: Sequence[str] = (),
     ) -> str:
         """Ask the router model a side question, such as a chat title.
 
@@ -2137,6 +2185,9 @@ class RAGSession:
             The side question.
         max_new_tokens: int
             Maximum length of the reply.
+        language_context: Sequence[str], optional
+            Original user messages for CJK permission, not generated prompt
+            or answer text. Defaults to ``()`` for internal side requests.
 
         Returns
         -------
@@ -2150,6 +2201,7 @@ class RAGSession:
             system,
             prompt,
             max_new_tokens=max_new_tokens,
+            language_context=language_context,
         )
 
     def usage_mark(self: RAGSession) -> dict[int, tuple[int, int]]:
@@ -2249,7 +2301,7 @@ class RAGSession:
             report = include_explicit_imports(self.project, report)
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
-        use_code_graph = project_type(profile.kind).code_graph is not False
+        use_code_graph = project_type(profile.type_id).code_graph is not False
 
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
@@ -2447,7 +2499,11 @@ class RAGSession:
         self._emit_progress(
             "building_code_graph",
             56.0,
-            f"Building code graph from {len(chunks)} chunks...",
+            (
+                f"Building source relationships from {len(chunks)} chunks..."
+                if use_code_graph and source_files
+                else "No source relationships to build; skipping graph"
+            ),
             current=len(chunks),
             total=len(chunks),
         )
@@ -2485,7 +2541,7 @@ class RAGSession:
         -------
         tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]
             Tuple (chunks, indexes, index_status, source_changes), where status
-            is reused or rebuilt.
+            is ``reused``, ``rebuilt``, or ``empty``.
 
         Raises
         ------
@@ -2499,6 +2555,8 @@ class RAGSession:
         reuse. Existing vectors are loaded only if the stored bundle is
         accepted. Source completeness is not checked here; index and metadata
         files are written separately rather than as one transaction.
+        Empty collections keep a current inventory in memory but write no
+        retrieval bundle. Search is skipped until sources yield chunks.
 
         """
 
@@ -2542,23 +2600,6 @@ class RAGSession:
         metadata_path = self.project.indexes / "settings.json"
         manifest_path = self.project.indexes / "source_manifest.json"
         expected_metadata = self._index_metadata()
-        # Bind the saved vectors to the actual loaded model, not merely to
-        # its configured ID or directory path. Cache identity on the loaded
-        # session so source refreshes do not rehash large local weight files.
-        model_source = getattr(embedding_session, "model_source", None)
-        if not isinstance(model_source, str):
-            raise ValueError("The embedding model source is unavailable.")
-        model_identity = getattr(
-            embedding_session, "_retrieval_model_identity", None
-        )
-        if model_identity is None:
-            model_identity = embedding_model_identity(
-                embedding_session.model_id, model_source
-            )
-            embedding_session._retrieval_model_identity = model_identity
-        expected_metadata["embedding_model_source"] = model_source
-        expected_metadata["embedding_model_identity"] = model_identity
-
         saved_manifest: dict[str, object] | None = None
         saved_metadata: dict[str, object] | None = None
         if manifest_path.is_file():
@@ -2585,6 +2626,33 @@ class RAGSession:
                     saved_metadata = value
             except (OSError, json.JSONDecodeError):
                 saved_metadata = None
+
+        if not selected_count:
+            changes["configuration_changed"] = (
+                saved_metadata is None
+                or any(
+                    saved_metadata.get(key) != value
+                    for key, value in expected_metadata.items()
+                )
+            )
+            return self._empty_retrieval(changes, current_manifest)
+
+        # Bind the saved vectors to the actual loaded model, not merely to
+        # its configured ID or directory path. Cache identity on the loaded
+        # session so source refreshes do not rehash large local weight files.
+        model_source = getattr(embedding_session, "model_source", None)
+        if not isinstance(model_source, str):
+            raise ValueError("The embedding model source is unavailable.")
+        model_identity = getattr(
+            embedding_session, "_retrieval_model_identity", None
+        )
+        if model_identity is None:
+            model_identity = embedding_model_identity(
+                embedding_session.model_id, model_source
+            )
+            embedding_session._retrieval_model_identity = model_identity
+        expected_metadata["embedding_model_source"] = model_source
+        expected_metadata["embedding_model_identity"] = model_identity
 
         configuration_changed = saved_metadata != expected_metadata
         changes["configuration_changed"] = configuration_changed
@@ -2650,6 +2718,7 @@ class RAGSession:
                     85.0,
                     "Saved retrieval index loaded.",
                 )
+                self._current_source_manifest = current_manifest
                 return (
                     list(indexes.semantic.chunks),
                     indexes,
@@ -2717,6 +2786,8 @@ class RAGSession:
             report=report,
             cached_chunks=cached_chunks,
         )
+        if not chunks:
+            return self._empty_retrieval(changes, current_manifest)
         # A chunk is embedded unless an identical saved chunk has a vector.
         pending_chunks = [
             chunk
@@ -2754,10 +2825,18 @@ class RAGSession:
                 "batch_size": _EMBEDDING_PROGRESS_BATCH_SIZE,
             },
         ):
+            # Code passages are embedded with their file path and module
+            # summary in front, so a function is found by what its module
+            # is about even when its own name and code do not say it.
+            summaries = _module_summaries(chunks)
             fresh_semantic = (
                 build_semantic_index(
                     pending_chunks,
                     embedding_session,
+                    texts=[
+                        _retrieval_text(chunk, summaries)
+                        for chunk in pending_chunks
+                    ],
                     batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
                     progress_callback=(
                         lambda current, total: self._emit_count_progress(
@@ -2809,7 +2888,10 @@ class RAGSession:
             component="rag",
             data={"chunk_count": len(chunks)},
         ):
-            lexical = build_lexical_index(chunks)
+            lexical = build_lexical_index(
+                chunks,
+                texts=[_retrieval_text(chunk, summaries) for chunk in chunks],
+            )
         indexes = prepare_persistent_indexes(
             semantic,
             lexical,
@@ -2850,7 +2932,53 @@ class RAGSession:
             85.0,
             "Retrieval index saved.",
         )
+        self._current_source_manifest = current_manifest
         return chunks, indexes, "rebuilt", changes
+
+    def _empty_retrieval(
+        self,
+        changes: dict[str, object],
+        manifest: dict[str, object],
+    ) -> tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]:
+        """Represent an empty source collection without persisting an index.
+
+        Parameters
+        ----------
+        changes: dict[str, object]
+            Source and configuration changes detected by the current scan.
+        manifest: dict[str, object]
+            Current source inventory, retained in memory for tool coverage.
+
+        Returns
+        -------
+        tuple[list[Chunk], PersistentIndexes, str, dict[str, object]]
+            Empty chunks, an in-memory retrieval container, the status
+            ``empty``, and the supplied change report.
+
+        Notes
+        -----
+        Persistence still requires real chunks. Old on-disk caches, when
+        present, are left untouched and are not consulted for this session's
+        evidence. Adding sources runs normal indexing on the next refresh.
+
+        """
+
+        self._current_source_manifest = manifest
+        indexes = PersistentIndexes(
+            fingerprint="",
+            semantic=SemanticIndex((), ()),
+            lexical=LexicalIndex((), (), {}),
+            code_graph=CodeGraph((), ()),
+        )
+        self.trace.emit(
+            "index.empty", component="rag",
+            data={"chunk_count": 0, "changes": changes},
+        )
+        self._emit_progress(
+            "index_ready", 85.0,
+            "No source passages to index; ready without retrieval evidence.",
+        )
+        return [], indexes, "empty", changes
 
     def _retrieve(
         self: RAGSession,
@@ -2860,6 +2988,7 @@ class RAGSession:
         trace_turn_id: str | None = None,
         status_callback: Callable[[str], None] | None = None,
         scope: Sequence[Path] = (),
+        prefer_source_code: bool = False,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -2878,10 +3007,18 @@ class RAGSession:
             Receives a short message before and after each search step, for
             progress display. Defaults to ``None``.
         scope: Sequence[pathlib.Path], optional
-            Documents the question is limited to, from ``document_scope``.
-            When it holds exactly one path, only that document's passages
-            are kept (if it has any); otherwise every document is searched.
-            Defaults to ``()``.
+            Preferred documents from ``document_scope``. A single path
+            supplies the initial passages when available, but cross-file
+            expansion remains allowed. Requested sources are prioritized
+            and evidence provenance is labeled. Defaults to ``()``.
+        prefer_source_code: bool, optional
+            Let each channel rank ``SOURCE_SEARCH_DEPTH`` times deeper and
+            keep its best source-code results (``prefer_source_results``),
+            then rank documentation and notebook passages after source code
+            (unless the question asks about documentation;
+            ``demote_documentation``) and keep ``SOURCE_SEARCH_RESULTS``
+            fused results (at least the retrieval count). Defaults to
+            ``False``.
 
         Returns
         -------
@@ -2896,9 +3033,12 @@ class RAGSession:
         capped by retrieval_count. Trace details use previews; the evidence
         records keep full chunk text.
 
-        A one-document scope ranks every chunk again (see
-        ``_rank_everything``) so that document's best passages are found even
-        when they are outside the project-wide top results.
+        The semantic loop already scores every chunk. Retain that complete
+        ranking for related-passage scoring and for ``_rank_everything``
+        when focusing on one document, without an additional query embedding.
+        This keeps the document's best passages available even when outside
+        the project-wide top results. Query scores are local to this call;
+        they are never reused across different queries or indexes.
 
         """
 
@@ -2916,6 +3056,9 @@ class RAGSession:
             if status_callback is not None:
                 status_callback(message)
 
+        if not self.chunks:
+            report("No indexed source passages; skipping retrieval")
+            return ()
         count = retrieval_count or self.project.profile.retrieval_count
         report("Formatting the search query")
         query_text = self._format_query(question)
@@ -2934,19 +3077,47 @@ class RAGSession:
             data=query_data,
             turn_id=trace_turn_id,
         )
+        # When the intent prefers source code, each channel ranks deeper and
+        # keeps its best source-code results (``prefer_source_results``).
+        depth = count * SOURCE_SEARCH_DEPTH if prefer_source_code else count
+        depth = max(depth, count)
+
+        def keep(results: list) -> list:
+            """Keep a channel's results for fusion.
+
+            Parameters
+            ----------
+            results: list
+                One channel's results, ranked to ``depth``.
+
+            Returns
+            -------
+            list
+                Its best source-code results and overall best few when the
+                intent prefers source code; otherwise the results.
+
+            """
+
+            if depth == count:
+                return results
+            return prefer_source_results(results, question, count)
+
         with trace.span(
             "retrieval.semantic",
             component="retrieval",
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
-            semantic = semantic_search(
+            # The loop scorer already ranks every chunk. Retain its scores
+            # for focused retrieval and expansion, without embedding again.
+            semantic_results = semantic_search(
                 self.indexes.semantic,
                 query_text,
                 self.embedding_session,
-                count=count,
+                count=max(depth, len(self.chunks)),
                 trace_turn_id=trace_turn_id,
             )
+            semantic = keep(semantic_results[:depth])
         trace.emit(
             "retrieval.semantic.ranked",
             component="retrieval",
@@ -2963,10 +3134,12 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Running lexical search")
-            lexical = lexical_search(
-                self.indexes.lexical,
-                question,
-                count=count,
+            lexical = keep(
+                lexical_search(
+                    self.indexes.lexical,
+                    question,
+                    count=depth,
+                )
             )
         trace.emit(
             "retrieval.lexical.ranked",
@@ -2983,23 +3156,30 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
-            report(
-                "Searching the code graph"
-                if self.project.profile.kind == PROJECT_KIND_CODE
-                else "Checking structured relationships"
-            )
-            # The graph is empty without code files or when the project type
-            # turns it off; there is nothing to search then.
-            code = (
-                code_search(
-                    self.indexes.code_graph,
-                    self.chunks,
-                    question,
-                    count=count,
+            if not self.indexes.code_graph.entities:
+                code = []
+                report(
+                    "No source relationships indexed; skipping graph search"
                 )
-                if self.indexes.code_graph.entities
-                else []
-            )
+            elif not names_code(question, self.indexes.code_graph):
+                # The graph channel follows named code; matching the words
+                # of a prose question to identifiers only adds noise.
+                code = []
+                report("No code named in the question; skipping graph search")
+            else:
+                report("Searching relationships between source entities")
+                code = keep(
+                    code_search(
+                        self.indexes.code_graph,
+                        self.chunks,
+                        question,
+                        count=depth,
+                    )
+                )
+                report(
+                    "Relationship search ranked "
+                    f"{len(code)} results"
+                )
         trace.emit(
             "retrieval.code.ranked",
             component="retrieval",
@@ -3009,21 +3189,22 @@ class RAGSession:
             ),
             turn_id=trace_turn_id,
         )
-        report(
-            f"Code graph search ranked {len(code)} results"
-            if self.project.profile.kind == PROJECT_KIND_CODE
-            else f"Structured relationship search found {len(code)} results"
-        )
         report("Combining and ranking search results")
         # Fuse every candidate, then rank test code after source code (unless
-        # the question is about tests) before keeping the top results.
+        # the question is about tests) and, when the intent prefers source
+        # code, documentation before tests, before keeping the top results.
         candidates = hybrid_search(
             semantic=semantic,
             lexical=lexical,
             code=code,
             count=max(count, len(semantic) + len(lexical) + len(code)),
         )
-        combined = demote_test_results(candidates, question)[:count]
+        if prefer_source_code:
+            candidates = demote_documentation(candidates, question)
+        kept = (
+            max(count, SOURCE_SEARCH_RESULTS) if prefer_source_code else count
+        )
+        combined = demote_test_results(candidates, question)[:kept]
         trace.emit(
             "retrieval.hybrid.ranked",
             component="retrieval",
@@ -3035,13 +3216,16 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
-        # A question about one document ("in this paper", "in smith2020")
-        # ranks that document's passages only.
+        # A named document supplies the primary passages; expansion may
+        # still add useful context from elsewhere in the repository.
         named = list(scope)
         if len(named) == 1:
             focused = [
                 result
-                for result in self._rank_everything(question, trace_turn_id)
+                for result in self._rank_everything(
+                    question, trace_turn_id,
+                    semantic_results=semantic_results,
+                )
                 if result.chunk.path == named[0]
             ][:count]
             if focused:
@@ -3054,7 +3238,11 @@ class RAGSession:
                     turn_id=trace_turn_id,
                 )
 
-        plan = plan_retrieval(question, self.indexes.code_graph)
+        # Every fused candidate, not only the kept top results, may lead to
+        # code: retrieved documentation, module headers, and tests.
+        plan = plan_context_expansion(
+            question, self.indexes.code_graph, candidates
+        )
         plan_data = asdict(plan)
         expansion_requested = any(
             bool(plan_data.get(name))
@@ -3086,12 +3274,60 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         report("Expanding related context")
+        # Related passages compete for a fixed number of places, by the
+        # similarity of their embedding to the query's.
+        relevance = (
+            self._passage_relevance(semantic_results)
+            if plan.related_functions
+            else None
+        )
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
             self.indexes.code_graph,
             plan,
+            relevance,
         )
+        direct_paths = set(plan.paths) | set(scope)
+        direct_ids = {
+            chunk.identifier for chunk in _chunks_for_functions(
+                self.chunks, self.indexes.code_graph, plan.functions
+            )
+        }
+        alternative_ids = {
+            chunk.identifier for chunk in _chunks_for_functions(
+                self.chunks, self.indexes.code_graph,
+                plan.alternative_functions,
+            )
+        }
+
+        def context_role(
+            chunk: Chunk,
+        ) -> Literal["direct", "related", "alternative"]:
+            """Describe a chunk's relationship to the requested target.
+
+            Parameters
+            ----------
+            chunk: Chunk
+                Retrieved or expanded source passage.
+
+            Returns
+            -------
+            "direct" | "related" | "alternative"
+                Provenance category; an explicit target takes precedence.
+
+            """
+
+            if chunk.path in direct_paths or chunk.identifier in direct_ids:
+                return "direct"
+            if chunk.identifier in alternative_ids:
+                return "alternative"
+            return "related"
+
+        # Preserve ranking inside each group, but never let an alternative
+        # displace the explicitly requested target in the answer context.
+        priorities = {"direct": 0, "related": 1, "alternative": 2}
+        expanded.sort(key=lambda chunk: priorities[context_role(chunk)])
         expansion_data: dict[str, object] = {
             "rrf_count": len(combined),
             "expanded_count": len(expanded),
@@ -3123,6 +3359,7 @@ class RAGSession:
                 symbol=chunk.symbol,
                 text=chunk.text,
                 cell=chunk.cell,
+                context_role=context_role(chunk),
             )
             for index, chunk in enumerate(expanded, start=1)
         )
@@ -3138,6 +3375,7 @@ class RAGSession:
                         "start_line": item.start_line,
                         "end_line": item.end_line,
                         "symbol": item.symbol,
+                        "context_role": item.context_role,
                         "text_sha256": sha256(
                             item.text.encode("utf-8")
                         ).hexdigest(),
@@ -3203,6 +3441,13 @@ class RAGSession:
         """
 
         trace = getattr(self, "trace", NullTraceLogger())
+        language_context = (
+            *(
+                turn.question
+                for turn in reversed(self._earlier_turns(decision))
+            ),
+            question,
+        )
 
         def ask(chat: object) -> Callable[[str, str, int], str]:
             """Adapt a chat session to the tools' side-question callback.
@@ -3222,7 +3467,8 @@ class RAGSession:
             """
 
             return lambda system, prompt, tokens: side_reply(
-                chat, system, prompt, max_new_tokens=tokens
+                chat, system, prompt, max_new_tokens=tokens,
+                language_context=language_context,
             )
 
         # ``ask_model`` answers silently; ``write`` streams a tool's final
@@ -3243,6 +3489,7 @@ class RAGSession:
                 prompt,
                 max_new_tokens=tokens,
                 token_callback=token_callback,
+                language_context=language_context,
             ),
             model_id=str(getattr(self.chat_session, "model_id", "")),
             progress=lambda message, **details: report_phase(
@@ -3338,8 +3585,9 @@ class RAGSession:
     def _source_files(self: RAGSession) -> dict[Path, int]:
         """Return selected source files and sizes from the source manifest.
 
-        A missing or unreadable manifest gives an empty mapping; tools use
-        the result only for inventories and coverage reports.
+        Prefer the current in-memory scan, including an empty collection,
+        over an older saved manifest. A missing or unreadable manifest gives
+        an empty mapping; tools use this for inventories and coverage reports.
 
         Returns
         -------
@@ -3351,7 +3599,10 @@ class RAGSession:
 
         manifest = self.project.indexes / "source_manifest.json"
         try:
-            files = json.loads(manifest.read_text(encoding="utf-8"))["files"]
+            current = getattr(self, "_current_source_manifest", None)
+            if current is None:
+                current = json.loads(manifest.read_text(encoding="utf-8"))
+            files = current["files"]
             return {
                 Path(name): int(entry.get("size_bytes", 0))
                 for name, entry in files.items()
@@ -3381,7 +3632,11 @@ class RAGSession:
         return [path for path in self._source_files() if path not in known]
 
     def _rank_everything(
-        self: RAGSession, text: str, trace_turn_id: str | None = None
+        self: RAGSession,
+        text: str,
+        trace_turn_id: str | None = None,
+        *,
+        semantic_results: Sequence[SemanticResult] | None = None,
     ) -> list[HybridResult]:
         """Rank every chunk for a text with the fused search channels.
 
@@ -3391,6 +3646,10 @@ class RAGSession:
             Text to rank chunks against.
         trace_turn_id: str | None, optional
             Turn identifier for trace events. Defaults to ``None``.
+        semantic_results: Sequence[SemanticResult] | None, optional
+            Complete semantic ranking already computed for this same query
+            and index. ``None`` performs semantic search. This private reuse
+            boundary avoids another model call. Defaults to ``None``.
 
         Returns
         -------
@@ -3400,13 +3659,18 @@ class RAGSession:
 
         """
 
+        if not self.chunks:
+            return []
         everything = len(self.chunks)
-        semantic = semantic_search(
-            self.indexes.semantic,
-            self._format_query(text),
-            self.embedding_session,
-            count=everything,
-            trace_turn_id=trace_turn_id,
+        semantic = (
+            semantic_search(
+                self.indexes.semantic,
+                self._format_query(text),
+                self.embedding_session,
+                count=everything,
+                trace_turn_id=trace_turn_id,
+            )
+            if semantic_results is None else list(semantic_results)
         )
         lexical = lexical_search(self.indexes.lexical, text, count=everything)
         code = (
@@ -3514,7 +3778,7 @@ class RAGSession:
         profile = self.project.profile
         if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
-        instruction = project_type(profile.kind).retrieval_instruction
+        instruction = project_type(profile.type_id).retrieval_instruction
         return format_qwen3_query(question, instruction)
 
     def _system_prompt(self: RAGSession) -> str:
@@ -3529,12 +3793,12 @@ class RAGSession:
 
         """
 
-        return project_type(self.project.profile.kind).system_prompt
+        return project_type(self.project.profile.type_id).system_prompt
 
     def _route(
         self: RAGSession,
         question: str,
-        kind: object,
+        config: object,
         use_router: bool,
         turn_id: str,
         report_phase: Callable[..., None],
@@ -3548,7 +3812,7 @@ class RAGSession:
         ----------
         question: str
             User question to classify.
-        kind: object
+        config: object
             Loaded project type with its intents and default intent.
         use_router: bool
             Whether to call the router instead of selecting the default intent.
@@ -3568,7 +3832,7 @@ class RAGSession:
         started = perf_counter()
         if not use_router:
             decision = RouteDecision(
-                intent=kind.default_intent,
+                intent=config.default_intent,
                 standalone=not self.turns,
                 fallback="routing off",
             )
@@ -3579,8 +3843,8 @@ class RAGSession:
                 component="rag",
                 data={
                     "machine_state": MACHINE_STATE_ANSWERING,
-                    "project_type": kind.kind,
-                    "intents": list(kind.intents),
+                    "project_type_id": config.id,
+                    "intents": list(config.intents),
                     "turn_count": len(self.turns),
                     "router_model": self.router_model,
                 },
@@ -3593,9 +3857,9 @@ class RAGSession:
                 turn_id=turn_id,
             ):
                 decision = route_question(
-                    self._router_chat(), kind, self.turns, question
+                    self._router_chat(), config, self.turns, question
                 )
-        intent = kind.intents[decision.intent]
+        intent = config.intents[decision.intent]
         data: dict[str, object] = {
             "classification": {
                 "intent": decision.intent,
@@ -3716,8 +3980,50 @@ class RAGSession:
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
             trace=self.trace,
+            block_unrequested_cjk=(
+                self.project.profile.block_unrequested_cjk
+            ),
             **settings,
         )
+
+    def _passage_relevance(
+        self: RAGSession, results: Sequence[SemanticResult]
+    ) -> Callable[[Chunk], float]:
+        """Reuse validated cosine scores from the current semantic search.
+
+        Parameters
+        ----------
+        results: Sequence[SemanticResult]
+            Complete semantic ranking for the current query and index.
+
+        Returns
+        -------
+        Callable[[Chunk], float]
+            The existing cosine similarity, or minus infinity for a passage
+            absent from the ranking. No embedding or vector rescoring occurs.
+
+        """
+
+        scores = {result.chunk.identifier: result.score for result in results}
+
+        def score(chunk: Chunk) -> float:
+            """Look up one passage's semantic score.
+
+            Parameters
+            ----------
+            chunk: Chunk
+                Indexed passage.
+
+            Returns
+            -------
+            float
+                Cosine similarity, or minus infinity without a saved score.
+
+            """
+
+            return scores.get(chunk.identifier, float("-inf"))
+
+        return score
 
     def _index_metadata(self: RAGSession) -> dict[str, object]:
         """Return settings that determine reusable index compatibility.
@@ -3738,7 +4044,7 @@ class RAGSession:
 
         profile = self.project.profile
         metadata: dict[str, object] = {
-            "project_kind": profile.kind,
+            "project_type_id": profile.type_id,
             "backend": self.backend,
             "embedding_model": profile.embedding_model(self.backend),
             "query_format": profile.query_format,
@@ -3749,8 +4055,10 @@ class RAGSession:
             "overlap_tokens": profile.overlap_tokens,
         }
         # Recorded only when off, so existing indexes stay valid by default.
-        if project_type(profile.kind).code_graph is False:
+        if project_type(profile.type_id).code_graph is False:
             metadata["code_graph"] = False
+        # Indexes built from plain chunk text are rebuilt once.
+        metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
         # Projects that read PDFs re-index when the PDF text extractor
         # changes; other projects are unaffected.
         if ".pdf" in profile.extensions:
@@ -3785,7 +4093,7 @@ class RAGSession:
         profile = self.project.profile
         return {
             **self._index_metadata(),
-            "project_kind": profile.kind,
+            "project_type_id": profile.type_id,
             "source": str(self.project.source),
             "backend_preference": profile.backend,
             "allow_download": profile.allow_download,
@@ -4365,7 +4673,13 @@ def _add_related_evidence(
                 extra.append(item)
     start = len(fresh) + 1
     return fresh + tuple(
-        replace(item, citation=number)
+        replace(
+            item, citation=number,
+            context_role=(
+                "related" if item.context_role == "direct"
+                else item.context_role
+            ),
+        )
         for number, item in enumerate(extra, start)
     )
 
@@ -4403,7 +4717,14 @@ def _merge_evidence(
                 ordered.append(item)
     kept = ordered[-_MAX_REUSED_EVIDENCE:]
     return tuple(
-        replace(item, citation=number) for number, item in enumerate(kept, 1)
+        replace(
+            item, citation=number,
+            context_role=(
+                "related" if item.context_role == "direct"
+                else item.context_role
+            ),
+        )
+        for number, item in enumerate(kept, 1)
     )
 
 
@@ -4433,8 +4754,9 @@ def _answer_prompt(
     Notes
     -----
     Evidence text is inserted without semantic validation. The current label
-    includes path, line range, and optional symbol, but not notebook cell or
-    PDF page metadata. This is prompt construction, not instruction isolation
+    includes path, line range, optional symbol and context role, but not
+    notebook cell or PDF page metadata. This is prompt construction, not
+    instruction isolation
     for untrusted source text.
 
     """
@@ -4453,8 +4775,18 @@ def _answer_prompt(
             f"{item.start_line}-{item.end_line}"
         )
         symbol = f" ({item.symbol})" if item.symbol else ""
-        sections.append(f"[{item.citation}] {location}{symbol}\n{item.text}")
+        role = (
+            f" [context: {item.context_role}]" if item.context_role else ""
+        )
+        sections.append(
+            f"[{item.citation}] {location}{symbol}{role}\n{item.text}"
+        )
     sections.append(
+        "Prioritize direct evidence about the requested target. "
+        "Related evidence can explain dependencies or alternatives. "
+        "An alternative name match is not proof of identity: attribute it to "
+        "its actual source and do not equate differently qualified symbols "
+        "without supporting evidence. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
         "after the claims they support. Do not repeat the source text or "
         "write a bibliography."
@@ -4546,6 +4878,7 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
             ),
             text=str(item["text"]),
             cell=(int(item["cell"]) if item.get("cell") is not None else None),
+            context_role=_evidence_context_role(item.get("context_role")),
         )
         for item in evidence_data
     )
@@ -4559,6 +4892,33 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
         evidence=evidence,
         parameters=parameters,
     )
+
+
+def _evidence_context_role(
+    value: object,
+) -> Literal["direct", "related", "alternative"] | None:
+    """Validate optional evidence provenance when restoring saved turns.
+
+    Parameters
+    ----------
+    value: object
+        Stored context role, or ``None`` for older evidence records.
+
+    Returns
+    -------
+    "direct" | "related" | "alternative" | None
+        Recognized provenance category.
+
+    Raises
+    ------
+    ValueError
+        If the saved category is unknown.
+
+    """
+
+    if value is None or value in ("direct", "related", "alternative"):
+        return value
+    raise ValueError("Saved evidence has an invalid context_role.")
 
 
 def _resume_checkpoint_id(snapshot: dict[str, object]) -> str:
@@ -4701,3 +5061,75 @@ def _ranked_trace_data(
                 row[name] = getattr(result, name)
         rows.append(row)
     return {"count": len(rows), "results": rows}
+
+
+def _module_summaries(chunks: Sequence[Chunk]) -> dict[Path, str]:
+    """Return the first docstring line of each Python module.
+
+    Parameters
+    ----------
+    chunks: Sequence[Chunk]
+        All indexed passages.
+
+    Returns
+    -------
+    dict[pathlib.Path, str]
+        For each file whose first passage is Python module context that
+        starts with a docstring (after optional comment lines), the
+        docstring's first nonblank line (at most
+        ``_SUMMARY_MAX_CHARACTERS`` characters).
+
+    """
+
+    summaries: dict[Path, str] = {}
+    for chunk in chunks:
+        if (
+            chunk.kind != "python_module_context"
+            or chunk.start_line != 1
+            or chunk.path in summaries
+        ):
+            continue
+        # A long docstring can continue in the next passage, so the text is
+        # matched rather than parsed.
+        match = _MODULE_DOCSTRING.match(chunk.text)
+        if match is None:
+            continue
+        body = chunk.text[match.end():].split(match.group(1), 1)[0]
+        lines = [line.strip() for line in body.splitlines()]
+        first = next((line for line in lines if line), "")
+        if first:
+            summaries[chunk.path] = first[:_SUMMARY_MAX_CHARACTERS]
+    return summaries
+
+
+def _retrieval_text(chunk: Chunk, summaries: dict[Path, str]) -> str:
+    """Return the text indexed for one passage.
+
+    Parameters
+    ----------
+    chunk: Chunk
+        Indexed passage.
+    summaries: dict[pathlib.Path, str]
+        First docstring lines of Python modules (``_module_summaries``).
+
+    Returns
+    -------
+    str
+        For Python and MATLAB code, the file path, then the module summary
+        when there is one, then the passage text; for other passages, the
+        passage text.
+
+    Notes
+    -----
+    Only searching sees this text: evidence, citations, and the answering
+    model keep the passage text itself.
+
+    """
+
+    if not str(chunk.kind).startswith(("python_", "matlab_")):
+        return chunk.text
+    header = [chunk.path.as_posix()]
+    summary = summaries.get(chunk.path)
+    if summary and chunk.kind != "python_module_context":
+        header.append(summary)
+    return "\n".join([*header, "", chunk.text])
