@@ -79,12 +79,16 @@ The resource is loaded once per process, not watched for hot reload.
 Missing keys, invalid types and incompatible values raise errors; the
 validator does not rewrite or repair the shipped resource.
 
-The sections are `DEFAULT_MODELS`, `REPOSITORY`, `ANSWERING`, `RAG`,
+The sections are `DEFAULT_MODELS`, `REPOSITORY`, `ANSWERING`, `RAG`, `CHAT`,
 `PROJECT_PROFILE`, `CHUNKING`, `PROJECT_TYPES`, and `RETRIEVAL`. The
 `DEFAULT_MODELS` section provides initial MLX/PyTorch chat and embedding
 identifiers. `PROJECT_TYPES` provides bounded fallbacks for fields omitted
 in an intent (for example a default document token budget); it does not
-select which intent should answer an arbitrary question.
+select which intent should answer an arbitrary question. `CHAT` owns the
+language/script vocabulary used in positive CJK output requests; a keyword
+mention alone does not grant permission. The per-project `[generation]`
+`block_unrequested_cjk` flag controls whether suppression is enabled, with
+`PROJECT_PROFILE.BLOCK_UNREQUESTED_CJK` as the fallback for older profiles.
 
 Changing scanner exclusions or the answer-routing heuristic vocabulary in
 this JSON changes future operations and can affect previously created

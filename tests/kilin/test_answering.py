@@ -150,6 +150,7 @@ class _FakeChat:
         *,
         max_new_tokens: int | None = None,
         token_callback: Callable[[str], None] | None = None,
+        language_context: tuple[str, ...] = (),
     ) -> str:
         """Capture the side-request state and simulate a model response.
 
@@ -161,6 +162,8 @@ class _FakeChat:
             Explicit generation length. Defaults to ``None``.
         token_callback: object, optional
             Receives generated text when supplied. Defaults to ``None``.
+        language_context: tuple[str, ...], optional
+            Original user messages for script policy. Defaults to ``()``.
 
         Returns
         -------
@@ -177,6 +180,7 @@ class _FakeChat:
                 "temperature": self.temperature,
                 "history": [dict(item) for item in self.messages],
                 "token_callback": token_callback,
+                "language_context": language_context,
             }
         )
         self.messages.append({"role": USER_ROLE, "content": message})
@@ -311,6 +315,7 @@ class TestSideReply(unittest.TestCase):
                         {"role": SYSTEM_ROLE, "content": "Side instructions"}
                     ],
                     "token_callback": None,
+                    "language_context": (),
                 }
             ],
         )

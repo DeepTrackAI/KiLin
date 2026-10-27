@@ -1240,9 +1240,9 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
         return tokenizer
 
     def test_finds_tokens_with_cjk_characters(self) -> None:
-        """Only tokens containing CJK characters or punctuation are found."""
+        """Only tokens containing CJK script characters are found."""
 
-        self.assertEqual(chat._cjk_token_ids(self._tokenizer()), (2, 3, 5))
+        self.assertEqual(chat._cjk_token_ids(self._tokenizer()), (2, 5))
         self.assertEqual(chat._cjk_token_ids(Mock()), ())
 
     def test_reply_blocks_only_without_cjk_input(self) -> None:
@@ -1254,14 +1254,14 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
             session, "_torch_reply", return_value="Answer"
         ):
             session.reply("Which device is used?")
-            self.assertEqual(session._blocked_token_ids(), (2, 3, 5))
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
             session.reply("使用哪个设备?")
             self.assertEqual(session._blocked_token_ids(), ())
             session.reply("And now in English?")
-            self.assertEqual(session._blocked_token_ids(), ())
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
 
     def test_request_words_allow_cjk_without_characters(self) -> None:
-        """Naming the language or script allows the tokens."""
+        """Explicit language or script requests allow the tokens."""
 
         session = _session()
         session._tokenizer = self._tokenizer()
@@ -1278,7 +1278,7 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
                 self.assertEqual(session._blocked_token_ids(), ())
             session.reset()
             session.reply("Which chinesewall function is used?")
-            self.assertEqual(session._blocked_token_ids(), (2, 3, 5))
+            self.assertEqual(session._blocked_token_ids(), (2, 5))
 
     def test_blocking_can_be_turned_off(self) -> None:
         """A session created without blocking never blocks tokens."""
@@ -1308,7 +1308,7 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
         with patch.object(chat, "import_module", return_value=torch):
             session._torch_reply([4, 5], 4)
         self.assertEqual(
-            model.generate.call_args.kwargs["suppress_tokens"], [2, 3, 5]
+            model.generate.call_args.kwargs["suppress_tokens"], [2, 5]
         )
 
     def test_mlx_generation_uses_a_logits_processor(self) -> None:
@@ -1336,7 +1336,7 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
             logits = processor(None, numpy.zeros((1, 6), dtype="float32"))
         self.assertEqual(
             numpy.isinf(logits[0]).tolist(),
-            [False, False, True, True, False, True],
+            [False, False, True, False, False, True],
         )
 
     def test_nothing_blocked_keeps_generation_options(self) -> None:

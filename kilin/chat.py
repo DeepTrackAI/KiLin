@@ -86,7 +86,7 @@ can also be the model id.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 import gc
 from importlib import import_module
 from math import isfinite
@@ -133,21 +133,53 @@ _ROLES: Final[frozenset[Role]] = frozenset(
     (SYSTEM_ROLE, USER_ROLE, ASSISTANT_ROLE)
 )
 
-# Chinese, Japanese, and Korean characters and their punctuation. Bilingual
-# models such as Qwen3 occasionally switch to Chinese mid-sentence; tokens
-# containing these characters are blocked unless the input contains one.
+# Curated Unicode 17.0 Han, kana, Hangul, and Bopomofo ranges. Deliberately
+# exclude general punctuation, fullwidth Latin, and unrelated Asian scripts.
+# See docs/model_management.md for the coverage and tokenizer limitations.
 _CJK: Final[re.Pattern[str]] = re.compile(
-    "[\u3000-\u303f\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff"
-    "\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]"
+    "[\u1100-\u11ff\u2e80-\u2fdf\u3041-\u3096\u3099-\u309f"
+    "\u30a1-\u30fa\u30fc-\u30ff\u3105-\u312f\u3131-\u318e"
+    "\u31a0-\u31bf\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff"
+    "\ua960-\ua97f\uac00-\ud7a3\ud7b0-\ud7ff\uf900-\ufaff"
+    "\uff66-\uff9f\uffa0-\uffdc\U0001aff0-\U0001afff"
+    "\U0001b000-\U0001b16f\U00020000-\U0002a6df"
+    "\U0002a700-\U0002ee5f\U0002f800-\U0002fa1f"
+    "\U00030000-\U0003347f]"
 )
-# Words that ask for those scripts without containing them ("the kanji for
-# river", "translate it into Chinese"); any of them also allows the tokens.
 _CJK_REQUEST_WORDS: Final = require_default_lowercase_words(
     load_defaults_section("CHAT"), "CJK_REQUEST_WORDS", "CHAT"
 )
+_CJK_LANGUAGE = (
+    r"(?:" + "|".join(map(re.escape, sorted(_CJK_REQUEST_WORDS))) + r")s?"
+)
 _CJK_REQUEST: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:" + "|".join(map(re.escape, sorted(_CJK_REQUEST_WORDS)))
-    + r")s?\b",
+    r"\b(?:in|into|using)\s+(?:(?:simplified|traditional|the)\s+)*"
+    + _CJK_LANGUAGE + r"\b|"
+    r"\b(?:use|include|show|write|print|quote|give|provide|output)\s+"
+    r"(?:(?:me|a|the|some|its|original|simplified|traditional)\s+)*"
+    + _CJK_LANGUAGE + r"\b|"
+    r"\b" + _CJK_LANGUAGE
+    + r"\s+(?:for|translation|equivalent|characters?|spelling|version)\b|"
+    r"^\s*" + _CJK_LANGUAGE + r"(?:,?\s+(?:please|only))?[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_CJK_NEGATIVE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:do\s+not|don['\u2019]t|never|avoid|without|no|exclude|stop)\b"
+    r"[^,.!?;\n]{0,80}\b" + _CJK_LANGUAGE + r"\b|"
+    r"\b" + _CJK_LANGUAGE
+    + r"(?:\s+\w+){0,3}\s+not\s+(?:needed|wanted|allowed|requested)\b",
+    re.IGNORECASE,
+)
+# Recognize common explicit switches away from CJK without treating every
+# occurrence of a language name as an instruction. This is not a parser.
+_LATIN_LANGUAGE = (
+    r"(?:english|french|german|spanish|italian|portuguese|swedish|"
+    r"norwegian|danish|dutch|finnish|icelandic|polish|czech|turkish|"
+    r"pinyin|romaji|romanized\s+\w+|latin(?:[- ]script|\s+letters)?)"
+)
+_NON_CJK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:in|into|use|using)\s+(?:only\s+)?" + _LATIN_LANGUAGE
+    + r"\b|\b" + _LATIN_LANGUAGE + r"\s+(?:only|please)\b",
     re.IGNORECASE,
 )
 
@@ -208,8 +240,9 @@ class ChatSession:
         Caller-owned trace sink. None selects a NullTraceLogger. Content
         retention depends on the sink and its flags. Defaults to ``None``.
     block_unrequested_cjk: bool, optional
-        Block Chinese, Japanese, and Korean tokens unless the input contains
-        or asks for them. Defaults to ``True``.
+        Best-effort suppression of unsolicited Chinese, Japanese, and
+        Korean script tokens, based on user-authored text. Defaults to
+        ``True``.
 
     Attributes
     ----------
@@ -247,8 +280,8 @@ class ChatSession:
     -------
     configure_generation(settings, *, trace_turn_id=None)
         Update generation settings after validating all supplied values.
-    reply(message, *, max_new_tokens=None, trace_turn_id=None)
-        Generate, return, and retain one assistant reply.
+    reply(message, *, language_context=None, **generation_options)
+        Generate and retain a reply, with optional original-user context.
     reset()
         Reset the conversation while keeping the model loaded.
     restore_history(messages)
@@ -276,11 +309,21 @@ class ChatSession:
     do not create a separate security boundary. Backend and Hub errors may
     propagate without conversion to RuntimeError.
 
-    With ``block_unrequested_cjk``, tokens containing Chinese, Japanese,
-    or Korean characters cannot be generated unless the history or the new
-    message contains such a character or a word asking for those scripts
-    (``CHAT.CJK_REQUEST_WORDS``, such as "Chinese" or "kanji"), so a reply
-    cannot switch to those languages mid-sentence.
+    With ``block_unrequested_cjk``, token suppression reduces unsolicited
+    CJK output. Only original user messages authorize those scripts, by
+    using them or positively requesting them. Later negative directives or
+    explicit switches to English override earlier authorization. Merely
+    discussing Japanese, or requesting Latin-script pinyin, does not grant
+    permission. System instructions and assistant replies never grant it.
+    Supply ``reply(language_context=...)`` when the prompt contains evidence
+    or generated instructions; RAG and tool adapters do this automatically.
+
+    Suppression is best-effort, not a language guarantee: script detection
+    uses curated Unicode ranges and a deterministic request heuristic, and
+    characters assembled from multiple byte-level tokens can escape the
+    standalone-token mask. Ordinary punctuation and fullwidth Latin are not
+    suppressed. Disable the setting for workflows requiring unrestricted
+    multilingual quotations or tokenizer-specific handling.
 
     """
 
@@ -354,8 +397,8 @@ class ChatSession:
             Caller-owned trace sink. None selects a NullTraceLogger. Content
             retention depends on the sink and its flags. Defaults to ``None``.
         block_unrequested_cjk: bool, optional
-            Block Chinese, Japanese, and Korean tokens unless the input
-            contains or asks for them. Defaults to ``True``.
+            Best-effort suppression of unsolicited Chinese, Japanese, and
+            Korean script tokens. Defaults to ``True``.
 
         Raises
         ------
@@ -581,6 +624,7 @@ class ChatSession:
         max_new_tokens: int | None = None,
         trace_turn_id: str | None = None,
         token_callback: Callable[[str], None] | None = None,
+        language_context: Sequence[str] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -605,6 +649,13 @@ class ChatSession:
             Receives decoded text pieces as they are generated, for live
             display. MLX streams; PyTorch calls it once with the whole reply.
             Its exceptions propagate. Defaults to ``None``.
+        language_context: Sequence[str] | None, optional
+            Original user-authored messages, oldest first with the current
+            question last, used only for CJK permission. Supply this when
+            ``message`` contains retrieved or generated material. An empty
+            sequence grants no permission. ``None`` uses user-role history
+            plus ``message``, appropriate for direct chat. Defaults to
+            ``None``. System and assistant messages are never inspected.
 
         Returns
         -------
@@ -619,7 +670,8 @@ class ChatSession:
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has
             exhausted the model context.
-            Also raised when ``token_callback`` is not callable.
+            Also raised when ``token_callback`` is not callable or
+            ``language_context`` is not a sequence of strings.
 
         Notes
         -----
@@ -641,6 +693,20 @@ class ChatSession:
 
         if token_callback is not None and not callable(token_callback):
             raise ValueError("token_callback must be callable or None.")
+
+        if language_context is None:
+            user_texts = [
+                item["content"] for item in self.messages
+                if item["role"] == USER_ROLE
+            ] + [message]
+        elif (
+            isinstance(language_context, (str, bytes))
+            or not isinstance(language_context, Sequence)
+            or not all(isinstance(text, str) for text in language_context)
+        ):
+            raise ValueError("language_context must be a sequence of text.")
+        else:
+            user_texts = language_context
 
         reply_started_at = perf_counter()
         token_override = _check_max_new_tokens(max_new_tokens)
@@ -671,11 +737,10 @@ class ChatSession:
         if token_budget is None:
             token_budget = self._remaining_context(len(tokens))
 
-        self._block_cjk = self.block_unrequested_cjk and not any(
-            _CJK.search(item["content"])
-            or _CJK_REQUEST.search(item["content"])
-            for item in messages
+        self._block_cjk = (
+            self.block_unrequested_cjk and not _allows_cjk(user_texts)
         )
+        blocked = self._blocked_token_ids()
         input_data: dict[str, object] = {
             "call_id": self.trace.new_id("llm-call"),
             "call_count_for_question": 1,
@@ -694,7 +759,9 @@ class ChatSession:
                 "temperature": self.temperature,
                 "max_new_tokens": token_budget,
                 "sampling": self.temperature > 0,
-                "cjk_tokens_blocked": self._block_cjk,
+                "cjk_blocking_requested": self._block_cjk,
+                "cjk_tokens_blocked": bool(blocked),
+                "cjk_suppressed_token_count": len(blocked),
             },
             "chat_template": {
                 "add_generation_prompt": True,
@@ -1156,8 +1223,8 @@ class ChatSession:
         The IDs are found once per loaded tokenizer by decoding every
         vocabulary entry. A tokenizer without a ``get_vocab`` mapping
         blocks nothing. Characters split across several byte-level tokens
-        are not blocked, but such tokens are rare compared with whole
-        characters.
+        are not blocked. No assumption is made about how often a tokenizer
+        uses that representation. Special tokens are never suppressed.
 
         """
 
@@ -1353,6 +1420,57 @@ def _check_system_prompt(value: str | None) -> str | None:
     return value.strip()
 
 
+def _allows_cjk(user_messages: Sequence[str]) -> bool:
+    """Resolve best-effort CJK permission from user-authored text only.
+
+    Parameters
+    ----------
+    user_messages: Sequence[str]
+        Original user messages in chronological order. Retrieved material,
+        system instructions, and assistant output must not be included.
+
+    Returns
+    -------
+    bool
+        Whether CJK output was authorized. Later explicit directives
+        supersede earlier ones. A negative or non-CJK directive overrides
+        script characters quoted in the same message; an affirmative CJK
+        directive after it can explicitly reauthorize output.
+
+    Notes
+    -----
+    Ordinary mentions of a language are not requests to use its script.
+    This deterministic English-directive heuristic is not a general natural
+    language interpreter. Unspecified follow-ups retain the latest user
+    decision, including authorization from actual script use.
+
+    """
+
+    allowed = False
+    for text in user_messages:
+        negative = list(_CJK_NEGATIVE.finditer(text))
+        decisions = [(match.end(), False) for match in negative]
+        decisions.extend(
+            (match.end(), False) for match in _NON_CJK_REQUEST.finditer(text)
+        )
+        decisions.extend(
+            (match.end(), True)
+            for match in _CJK_REQUEST.finditer(text)
+            if not any(
+                item.start() <= match.start() < item.end()
+                for item in negative
+            )
+        )
+        if decisions:
+            # On an exact tie the restrictive directive wins.
+            allowed = max(decisions, key=lambda item: (item[0], not item[1]))[
+                1
+            ]
+        elif _CJK.search(text):
+            allowed = True
+    return allowed
+
+
 def _cjk_token_ids(tokenizer: object) -> tuple[int, ...]:
     """Find vocabulary tokens that contain Chinese, Japanese, or Korean text.
 
@@ -1373,11 +1491,20 @@ def _cjk_token_ids(tokenizer: object) -> tuple[int, ...]:
     vocabulary = get_vocab() if callable(get_vocab) else None
     if not isinstance(vocabulary, dict):
         return ()
+    decode = getattr(tokenizer, "decode", None)
+    if not callable(decode):
+        return ()
+    special = getattr(tokenizer, "all_special_ids", ())
+    special = (
+        set(special) if isinstance(special, (list, tuple, set)) else set()
+    )
+    token_ids = {
+        value for value in vocabulary.values()
+        if type(value) is int and value >= 0 and value not in special
+    }
     found = []
-    for token_id in sorted(set(vocabulary.values())):
-        if not isinstance(token_id, int):
-            continue
-        text = tokenizer.decode([token_id])  # type: ignore[attr-defined]
+    for token_id in sorted(token_ids):
+        text = decode([token_id])
         if isinstance(text, str) and _CJK.search(text):
             found.append(token_id)
     return tuple(found)
@@ -1403,7 +1530,7 @@ def _mlx_token_blocker(
 
     mx = import_module("mlx.core")
     numpy = import_module("numpy")
-    penalties: dict[int, object] = {}
+    penalties: dict[tuple[int, str], object] = {}
 
     def block(tokens: object, logits: object) -> object:
         """Set the logits of blocked tokens to minus infinity.
@@ -1423,11 +1550,13 @@ def _mlx_token_blocker(
         """
 
         size = int(logits.shape[-1])  # type: ignore[attr-defined]
-        if size not in penalties:
+        dtype = logits.dtype  # type: ignore[attr-defined]
+        key = (size, str(dtype))
+        if key not in penalties:
             penalty = numpy.zeros(size, dtype=numpy.float32)
-            inside = [token for token in token_ids if token < size]
+            inside = [token for token in token_ids if 0 <= token < size]
             penalty[inside] = -numpy.inf
-            penalties[size] = mx.array(penalty)
-        return logits + penalties[size]  # type: ignore[operator]
+            penalties[key] = mx.array(penalty, dtype=dtype)
+        return logits + penalties[key]  # type: ignore[operator]
 
     return block

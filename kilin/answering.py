@@ -130,7 +130,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import json
 from pathlib import PureWindowsPath
@@ -263,7 +263,8 @@ class _Chat(Protocol):
         """
 
     def reply(
-        self, message: str, *, max_new_tokens: int | None = None
+        self, message: str, *, max_new_tokens: int | None = None,
+        language_context: Sequence[str] | None = None,
     ) -> str:
         """Generate, return, and retain one assistant reply.
 
@@ -274,6 +275,9 @@ class _Chat(Protocol):
         max_new_tokens: int | None, optional
             Maximum generated tokens, or None for the default. Defaults to
             ``None``.
+        language_context: Sequence[str] | None, optional
+            Original user messages for script permission, or ``None`` for
+            direct-chat history. Defaults to ``None``.
 
         Returns
         -------
@@ -462,6 +466,7 @@ def side_reply(
     *,
     max_new_tokens: int,
     token_callback: Callable[[str], None] | None = None,
+    language_context: Sequence[str] = (),
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -478,6 +483,9 @@ def side_reply(
     token_callback: Callable[[str], None] | None, optional
         Receives the reply as it is generated, for a side answer shown to
         the user. Defaults to ``None``.
+    language_context: Sequence[str], optional
+        Original user messages authorizing CJK output, oldest first. The
+        generated side prompt cannot authorize scripts. Defaults to ``()``.
 
     Returns
     -------
@@ -497,7 +505,10 @@ def side_reply(
     try:
         chat.restore_history([{"role": SYSTEM_ROLE, "content": system}])
         chat.configure_generation({"thinking": False, "temperature": 0.0})
-        options: dict[str, object] = {"max_new_tokens": max_new_tokens}
+        options: dict[str, object] = {
+            "max_new_tokens": max_new_tokens,
+            "language_context": language_context,
+        }
         if token_callback is not None:
             options["token_callback"] = token_callback
         reply = chat.reply(prompt, **options)
