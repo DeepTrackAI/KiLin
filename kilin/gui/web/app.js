@@ -498,7 +498,7 @@ function isOversizedSkippedFile(item) {
 }
 
 /**
- * Say why a preview file cannot be ticked, and how to include it if it can.
+ * Say briefly why a preview file cannot be ticked.
  *
  * @param item Skipped-file preview row with a reason code.
  * @returns Short text shown next to the file.
@@ -507,7 +507,7 @@ function skippedReason(item) {
   if (isOversizedSkippedFile(item)) return "Above current limit · check to include";
   if (selectionReasonCodes !== null
       && item.reason_code === selectionReasonCodes.FILE_TYPE_NOT_SELECTED) {
-    return "Not a file type of this project · add it under Additional file types";
+    return "File type not included";
   }
   return item.reason;
 }
