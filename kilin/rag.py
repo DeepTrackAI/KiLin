@@ -954,9 +954,7 @@ class RAGSession:
                 try:
                     model.close()
                 except BaseException as cleanup_error:
-                    error.add_note(
-                        f"Model cleanup failed: {cleanup_error!r}"
-                    )
+                    error.add_note(f"Model cleanup failed: {cleanup_error!r}")
             # __init__ releases the owned trace and conversation lock on
             # every construction failure, including this one.
             raise
@@ -1655,9 +1653,7 @@ class RAGSession:
                         *history_messages(self.turns, history_ids),
                     ]
                 )
-                prompt = _answer_prompt(
-                    question, evidence, resolved_guidance
-                )
+                prompt = _answer_prompt(question, evidence, resolved_guidance)
                 trace.emit(
                     "generation.input.prepared",
                     component="rag",
@@ -1843,16 +1839,11 @@ class RAGSession:
         previous_owns_trace = self._owns_trace
         if previous_owns_trace and trace is not previous_trace:
             previous_trace.close()
-        if (
-            old_ownership is not None
-            and old_ownership is not target_ownership
-        ):
+        if old_ownership is not None and old_ownership is not target_ownership:
             old_ownership.release()
 
         self.trace = trace
-        self._owns_trace = (
-            previous_owns_trace and trace is previous_trace
-        )
+        self._owns_trace = previous_owns_trace and trace is previous_trace
         self._conversation_ownership = target_ownership
         self.chat_session.trace = trace
         self.embedding_session.trace = trace
@@ -2172,7 +2163,11 @@ class RAGSession:
         self.router_model = model_id
 
     def router_reply(
-        self: RAGSession, system: str, prompt: str, *, max_new_tokens: int,
+        self: RAGSession,
+        system: str,
+        prompt: str,
+        *,
+        max_new_tokens: int,
         language_context: Sequence[str] = (),
     ) -> str:
         """Ask the router model a side question, such as a chat title.
@@ -2628,12 +2623,9 @@ class RAGSession:
                 saved_metadata = None
 
         if not selected_count:
-            changes["configuration_changed"] = (
-                saved_metadata is None
-                or any(
-                    saved_metadata.get(key) != value
-                    for key, value in expected_metadata.items()
-                )
+            changes["configuration_changed"] = saved_metadata is None or any(
+                saved_metadata.get(key) != value
+                for key, value in expected_metadata.items()
             )
             return self._empty_retrieval(changes, current_manifest)
 
@@ -2971,11 +2963,13 @@ class RAGSession:
             code_graph=CodeGraph((), ()),
         )
         self.trace.emit(
-            "index.empty", component="rag",
+            "index.empty",
+            component="rag",
             data={"chunk_count": 0, "changes": changes},
         )
         self._emit_progress(
-            "index_ready", 85.0,
+            "index_ready",
+            85.0,
             "No source passages to index; ready without retrieval evidence.",
         )
         return [], indexes, "empty", changes
@@ -3176,10 +3170,7 @@ class RAGSession:
                         count=depth,
                     )
                 )
-                report(
-                    "Relationship search ranked "
-                    f"{len(code)} results"
-                )
+                report("Relationship search ranked " f"{len(code)} results")
         trace.emit(
             "retrieval.code.ranked",
             component="retrieval",
@@ -3223,7 +3214,8 @@ class RAGSession:
             focused = [
                 result
                 for result in self._rank_everything(
-                    question, trace_turn_id,
+                    question,
+                    trace_turn_id,
                     semantic_results=semantic_results,
                 )
                 if result.chunk.path == named[0]
@@ -3290,13 +3282,16 @@ class RAGSession:
         )
         direct_paths = set(plan.paths) | set(scope)
         direct_ids = {
-            chunk.identifier for chunk in _chunks_for_functions(
+            chunk.identifier
+            for chunk in _chunks_for_functions(
                 self.chunks, self.indexes.code_graph, plan.functions
             )
         }
         alternative_ids = {
-            chunk.identifier for chunk in _chunks_for_functions(
-                self.chunks, self.indexes.code_graph,
+            chunk.identifier
+            for chunk in _chunks_for_functions(
+                self.chunks,
+                self.indexes.code_graph,
                 plan.alternative_functions,
             )
         }
@@ -3467,7 +3462,10 @@ class RAGSession:
             """
 
             return lambda system, prompt, tokens: side_reply(
-                chat, system, prompt, max_new_tokens=tokens,
+                chat,
+                system,
+                prompt,
+                max_new_tokens=tokens,
                 language_context=language_context,
             )
 
@@ -3670,7 +3668,8 @@ class RAGSession:
                 count=everything,
                 trace_turn_id=trace_turn_id,
             )
-            if semantic_results is None else list(semantic_results)
+            if semantic_results is None
+            else list(semantic_results)
         )
         lexical = lexical_search(self.indexes.lexical, text, count=everything)
         code = (
@@ -3980,9 +3979,7 @@ class RAGSession:
             system_prompt=self._system_prompt(),
             allow_download=self.project.profile.allow_download,
             trace=self.trace,
-            block_unrequested_cjk=(
-                self.project.profile.block_unrequested_cjk
-            ),
+            block_unrequested_cjk=(self.project.profile.block_unrequested_cjk),
             **settings,
         )
 
@@ -4329,9 +4326,7 @@ class RAGSession:
             timestamp = datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H-%M-%S-%fZ"
             )
-            archived_path = path.with_name(
-                f"conversation_{timestamp}.json"
-            )
+            archived_path = path.with_name(f"conversation_{timestamp}.json")
             path.replace(archived_path)
             return archived_path
 
@@ -4674,9 +4669,11 @@ def _add_related_evidence(
     start = len(fresh) + 1
     return fresh + tuple(
         replace(
-            item, citation=number,
+            item,
+            citation=number,
             context_role=(
-                "related" if item.context_role == "direct"
+                "related"
+                if item.context_role == "direct"
                 else item.context_role
             ),
         )
@@ -4718,9 +4715,11 @@ def _merge_evidence(
     kept = ordered[-_MAX_REUSED_EVIDENCE:]
     return tuple(
         replace(
-            item, citation=number,
+            item,
+            citation=number,
             context_role=(
-                "related" if item.context_role == "direct"
+                "related"
+                if item.context_role == "direct"
                 else item.context_role
             ),
         )
@@ -4775,9 +4774,7 @@ def _answer_prompt(
             f"{item.start_line}-{item.end_line}"
         )
         symbol = f" ({item.symbol})" if item.symbol else ""
-        role = (
-            f" [context: {item.context_role}]" if item.context_role else ""
-        )
+        role = f" [context: {item.context_role}]" if item.context_role else ""
         sections.append(
             f"[{item.citation}] {location}{symbol}{role}\n{item.text}"
         )
@@ -4969,9 +4966,7 @@ def _write_json(path: Path, data: dict[str, object]) -> None:
 
     """
 
-    atomic_write_text(
-        path, json.dumps(data, indent=2, sort_keys=True) + "\n"
-    )
+    atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
 
 
 def _chunk_trace_data(
@@ -5094,7 +5089,7 @@ def _module_summaries(chunks: Sequence[Chunk]) -> dict[Path, str]:
         match = _MODULE_DOCSTRING.match(chunk.text)
         if match is None:
             continue
-        body = chunk.text[match.end():].split(match.group(1), 1)[0]
+        body = chunk.text[match.end() :].split(match.group(1), 1)[0]
         lines = [line.strip() for line in body.splitlines()]
         first = next((line for line in lines if line), "")
         if first:

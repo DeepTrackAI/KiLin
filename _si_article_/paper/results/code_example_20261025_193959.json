@@ -1,0 +1,646 @@
+{
+  "date": "2026-10-25T18:32:13+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.8",
+    "os_version": "26.6.2",
+    "model": "Mac16,7",
+    "chip": "Apple M4 Pro",
+    "memory_gb": 48,
+    "mlx": "0.32.3"
+  },
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "1a358072360b99026f7eb2693030a4bb1d56ef97",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "use_router": true,
+  "question_sets": [
+    "evaluation"
+  ],
+  "retrieval_count": null,
+  "corpus": {
+    "source_files": 316,
+    "chunks": 5318,
+    "graph_entities": 4480,
+    "graph_relations": 26977
+  },
+  "index_status": "reused",
+  "questions": [
+    {
+      "id": "markdown_sections",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 23.76,
+      "answer": "KíLín splits a Markdown file into searchable parts by identifying ATX-style headings (lines starting with `#`) and separating the text before the first heading as a distinct \"preamble\" section. The code in `sources_md.py` uses `_markdown_headings` to locate these headings [1], then `_markdown_units` divides the file into the preamble (lines 1 to the first heading) and sections between headings [5]. The preamble is preserved as a standalone `SourceUnit` with the kind `\"markdown_preamble\"` [5]. Lines after the last heading are also captured as a section. If no headings exist, the entire file is treated as preamble. This approach ensures searchable chunks are derived from structured sections while retaining unstructured pre-heading text.",
+      "trace_file": "conversation_2026-10-25T18-32-13.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "_markdown_units",
+          "_markdown_headings"
+        ],
+        "lexical": [
+          "_markdown_headings"
+        ],
+        "code": [],
+        "hybrid": [
+          "_markdown_units",
+          "_markdown_headings"
+        ],
+        "evidence": [
+          "_markdown_units",
+          "_markdown_headings"
+        ],
+        "cited": [
+          "_markdown_units",
+          "_markdown_headings"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/sources/extensions/sources_md.py",
+          "symbol": "_markdown_headings",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 5,
+          "path": "kilin/sources/extensions/sources_md.py",
+          "symbol": "_markdown_units",
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "matlab_calls",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 26.44,
+      "answer": "KíLín identifies MATLAB function calls using regex patterns to parse source code without execution. For MATLAB, it matches function definitions with `_FUNCTION` regex (e.g., `function ...`) and calls with `_CALL` regex (e.g., `function_name(...`), while excluding control statements like `if` or `for` [4][9]. It resolves function names using context from the code graph and known entities [8]. This approach relies on structural text patterns, not semantic analysis. \n\nFor Python, the evidence does not explicitly describe how KíLín handles function calls. The provided code focuses on MATLAB-specific regex and graph-building logic, with no direct comparison to Python’s handling. However, the general framework (e.g., `CodeGraph`, `extract_code_relations`) suggests Python might use similar regex-based parsing, though the exact methods are not detailed in the supplied evidence. The MATLAB approach is explicitly tied to structural text matching, while Python’s method (if similar) would likely follow the same pattern but adapted to Python syntax. \n\nThe key difference lies in MATLAB’s explicit regex rules for function and call detection, whereas Python’s handling is not fully described here. [4][8][9]",
+      "trace_file": "conversation_2026-10-25T18-32-45.json",
+      "gold_count": 1,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [
+          "extract_code_relations"
+        ],
+        "code": [],
+        "hybrid": [
+          "extract_code_relations"
+        ],
+        "evidence": [
+          "extract_code_relations"
+        ],
+        "cited": [
+          "extract_code_relations"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 4,
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_m.py",
+          "symbol": "code_graph_m",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_m.py",
+          "symbol": "extract_code_relations",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/retrievals/code_graph/extensions/code_graph_m.py",
+          "symbol": "extract_code_relations",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "long_document",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 23.56,
+      "answer": "When a whole file exceeds the evidence budget, KíLín selects parts based on relevance and token estimation. The `_fit` function in `document_reading.py` [1] prioritizes the most relevant chunks from ranked search results, adding them first in order of relevance. If the total token count still exceeds the budget, less relevant chunks are appended last. The process uses estimated token counts to ensure each part fits within the budget [6]. For large files, the `plan_parts` function splits the document into segments, reading them sequentially [7]. This ensures the model sees the most relevant passages first, even if the entire file isn't included. The selection logic avoids loading entire files into memory, relying on pre-indexed chunks and their estimated token sizes [10].",
+      "trace_file": "conversation_2026-10-25T18-33-17.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "read_document",
+          "_fit"
+        ],
+        "lexical": [
+          "_fit"
+        ],
+        "code": [],
+        "hybrid": [
+          "read_document",
+          "_fit"
+        ],
+        "evidence": [
+          "read_document",
+          "_fit"
+        ],
+        "cited": [
+          "_fit"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 10,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/retrievals/document_reading.py",
+          "symbol": "_fit",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/tools/batch_review/tool.py",
+          "symbol": "_fit",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/tools/batch_review/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "lexical"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/retrievals/document_reading.py",
+          "symbol": "_fit",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "exact_mentions",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "mention_listing",
+      "wall_s": 4.31,
+      "answer": "Found **1 mention** of “exact name” or “longer word” in **1 of 316 files** (case-sensitive, whole words).\n\n- “exact name”: 0\n- “longer word”: 1\n\n**Mentions per file**\n\n- retrieval_code.py: 1\n\n**Where**\n\n1. retrieval_code.py, line 399, in _contains_whole_words: …heck would let a short entity name match inside an unrelated **longer word** that merely starts the same way -- for example the module en… [1]\n\nScanned all indexed text in 316 files.",
+      "trace_file": "conversation_2026-10-25T18-33-46.json"
+    },
+    {
+      "id": "answer_streaming",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 22.71,
+      "answer": "The desktop app streams partial answers incrementally using the `_AnswerStream` class [6]. This class buffers generated text and emits it as `\"answer_delta\"` events to the frontend at regular intervals (default 0.08 seconds). The `add` method accumulates text fragments, and `flush` sends them as updates when the interval threshold is met. This allows the UI to display the answer progressively while the model is still generating it, rather than waiting for the full response. The `send` callback in `_AnswerStream` connects to the frontend, ensuring real-time updates without blocking the user interface.",
+      "trace_file": "conversation_2026-10-25T18-33-55.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "ChatEngine.ask"
+        ],
+        "lexical": [],
+        "code": [],
+        "hybrid": [
+          "ChatEngine.ask"
+        ],
+        "evidence": [
+          "ChatEngine.ask"
+        ],
+        "cited": [],
+        "code_only": []
+      },
+      "evidence_count": 10,
+      "cited_count": 1,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 6,
+          "path": "kilin/gui/engine.py",
+          "symbol": "_AnswerStream",
+          "retrieved_by": [
+            "semantic"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "superscript_citations",
+      "kind": "location",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 30.36,
+      "answer": "KíLín recognizes citation numbers as small raised digits in PDFs by extracting superscript runs using `superscript_runs` [1], which identifies sequences of small, raised digits, commas, and dashes. It leverages PDFMiner to parse text and filter out lowered subscripts, ensuring only true superscripts are considered. Regular expressions like `_RUN_CHARACTER` [2] match these runs, while patterns like `_POWER_OF_TEN` and `_EXPONENT` exclude exponents (e.g., \"cm²\") and powers of ten (e.g., \"10^3\") from being mistaken for citations. Contextual checks, such as requiring the digits to follow the same characters on the line, further confirm their role as citations [6]. To avoid errors, KíLín validates numbers against the reference list’s range via `cited_numbers` [10], rejecting outliers or invalid formats. This combination of glyph analysis, regex filtering, and contextual validation ensures citations are distinguished from other raised numbers like exponents or unit markers.",
+      "trace_file": "conversation_2026-10-25T18-34-23.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "superscript_runs"
+        ],
+        "lexical": [
+          "superscript_runs"
+        ],
+        "code": [],
+        "hybrid": [
+          "superscript_runs"
+        ],
+        "evidence": [
+          "superscript_runs"
+        ],
+        "cited": [
+          "superscript_runs"
+        ],
+        "code_only": []
+      },
+      "evidence_count": 12,
+      "cited_count": 4,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "superscript_runs",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 2,
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "_citations",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "_citations",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 10,
+          "path": "kilin/tools/reference_check/_citations.py",
+          "symbol": "cited_numbers",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "claim_verdict",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 24.85,
+      "answer": "The `verify_claim` function uses the model to generate a verdict by first creating prompts based on the claim and relevant passages [1]. These prompts guide the model to assess whether the cited work supports the claim. The model's response is then parsed by `parse_verdict` [12], which extracts the verdict, quote, and comment. The quote is checked against the provided passages to ensure it matches exactly or near-exactly (with adjustments for minor differences like punctuation or spacing). If no matching passage is found, the verdict may be adjusted (e.g., \"contradicted\" becomes \"not supported\"), and the comment notes this discrepancy. The final verdict, along with the validated quote and comment, is returned as part of a `Verdict` object [3]. This process ensures the model's answer is both evaluated against the text and refined for accuracy.",
+      "trace_file": "conversation_2026-10-25T18-34-59.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "verify_claim"
+        ],
+        "lexical": [
+          "verify_claim"
+        ],
+        "code": [
+          "verify_claim",
+          "_judge"
+        ],
+        "hybrid": [
+          "verify_claim",
+          "_judge"
+        ],
+        "evidence": [
+          "verify_claim",
+          "_judge",
+          "parse_verdict"
+        ],
+        "cited": [
+          "verify_claim",
+          "parse_verdict"
+        ],
+        "code_only": [
+          "_judge"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 3,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "verify_claim",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 3,
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "Verdict",
+          "retrieved_by": [
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 12,
+          "path": "kilin/tools/_shared/claims.py",
+          "symbol": "parse_verdict",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "output_saving",
+      "kind": "mechanism",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 24.69,
+      "answer": "save_output_file writes a tool's output into the project without overwriting existing files by using a two-step process: staging and publishing [1]. First, it creates a temporary staging file in the project's outputs directory using `staged_output_file` [8], ensuring exclusive access to prevent conflicts. The content is written to this staging file. Next, `publish_output_file` [7] attempts to publish the content by creating a hard link to the staging file with the desired name. If the name already exists, it appends a number (e.g., `-2`, `-3`) to generate a unique filename, avoiding overwrites. This process ensures existing files remain untouched, and concurrent saves receive distinct filenames [1]. The function also validates the output name to prevent invalid characters or reserved names [11], and checks for collisions by iterating through numbered alternatives [13]. The final published file is returned as a Path object, ensuring the output is safely stored without replacing existing files.",
+      "trace_file": "conversation_2026-10-25T18-35-29.json",
+      "gold_count": 3,
+      "gold_found": {
+        "semantic": [
+          "save_output_file",
+          "publish_output_file"
+        ],
+        "lexical": [
+          "save_output_file"
+        ],
+        "code": [
+          "save_output_file",
+          "staged_output_file"
+        ],
+        "hybrid": [
+          "save_output_file",
+          "publish_output_file",
+          "staged_output_file"
+        ],
+        "evidence": [
+          "save_output_file",
+          "publish_output_file",
+          "staged_output_file"
+        ],
+        "cited": [
+          "save_output_file",
+          "publish_output_file",
+          "staged_output_file"
+        ],
+        "code_only": [
+          "staged_output_file"
+        ]
+      },
+      "evidence_count": 13,
+      "cited_count": 5,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "save_output_file",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 7,
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "publish_output_file",
+          "retrieved_by": [
+            "semantic"
+          ]
+        },
+        {
+          "citation": 8,
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "staged_output_file",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 11,
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "_output_name",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        },
+        {
+          "citation": 13,
+          "path": "kilin/tools/_shared/outputs.py",
+          "symbol": "_output_candidates",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "newest_listed_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 27.64,
+      "answer": "The `newest_listed` function is called by two functions: `run` in `kilin/tools/show_source/tool.py` [3] and `run` in `kilin/tools/filter_results/tool.py` [9].  \n\n1. **`show_source` tool's `run` function**:  \n   - Calls `newest_listed(request.earlier)` to retrieve the most recent earlier turn with evidence.  \n   - If a valid turn is found, it uses the turn's `answer`, `paths`, and `texts` to extract relevant sentences, construct a summary, and generate an explanation via a language model. The turn’s evidence is formatted into citations and included in the response [3].  \n\n2. **`filter_results` tool's `run` function**:  \n   - Calls `newest_listed(request.earlier)` to identify the latest turn with evidence.  \n   - If found, it processes the turn’s `texts` and `paths` to create a list of items, batches them for processing, and generates a filtered list of matching items. The turn’s evidence is used to build citations and evidence entries for the response [9].  \n\nBoth functions rely on `newest_listed` to access the most recent turn with evidence, then use its metadata (e.g., `texts`, `paths`) to tailor their specific output, such as explanations or filtered results.",
+      "trace_file": "conversation_2026-10-25T18-35-59.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [],
+        "lexical": [],
+        "code": [
+          "run",
+          "run"
+        ],
+        "hybrid": [
+          "run"
+        ],
+        "evidence": [
+          "run",
+          "run"
+        ],
+        "cited": [
+          "run",
+          "run"
+        ],
+        "code_only": [
+          "run",
+          "run"
+        ]
+      },
+      "evidence_count": 14,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 3,
+          "path": "kilin/tools/show_source/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "code"
+          ]
+        },
+        {
+          "citation": 9,
+          "path": "kilin/tools/filter_results/tool.py",
+          "symbol": "run",
+          "retrieved_by": [
+            "context_expansion"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "workspace_path_callers",
+      "kind": "dependency",
+      "set": "evaluation",
+      "intent": "code_explanation",
+      "wall_s": 26.82,
+      "answer": "The function `prepare_sources_workspace` calls `default_workspace_path` when `workspace_directory` is not provided, using `workspace_root` to generate a default path for the workspace. This occurs during workspace creation, ensuring a deterministic, non-colliding name within the specified parent directory [6]. \n\nThe function `_workspace_path` (defined in `kilin/gui/engine.py`) calls `default_workspace_path` when an explicit `chosen` workspace path is empty, deriving a default path from the first source. This is used to suggest a preview location without reserving or reusing a workspace [1]. \n\nBoth functions rely on `default_workspace_path` to compute a deterministic path based on source metadata and a parent directory, ensuring uniqueness and avoiding collisions. The folder suggested by `default_workspace_path` is used in these contexts to allocate workspace directories, but neither function directly uses the folder itself—only the path it generates.",
+      "trace_file": "conversation_2026-10-25T18-36-32.json",
+      "gold_count": 2,
+      "gold_found": {
+        "semantic": [
+          "_workspace_path"
+        ],
+        "lexical": [
+          "_workspace_path"
+        ],
+        "code": [
+          "_workspace_path",
+          "prepare_sources_workspace"
+        ],
+        "hybrid": [
+          "_workspace_path",
+          "prepare_sources_workspace"
+        ],
+        "evidence": [
+          "_workspace_path",
+          "prepare_sources_workspace"
+        ],
+        "cited": [
+          "_workspace_path",
+          "prepare_sources_workspace"
+        ],
+        "code_only": [
+          "prepare_sources_workspace"
+        ]
+      },
+      "evidence_count": 11,
+      "cited_count": 2,
+      "invalid_citations": [],
+      "cited_sources": [
+        {
+          "citation": 1,
+          "path": "kilin/gui/engine.py",
+          "symbol": "_workspace_path",
+          "retrieved_by": [
+            "code",
+            "lexical",
+            "semantic"
+          ]
+        },
+        {
+          "citation": 6,
+          "path": "kilin/workspace.py",
+          "symbol": "prepare_sources_workspace",
+          "retrieved_by": [
+            "code"
+          ]
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "markdown_sections": {
+      "answer": "KíLín splits a Markdown file into searchable parts by identifying headings (e.g., `#`, `##`, etc.) and treating each heading as the start of a new section. The content between headings is grouped into sections, and each section is indexed for search. \n\n**Opening lines before the first heading** are included in the first section. If there are no headings in the file, the entire content is treated as a single section. This ensures that even introductory text or pre-heading content is part of the searchable index. \n\nThis behavior allows KíLín to handle both structured and unstructured Markdown files, ensuring all content is indexed unless explicitly excluded by the user.",
+      "wall_s": 19.88
+    },
+    "matlab_calls": {
+      "answer": "KíLín determines which functions a MATLAB file calls through **static analysis** of the code. It parses the MATLAB script or function file, examining the syntax to identify all explicit function calls (e.g., `plot(x, y)`, `sin(x)`, or calls to other MATLAB functions). Since MATLAB has a structured syntax and is compiled, this approach is feasible without executing the code.\n\nFor Python, KíLín uses a **combination of static analysis and dynamic execution**. Python's dynamic nature (e.g., dynamic imports, conditional execution, or runtime function resolution) means static analysis alone might miss some dependencies. KíLín may run the Python code in a sandboxed environment to observe actual function calls, ensuring it captures all dependencies, even those that are conditionally executed or imported at runtime.\n\n**Key difference**: MATLAB's static structure allows KíLín to rely solely on syntax parsing, while Python's flexibility requires dynamic execution to fully resolve function calls.",
+      "wall_s": 17.9
+    },
+    "long_document": {
+      "answer": "The KíLín Python package is designed to handle large files by processing them in a streaming or chunked manner, but the exact method for selecting parts of the file when it exceeds the evidence budget depends on the specific implementation details of the package. However, based on general principles of such tools:\n\n1. **Chunking**: KíLín might divide the file into fixed-size chunks and process them sequentially, ensuring only a manageable portion of the file is in memory at any time. This approach avoids loading the entire file into memory.\n\n2. **Sampling**: If the file is too large, the package might use sampling techniques (e.g., random sampling or stratified sampling) to select representative parts of the file for analysis, especially if the query does not require full coverage.\n\n3. **Query-Driven Selection**: If the query specifies a particular region or pattern, KíLín might focus on relevant sections of the file, prioritizing areas that match the query's criteria.\n\n4. **Configuration Parameters**: The behavior could be controlled by parameters such as `chunk_size`, `sample_rate`, or `max_tokens`, which users can adjust to balance between computational efficiency and the completeness of the analysis.\n\nFor precise details, you would need to consult the KíLín documentation or source code, as the exact selection strategy may vary based on the package's design. If you have access to the documentation, it would provide the most accurate answer.",
+      "wall_s": 15.69
+    },
+    "exact_mentions": {
+      "answer": "KíLín uses a combination of **regular expressions with word boundaries** and **AST (Abstract Syntax Tree) parsing** to identify exact names in a project while avoiding partial matches within longer words. Here's how it works:\n\n1. **Word Boundaries with Regex**:  \n   KíLín employs regular expressions that include word boundaries (`\\b`) to ensure the exact name is matched as a standalone identifier. For example, searching for `name` would match `name` but not `username` or `names` because the regex ensures the name is surrounded by non-word characters (like spaces, punctuation, or the start/end of a line).\n\n2. **AST Parsing for Contextual Accuracy**:  \n   By parsing the code into an AST, KíLín can analyze identifiers in their syntactic context. This allows it to distinguish between standalone names (e.g., variable names, function names) and parts of longer words. The AST ensures that matches occur only where the name is explicitly used as an identifier, not as a substring within other constructs (e.g., `username` vs. `user`).\n\n3. **Language-Specific Rules**:  \n   KíLín adheres to the syntax and semantics of the target language (e.g., Python) to refine matches. For instance, it avoids matching names within strings, comments, or other non-identifier contexts, further reducing false positives.\n\nThis approach ensures precise detection of exact names while avoiding unintended matches within longer words or phrases.",
+      "wall_s": 16.87
+    },
+    "answer_streaming": {
+      "answer": "The KíLín Python package's desktop app displays answers incrementally while the model is generating them by using a combination of background processing and real-time updates. Here's how it works:\n\n1. **Background Thread/Process**: The model's inference (e.g., text generation) runs in a separate thread or process to prevent the UI from freezing. This ensures the desktop app remains responsive during generation.\n\n2. **Streaming Output**: The model generates text in a step-by-step manner (token by token). KíLín captures these tokens as they are produced, often using a streaming API or custom implementation (e.g., via `generate` methods with `stream=True`).\n\n3. **UI Updates**: The generated tokens are sent to the main thread (which handles the UI) via a queue, event loop, or signal-slot mechanism (e.g., PyQt/PySide's `QThread` or `QTimer`). The UI widget (e.g., `QTextEdit`) is updated incrementally with each new token, creating the effect of the answer being written in real time.\n\n4. **Efficient Rendering**: The app updates the UI in small chunks to avoid lag, ensuring smooth real-time feedback without overwhelming the system.\n\nThis approach allows users to see the model's output as it is being generated, rather than waiting for the entire response. For specific implementation details, refer to KíLín's documentation or source code for how it integrates with LLMs and GUI frameworks.",
+      "wall_s": 19.45
+    },
+    "superscript_citations": {
+      "answer": "KíLín, a Python package for extracting citations from PDFs, recognizes citation numbers printed as small raised numbers (superscripts) by analyzing **layout, font attributes, and contextual patterns**. Here's how it works:\n\n1. **Superscript Detection**:  \n   KíLín identifies superscripted text by checking for **smaller font sizes**, **vertical alignment** (e.g., raised above the baseline), and **font styling** (e.g., italic or specific font weights). These characteristics are common in citation numbers but differ from other raised elements like mathematical exponents or footnotes.\n\n2. **Contextual Positioning**:  \n   Citation numbers are typically placed **at the end of sentences or phrases**. KíLín uses **layout analysis** to detect such patterns, distinguishing them from isolated superscripts (e.g., in equations or footnotes).\n\n3. **Citation Style Matching**:  \n   The tool may apply **rules based on citation styles** (e.g., APA, MLA, Chicago) to confirm the number is a citation. For example, MLA-style citations often use superscript numbers at the end of sentences, while APA uses parentheses.\n\n4. **Avoiding False Positives**:  \n   KíLín avoids mistaking other raised numbers by:  \n   - **Checking proximity to text**: Superscripts in equations or footnotes are often surrounded by mathematical or formatting symbols, whereas citations are embedded in prose.  \n   - **Analyzing surrounding text**: Citation numbers are usually followed by a reference list or a corresponding entry in the document.  \n   - **Font and style consistency**: Citation numbers often use a specific font or size, which may differ from other superscripts (e.g., exponents in equations).\n\nFor precise details, refer to KíLín's documentation or source code, as the exact implementation may involve heuristics or machine learning models trained on citation patterns.",
+      "wall_s": 24.36
+    },
+    "claim_verdict": {
+      "answer": "The `verify_claim` function in the KíLín Python package evaluates whether a cited claim is supported by the provided evidence. Here's how it works:\n\n1. **Claim and Evidence Analysis**:  \n   The function takes a claim and associated evidence (e.g., a text or document) as input. It uses natural language processing (NLP) to analyze the claim and identify relevant parts of the evidence that might support or contradict it.\n\n2. **Model-Based Verification**:  \n   A pre-trained model (likely a language model) is used to determine if the claim is **supported**, **refuted**, or **unsupported** by the evidence. The model assesses the logical consistency between the claim and the evidence, checking for factual alignment, relevance, and coherence.\n\n3. **Quote Generation and Validation**:  \n   - The model generates a **quote** (or summary) from the evidence that directly supports the claim. This quote is intended to be a concise, accurate representation of the evidence's relevant portion.  \n   - The quote is then **cross-checked** against the original evidence to ensure it is verbatim or paraphrased correctly. This step ensures the quote does not introduce errors, misinterpretations, or fabrications.  \n   - If the quote aligns with the evidence, the claim is marked as supported. If not, the verdict may shift to \"refuted\" or \"unsupported.\"\n\n4. **Verdict Determination**:  \n   Based on the model's analysis of the claim and the validated quote, a verdict is reached. For example:  \n   - **Supported**: The claim is directly confirmed by the evidence.  \n   - **Refuted**: The evidence contradicts the claim.  \n   - **Unsupported**: The evidence neither supports nor contradicts the claim.\n\n### Key Considerations:\n- The quote is critical for transparency, as it allows users to trace the reasoning behind the verdict.  \n- The validation of the quote ensures the model does not hallucinate or misrepresent the evidence.  \n- The exact implementation details (e.g., model architecture, validation rules) may vary depending on the specific version of KíLín.  \n\nIf you need further details about the specific model or validation rules, you may need to consult the KíLín documentation or source code.",
+      "wall_s": 21.44
+    },
+    "output_saving": {
+      "answer": "The `save_output_file` function in the KíLín Python package is designed to save a tool's output to a specified file path without overwriting existing files. While the exact implementation details may vary, the general approach typically involves the following steps:\n\n1. **Check for Existing File**: The function first checks whether the target file already exists in the specified directory. This is often done using file system operations like `os.path.exists()`.\n\n2. **Generate a Unique Filename**: If the file exists, the function generates a unique filename to avoid overwriting. This could involve appending a timestamp, a counter, or a unique identifier (e.g., `output_20231010_1234.txt` or `output_v2.txt`).\n\n3. **Save the Output**: The tool's output is then written to the new filename, ensuring the original file remains untouched.\n\n4. **Return or Log the Result**: The function may return the path to the saved file or log the action for user confirmation.\n\nThis behavior ensures that existing files are preserved while allowing new outputs to be saved without conflicts. For precise details, refer to the KíLín package's documentation or source code. If the function is not part of KíLín, additional context would be needed.",
+      "wall_s": 16.93
+    },
+    "newest_listed_callers": {
+      "answer": "I currently do not have specific information about a Python package named \"KíLín\" or a function called `newest_listed` within it. If this refers to a specific library, framework, or tool, additional context or documentation would be needed to provide an accurate answer. \n\nIf you can clarify the package's purpose, domain, or provide a link to its documentation, I’d be happy to help further!",
+      "wall_s": 12.35
+    },
+    "workspace_path_callers": {
+      "answer": "I don't have information about a Python package named \"KíLín\" or its functions. It's possible there may be a typo or confusion with another package name. If you meant a different package (e.g., \"Kiln\" or another name), please clarify, and I'll do my best to assist. Otherwise, I recommend checking the package's documentation or source code for details about `default_workspace_path` and its usage.",
+      "wall_s": 9.04
+    }
+  }
+}

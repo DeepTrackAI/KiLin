@@ -1,0 +1,130 @@
+{
+  "date": "2026-10-26T21:08:05+00:00",
+  "environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.2",
+    "os_version": "26.6.2",
+    "model": "Mac15,6",
+    "chip": "Apple M3 Pro",
+    "memory_gb": 36,
+    "mlx": "0.32.3"
+  },
+  "kilin_checkout": "b87e23ca03ca8c41f7e235153080a47b048a099a",
+  "use_router": true,
+  "indexed_revision": {
+    "ref": "HEAD",
+    "commit": "b87e23ca03ca8c41f7e235153080a47b048a099a",
+    "excluded": [
+      "example_repos",
+      "assets",
+      "benchmarks",
+      "paper"
+    ]
+  },
+  "models": {
+    "chat": "Qwen/Qwen3-8B-MLX-4bit",
+    "embedding": "mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ"
+  },
+  "cold_open": {
+    "label": "cold",
+    "wall_s": 519.97,
+    "index_status": "rebuilt",
+    "backend": "mlx",
+    "operations_s": {
+      "model.embedding.load": 0.82,
+      "index.code_graph.build": 0.72,
+      "index.semantic.build": 504.16,
+      "index.lexical.build": 0.7,
+      "index.save": 6.81,
+      "model.chat.load": 0.76,
+      "indexing": 518.36,
+      "session.ready": 519.97
+    }
+  },
+  "corpus": {
+    "source_files": 316,
+    "chunks": 5318,
+    "graph_entities": 4480,
+    "graph_relations": 26977
+  },
+  "warm_open": {
+    "label": "warm",
+    "wall_s": 5.51,
+    "index_status": "reused",
+    "backend": "mlx",
+    "operations_s": {
+      "model.embedding.load": 0.32,
+      "index.load": 4.61,
+      "model.chat.load": 0.51,
+      "indexing": 4.67,
+      "session.ready": 5.51
+    }
+  },
+  "questions": [
+    {
+      "repeat": 1,
+      "question_id": "routing",
+      "intent": "code_explanation",
+      "open_s": 5.19,
+      "wall_s": 45.42,
+      "answer_characters": 2853,
+      "answer_sha256": "e5f93c82cd89731d848bae5399b999888e40f0fe284d6dab68bbc14b72978362",
+      "verdict": null,
+      "trace_file": "conversation_2026-10-26T21-16-53.json",
+      "turn_s": 45.41,
+      "routing_s": 4.99,
+      "semantic_s": 0.39,
+      "lexical_s": 0.02,
+      "code_s": 0.79,
+      "generation_s": 38.29,
+      "output_tokens": 588,
+      "output_tokens_per_second": 15.4,
+      "llm_calls": 1
+    },
+    {
+      "repeat": 1,
+      "question_id": "index_reuse",
+      "intent": "code_explanation",
+      "open_s": 5.34,
+      "wall_s": 42.98,
+      "answer_characters": 2789,
+      "answer_sha256": "6c032a5d3f638eaa6125f58154e5b4833ce9ad1652b1e6aaabae0740019c385b",
+      "verdict": null,
+      "trace_file": "conversation_2026-10-26T21-17-44.json",
+      "turn_s": 42.98,
+      "routing_s": 4.95,
+      "semantic_s": 0.36,
+      "lexical_s": 0.02,
+      "code_s": 0.84,
+      "generation_s": 35.9,
+      "output_tokens": 535,
+      "output_tokens_per_second": 14.9,
+      "llm_calls": 1
+    },
+    {
+      "repeat": 1,
+      "question_id": "index_storage",
+      "intent": "code_explanation",
+      "open_s": 5.41,
+      "wall_s": 49.51,
+      "answer_characters": 2870,
+      "answer_sha256": "b6fa4f975da23234454e3cff67b11a094037a06f32d53338fff98c3a1f2ddbc8",
+      "verdict": null,
+      "trace_file": "conversation_2026-10-26T21-18-32.json",
+      "turn_s": 49.5,
+      "routing_s": 4.94,
+      "semantic_s": 0.36,
+      "lexical_s": 0.02,
+      "code_s": 0.78,
+      "generation_s": 42.47,
+      "output_tokens": 595,
+      "output_tokens_per_second": 14.0,
+      "llm_calls": 1
+    }
+  ],
+  "peak_memory_gb": {
+    "process": 6.0,
+    "mlx": 5.76
+  }
+}
