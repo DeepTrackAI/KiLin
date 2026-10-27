@@ -28,6 +28,12 @@ assets/                # Maintenance/benchmark notebooks and helpers
 .github/workflows/     # CI tests, package and documentation validation
 tutorials/             # Progressive notebooks, some SVG examples
 docs/                  # Architecture and reference documentation
+_si_article_/          # Paper work, benchmarks and local source corpora
+    benchmarks/         # Tracked notebooks/gold; empty run workspaces
+    code_repo/          # Local-only contents, omitted from source ZIP
+    literature_repo/    # Local-only contents, omitted from source ZIP
+    code_analysis/      # Tracked code-analysis manuscript files
+    reference_analysis/ # Placeholder .gitkeep for now
 sandbox/               # Local development workspaces; export empty
 ```
 
@@ -37,8 +43,13 @@ embeddings, semantic/lexical/code retrieval, indexes, routing, RAG sessions,
 trace logging, project types and custom tools. Notebook examples are not a
 substitute for production API tests and must not rely on changes to hidden
 per-user files. `assets/clean_repository.ipynb` supports a controlled clean
-source export; `assets/benchmark_traces.ipynb` analyzes diagnostic traces
-without production timing hooks.
+source export. Within `_si_article_/`, benchmark sources are included but
+benchmark run workspaces and the local code/literature corpora are exported
+empty. The `code_analysis/` directory includes Git-tracked paper files;
+move any existing untracked `paper/` content there and stage it explicitly.
+`reference_analysis/` contains only `.gitkeep` for now.
+`assets/benchmark_traces.ipynb` analyzes diagnostic traces without
+production timing hooks.
 
 ## Architectural conventions
 
