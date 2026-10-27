@@ -212,6 +212,18 @@ modified, and `sources.json` is updated to reflect removed entries. Projects
 with external or root-as-source locations cannot use that deletion API.
 Index refreshing is a separate core operation.
 
+`kilin.workspace.find_source_changes(project)` compares each original and
+its copy with the copy's stamp and changes nothing. It lists copies whose
+originals changed (`changed`) or were deleted (`deleted`), and copies the
+user edited in the project although their originals changed (`edited`).
+Missing or empty originals, files without a stamp, and files added to an
+original folder after import are not listed.
+`kilin.workspace.sync_project_sources(project)` finds the changes again,
+updates `changed` copies, removes `deleted` ones and keeps `edited` ones,
+then updates `sources.json`. When a saved project reopens with copies to
+update, the GUI asks the user whether to update them or keep the old
+copies, and reindexes after an update.
+
 ## Project-owned outputs and templates
 
 The following GUI-independent core functions manage user-owned files:
