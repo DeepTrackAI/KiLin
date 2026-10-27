@@ -55,6 +55,8 @@ const expandedFolders = new Set();
 const collapsedWorkspaceFolders = new Set();
 // Paths shown in the workspace tree, to warn before replacing files.
 let workspacePaths = new Set();
+// The user's last show/hide choice for the side panels; null before any.
+let sidePanelChoice = null;
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -214,6 +216,19 @@ function showWorkspace(visible) {
   control.setAttribute("aria-label", visible ? "Hide side panels" : "Show side panels");
   control.title = control.getAttribute("aria-label");
   control.classList.toggle("panels-hidden", !visible);
+}
+
+/**
+ * Show or hide the side panels because the user asked, and remember it.
+ *
+ * Automatic layout changes (opening a project, a new chat) then follow
+ * this choice instead of overriding it.
+ *
+ * @param visible Whether the user wants the side panels shown.
+ */
+function chooseSidePanels(visible) {
+  sidePanelChoice = visible;
+  showWorkspace(visible);
 }
 
 /**
@@ -1959,7 +1974,7 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
       link.setAttribute("aria-label", `Show reference ${number}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
-        showWorkspace(true);
+        chooseSidePanels(true);
         selectTurn(item, turn, number);
       });
       superscript.append(link);
@@ -2132,13 +2147,13 @@ function addTurn(turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
   answer.addEventListener("click", () => {
-    showWorkspace(true);
+    chooseSidePanels(true);
     selectTurn(item, turn);
   });
   answer.addEventListener("keydown", (event) => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      showWorkspace(true);
+      chooseSidePanels(true);
       selectTurn(item, turn);
     }
   });
@@ -2820,7 +2835,7 @@ function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
   const choose = () => {
-    showWorkspace(true);
+    chooseSidePanels(true);
     selectTurn(item, turn);
   };
   answer.addEventListener("click", choose);
@@ -3313,7 +3328,8 @@ function onEvent(raw) {
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
     renderWorkspace(data.workspace_files);
-    showWorkspace(Boolean(data.turns.length));
+    // Open with references only when there are answers, unless the user chose.
+    showWorkspace(sidePanelChoice ?? Boolean(data.turns.length));
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -3336,10 +3352,7 @@ function onEvent(raw) {
     renderConversations(data);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) {
-      renderConversationEmpty();
-      showWorkspace(false);
-    }
+    if (!data.turns.length) renderConversationEmpty();
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -3585,7 +3598,6 @@ byId("project-name").addEventListener("input", () => {
 });
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
-  showWorkspace(false);
   setBusy(true, "Starting a new conversation…");
   bridge.newConversation();
 });
@@ -3644,7 +3656,7 @@ byId("change-project").addEventListener("click", () => {
   refreshSavedProject();
 });
 byId("toggle-workspace").addEventListener("click", () => {
-  showWorkspace(!shell.classList.contains("sidebar-open"));
+  chooseSidePanels(!shell.classList.contains("sidebar-open"));
 });
 byId("toggle-conversations").addEventListener("click", () => {
   showConversations(shell.classList.contains("conversations-hidden"));
@@ -3858,7 +3870,7 @@ for (const side of ["left", "right"]) {
       if (startWidth) shell.style.setProperty(`--${side}-width`, startWidth);
       else shell.style.removeProperty(`--${side}-width`);
       if (side === "left") showConversations(false);
-      else showWorkspace(false);
+      else chooseSidePanels(false);
       positionPanelResizers();
       syncSourceDropTarget();
       return;
