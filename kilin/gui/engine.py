@@ -2359,18 +2359,14 @@ class ChatEngine:
                         self.active_conversation.conversation_id
                     ),
                 )
-            turn = self.session.turns[-1]
-            event: dict[str, object] = {
-                "turn": asdict(turn),
-                "usage": self._usage_totals(),
-            }
-            # A tool that saved a file (for example a research briefing in
-            # outputs/) refreshes the workspace tree.
-            if (turn.parameters.get("tool") or {}).get("saved"):
-                event["workspace_files"] = list_project_files(
-                    self.session.project
-                )
-            self._send("answered", **event)
+            # An answer can add files (a tool's report in outputs/, the
+            # conversation log), so the workspace tree is refreshed too.
+            self._send(
+                "answered",
+                turn=asdict(self.session.turns[-1]),
+                usage=self._usage_totals(),
+                workspace_files=list_project_files(self.session.project),
+            )
         except Exception as error:
             self._report_error(
                 "gui.question.failed",
