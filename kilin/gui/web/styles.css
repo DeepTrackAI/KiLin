@@ -224,6 +224,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .workspace-panel .tree-folder summary, .workspace-panel .tree-file { font-size: 13px; font-weight: 400; }
 .workspace-panel .tree-file { width: fit-content; min-height: 0; padding: 1px 3px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left; }
 .workspace-panel .tree-file:hover, .workspace-panel .tree-file:focus-visible { background: var(--highlight); }
+.workspace-panel .tree-file.active-conversation { font-weight: 650; }
 /* Siblings share one indent: folders and files start at the same edge. */
 .workspace-panel .tree-folder, .workspace-panel .source-drop-target { margin: 5px 0; }
 .workspace-panel .tree-folder summary { padding: 1px 3px; }

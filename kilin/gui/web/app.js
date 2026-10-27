@@ -1281,6 +1281,24 @@ function renderWorkspace(paths) {
     line.addEventListener("click", () => openWorkspaceFile(file));
     host.append(line);
   }
+  markActiveConversationFile();
+}
+
+/**
+ * Bold the workspace entry of the conversation file now in use.
+ *
+ * The engine's trace path is the active conversation's JSON file, an
+ * absolute path; workspace rows carry project-relative paths.
+ */
+function markActiveConversationFile() {
+  const active = activeTracePath.replaceAll("\\", "/");
+  byId("workspace-tree").querySelectorAll(".tree-file").forEach((row) => {
+    const path = row.dataset.path;
+    row.classList.toggle(
+      "active-conversation",
+      Boolean(active && path && active.endsWith(`/${path}`)),
+    );
+  });
 }
 
 // Send the visible drop rectangle to Qt; all other workspace rows reject drops.
@@ -2982,6 +3000,7 @@ function onEvent(raw) {
   const data = JSON.parse(raw);
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
+    markActiveConversationFile();
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
