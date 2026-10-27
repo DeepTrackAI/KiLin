@@ -92,7 +92,10 @@ project = kilin.add_project_sources(
 ```
 
 Creation installs the normal profile, directories, and selected resources.
-`sources.json` is written when sources are first imported. Later imports
+`sources.json` is written when sources are first imported. For each
+copied file it records the copy's size and modification time at import
+(`stamps`), so a later change to the original or to the copy can be told
+apart; manifests written before stamps existed remain valid. Later imports
 respect the saved profile and never modify it implicitly. Existing source
 folders are copied into a new destination rather than adopted in place.
 Previously saved root-as-source or external-source profiles remain readable;
