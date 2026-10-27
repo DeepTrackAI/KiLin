@@ -292,7 +292,7 @@ function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
     const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources to this project?\n\n${names}\n\nKíLín will copy supported files into sources and update the index, reusing unchanged chunks when possible. This may take a while. Existing sources and saved chats will be kept. Re-added files may replace their existing copies. Continue?`)) return;
+    if (!confirm(`Add these sources? It could take a while.\n\n${names}\n\nKíLín copies them into sources and updates the index, which may take a while. A file added again replaces its old copy.`)) return;
     error.classList.add("hidden");
     setBusy(true, "Adding sources and updating the index…");
     bridge.addProjectSources(JSON.stringify(paths));
