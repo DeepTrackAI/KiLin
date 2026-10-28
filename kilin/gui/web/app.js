@@ -2264,12 +2264,17 @@ function selectTurn(item, turn, citation = null) {
   selectedTurn = item;
   item.classList.add("selected");
   clearSourcePreview();
-  byId("references-for").textContent = turn.evidence?.length
-    ? `Sources for: ${turn.question}`
-    : "No sources saved for this answer.";
+  const evidence = turn.evidence || [];
+  const { labels, cited } = labelsForTurn(turn);
+  const sources = referencedSources(evidence, labels, cited);
+  byId("references-for").textContent = !evidence.length
+    ? "No sources saved for this answer."
+    : cited && cited < evidence.length
+      ? `Sources for: ${turn.question} · ${cited} cited of ${evidence.length} passages read`
+      : `Sources for: ${turn.question}`;
   const list = byId("references-list");
   list.replaceChildren();
-  for (const source of turn.evidence || []) {
+  for (const source of sources) {
     const holder = document.createElement("div");
     holder.className = "reference-entry";
     const button = document.createElement("button");
@@ -2278,7 +2283,7 @@ function selectTurn(item, turn, citation = null) {
     button.dataset.citation = String(source.citation);
     const number = document.createElement("span");
     number.className = "reference-number";
-    number.textContent = String(source.citation);
+    number.textContent = String(labels.get(Number(source.citation)));
     const path = document.createElement("span");
     path.className = "reference-path";
     path.textContent = `${source.path}:${source.start_line}-${source.end_line}`;
@@ -2326,6 +2331,64 @@ function renderSourcePreview(data) {
 
 
 /**
+ * Number the cited sources 1, 2, 3… in the order the answer cites them.
+ *
+ * Evidence numbers count all retrieved passages, so they can be large
+ * (143, 286…). Only the labels the user sees change; links still use the
+ * evidence numbers.
+ *
+ * @param markers Evidence numbers of each linked citation marker, in
+ *   reading order, such as [[143], [286, 288]].
+ * @param evidence The turn's evidence records.
+ * @returns Map from evidence number to shown label. Evidence the answer
+ *   does not cite follows, in its saved order.
+ */
+function citationLabels(markers, evidence) {
+  const labels = new Map();
+  const label = (number) => {
+    if (!labels.has(number)) labels.set(number, labels.size + 1);
+  };
+  markers.flat().forEach(label);
+  evidence.forEach((source) => label(Number(source.citation)));
+  return labels;
+}
+
+// Shown labels of each rendered turn and how many sources its answer
+// cites, shared by its answer and references.
+const turnCitationLabels = new WeakMap();
+
+/**
+ * Choose and order the sources the References panel lists.
+ *
+ * An answer may read many passages but cite only a few: list those, in
+ * their label order, unless the answer cites none.
+ *
+ * @param evidence The turn's evidence records.
+ * @param labels Map from evidence number to shown label.
+ * @param cited Number of distinct sources the answer cites.
+ * @returns The evidence records to list.
+ */
+function referencedSources(evidence, labels, cited) {
+  return evidence
+    .filter((source) => !cited || labels.get(Number(source.citation)) <= cited)
+    .sort((a, b) => labels.get(Number(a.citation)) - labels.get(Number(b.citation)));
+}
+
+/**
+ * Return the shown citation labels of a turn, numbering its evidence in
+ * order when its answer has not been rendered.
+ *
+ * @param turn Saved question, answer, and evidence data.
+ * @returns ``labels`` (evidence number to shown label) and ``cited``, the
+ *   number of distinct sources the answer cites; those have labels 1 to
+ *   ``cited``.
+ */
+function labelsForTurn(turn) {
+  return turnCitationLabels.get(turn)
+    || { labels: citationLabels([], turn.evidence || []), cited: 0 };
+}
+
+/**
  * Render answer text with links only for recognized numeric citations.
  *
  * @param answer Destination DOM element.
@@ -2342,19 +2405,33 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
   }
   // Markdown and citations are both recognized; only evidence numbers that
   // belong to this answer become links.
+  const markerNumbers = (marker) => {
+    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
+    return numbers.every((number) => citations.has(number)) ? numbers : null;
+  };
+  // A first, unseen pass finds the linked markers in reading order, so
+  // they can be shown as 1, 2, 3… instead of evidence numbers.
+  const markers = [];
+  renderMarkdown(document.createElement("div"), parts.answer, (marker) => {
+    const numbers = markerNumbers(marker);
+    if (numbers) markers.push(numbers);
+    return null;
+  });
+  const labels = citationLabels(markers, turn.evidence || []);
+  turnCitationLabels.set(turn, { labels, cited: new Set(markers.flat()).size });
   const body = document.createElement("div");
   body.className = "answer-body";
   renderMarkdown(body, parts.answer, (marker) => {
-    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
-    if (!numbers.every((number) => citations.has(number))) return null;
+    const numbers = markerNumbers(marker);
+    if (!numbers) return null;
     const superscript = document.createElement("sup");
     superscript.className = "answer-citation";
     numbers.forEach((number, index) => {
       if (index) superscript.append(document.createTextNode(","));
       const link = document.createElement("button");
       link.type = "button";
-      link.textContent = String(number);
-      link.setAttribute("aria-label", `Show reference ${number}`);
+      link.textContent = String(labels.get(number));
+      link.setAttribute("aria-label", `Show reference ${labels.get(number)}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
         chooseSidePanels(true);
