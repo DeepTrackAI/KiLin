@@ -1890,14 +1890,88 @@ class ChatEngine:
             trace=self.active_trace,
         )
 
-    def add_project_sources(self, sources: list[str]) -> None:
+    def check_sources(self, sources: list[str]) -> None:
+        """Tell the user what adding these sources would copy.
+
+        Parameters
+        ----------
+        sources: list[str]
+            Files and folders the user dropped or chose.
+
+        Notes
+        -----
+        Sends ``sources_checked`` with the files that would be added, those
+        left out for their type or size, and, for sources already in the
+        project, which of their copies changed since they were copied;
+        nothing is copied. The user then confirms with
+        ``add_project_sources``.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if (
+                not sources
+                or not isinstance(sources, list)
+                or not all(
+                    isinstance(path, str) and path.strip() for path in sources
+                )
+            ):
+                raise ValueError("Choose source files or folders.")
+            project = self.session.project
+            plan = _source_plan(project, sources)
+            changes = {"added": [], "changed": [], "deleted": [], "edited": []}
+            existing = [
+                item["name"] for item in plan["add"]
+                if item["state"] == "existing"
+            ]
+            if existing:
+                found = find_source_changes(project)
+                changes = {
+                    group: [
+                        path for path in paths
+                        if any(
+                            path == f"sources/{name}"
+                            or path.startswith(f"sources/{name}/")
+                            for name in existing
+                        )
+                    ]
+                    for group, paths in found.items()
+                }
+            self._send(
+                "sources_checked",
+                sources=sources,
+                add=plan["add"],
+                files=plan["files"],
+                skipped_folders=[Path(path).name for path in plan["skipped"]],
+                changes=changes,
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.sources.check.failed",
+                error,
+                f"Could not check the sources: {error}",
+            )
+
+    def add_project_sources(
+        self, sources: list[str], decisions: object = None
+    ) -> None:
         """Add confirmed sources and restore the active chat.
 
         Parameters
         ----------
         sources: list[str]
-            New source paths approved for addition to the active
-            project.
+            Source paths approved for addition to the active project.
+        decisions: object, optional
+            For sources already in the project, sync actions keyed by the
+            ``sources/`` paths reported by ``check_sources``. Defaults to
+            ``None``: copies already in the project stay as they are.
+
+        Notes
+        -----
+        Only sources not yet in the project are copied; folders without any
+        file to copy are skipped. The index is refreshed once at the end.
 
         """
 
@@ -1924,13 +1998,38 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
-            left_out = _left_out_files(self.session.project, sources)
-            project = add_project_sources(
-                root, sources, trace=self.active_trace
-            )
-            self._refresh_sources(project)
-            if left_out:
-                self._send("sources_left_out", files=left_out)
+            if decisions is not None and not (
+                isinstance(decisions, dict)
+                and all(
+                    isinstance(path, str) and isinstance(action, str)
+                    for path, action in decisions.items()
+                )
+            ):
+                raise ValueError("Source decisions must map paths to actions.")
+            # A folder without a single file of the project's types cannot
+            # be copied, and a source already in the project changes only
+            # through the user's choices; the check told the user both.
+            plan = _source_plan(self.session.project, sources)
+            new = [
+                value
+                for value, item in zip(plan["sources"], plan["add"])
+                if item["state"] != "existing"
+            ]
+            if new:
+                add_project_sources(root, new, trace=self.active_trace)
+            if decisions:
+                done = sync_project_sources(
+                    open_project(root), decisions=decisions
+                )
+                self.active_trace.emit(
+                    "gui.sources.synced", component="gui_engine", data=done
+                )
+            if new or decisions:
+                self._refresh_sources(open_project(root))
+            else:
+                self._announce_project(
+                    self.session.project, self.active_conversation
+                )
         except Exception as error:
             # A failed copy may have written some files: index what is there,
             # so an old in-memory index is never used.
@@ -3638,10 +3737,32 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
     raise ValueError("Choose an effort level and a search depth.")
 
 
-def _left_out_files(
+def _imported_sources(project: QAProject) -> dict[str, str]:
+    """Map each imported original path to its name under ``sources/``.
+
+    Parameters
+    ----------
+    project: QAProject
+        Open project whose ``sources.json`` records the imports.
+
+    Returns
+    -------
+    dict[str, str]
+        Resolved original path to copy name; empty without a manifest.
+
+    """
+
+    manifest = project.root / "sources.json"
+    if not manifest.is_file():
+        return {}
+    records = json.loads(manifest.read_text(encoding="utf-8"))["sources"]
+    return {record["original"]: record["name"] for record in records}
+
+
+def _source_plan(
     project: QAProject, sources: list[str]
-) -> list[dict[str, str]]:
-    """List files in added folders that the project does not copy.
+) -> dict[str, list]:
+    """Work out what adding these sources would copy, without copying.
 
     Parameters
     ----------
@@ -3652,16 +3773,24 @@ def _left_out_files(
 
     Returns
     -------
-    list[dict[str, str]]
-        ``path`` (folder name and file, such as ``GAUDI/settings.json``) and
-        ``reason_code`` of each file left out for its type or size, in scan
-        order.
+    dict[str, list]
+        ``add``: ``name``, ``kind`` (``file`` or ``folder``), number of
+        ``files`` and ``state`` for each source that adds something:
+        ``new``; ``renamed``, a different source whose name is taken, so
+        the core copies it under another name; or ``existing``, already
+        imported from this path, with ``name`` its copy under ``sources/``.
+        ``sources``: the given values in the same order as ``add``.
+        ``files``: ``path`` (folder name and file, such as
+        ``GAUDI/settings.json``) and ``reason_code`` of each file left out
+        for its type or size, in scan order. ``skipped``: the sources, as
+        given, of folders with no file to copy.
 
     Notes
     -----
     Folders are scanned with the same rules as the copy. Files left out on
-    purpose, such as secrets or ``.DS_Store``, are not listed, and neither
-    are directly added files, which are always copied.
+    purpose, such as secrets or ``.DS_Store``, are not listed. Directly
+    added files are always copied. Sources are matched by the original
+    path, as the core does, not by name.
 
     """
 
@@ -3669,24 +3798,40 @@ def _left_out_files(
         SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
         SELECTION_REASON_FILE_TOO_LARGE,
     }
-    files = []
+    imported = _imported_sources(project)
+    taken = set(imported.values())
+    plan: dict[str, list] = {
+        "add": [], "sources": [], "files": [], "skipped": []
+    }
+    root = project.root.resolve()
     for value in sources:
         source = Path(value).expanduser()
+        resolved = source.resolve()
+        name = imported.get(str(resolved))
+        state = (
+            "existing" if name is not None
+            else "renamed" if source.name in taken
+            or (project.root / "sources" / source.name).exists()
+            else "new"
+        )
         if source.is_symlink() or not source.is_dir():
+            plan["add"].append({
+                "name": name or source.name, "kind": "file", "files": 1,
+                "state": state,
+            })
+            plan["sources"].append(value)
             continue
-        source = source.resolve()
-        root = project.root.resolve()
         report = scan_repository(
-            source,
+            resolved,
             extensions=project.profile.extensions,
             exclude_paths=(
-                (root.relative_to(source).as_posix(),)
-                if root.is_relative_to(source)
+                (root.relative_to(resolved).as_posix(),)
+                if root.is_relative_to(resolved)
                 else ()
             ),
             max_file_bytes=project.profile.max_file_bytes,
         )
-        files.extend(
+        plan["files"].extend(
             {
                 "path": f"{source.name}/{row['path']}",
                 "reason_code": row["reason_code"],
@@ -3694,7 +3839,16 @@ def _left_out_files(
             for row in report["entries"]
             if row["kind"] == "file" and row["reason_code"] in shown
         )
-    return files
+        selected = len(report["selected_files"])
+        if selected:
+            plan["add"].append({
+                "name": name or source.name, "kind": "folder",
+                "files": selected, "state": state,
+            })
+            plan["sources"].append(value)
+        elif report["complete"]:
+            plan["skipped"].append(value)
+    return plan
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:
@@ -3880,8 +4034,12 @@ def main() -> None:
                         )
                     elif action == "delete_conversation":
                         engine.delete_conversation(command["conversation_id"])
+                    elif action == "check_sources":
+                        engine.check_sources(command["sources"])
                     elif action == "add_project_sources":
-                        engine.add_project_sources(command["sources"])
+                        engine.add_project_sources(
+                            command["sources"], command.get("decisions")
+                        )
                     elif action == "remove_project_sources":
                         engine.remove_project_sources(command["paths"])
                     elif action == "sync_sources":

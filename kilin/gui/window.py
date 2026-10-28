@@ -693,13 +693,35 @@ class ChatBridge(QObject):
         self.sourceDropTargetChanged.emit(bounds_json)
 
     @Slot(str)
-    def addProjectSources(self, sources_json: str) -> None:
-        """Import sources after the page's rebuild confirmation.
+    def checkProjectSources(self, sources_json: str) -> None:
+        """Ask what adding these sources would copy, before adding.
+
+        Parameters
+        ----------
+        sources_json: str
+            JSON-encoded source paths dropped or chosen in the page.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "check_sources",
+                "sources": json.loads(sources_json),
+            }
+        )
+
+    @Slot(str, str)
+    def addProjectSources(
+        self, sources_json: str, decisions_json: str
+    ) -> None:
+        """Import sources after the user confirmed the check.
 
         Parameters
         ----------
         sources_json: str
             JSON-encoded source paths selected in the page.
+        decisions_json: str
+            JSON object of sync actions for copies already in the project.
 
         """
 
@@ -707,6 +729,7 @@ class ChatBridge(QObject):
             {
                 "action": "add_project_sources",
                 "sources": json.loads(sources_json),
+                "decisions": json.loads(decisions_json),
             }
         )
 

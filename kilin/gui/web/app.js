@@ -299,18 +299,17 @@ function renderSavedProjects(projects) {
 }
 
 /**
- * Normalize and deduplicate source paths, then request a preview.
+ * Check sources for an open project, or add them to a new project's preview.
  *
  * @param paths Local paths provided by a native dialog or drag-and-drop.
  */
 function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
-    const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources, replacing any earlier copy, and updates the index; this may take a while.`)) return;
+    // Check first: the dialog shows what would be added and left out.
     error.classList.add("hidden");
-    setBusy(true, "Adding sources and updating the index…");
-    bridge.addProjectSources(JSON.stringify(paths));
+    setBusy(true, "Checking the sources…");
+    bridge.checkProjectSources(JSON.stringify(paths));
     return;
   }
   for (const path of paths) {
@@ -495,21 +494,6 @@ function fileTree(files) {
 function isOversizedSkippedFile(item) {
   return selectionReasonCodes !== null
     && item.reason_code === selectionReasonCodes.FILE_TOO_LARGE;
-}
-
-/**
- * Remind the user which files of added folders KíLín left out.
- *
- * @param files ``sources_left_out`` rows: ``path`` and ``reason_code``.
- * @returns Short message naming up to ten files and why each was left out.
- */
-function sourcesLeftOutMessage(files) {
-  const shown = files.slice(0, 10).map((file) => `${file.path} (${
-    file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE ? "too large" : "file type not included"
-  })`);
-  if (files.length > 10) shown.push(`and ${files.length - 10} more`);
-  const count = `${files.length} file${files.length === 1 ? "" : "s"}`;
-  return `KíLín left out ${count} it does not index in this project:\n\n${shown.join("\n")}\n\nThe other files were added.`;
 }
 
 /**
@@ -1867,6 +1851,175 @@ byId("source-sync-apply").addEventListener("click", () => {
     decisions[input.dataset.path] = input.value;
   }
   syncSources(decisions);
+});
+
+/**
+ * Count the copies of already imported sources that changed.
+ *
+ * @param changes The check's ``changes``: ``sources/`` paths by group.
+ * @returns Files the user can bring in, update or remove.
+ */
+function sourceAddPending(changes) {
+  return changes.added.length + changes.changed.length + changes.deleted.length;
+}
+
+/**
+ * Sum up what adding the checked sources would copy and leave out.
+ *
+ * @param check The ``sources_checked`` event: ``add`` (``name``, ``kind``,
+ *   ``files``, ``state``), left-out ``files``, ``skipped_folders`` and the
+ *   ``changes`` of sources already in the project.
+ * @returns The sentence at the top of the add dialog.
+ */
+function sourceAddSummary(check) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  if (!count && !existing.length) return "Nothing can be added: this project does not index these files.";
+  const parts = [];
+  if (count) parts.push(`KíLín will add ${files(count)}.`);
+  if (existing.length) {
+    const one = existing.length === 1;
+    const names = existing.map((item) => item.name).join(", ");
+    const pending = sourceAddPending(check.changes);
+    parts.push(pending
+      ? `${names} ${one ? "is" : "are"} already in the project; ${files(pending)} changed since ${one ? "it was" : "they were"} copied.`
+      : `${names} ${one ? "is" : "are"} already in the project, with no changes.`);
+  }
+  const left = check.files.length;
+  if (left) parts.push(`${files(left)} ${left === 1 ? "is" : "are"} left out because this project does not index ${left === 1 ? "it" : "them"}.`);
+  return parts.join(" ");
+}
+
+/**
+ * Say why a checked file is left out.
+ *
+ * @param file A left-out row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function sourceAddReason(file) {
+  return file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE ? "Too large" : "File type not included";
+}
+
+let sourceAddPaths = [];
+
+/**
+ * Build one row of the add dialog.
+ *
+ * @param group ``added`` for files to add, ``left-out`` otherwise.
+ * @param relative Folder and file name to show.
+ * @param detail Muted text on the right.
+ * @returns The list item.
+ */
+function sourceAddRow(group, relative, detail) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  const side = document.createElement("span");
+  side.className = "sync-kept";
+  side.textContent = detail;
+  item.append(name, side);
+  return item;
+}
+
+/**
+ * Show what adding the dropped sources would copy, and ask to go on.
+ *
+ * Sources already in the project are matched by their original path: an
+ * unchanged one needs nothing, and files that changed since they were
+ * copied get the same choices as in the sync dialog. A different file
+ * with a taken name is copied under a new name.
+ *
+ * @param check The ``sources_checked`` event.
+ */
+function showSourceAdd(check) {
+  sourceAddPaths = check.sources;
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  const pending = sourceAddPending(check.changes);
+  byId("source-add-summary").textContent = sourceAddSummary(check);
+  const counts = byId("source-add-counts");
+  const list = byId("source-add-files");
+  counts.replaceChildren();
+  list.replaceChildren();
+  const { added, changed, deleted } = check.changes;
+  const differing = (item) => [...added, ...changed, ...deleted].filter((path) => (
+    path === `sources/${item.name}` || path.startsWith(`sources/${item.name}/`)
+  )).length;
+  const sections = [
+    ["added", "To add", count ? `${count} to add` : null, adding.map((item) => sourceAddRow(
+      "added", item.name, item.state === "renamed"
+        ? "Same name, different file · added under a new name"
+        : item.kind === "folder" ? files(item.files) : "File",
+    ))],
+    ["", "Already in the project", existing.length ? `${existing.length} already added` : null, existing.map((item) => sourceAddRow(
+      "", item.name, differing(item) ? `${files(differing(item))} changed since copied` : "No changes",
+    ))],
+  ];
+  // A chip only: the changed files are listed under their own headings.
+  sections.push(["changed", "", pending ? `${pending} changed` : null, []]);
+  // Radio names must not repeat those of the sync dialog's rows.
+  let index = 100000;
+  for (const { group, paths } of sourceSyncGroups(check.changes)) {
+    const heading = {
+      added: "New in the original", changed: "Changed in the original",
+      deleted: "Deleted from the original", edited: "Edited by you",
+    }[group];
+    sections.push([group, heading, null, paths.map((path) => sourceSyncRow(group, path, index++))]);
+  }
+  sections.push(
+    ["left-out", "Left out", check.files.length ? `${check.files.length} left out` : null, [
+      ...check.files.slice(0, 100).map((file) => sourceAddRow("left-out", file.path, sourceAddReason(file))),
+      ...(check.files.length > 100 ? [sourceAddRow("left-out", `and ${check.files.length - 100} more`, "")] : []),
+    ]],
+    ["left-out", "Not added", null, check.skipped_folders.map((name) => sourceAddRow(
+      "left-out", name, "No files this project indexes",
+    ))],
+  );
+  for (const [group, title, chip, rows] of sections) {
+    if (chip) {
+      const item = document.createElement("li");
+      item.className = `sync-count ${group}`;
+      item.textContent = chip;
+      counts.append(item);
+    }
+    if (!rows.length) continue;
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    items.append(...rows);
+    list.append(heading, items);
+  }
+  const confirm = byId("source-add-confirm");
+  confirm.classList.toggle("hidden", !count && !pending);
+  confirm.textContent = count ? "Add" : "Update";
+  byId("source-add-cancel").textContent = count || pending ? "Cancel" : "Close";
+  byId("source-add").showModal();
+}
+
+byId("source-add-cancel").addEventListener("click", () => byId("source-add").close());
+byId("source-add-confirm").addEventListener("click", () => {
+  byId("source-add").close();
+  if (busy || !bridge) return;
+  const decisions = {};
+  for (const input of byId("source-add-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  setBusy(true, "Adding sources and updating the index…");
+  bridge.addProjectSources(JSON.stringify(sourceAddPaths), JSON.stringify(decisions));
 });
 
 /**
@@ -3603,8 +3756,9 @@ function onEvent(raw) {
     }
   } else if (data.event === "source_changes") {
     showSourceSync(data);
-  } else if (data.event === "sources_left_out") {
-    alert(sourcesLeftOutMessage(data.files));
+  } else if (data.event === "sources_checked") {
+    setBusy(false);
+    showSourceAdd(data);
   } else if (data.event === "folder_changed") {
     renderWorkspace(data.workspace_files);
     setBusy(false);

@@ -10,6 +10,7 @@ Real project/index files are used, with mocked local model sessions.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -301,8 +302,8 @@ class TestEngineModelTransitions(unittest.TestCase):
         )
         self.assertIn("gui_sources_remove_requested", self.trace_text())
 
-    def test_added_folder_reports_files_left_out(self):
-        """Remind the user of files the project does not index."""
+    def test_check_lists_files_to_add_and_left_out(self):
+        """The check before adding copies nothing and explains the rest."""
         folder = self.root / "notes"
         folder.mkdir()
         (folder / "kept.txt").write_text(
@@ -310,29 +311,102 @@ class TestEngineModelTransitions(unittest.TestCase):
         )
         (folder / "data.json").write_text("{}", encoding="utf-8")
         (folder / ".DS_Store").write_text("finder", encoding="utf-8")
-        self.engine.add_project_sources([str(folder)])
-        names = [event["event"] for event in self.events]
-        self.assertLess(names.index("opened"), names.index("sources_left_out"))
+        code = self.root / "ops"
+        code.mkdir()
+        (code / "edges.py").write_text("x = 1\n", encoding="utf-8")
+        note = self.root / "note.json"
+        note.write_text("{}", encoding="utf-8")
+        sources = [str(folder), str(code), str(note)]
+        self.events.clear()
+        self.engine.check_sources(sources)
         self.assertEqual(
-            self.events[-1],
-            {
-                "event": "sources_left_out",
+            self.events,
+            [{
+                "event": "sources_checked",
+                "sources": sources,
+                "add": [
+                    {
+                        "name": "notes", "kind": "folder", "files": 1,
+                        "state": "new",
+                    },
+                    {
+                        "name": "note.json", "kind": "file", "files": 1,
+                        "state": "new",
+                    },
+                ],
                 "files": [
                     {
                         "path": "notes/data.json",
                         "reason_code": "file_type_not_selected",
-                    }
+                    },
+                    {
+                        "path": "ops/edges.py",
+                        "reason_code": "file_type_not_selected",
+                    },
                 ],
-            },
+                "skipped_folders": ["ops"],
+                "changes": {
+                    "added": [], "changed": [], "deleted": [], "edited": [],
+                },
+            }],
         )
-        self.assertTrue((self.project.source / "notes/kept.txt").is_file())
+        self.assertFalse((self.project.source / "notes").exists())
 
-        self.events.clear()
-        (folder / "data.json").unlink()
-        self.engine.add_project_sources([str(folder)])
-        self.assertNotIn(
-            "sources_left_out", [event["event"] for event in self.events]
+    def test_check_recognises_sources_already_in_the_project(self):
+        """Same original: unchanged or changed; same name: renamed."""
+        note = self.root / "note.txt"
+        note.write_text("First note about attention.", encoding="utf-8")
+        os.utime(note, ns=(10**18, 10**18))
+        self.engine.add_project_sources([str(note)])
+        copy = self.project.source / "note.txt"
+        self.assertTrue(copy.is_file())
+
+        def check(path: Path) -> dict:
+            self.events.clear()
+            self.engine.check_sources([str(path)])
+            return self.events[-1]
+
+        unchanged = check(note)
+        self.assertEqual(unchanged["add"][0]["state"], "existing")
+        self.assertEqual(unchanged["changes"]["changed"], [])
+        other = self.root / "elsewhere" / "note.txt"
+        other.parent.mkdir()
+        other.write_text("A different note.", encoding="utf-8")
+        self.assertEqual(check(other)["add"][0]["state"], "renamed")
+
+        note.write_text("Updated note about attention.", encoding="utf-8")
+        os.utime(note, ns=(2 * 10**18, 2 * 10**18))
+        self.assertEqual(
+            check(note)["changes"]["changed"], ["sources/note.txt"]
         )
+        # Adding again without a choice keeps the old copy.
+        self.engine.add_project_sources([str(note)])
+        self.assertIn("First", copy.read_text(encoding="utf-8"))
+        self.engine.add_project_sources(
+            [str(note)], {"sources/note.txt": "replace"}
+        )
+        self.assertIn("Updated", copy.read_text(encoding="utf-8"))
+        self.engine.add_project_sources([str(note)], ["not", "a", "dict"])
+        self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_folder_without_project_files_is_skipped(self):
+        """Adding skips a folder with nothing to copy instead of failing."""
+        code = self.root / "ops"
+        code.mkdir()
+        (code / "edges.py").write_text("x = 1\n", encoding="utf-8")
+        note = self.root / "note.txt"
+        note.write_text("Another note about attention.", encoding="utf-8")
+        for sources in ([code, note], [code]):
+            with self.subTest(sources=len(sources)):
+                self.events.clear()
+                self.engine.add_project_sources(
+                    [str(path) for path in sources]
+                )
+                names = [event["event"] for event in self.events]
+                self.assertNotIn("error", names)
+                self.assertIn("opened", names)
+        self.assertTrue((self.project.source / "note.txt").is_file())
+        self.assertFalse((self.project.source / "ops").exists())
 
     def test_remove_source_rejects_paths_outside_sources(self):
         """Reject source-removal requests targeting project metadata."""

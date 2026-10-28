@@ -149,6 +149,10 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "delete_conversation",
             ),
             (
+                {"action": "check_sources", "sources": ["/more"]},
+                "check_sources",
+            ),
+            (
                 {"action": "add_project_sources", "sources": ["/more"]},
                 "add_project_sources",
             ),
@@ -605,7 +609,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "model_downloaded", "models_applied", "opened", "preview",
             "progress", "projects", "readiness", "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
-            "sources_left_out", "status", "stopped", "trace_ready",
+            "sources_checked", "status", "stopped", "trace_ready",
             "usage_progress",
         })
 
