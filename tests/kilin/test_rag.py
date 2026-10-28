@@ -23,6 +23,11 @@ from unittest.mock import DEFAULT, MagicMock, Mock, patch, sentinel
 import warnings
 
 from kilin import rag
+from kilin.workspace import (
+    list_source_versions,
+    prepare_sources_workspace,
+    sync_project_sources,
+)
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     new_conversation_session,
@@ -2443,6 +2448,85 @@ class TestRAGSourcePreparation(unittest.TestCase):
             "selected_files": ["a.py", "b.py"] if names is None else names,
             "entries": [],
         }
+
+    def test_preserved_versions_are_separately_indexed(self) -> None:
+        """Retained and current copies yield distinct indexed evidence."""
+
+        original = self.root / "external"
+        original.mkdir()
+        file = original / "analysis.py"
+        file.write_text(
+            "def evaluate():\n    return 10\n", encoding="utf-8"
+        )
+        project = prepare_sources_workspace(
+            [original], "code", self.root / "managed"
+        )
+        file.write_text(
+            "def evaluate():\n    return 20\n", encoding="utf-8"
+        )
+        sync_project_sources(project, decisions={
+            "sources/external/analysis.py": "keep_both",
+        })
+        versions = list_source_versions(project)
+        self.assertEqual(len(versions), 1)
+        self.session.project = project
+        embedding = FakeEmbeddings()
+        embedding.model_id = "fake-embedding"
+        embedding.model_source = "local-test-model"
+        embedding.count_tokens = lambda text: len(text.split())
+        with patch.object(
+            rag, "embedding_model_identity", return_value="fake-id"
+        ):
+            chunks, indexes, status, _ = self.session._prepare_retrieval(
+                embedding
+            )
+        self.assertEqual(status, "rebuilt")
+        expected = {
+            Path("external/analysis.py"),
+            Path(versions[0]["version"]).relative_to("sources"),
+        }
+        self.assertEqual({item.path for item in chunks}, expected)
+        self.assertEqual(
+            {item.path for item in indexes.semantic.chunks}, expected
+        )
+        manifest = json.loads(
+            (project.indexes / "source_manifest.json").read_text()
+        )
+        self.assertEqual(set(manifest["files"]), {
+            item.as_posix() for item in expected
+        })
+        self.assertEqual(len(embedding.calls), 1)
+        self.assertEqual(len(embedding.calls[0]), 2)
+        self.assertEqual({
+            str(item.path): item.text for item in chunks
+        }["external/analysis.py"], "def evaluate():\n    return 20\n")
+        self.assertIn(
+            "return 10", next(
+                item.text for item in chunks
+                if item.path != Path("external/analysis.py")
+            )
+        )
+
+        # The retained version is unchanged on the next refresh, so the
+        # source identity and its embedding can be reused as-is.
+        file.write_text(
+            "def evaluate():\n    return 30\n", encoding="utf-8"
+        )
+        sync_project_sources(project, decisions={
+            "sources/external/analysis.py": "replace",
+        })
+        with patch.object(
+            rag, "embedding_model_identity", return_value="fake-id"
+        ):
+            updated, _, refreshed, delta = self.session._prepare_retrieval(
+                embedding
+            )
+        self.assertEqual(refreshed, "rebuilt")
+        self.assertEqual(
+            {item.path for item in updated}, expected
+        )
+        self.assertEqual(delta["modified"], ["external/analysis.py"])
+        self.assertEqual(len(embedding.calls[-1]), 1)
 
     def test_source_preparation_extracts_chunks_and_code_graph(self) -> None:
         """Build source chunks and code graphs from the repository."""

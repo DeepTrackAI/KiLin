@@ -136,9 +136,10 @@ class TestEngineResume(unittest.TestCase):
 
 
     def test_changed_originals_are_reported_after_resume(self) -> None:
-        """Send source_changes only when a copy can be updated."""
+        """Send source_changes only when a file can be synced."""
 
         changes = {
+            "added": ["sources/repository/new.py"],
             "changed": ["sources/notes.md"],
             "deleted": ["sources/repository/b.py"],
             "edited": [],
@@ -150,10 +151,23 @@ class TestEngineResume(unittest.TestCase):
         check.assert_called_once_with(self.project)
         self.assertEqual(self.events, [{"event": "source_changes", **changes}])
 
+        # Each group alone is enough to ask.
+        for group in ("added", "changed", "deleted"):
+            self.events.clear()
+            one = {"added": [], "changed": [], "deleted": [], "edited": []}
+            one[group] = ["sources/a.md"]
+            with patch.object(
+                gui_engine, "find_source_changes", return_value=one
+            ):
+                self.engine.resume_project(str(self.root))
+            self.assertEqual(self.events, [{"event": "source_changes", **one}])
+
         # Nothing to update when only edited copies differ.
         for edited in ([], ["sources/repository/a.py"]):
             self.events.clear()
-            unchanged = {"changed": [], "deleted": [], "edited": edited}
+            unchanged = {
+                "added": [], "changed": [], "deleted": [], "edited": edited,
+            }
             with patch.object(
                 gui_engine, "find_source_changes", return_value=unchanged
             ):
@@ -172,27 +186,52 @@ class TestEngineResume(unittest.TestCase):
         self.assertEqual(self.events, [])
 
     def test_sync_updates_sources_then_reindexes(self) -> None:
-        """Syncing refreshes the index, even after a failed copy."""
+        """Syncing applies the choices and refreshes the index, even after a
+        failed copy."""
 
         session = SimpleNamespace(project=self.project)
         self.engine.session = session
+        decisions = {"sources/a.md": "keep_both", "sources/b.md": "import"}
         for failure in (None, OSError("disk full")):
             with self.subTest(failure=failure):
                 self.events.clear()
                 with patch.object(
                     gui_engine, "sync_project_sources", side_effect=failure,
-                    return_value={"changed": [], "deleted": [], "edited": []},
+                    return_value={
+                        "added": [], "changed": [], "deleted": [],
+                        "edited": [],
+                    },
                 ) as sync, patch.object(
                     self.engine, "_refresh_sources"
                 ) as refresh:
-                    self.engine.sync_sources()
-                sync.assert_called_once_with(self.project)
+                    self.engine.sync_sources(decisions)
+                sync.assert_called_once_with(
+                    self.project, decisions=decisions
+                )
                 refresh.assert_called_once_with(self.project)
                 errors = [
                     event for event in self.events
                     if event["event"] == "error"
                 ]
                 self.assertEqual(len(errors), failure is not None)
+
+
+    def test_sync_rejects_malformed_decisions(self) -> None:
+        """Bad choices are reported without touching files or the index."""
+
+        self.engine.session = SimpleNamespace(project=self.project)
+        for decisions in (["sources/a.md"], {"sources/a.md": 1}):
+            with self.subTest(decisions=decisions):
+                self.events.clear()
+                with patch.object(
+                    gui_engine, "sync_project_sources"
+                ) as sync, patch.object(
+                    self.engine, "_refresh_sources"
+                ) as refresh:
+                    self.engine.sync_sources(decisions)
+                sync.assert_not_called()
+                refresh.assert_not_called()
+                self.assertEqual(self.events[-1]["event"], "error")
 
 
 if __name__ == "__main__":
