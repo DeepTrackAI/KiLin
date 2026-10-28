@@ -84,8 +84,10 @@ paths and source paths remain subject to downstream core validation.
 | `select_conversation` | `conversation_id` | Switch to a saved conversation |
 | `rename_conversation` | `conversation_id`, `name` | Rename the registered conversation |
 | `delete_conversation` | `conversation_id` | Archive/remove it from the visible catalog |
-| `add_project_sources` | `sources` | Add confirmed source paths and rebuild as needed |
+| `check_sources` | `sources` | Report what adding these files and folders would copy and leave out, without copying; the page asks the user before `add_project_sources` |
+| `add_project_sources` | `sources`, optional `decisions` (`sources/` path → sync action) | Copy the sources not yet in the project, skipping folders without any file to copy; apply the user's choices to copies of sources already in the project; reindex once |
 | `remove_project_sources` | `paths` | Remove confirmed copied project sources |
+| `sync_sources` | `decisions` (object of `sources/` path → `import`, `replace`, `keep_both`, `delete` or `keep`) | Apply the user's choice per changed file, leave unlisted files and edited copies untouched, and reindex |
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
@@ -143,9 +145,9 @@ can accompany an event.
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
-| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`) |
-| Conversation | `conversation_opened` (`turns`, settings, usage, and conversation metadata); `conversations` (catalog and active ID); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
-| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, optionally `workspace_files`); `progress` (core progress record) |
+| Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
+| Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
+| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`); `backend_failed` (`message`) |
@@ -157,6 +159,33 @@ The process-recovery events `stopped` and `backend_restarted`, and some
 `error` events, originate in `window.py`, not `engine.py`. Diagnostic trace
 event names such as `gui.project.settings.saved` are a **separate** trace
 schema and are not browser events.
+
+### Open-project source-add confirmation
+
+`check_sources` delegates the import plan to
+`kilin.preview_project_sources()`. A `sources_checked` event lists only
+eligible imports in `add`, with core-allocated destination names (`state` is
+`new`, `renamed`, or `existing`). The `sources` array in the plan corresponds
+to these eligible imports, even when the user's original selection includes
+files that cannot be copied. The GUI keeps the originally requested paths in
+the event for confirmation and rechecks the plan on the add command.
+
+Direct files bypass directory suffix and protected-name filters but remain
+subject to the project's saved nonempty/file-size rule. Empty and oversized
+files appear in `files` with `empty_file` and `file_too_large` reason codes.
+Missing, linked, or unsupported paths and conflicting destination names
+produce an `error` event rather than a misleading addition preview. Name
+collisions within one selection batch use the same hashed destination names
+as the importer. The plan is read-only, not a reservation: filesystem changes
+between preview and import are checked again by the core.
+
+On resume, `source_changes` describes pending source differences without
+modifying snapshots. The user must confirm synchronization; accepted changes
+are indexed once afterward. A deleted original explicitly kept by the user
+is detached. If that original later returns to the same path, the retained
+copy is reported as `changed`, and an explicit `replace` or `keep_both`
+choice is needed to reconcile it; the automatic core policy keeps it.
+Replacing a source with an empty or oversized original fails before copying.
 
 ### Source-preview contract
 

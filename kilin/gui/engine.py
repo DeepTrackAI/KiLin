@@ -120,7 +120,10 @@ from kilin import RAGSession, prepare_sources_workspace
 from kilin.workspace import (
     add_project_sources,
     default_workspace_path,
+    find_source_changes,
+    preview_project_sources,
     remove_workspace_sources,
+    sync_project_sources,
 )
 from kilin.project_files import (
     add_project_files,
@@ -1037,6 +1040,7 @@ class ChatEngine:
             )
             self._start_project_trace(project.root, conversation)
             self._activate_project(project, conversation)
+            self._report_source_changes(project)
         except Exception as error:
             self._report_error(
                 "gui.project.resume.failed",
@@ -1045,6 +1049,36 @@ class ChatEngine:
             )
             if self.session is None:
                 self._close_project_trace()
+
+    def _report_source_changes(self, project: QAProject) -> None:
+        """Tell the frontend which originals changed since their import.
+
+        Parameters
+        ----------
+        project: QAProject
+            Reopened project whose copies are compared with their originals.
+
+        Notes
+        -----
+        Sends ``source_changes`` only when a file can be imported, updated
+        or removed, so the user can choose per file. Copies the user edited
+        are listed but always kept. A failed check is traced but not shown:
+        the project is already open and usable.
+
+        """
+
+        try:
+            changes = find_source_changes(project)
+        except Exception as error:
+            self.active_trace.exception(
+                "gui.sources.changes.failed", error, component="gui_engine"
+            )
+            return
+        self.active_trace.emit(
+            "gui.sources.changes.found", component="gui_engine", data=changes
+        )
+        if changes["added"] or changes["changed"] or changes["deleted"]:
+            self._send("source_changes", **changes)
 
     def settings(self, type_id: str, workspace: str) -> None:
         """Return saved or default settings and cached model IDs.
@@ -1450,7 +1484,9 @@ class ChatEngine:
         sources: list[str]
             Files or folders the user selected.
         extensions: list[str]
-            Additional text file types requested by the user.
+            File types the new project copies: its type's own and any the
+            user added. Folder files of other types are listed as skipped,
+            so they cannot be ticked.
         max_file_bytes: int
             Largest file that may be copied.
         workspace: str, optional
@@ -1469,9 +1505,7 @@ class ChatEngine:
 
         try:
             roots = []
-            allowed_extensions = tuple(
-                dict.fromkeys((*DEFAULT_EXTENSIONS, *extensions))
-            )
+            allowed_extensions = tuple(dict.fromkeys(extensions))
             destination = _workspace_path(sources, self.sandbox, workspace)
             for value in sources:
                 original = Path(value).expanduser()
@@ -1856,14 +1890,88 @@ class ChatEngine:
             trace=self.active_trace,
         )
 
-    def add_project_sources(self, sources: list[str]) -> None:
+    def check_sources(self, sources: list[str]) -> None:
+        """Tell the user what adding these sources would copy.
+
+        Parameters
+        ----------
+        sources: list[str]
+            Files and folders the user dropped or chose.
+
+        Notes
+        -----
+        Sends ``sources_checked`` with the files that would be added, those
+        left out for their type or size, and, for sources already in the
+        project, which of their copies changed since they were copied;
+        nothing is copied. The user then confirms with
+        ``add_project_sources``.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if (
+                not sources
+                or not isinstance(sources, list)
+                or not all(
+                    isinstance(path, str) and path.strip() for path in sources
+                )
+            ):
+                raise ValueError("Choose source files or folders.")
+            project = self.session.project
+            plan = preview_project_sources(project, sources)
+            changes = {"added": [], "changed": [], "deleted": [], "edited": []}
+            existing = [
+                item["name"] for item in plan["add"]
+                if item["state"] == "existing"
+            ]
+            if existing:
+                found = find_source_changes(project)
+                changes = {
+                    group: [
+                        path for path in paths
+                        if any(
+                            path == f"sources/{name}"
+                            or path.startswith(f"sources/{name}/")
+                            for name in existing
+                        )
+                    ]
+                    for group, paths in found.items()
+                }
+            self._send(
+                "sources_checked",
+                sources=sources,
+                add=plan["add"],
+                files=plan["files"],
+                skipped_folders=[Path(path).name for path in plan["skipped"]],
+                changes=changes,
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.sources.check.failed",
+                error,
+                f"Could not check the sources: {error}",
+            )
+
+    def add_project_sources(
+        self, sources: list[str], decisions: object = None
+    ) -> None:
         """Add confirmed sources and restore the active chat.
 
         Parameters
         ----------
         sources: list[str]
-            New source paths approved for addition to the active
-            project.
+            Source paths approved for addition to the active project.
+        decisions: object, optional
+            For sources already in the project, sync actions keyed by the
+            ``sources/`` paths reported by ``check_sources``. Defaults to
+            ``None``: copies already in the project stay as they are.
+
+        Notes
+        -----
+        Only sources not yet in the project are copied; folders without any
+        file to copy are skipped. The index is refreshed once at the end.
 
         """
 
@@ -1890,10 +1998,38 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
-            project = add_project_sources(
-                root, sources, trace=self.active_trace
-            )
-            self._refresh_sources(project)
+            if decisions is not None and not (
+                isinstance(decisions, dict)
+                and all(
+                    isinstance(path, str) and isinstance(action, str)
+                    for path, action in decisions.items()
+                )
+            ):
+                raise ValueError("Source decisions must map paths to actions.")
+            # A folder without a single file of the project's types cannot
+            # be copied, and a source already in the project changes only
+            # through the user's choices; the check told the user both.
+            plan = preview_project_sources(self.session.project, sources)
+            new = [
+                value
+                for value, item in zip(plan["sources"], plan["add"])
+                if item["state"] != "existing"
+            ]
+            if new:
+                add_project_sources(root, new, trace=self.active_trace)
+            if decisions:
+                done = sync_project_sources(
+                    open_project(root), decisions=decisions
+                )
+                self.active_trace.emit(
+                    "gui.sources.synced", component="gui_engine", data=done
+                )
+            if new or decisions:
+                self._refresh_sources(open_project(root))
+            else:
+                self._announce_project(
+                    self.session.project, self.active_conversation
+                )
         except Exception as error:
             # A failed copy may have written some files: index what is there,
             # so an old in-memory index is never used.
@@ -1974,6 +2110,55 @@ class ChatEngine:
                 "gui.sources.remove.failed",
                 error,
                 f"Could not remove sources: {error}",
+            )
+
+    def sync_sources(self, decisions: object = None) -> None:
+        """Apply the user's choice for each changed source, then reindex.
+
+        Parameters
+        ----------
+        decisions: object, optional
+            Mapping of ``sources/`` paths from ``source_changes`` to
+            ``import``, ``replace``, ``keep_both``, ``delete`` or ``keep``.
+            Unlisted files are left untouched. Defaults to ``None``, which
+            updates changed copies, removes deleted ones and imports nothing.
+
+        Notes
+        -----
+        Copies the user edited in the project are kept unless a decision
+        names them. The core checks every decision before changing files.
+        The index is refreshed even if a file fails, so it matches the
+        files on disk.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if decisions is not None and not (
+                isinstance(decisions, dict)
+                and all(
+                    isinstance(path, str) and isinstance(action, str)
+                    for path, action in decisions.items()
+                )
+            ):
+                raise ValueError("Source decisions must map paths to actions.")
+            project = self.session.project
+            self._send(
+                "status", message="Updating sources and the index…"
+            )
+            try:
+                done = sync_project_sources(project, decisions=decisions)
+                self.active_trace.emit(
+                    "gui.sources.synced", component="gui_engine", data=done
+                )
+            finally:
+                self._refresh_sources(open_project(project.root))
+        except Exception as error:
+            self._report_error(
+                "gui.sources.sync.failed",
+                error,
+                f"Could not update sources: {error}",
             )
 
     def edit_folder(
@@ -2277,18 +2462,14 @@ class ChatEngine:
                         self.active_conversation.conversation_id
                     ),
                 )
-            turn = self.session.turns[-1]
-            event: dict[str, object] = {
-                "turn": asdict(turn),
-                "usage": self._usage_totals(),
-            }
-            # A tool that saved a file (for example a research briefing in
-            # outputs/) refreshes the workspace tree.
-            if (turn.parameters.get("tool") or {}).get("saved"):
-                event["workspace_files"] = list_project_files(
-                    self.session.project
-                )
-            self._send("answered", **event)
+            # An answer can add files (a tool's report in outputs/, the
+            # conversation log), so the workspace tree is refreshed too.
+            self._send(
+                "answered",
+                turn=asdict(self.session.turns[-1]),
+                usage=self._usage_totals(),
+                workspace_files=list_project_files(self.session.project),
+            )
         except Exception as error:
             self._report_error(
                 "gui.question.failed",
@@ -2954,7 +3135,7 @@ class ChatEngine:
         )
 
     def _send_conversations(self, event: str, **data: object) -> None:
-        """Send the catalog and active identity in one consistent shape.
+        """Send the catalog, active identity and project files together.
 
         Parameters
         ----------
@@ -2972,6 +3153,12 @@ class ChatEngine:
 
         if self.conversation_store is None or self.active_conversation is None:
             raise RuntimeError("Conversation store is not open.")
+        # Creating, branching or deleting a chat adds or removes its file,
+        # so the workspace tree is refreshed too.
+        if self.session is not None:
+            data.setdefault(
+                "workspace_files", list_project_files(self.session.project)
+            )
         self._send(
             event,
             active_conversation_id=(self.active_conversation.conversation_id),
@@ -3733,10 +3920,16 @@ def main() -> None:
                         )
                     elif action == "delete_conversation":
                         engine.delete_conversation(command["conversation_id"])
+                    elif action == "check_sources":
+                        engine.check_sources(command["sources"])
                     elif action == "add_project_sources":
-                        engine.add_project_sources(command["sources"])
+                        engine.add_project_sources(
+                            command["sources"], command.get("decisions")
+                        )
                     elif action == "remove_project_sources":
                         engine.remove_project_sources(command["paths"])
+                    elif action == "sync_sources":
+                        engine.sync_sources(command.get("decisions"))
                     elif action == "edit_folder":
                         arguments = dict(command)
                         del arguments["action"]

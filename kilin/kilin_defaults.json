@@ -27,7 +27,6 @@
       ".python-version"
     ],
     "SKIP_DIRECTORIES": [
-      ".genrag",
       ".git",
       ".ipynb_checkpoints",
       ".mypy_cache",

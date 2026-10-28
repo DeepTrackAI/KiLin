@@ -299,18 +299,17 @@ function renderSavedProjects(projects) {
 }
 
 /**
- * Normalize and deduplicate source paths, then request a preview.
+ * Check sources for an open project, or add them to a new project's preview.
  *
  * @param paths Local paths provided by a native dialog or drag-and-drop.
  */
 function addSources(paths) {
   if (busy || !paths.length) return;
   if (ready) {
-    const names = paths.map((path) => String(path).split(/[\\/]/).pop()).join("\n");
-    if (!confirm(`Add these sources?\n\n${names}\n\nKíLín copies them into sources, replacing any earlier copy, and updates the index; this may take a while.`)) return;
+    // Check first: the dialog shows what would be added and left out.
     error.classList.add("hidden");
-    setBusy(true, "Adding sources and updating the index…");
-    bridge.addProjectSources(JSON.stringify(paths));
+    setBusy(true, "Checking the sources…");
+    bridge.checkProjectSources(JSON.stringify(paths));
     return;
   }
   for (const path of paths) {
@@ -329,13 +328,22 @@ function fileTypes() {
 }
 
 /**
+ * List the file types the new project copies: its type's own and the extra
+ * types typed in Settings. The preview offers only these, so every file the
+ * user can tick is one project creation accepts.
+ */
+function projectFileTypes() {
+  return [...new Set([...profile.extensions, ...fileTypes()])];
+}
+
+/**
  * Request a backend metadata scan for the current source selection.
  */
 function previewSources() {
   if (bridge && selectedSources.length) {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
-      JSON.stringify(selectedSources), JSON.stringify(fileTypes()),
+      JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
       Number(byId("max-file-bytes").value), byId("workspace-path").value.trim(),
     );
   }
@@ -489,6 +497,21 @@ function isOversizedSkippedFile(item) {
 }
 
 /**
+ * Say briefly why a preview file cannot be ticked.
+ *
+ * @param item Skipped-file preview row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function skippedReason(item) {
+  if (isOversizedSkippedFile(item)) return "Above current limit · check to include";
+  if (selectionReasonCodes !== null
+      && item.reason_code === selectionReasonCodes.FILE_TYPE_NOT_SELECTED) {
+    return "File type not included";
+  }
+  return item.reason;
+}
+
+/**
  * Rebuild source trees, counts, and removal controls from preview state.
  */
 function renderPreview() {
@@ -519,12 +542,7 @@ function renderPreview() {
       checkedFiles.delete(rootPath);
       renderPreview();
     });
-    const reasons = Object.fromEntries(skipped.map((item) => [
-      item.path,
-      isOversizedSkippedFile(item)
-        ? "Above current limit · check to include"
-        : item.reason,
-    ]));
+    const reasons = Object.fromEntries(skipped.map((item) => [item.path, skippedReason(item)]));
     const all = [...files, ...skipped.map((item) => item.path)];
     holder.append(branch(rootPath, fileTree(all), all, chosen, 0, offered, reasons), remove);
     tree.append(holder);
@@ -1158,7 +1176,7 @@ function collectSettings() {
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
-    extensions: [...new Set([...profile.extensions, ...fileTypes()])],
+    extensions: projectFileTypes(),
     max_file_bytes: selectedFileSizeLimit(),
     target_tokens: Number(byId("target-tokens").value),
     max_tokens: Number(byId("max-tokens").value),
@@ -1640,6 +1658,371 @@ function clearError() {
   shownErrorStatus = "";
   error.classList.add("hidden");
 }
+
+/**
+ * Count the files a sync can import, update or remove, and those it keeps.
+ *
+ * @param changes The ``source_changes`` event: lists of copy paths under
+ *   ``added``, ``changed``, ``deleted`` and ``edited``.
+ * @returns The sentence at the top of the sync dialog.
+ */
+function sourceSyncSummary(changes) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const count = changes.added.length + changes.changed.length + changes.deleted.length;
+  let text = `${files(count)} changed in the original folders since KíLín copied them.`;
+  if (changes.edited.length) {
+    text += ` KíLín keeps the ${files(changes.edited.length)} you edited in the project.`;
+  }
+  return text;
+}
+
+/**
+ * List the choices for one group of files; the first one is the default.
+ *
+ * @param group ``added``, ``changed``, ``deleted`` or ``edited``.
+ * @returns Pairs of sync action and label; empty for edited copies, which
+ *   are always kept.
+ */
+function sourceSyncChoices(group) {
+  return {
+    added: [["import", "Add"], ["keep", "Skip"]],
+    changed: [["replace", "Update"], ["keep_both", "Keep both"], ["keep", "Keep old"]],
+    deleted: [["delete", "Remove"], ["keep", "Keep"]],
+    edited: [],
+  }[group];
+}
+
+/**
+ * Choose the same kind of action for every file at once.
+ *
+ * @param changes The ``source_changes`` event.
+ * @param mode ``update`` brings every change in; ``both`` also keeps the
+ *   old copy of changed files and the copy of deleted ones.
+ * @returns Sync actions keyed by ``sources/`` path; edited copies are left
+ *   out, so they are kept.
+ */
+function sourceSyncPlan(changes, mode) {
+  const actions = mode === "both"
+    ? { added: "import", changed: "keep_both", deleted: "keep" }
+    : { added: "import", changed: "replace", deleted: "delete" };
+  const decisions = {};
+  for (const [group, action] of Object.entries(actions)) {
+    for (const path of changes[group]) decisions[path] = action;
+  }
+  return decisions;
+}
+
+/**
+ * Group the differing files under short headings, leaving out empty groups.
+ *
+ * @param changes The ``source_changes`` event.
+ * @returns Groups with their key, heading and ``sources/`` paths.
+ */
+function sourceSyncGroups(changes) {
+  return [
+    ["added", "New"],
+    ["changed", "Changed"],
+    ["deleted", "Deleted"],
+    ["edited", "Edited by you"],
+  ].filter(([group]) => changes[group].length).map(([group, title]) => ({
+    group, title, paths: changes[group],
+  }));
+}
+
+let sourceSyncChanges = null;
+
+/**
+ * Build one file row: its name, folder and choices.
+ *
+ * @param group The file's change group.
+ * @param path The copy's ``sources/`` path.
+ * @param index A number that keeps each row's radio group separate.
+ * @returns The list item.
+ */
+function sourceSyncRow(group, path, index) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const relative = path.replace(/^sources\//, "");
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  item.append(name);
+  const choices = sourceSyncChoices(group);
+  if (!choices.length) {
+    const note = document.createElement("span");
+    note.className = "sync-kept";
+    note.textContent = "Your edit is kept";
+    item.append(note);
+    return item;
+  }
+  const options = document.createElement("div");
+  options.className = "segmented";
+  options.setAttribute("role", "radiogroup");
+  options.setAttribute("aria-label", `Action for ${relative}`);
+  choices.forEach(([action, label], position) => {
+    const option = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `source-sync-${index}`;
+    input.value = action;
+    input.dataset.path = path;
+    input.checked = position === 0;
+    const text = document.createElement("span");
+    text.textContent = label;
+    option.append(input, text);
+    options.append(option);
+  });
+  item.append(options);
+  return item;
+}
+
+/**
+ * Switch the sync dialog between the quick buttons and the file list.
+ *
+ * @param fileByFile Whether to show the list of files with their choices.
+ */
+function setSourceSyncFileByFile(fileByFile) {
+  byId("source-sync-files").classList.toggle("hidden", !fileByFile);
+  byId("source-sync-quick").classList.toggle("hidden", fileByFile);
+  byId("source-sync-manual").classList.toggle("hidden", !fileByFile);
+}
+
+/**
+ * Ask what to do with the files whose originals changed.
+ *
+ * The quick buttons update everything, keep old and new copies, or keep
+ * the old copies; "Choose file by file" lists each file with its own
+ * choice. Copies the user edited are always kept.
+ *
+ * @param changes The ``source_changes`` event.
+ */
+function showSourceSync(changes) {
+  sourceSyncChanges = changes;
+  byId("source-sync-summary").textContent = sourceSyncSummary(changes);
+  const counts = byId("source-sync-counts");
+  const list = byId("source-sync-files");
+  counts.replaceChildren();
+  list.replaceChildren();
+  let index = 0;
+  for (const { group, title, paths } of sourceSyncGroups(changes)) {
+    const count = document.createElement("li");
+    count.className = `sync-count ${group}`;
+    count.textContent = `${paths.length} ${title.toLowerCase()}`;
+    counts.append(count);
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    for (const path of paths) items.append(sourceSyncRow(group, path, index++));
+    list.append(heading, items);
+  }
+  byId("source-sync-both").classList.toggle("hidden", !changes.changed.length);
+  setSourceSyncFileByFile(false);
+  byId("source-sync").showModal();
+}
+
+/**
+ * Close the sync dialog and send the chosen actions to the core.
+ *
+ * @param decisions Sync actions keyed by ``sources/`` path.
+ */
+function syncSources(decisions) {
+  byId("source-sync").close();
+  if (busy || !bridge) return;
+  setBusy(true, "Updating sources and the index…");
+  bridge.syncProjectSources(JSON.stringify(decisions));
+}
+
+byId("source-sync-keep").addEventListener("click", () => byId("source-sync").close());
+byId("source-sync-both").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "both")));
+byId("source-sync-update").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "update")));
+byId("source-sync-pick").addEventListener("click", () => setSourceSyncFileByFile(true));
+byId("source-sync-back").addEventListener("click", () => setSourceSyncFileByFile(false));
+byId("source-sync-apply").addEventListener("click", () => {
+  const decisions = {};
+  for (const input of byId("source-sync-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  syncSources(decisions);
+});
+
+/**
+ * Count the copies of already imported sources that changed.
+ *
+ * @param changes The check's ``changes``: ``sources/`` paths by group.
+ * @returns Files the user can bring in, update or remove.
+ */
+function sourceAddPending(changes) {
+  return changes.added.length + changes.changed.length + changes.deleted.length;
+}
+
+/**
+ * Sum up what adding the checked sources would copy and leave out.
+ *
+ * @param check The ``sources_checked`` event: ``add`` (``name``, ``kind``,
+ *   ``files``, ``state``), left-out ``files``, ``skipped_folders`` and the
+ *   ``changes`` of sources already in the project.
+ * @returns The sentence at the top of the add dialog.
+ */
+function sourceAddSummary(check) {
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  if (!count && !existing.length) return "Nothing can be added: this project does not index these files.";
+  const parts = [];
+  if (count) parts.push(`KíLín will add ${files(count)}.`);
+  if (existing.length) {
+    const one = existing.length === 1;
+    const names = existing.map((item) => item.name).join(", ");
+    const pending = sourceAddPending(check.changes);
+    parts.push(pending
+      ? `${names} ${one ? "is" : "are"} already in the project; ${files(pending)} changed since ${one ? "it was" : "they were"} copied.`
+      : `${names} ${one ? "is" : "are"} already in the project, with no changes.`);
+  }
+  const left = check.files.length;
+  if (left) parts.push(`${files(left)} ${left === 1 ? "is" : "are"} left out because this project does not index ${left === 1 ? "it" : "them"}.`);
+  return parts.join(" ");
+}
+
+/**
+ * Say why a checked file is left out.
+ *
+ * @param file A left-out row with a reason code.
+ * @returns Short text shown next to the file.
+ */
+function sourceAddReason(file) {
+  if (file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE) return "Too large";
+  if (file.reason_code === selectionReasonCodes?.EMPTY_FILE) return "Empty file";
+  return "File type not included";
+}
+
+let sourceAddPaths = [];
+
+/**
+ * Build one row of the add dialog.
+ *
+ * @param group ``added`` for files to add, ``left-out`` otherwise.
+ * @param relative Folder and file name to show.
+ * @param detail Muted text on the right.
+ * @returns The list item.
+ */
+function sourceAddRow(group, relative, detail) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  const side = document.createElement("span");
+  side.className = "sync-kept";
+  side.textContent = detail;
+  item.append(name, side);
+  return item;
+}
+
+/**
+ * Show what adding the dropped sources would copy, and ask to go on.
+ *
+ * Sources already in the project are matched by their original path: an
+ * unchanged one needs nothing, and files that changed since they were
+ * copied get the same choices as in the sync dialog. A different file
+ * with a taken name is copied under a new name.
+ *
+ * @param check The ``sources_checked`` event.
+ */
+function showSourceAdd(check) {
+  sourceAddPaths = check.sources;
+  const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
+  const adding = check.add.filter((item) => item.state !== "existing");
+  const existing = check.add.filter((item) => item.state === "existing");
+  const count = adding.reduce((total, item) => total + item.files, 0);
+  const pending = sourceAddPending(check.changes);
+  byId("source-add-summary").textContent = sourceAddSummary(check);
+  const counts = byId("source-add-counts");
+  const list = byId("source-add-files");
+  counts.replaceChildren();
+  list.replaceChildren();
+  const { added, changed, deleted } = check.changes;
+  const differing = (item) => [...added, ...changed, ...deleted].filter((path) => (
+    path === `sources/${item.name}` || path.startsWith(`sources/${item.name}/`)
+  )).length;
+  const sections = [
+    ["added", "To add", count ? `${count} to add` : null, adding.map((item) => sourceAddRow(
+      "added", item.name, item.state === "renamed"
+        ? "Same name, different file · added under a new name"
+        : item.kind === "folder" ? files(item.files) : "File",
+    ))],
+    ["", "Already in the project", existing.length ? `${existing.length} already added` : null, existing.map((item) => sourceAddRow(
+      "", item.name, differing(item) ? `${files(differing(item))} changed since copied` : "No changes",
+    ))],
+  ];
+  // A chip only: the changed files are listed under their own headings.
+  sections.push(["changed", "", pending ? `${pending} changed` : null, []]);
+  // Radio names must not repeat those of the sync dialog's rows.
+  let index = 100000;
+  for (const { group, paths } of sourceSyncGroups(check.changes)) {
+    const heading = {
+      added: "New in the original", changed: "Changed in the original",
+      deleted: "Deleted from the original", edited: "Edited by you",
+    }[group];
+    sections.push([group, heading, null, paths.map((path) => sourceSyncRow(group, path, index++))]);
+  }
+  sections.push(
+    ["left-out", "Left out", check.files.length ? `${check.files.length} left out` : null, [
+      ...check.files.slice(0, 100).map((file) => sourceAddRow("left-out", file.path, sourceAddReason(file))),
+      ...(check.files.length > 100 ? [sourceAddRow("left-out", `and ${check.files.length - 100} more`, "")] : []),
+    ]],
+    ["left-out", "Not added", null, check.skipped_folders.map((name) => sourceAddRow(
+      "left-out", name, "No files this project indexes",
+    ))],
+  );
+  for (const [group, title, chip, rows] of sections) {
+    if (chip) {
+      const item = document.createElement("li");
+      item.className = `sync-count ${group}`;
+      item.textContent = chip;
+      counts.append(item);
+    }
+    if (!rows.length) continue;
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    const items = document.createElement("ul");
+    items.append(...rows);
+    list.append(heading, items);
+  }
+  const confirm = byId("source-add-confirm");
+  confirm.classList.toggle("hidden", !count && !pending);
+  confirm.textContent = count ? "Add" : "Update";
+  byId("source-add-cancel").textContent = count || pending ? "Cancel" : "Close";
+  byId("source-add").showModal();
+}
+
+byId("source-add-cancel").addEventListener("click", () => byId("source-add").close());
+byId("source-add-confirm").addEventListener("click", () => {
+  byId("source-add").close();
+  if (busy || !bridge) return;
+  const decisions = {};
+  for (const input of byId("source-add-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  setBusy(true, "Adding sources and updating the index…");
+  bridge.addProjectSources(JSON.stringify(sourceAddPaths), JSON.stringify(decisions));
+});
 
 /**
  * Gate operation controls and update the visible activity state.
@@ -3352,6 +3735,7 @@ function onEvent(raw) {
     conversation.replaceChildren();
     clearReferences();
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
     if (!data.turns.length) renderConversationEmpty();
@@ -3363,6 +3747,7 @@ function onEvent(raw) {
     setBusy(false);
   } else if (data.event === "conversations") {
     renderConversations(data);
+    if (data.workspace_files) renderWorkspace(data.workspace_files);
     setBusy(false);
   } else if (data.event === "reference_preview") {
     renderSourcePreview(data);
@@ -3371,6 +3756,11 @@ function onEvent(raw) {
         && data.citation === activeReference.citation) {
       activeReference.note.textContent = data.message;
     }
+  } else if (data.event === "source_changes") {
+    showSourceSync(data);
+  } else if (data.event === "sources_checked") {
+    setBusy(false);
+    showSourceAdd(data);
   } else if (data.event === "folder_changed") {
     renderWorkspace(data.workspace_files);
     setBusy(false);
