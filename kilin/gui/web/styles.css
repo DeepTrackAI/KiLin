@@ -301,7 +301,7 @@ button:disabled { opacity: .62; cursor: default; }
 .tool-plan-option-note { font-size: 12px; opacity: .75; }
 .tool-plan-cancel { justify-self: start; min-height: 0; margin-top: 2px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
 .tool-plan-cancel:hover { color: var(--text); background: var(--surface); }
-.answer-phase-timer, .answer-duration { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.answer-duration { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .answer-duration { margin: 0 0 4px; }
 .answer-phase-detail { width: fit-content; margin-top: 8px; color: transparent; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 42%, color-mix(in srgb, var(--muted) 55%, white) 50%, var(--muted) 58%, var(--muted) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; font-size: 13px; animation: stage-shimmer 1.6s linear infinite; }
 @keyframes stage-shimmer { from { background-position: 80% 0; } to { background-position: 20% 0; } }
@@ -478,6 +478,7 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-timeline { margin: 6px 0 4px; padding: 0 0 0 14px; list-style: none; border-left: 2px solid var(--line); }
 .answer-timeline li { display: flex; justify-content: space-between; gap: 16px; max-width: 560px; padding: 1px 0; }
 .timeline-time { flex: none; font-variant-numeric: tabular-nums; }
+.timeline-running { color: var(--text); }
 /* Markdown inside answers. */
 .answer-body { white-space: normal; }
 .answer-body > :first-child { margin-top: 0; }
