@@ -238,10 +238,16 @@ from .project_files import (
     replace_project_file,
 )
 from .workspace import (
+    SourceAction,
+    SourceChanges,
+    SourceVersion,
     add_project_sources,
     default_workspace_path,
+    find_source_changes,
+    list_source_versions,
     prepare_sources_workspace,
     remove_workspace_sources,
+    sync_project_sources,
 )
 
 __all__ = [
@@ -337,6 +343,8 @@ __all__ = [
     "synchronize_project_workspace",
     "add_project_sources",
     "default_workspace_path",
+    "find_source_changes",
+    "list_source_versions",
     "indexes_are_current",
     "lexical_search",
     "lexical_terms",
@@ -355,6 +363,10 @@ __all__ = [
     "prepare_project_workspace",
     "prepare_sources_workspace",
     "remove_workspace_sources",
+    "sync_project_sources",
+    "SourceAction",
+    "SourceChanges",
+    "SourceVersion",
     "add_project_files",
     "replace_project_file",
     "remove_project_files",
