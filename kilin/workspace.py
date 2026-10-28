@@ -31,14 +31,21 @@ Key Features
 
 - **Copy stamps**
 
-    Record each copy's size and modification time when it is imported, so
-    later changes to the original or to the copy can be told apart.
+    Record each copy's size and modification time when it is imported, for
+    fast comparison with its original and for detecting edited copies.
+    Matching metadata is treated as unchanged, not as proof of equal bytes.
 
-- **Change detection**
+- **Change detection and per-file synchronization**
 
-    Compare each original and its copy with the copy's stamp to tell which
-    originals changed or were deleted and which copies the user edited, and
-    update the copies on request without overwriting the user's edits.
+    Recursively detect eligible new files, changed originals, and deletions.
+    A caller may import, replace, keep, delete, or preserve both versions for
+    individual files. Metadata-only changes avoid rewriting file contents.
+
+- **Separately retrievable versions**
+
+    Record earlier snapshots under ``sources/.kilin_versions`` with distinct
+    paths, so accepted versions are independently represented in retrieval
+    indexes and cited without ambiguity.
 
 - **Selected copying**
 
@@ -77,15 +84,20 @@ Module Structure
 
 - ``find_source_changes``
 
-    List copies whose originals changed or were deleted since import.
+    List eligible added files and copies whose originals changed or vanished.
 
 - ``sync_project_sources``
 
-    Update or remove those copies, keeping copies the user edited.
+    Apply individual changes, optionally retaining both source versions.
+
+- ``list_source_versions``
+
+    List the separate indexed-source identities of retained versions.
 
 - ``include_explicit_imports``
 
-    Preserve explicitly imported files during RAG source scanning.
+    Preserve explicitly imported files and tracked historical versions during
+    RAG source scanning.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
@@ -110,11 +122,12 @@ import json
 import re
 from pathlib import Path, PurePosixPath, PureWindowsPath
 import shutil
+import stat
 from tempfile import NamedTemporaryFile
 from time import perf_counter
 from typing import (
-    Callable, Final, Literal, Mapping, NotRequired, Sequence, TypedDict,
-    cast,
+    Callable, Final, Literal, Mapping, NotRequired, Sequence, TypeAlias,
+    TypedDict, cast,
 )
 
 from kilin._project_creation import check_available, destination_path
@@ -135,12 +148,20 @@ __all__ = [
     "remove_workspace_sources",
     "find_source_changes",
     "sync_project_sources",
+    "SourceChanges",
+    "SourceAction",
+    "SourceVersion",
+    "list_source_versions",
     "include_explicit_imports",
 ]
 
 # Workspace folders whose files may be copied into the sources: what KíLín
 # wrote (kilin.tools._shared.outputs) and the report templates.
 _COPYABLE_WORKSPACE_FOLDERS: Final[tuple[str, ...]] = ("outputs", "templates")
+_VERSION_DIRECTORY: Final[str] = ".kilin_versions"
+SourceAction: TypeAlias = Literal[
+    "import", "replace", "keep", "keep_both", "delete"
+]
 
 
 class _CopyStamp(TypedDict):
@@ -152,15 +173,46 @@ class _CopyStamp(TypedDict):
     mtime_ns: int
 
 
+class SourceVersion(TypedDict):
+    """One retained and separately indexable source version.
+
+    Attributes
+    ----------
+    source: str
+        Original workspace-relative path, for example ``sources/a/main.py``.
+    version: str
+        Unique workspace-relative path of the preserved source version.
+    sha256: str
+        Content hash recorded when the version was preserved.
+
+    """
+
+    source: str
+    version: str
+    sha256: str
+
+
+class _StoredVersion(TypedDict):
+    """Persisted version path and its original relative filename.
+
+    """
+
+    file: str
+    path: str
+    sha256: str
+
+
 class SourceChanges(TypedDict):
     """Copies that differ from their originals, as workspace-relative paths.
 
+    ``added`` files can be imported from tracked original directories.
     ``changed`` copies can be updated from their originals and ``deleted``
     copies removed; ``edited`` copies were changed in the project and are
     kept even though their originals changed or were deleted.
 
     """
 
+    added: list[str]
     changed: list[str]
     deleted: list[str]
     edited: list[str]
@@ -175,6 +227,8 @@ class _SourceRecord(TypedDict):
     name: str
     files: NotRequired[list[str]]
     stamps: NotRequired[dict[str, _CopyStamp]]
+    kind: NotRequired[Literal["file", "folder"]]
+    versions: NotRequired[list[_StoredVersion]]
 
 
 def default_workspace_path(
@@ -513,7 +567,14 @@ def _prepare_sources_workspace(
             )
             if record is None:
                 name = _unique_name(source, used, source_root)
-                record = _SourceRecord(original=original, name=name)
+                record = _SourceRecord(
+                    original=original, name=name,
+                    kind="file" if source.is_file() else "folder",
+                )
+            else:
+                record.setdefault(
+                    "kind", "file" if source.is_file() else "folder"
+                )
             destination = source_root / record["name"]
             selection = (
                 selections[original] if selections is not None else None
@@ -594,7 +655,11 @@ def _unique_name(source: Path, used: set[str], root: Path) -> str:
 
     """
 
-    if source.name not in used and not (root / source.name).exists():
+    if (
+        source.name not in used
+        and source.name != _VERSION_DIRECTORY
+        and not (root / source.name).exists()
+    ):
         return source.name
     digest = sha256(str(source).encode()).hexdigest()[:8]
     name = f"{source.stem}-{digest}{source.suffix}"
@@ -875,6 +940,32 @@ def _stamp_copies(
     record["stamps"] = renewed
 
 
+def _safe_relative(value: str) -> bool:
+    """Check that an untrusted manifest path is a normalized POSIX path.
+
+    Parameters
+    ----------
+    value: str
+        Workspace-relative path from the persisted source manifest.
+
+    Returns
+    -------
+    bool
+        Whether the path has safe components and no drive or traversal.
+
+    """
+
+    if not value or "\\" in value or "\0" in value:
+        return False
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and not PureWindowsPath(value).drive
+        and all(part not in ("", ".", "..") for part in value.split("/"))
+        and path.as_posix() == value
+    )
+
+
 def _read_records(path: Path) -> list[_SourceRecord]:
     """Validate persisted source ownership before using destination names.
 
@@ -913,6 +1004,7 @@ def _read_records(path: Path) -> list[_SourceRecord]:
         raise ValueError("Invalid workspace source list.")
     seen_names: set[str] = set()
     seen_originals: set[str] = set()
+    seen_versions: set[str] = set()
     for item in records:
         if not isinstance(item, dict):
             raise ValueError("Invalid workspace source entry.")
@@ -930,6 +1022,9 @@ def _read_records(path: Path) -> list[_SourceRecord]:
             raise ValueError("Invalid workspace source entry.")
         if original in seen_originals or name in seen_names:
             raise ValueError("Duplicate or conflicting workspace sources.")
+        kind = item.get("kind")
+        if kind is not None and kind not in ("file", "folder"):
+            raise ValueError("Invalid workspace source kind.")
         seen_originals.add(original)
         seen_names.add(name)
         files = item.get("files", [])
@@ -964,6 +1059,33 @@ def _read_records(path: Path) -> list[_SourceRecord]:
                 )
             ):
                 raise ValueError("Invalid workspace source copy stamps.")
+        versions = item.get("versions", [])
+        if not isinstance(versions, list):
+            raise ValueError("Invalid workspace source versions.")
+        for version in versions:
+            if not isinstance(version, dict) or set(version) != {
+                "file", "path", "sha256"
+            }:
+                raise ValueError("Invalid workspace source versions.")
+            relative, stored, digest = (
+                version["file"], version["path"], version["sha256"]
+            )
+            if not isinstance(relative, str) or not _safe_relative(relative):
+                raise ValueError("Invalid workspace source version file.")
+            prefix = f"{_VERSION_DIRECTORY}/{name}/"
+            if (
+                not isinstance(stored, str)
+                or not _safe_relative(stored)
+                or not stored.startswith(prefix)
+                or stored in seen_versions
+            ):
+                raise ValueError("Invalid workspace source version path.")
+            if (
+                not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise ValueError("Invalid workspace source version digest.")
+            seen_versions.add(stored)
     return cast("list[_SourceRecord]", records)
 
 
@@ -1074,6 +1196,8 @@ def remove_workspace_sources(
                 raise ValueError(f"Do not remove symbolic links: {value}")
         if not target.exists():
             raise ValueError(f"Source not found: {value}")
+        if target == managed / _VERSION_DIRECTORY:
+            raise ValueError("Remove retained versions individually.")
         targets.append(target)
     if len(set(targets)) != len(targets):
         raise ValueError("Duplicate source paths.")
@@ -1097,16 +1221,30 @@ def remove_workspace_sources(
             retained: list[_SourceRecord] = []
             for record in records:
                 destination = managed / record["name"]
-                if destination.is_symlink() or not destination.exists():
-                    continue
-                if destination.is_file():
-                    record["files"] = [Path(record["original"]).name]
+                if destination.is_symlink():
+                    record["files"] = []
+                elif destination.is_file():
+                    record["files"] = [
+                        Path(record["original"]).name
+                        if Path(record["original"]).name in
+                        record.get("files", []) else ""
+                    ]
+                    record["files"] = [
+                        value for value in record["files"] if value
+                    ]
                 elif destination.is_dir():
                     record["files"] = [
                         item for item in record.get("files", [])
                         if _is_regular_snapshot(destination, item)
                     ]
                 else:
+                    record["files"] = []
+                if "versions" in record:
+                    record["versions"] = [
+                        version for version in record["versions"]
+                        if _is_regular_snapshot(managed, version["path"])
+                    ]
+                if not record["files"] and not record.get("versions"):
                     continue
                 if "stamps" in record:
                     record["stamps"] = {
@@ -1120,45 +1258,36 @@ def remove_workspace_sources(
 
 
 def find_source_changes(project: QAProject) -> SourceChanges:
-    """List source copies whose originals changed since they were imported.
+    """Find added originals and differences from imported source copies.
 
     Parameters
     ----------
     project: QAProject
-        Opened project backed by the managed ``sources/`` directory.
+        Opened project with managed ``sources/`` snapshots.
 
     Returns
     -------
     SourceChanges
-        Sorted workspace-relative copy paths, such as
-        ``sources/repository/main.py``, grouped as changed, deleted, or
-        edited.
-
-    Raises
-    ------
-    ValueError
-        If ``sources.json`` is invalid.
-    OSError
-        If reading the manifest or a file's metadata fails.
+        Sorted workspace-relative paths categorized as ``added``,
+        ``changed``, ``deleted``, or ``edited``.
 
     Notes
     -----
-    Nothing is changed. A file counts as changed when its size or
-    modification time differs from its copy stamp, so a change that keeps
-    both is not noticed. A source whose original is missing, is an empty
-    folder, or is no longer the same kind of entry is skipped, as are files
-    without a stamp and links. Files added to an original folder after
-    import are not listed: they may have been left out on purpose.
+    Original directories are scanned recursively using the project profile.
+    Empty and excluded directories contribute no new files. Missing
+    previously tracked originals, including renamed paths, are deletions;
+    their new locations are not inferred. A matching size and modification
+    time is treated as unchanged without hashing. Detection never writes.
 
     """
 
     root = _managed_root(project)
-    changes = SourceChanges(changed=[], deleted=[], edited=[])
+    changes = _empty_changes()
     if root is None:
         return changes
     records = _read_records(root / "sources.json")
     for _record, group, _source, copy, _relative in _differences(
-        root, records
+        project, root, records
     ):
         changes[group].append(copy.relative_to(root).as_posix())
     for paths in changes.values():
@@ -1166,70 +1295,397 @@ def find_source_changes(project: QAProject) -> SourceChanges:
     return changes
 
 
-def sync_project_sources(project: QAProject) -> SourceChanges:
-    """Update source copies from originals that changed since import.
+def list_source_versions(project: QAProject) -> list[SourceVersion]:
+    """List retained source versions with their distinct retrieval paths.
 
     Parameters
     ----------
     project: QAProject
-        Opened project backed by the managed ``sources/`` directory.
+        Project whose retained copies are being inspected.
 
     Returns
     -------
-    SourceChanges
-        Copies updated (``changed``) and removed (``deleted``), and copies
-        kept because the user edited them (``edited``), as in
-        ``find_source_changes``.
-
-    Raises
-    ------
-    ValueError
-        If ``sources.json`` is invalid or a copy is reached through a link.
-    OSError
-        If copying, deleting, or saving ``sources.json`` fails.
+    list[SourceVersion]
+        Existing regular versions with workspace-relative source, version,
+        and saved content digest. Missing or linked files are omitted.
 
     Notes
     -----
-    Changes are found again when this runs, so only what still differs is
-    touched. Originals are never changed. Updated copies get new stamps;
-    removed copies leave ``sources.json``, and folders they leave empty are
-    removed. ``sources.json`` is saved even if a later file fails. Index
-    refresh is left to the caller.
+    Version files are separately selectable for retrieval indexing; the
+    repository scanner's extension, size, and extraction constraints still
+    determine whether a particular version is searchable.
 
     """
 
     root = _managed_root(project)
-    done = SourceChanges(changed=[], deleted=[], edited=[])
     if root is None:
+        return []
+    versions: list[SourceVersion] = []
+    managed = root / "sources"
+    for record in _read_records(root / "sources.json"):
+        for item in record.get("versions", []):
+            if not _is_regular_snapshot(managed, item["path"]):
+                continue
+            versions.append(SourceVersion(
+                source=f"sources/{record['name']}/{item['file']}"
+                if record.get("kind") != "file"
+                else f"sources/{record['name']}",
+                version=f"sources/{item['path']}",
+                sha256=item["sha256"],
+            ))
+    return sorted(versions, key=lambda item: item["version"])
+
+
+def sync_project_sources(
+    project: QAProject,
+    *,
+    decisions: Mapping[str, SourceAction] | None = None,
+) -> SourceChanges:
+    """Synchronize selected files and optionally retain indexed versions.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project with managed ``sources/`` snapshots.
+    decisions: Mapping[str, SourceAction] | None, optional
+        Actions keyed by workspace-relative paths from
+        ``find_source_changes``. ``import`` accepts new originals;
+        ``replace`` updates existing copies; ``keep`` leaves a changed copy
+        alone or detaches a deleted original; ``keep_both`` saves the
+        previous copy as a separately indexed version before replacement;
+        ``delete`` removes a missing original's copy. Unlisted paths are
+        untouched. None preserves the earlier default: replace changed,
+        delete missing, preserve edited copies, and ignore new originals.
+
+    Returns
+    -------
+    SourceChanges
+        Paths imported, replaced, or removed, plus unchanged edited copies.
+        Retained version paths can be read with ``list_source_versions``.
+
+    Raises
+    ------
+    ValueError
+        If a decision is invalid, refers to a no-longer-pending file, or
+        would overwrite a user-owned snapshot without explicit permission.
+    OSError
+        If reading, copying, or saving the source inventory fails.
+
+    Notes
+    -----
+    Rechecks pending changes before acting and validates all requested
+    decisions before writing. Edits to a workspace copy are never discarded
+    by the default policy. ``keep_both`` needs an existing original and
+    archives the old copy under ``sources/.kilin_versions``. The archive
+    is tracked and exposed for indexing as an independent file, not as an
+    untracked backup. Identical bytes trigger a metadata-only update rather
+    than an unnecessary duplicate. Updated files bypass the import-size
+    limit; indexing keeps its own profile limits and format restrictions.
+    Index refresh remains the caller's responsibility and should happen
+    once after the full batch. Multi-file updates are not transactional.
+
+    """
+
+    root = _managed_root(project)
+    done = _empty_changes()
+    if root is None:
+        if decisions:
+            raise ValueError("Only managed sources can be synchronized.")
         return done
     manifest = root / "sources.json"
     records = _read_records(manifest)
+    pending = _differences(project, root, records)
+    changes_by_path = {
+        copy.relative_to(root).as_posix(): (
+            record, group, source, copy, relative
+        )
+        for record, group, source, copy, relative in pending
+    }
+    if decisions is not None:
+        if not isinstance(decisions, Mapping):
+            raise ValueError("Source decisions must map paths to actions.")
+        for path, action in decisions.items():
+            if not isinstance(path, str) or path not in changes_by_path:
+                raise ValueError(
+                    f"Source is not pending synchronization: {path}"
+                )
+            group = changes_by_path[path][1]
+            allowed = {
+                "added": ("import", "keep"),
+                "changed": ("replace", "keep", "keep_both"),
+                "deleted": ("delete", "keep"),
+                "edited": ("replace", "keep", "keep_both", "delete"),
+            }[group]
+            if not isinstance(action, str) or action not in allowed:
+                raise ValueError(
+                    f"Invalid action for {group} source: {action}"
+                )
+            source = changes_by_path[path][2]
+            if group == "edited" and action in ("replace", "keep_both"):
+                if not _regular_original(source):
+                    raise ValueError(
+                        f"Cannot replace a copy of a deleted source: {path}"
+                    )
+            if group == "edited" and action == "delete":
+                if _regular_original(source):
+                    raise ValueError(
+                        f"Cannot delete a copy of an existing source: {path}"
+                    )
+            if action == "import" and (
+                changes_by_path[path][3].exists()
+                or changes_by_path[path][3].is_symlink()
+            ):
+                raise ValueError(
+                    f"New source conflicts with a workspace copy: {path}"
+                )
+    modified = False
     try:
-        for record, group, source, copy, relative in _differences(
-            root, records
-        ):
-            if group == "changed":
-                _copy_file(source, copy, replace_existing=True)
+        for record, group, source, copy, relative in pending:
+            path = copy.relative_to(root).as_posix()
+            action = (
+                decisions.get(path, "keep") if decisions is not None else
+                {
+                    "added": "keep", "changed": "replace",
+                    "deleted": "delete", "edited": "keep",
+                }[group]
+            )
+            if action == "keep":
+                if decisions is not None and group == "deleted":
+                    _untrack_file(record, relative)
+                    modified = True
+                elif group == "edited" and (
+                    decisions is None or path in decisions
+                ):
+                    done["edited"].append(path)
+                continue
+            if action == "import":
+                if (
+                    not _regular_original(source)
+                    or _linked_source_parent(
+                        Path(record["original"]), source
+                    )
+                ):
+                    raise ValueError(
+                        f"The newly selected file is no longer safe: {source}"
+                    )
+                size = source.stat().st_size
+                if not 0 < size <= project.profile.max_file_bytes:
+                    raise ValueError(
+                        f"New file is empty or exceeds the limit: {source}"
+                    )
+                if copy.exists() or copy.is_symlink():
+                    raise ValueError(
+                        f"New source conflicts with a workspace copy: {path}"
+                    )
+                _copy_file(source, copy)
+                record["files"] = sorted(
+                    set(record.get("files", [])) | {relative}
+                )
                 record.setdefault("stamps", {})[relative] = _copy_stamp(copy)
-            elif group == "deleted":
+                done["added"].append(path)
+                modified = True
+            elif action in ("replace", "keep_both"):
+                if (
+                    not _regular_original(source)
+                    or _linked_source_parent(
+                        Path(record["original"]), source
+                    )
+                ):
+                    raise FileNotFoundError(
+                        f"Source disappeared during synchronization: {source}"
+                    )
+                identical = _same_contents(source, copy)
+                if action == "keep_both" and not identical:
+                    retained = _archive_source_version(
+                        root, record, relative, copy
+                    )
+                    record.setdefault("versions", []).append(retained)
+                    modified = True
+                if identical:
+                    shutil.copystat(source, copy)
+                else:
+                    _copy_file(source, copy, replace_existing=True)
+                record.setdefault("stamps", {})[relative] = _copy_stamp(copy)
+                done["changed"].append(path)
+                modified = True
+            elif action == "delete":
+                if _regular_original(source) or source.is_symlink():
+                    raise ValueError(
+                        f"The original source is available again: {source}"
+                    )
                 copy.unlink()
-                record["files"] = [
-                    item for item in record.get("files", [])
-                    if item != relative
-                ]
-                record.get("stamps", {}).pop(relative, None)
+                _untrack_file(record, relative)
                 folder = root / "sources" / record["name"]
                 parent = copy.parent
                 while parent != folder and not any(parent.iterdir()):
                     parent.rmdir()
                     parent = parent.parent
-            done[group].append(copy.relative_to(root).as_posix())
+                done["deleted"].append(path)
+                modified = True
     finally:
-        if any(done.values()):
+        if modified:
             _write_records(manifest, records)
     for paths in done.values():
         paths.sort()
     return done
+
+
+def _empty_changes() -> SourceChanges:
+    """Create distinct mutable lists for source change categories.
+
+    Returns
+    -------
+    SourceChanges
+        Empty grouped source changes.
+
+    """
+
+    return SourceChanges(added=[], changed=[], deleted=[], edited=[])
+
+
+def _untrack_file(record: _SourceRecord, relative: str) -> None:
+    """Detach one file from an original without removing its copy.
+
+    Parameters
+    ----------
+    record: _SourceRecord
+        Mutable persisted source inventory.
+    relative: str
+        Previously tracked filename relative to the original.
+
+    """
+
+    record["files"] = [
+        item for item in record.get("files", []) if item != relative
+    ]
+    record.get("stamps", {}).pop(relative, None)
+
+
+def _regular_original(source: Path) -> bool:
+    """Check for an existing regular original without following a link.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Original source file to examine.
+
+    Returns
+    -------
+    bool
+        Whether the source path itself is an ordinary regular file.
+
+    """
+
+    try:
+        return stat.S_ISREG(source.lstat().st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+
+
+def _archive_source_version(
+    root: Path, record: _SourceRecord, relative: str, copy: Path
+) -> _StoredVersion:
+    """Store one historical snapshot at a unique, indexable source path.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Managed project root.
+    record: _SourceRecord
+        Original source record owning the version.
+    relative: str
+        Filename relative to the original directory.
+    copy: pathlib.Path
+        Existing workspace snapshot to preserve.
+
+    Returns
+    -------
+    _StoredVersion
+        Source-relative archived version path and its content digest.
+
+    Notes
+    -----
+    A content digest distinguishes versions with identical names. A
+    sequence number also permits later restorations of earlier contents.
+    Each archive is an independent file under a reserved namespace, not
+    a replacement for the current file.
+
+    """
+
+    identity = _hash_file(copy)
+    original = PurePosixPath(relative)
+    count = sum(
+        item["file"] == relative for item in record.get("versions", [])
+    )
+    while True:
+        count += 1
+        name = (
+            f"{original.stem}__v{count:04d}__{identity[:12]}"
+            f"{original.suffix}"
+        )
+        archived = (
+            PurePosixPath(_VERSION_DIRECTORY) / record["name"] /
+            original.parent / name
+        ).as_posix()
+        destination = root / "sources" / archived
+        if not destination.exists() and not destination.is_symlink():
+            break
+    _copy_file(copy, destination)
+    if _hash_file(destination) != identity:
+        destination.unlink()
+        raise OSError("The snapshot changed while creating its version.")
+    return _StoredVersion(file=relative, path=archived, sha256=identity)
+
+
+def _hash_file(path: Path) -> str:
+    """Hash a potentially large source copy using bounded reads.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        Existing file whose content is fingerprinted.
+
+    Returns
+    -------
+    str
+        Lowercase hexadecimal SHA-256 digest of the file bytes.
+
+    """
+
+    digest = sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _same_contents(source: Path, copy: Path) -> bool:
+    """Compare file contents only after source metadata has changed.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Original file that differs from its imported metadata stamp.
+    copy: pathlib.Path
+        Unedited workspace copy of that original.
+
+    Returns
+    -------
+    bool
+        True if the files have identical content, regardless of timestamps.
+
+    Notes
+    -----
+    Different sizes avoid hashing. Equal-sized files are hashed in bounded
+    blocks to avoid loading their contents into memory. This comparison is
+    not performed when a file's size and modification time still match the
+    saved stamp.
+
+    """
+
+    if source.stat().st_size != copy.stat().st_size:
+        return False
+    return _hash_file(source) == _hash_file(copy)
 
 
 def _managed_root(project: QAProject) -> Path | None:
@@ -1260,35 +1716,65 @@ def _managed_root(project: QAProject) -> Path | None:
     return root
 
 
+def _linked_source_parent(original: Path, source: Path) -> bool:
+    """Check whether a tracked source passes through a linked subfolder.
+
+    Parameters
+    ----------
+    original: pathlib.Path
+        Root of the imported source, or the directly imported file.
+    source: pathlib.Path
+        Tracked original file beneath that root.
+
+    Returns
+    -------
+    bool
+        True if a parent of the tracked file, below the source root, is a
+        symbolic link. The direct-file case has no such parents.
+
+    """
+
+    parent = source.parent
+    while source != original and parent != original:
+        if parent.is_symlink():
+            return True
+        parent = parent.parent
+    return False
+
+
 def _differences(
-    root: Path, records: list[_SourceRecord]
+    project: QAProject, root: Path, records: list[_SourceRecord]
 ) -> list[
     tuple[
         _SourceRecord,
-        Literal["changed", "deleted", "edited"],
+        Literal["added", "changed", "deleted", "edited"],
         Path,
         Path,
         str,
     ]
 ]:
-    """Compare each tracked original and copy with the copy's stamp.
+    """Compare tracked files and discover eligible new originals recursively.
 
     Parameters
     ----------
+    project: QAProject
+        Project whose saved profile determines new-file eligibility.
     root: pathlib.Path
-        Resolved project root with a managed ``sources/`` folder.
+        Resolved root containing the managed ``sources/`` directory.
     records: list[_SourceRecord]
-        Validated records from ``sources.json``.
+        Validated source ownership records.
 
     Returns
     -------
     list[tuple]
-        For each differing file: its record, its group, the original file,
-        the copy, and its name relative to the source.
+        Source record, change category, original, copy, and relative name.
 
     Notes
     -----
-    The skipping rules are those described in ``find_source_changes``.
+    Previously imported files are compared by metadata, while new paths
+    are discovered with the same recursive selection rules used at import.
+    An inaccessible original aborts scanning rather than suggesting a bulk
+    deletion; symlink paths are never followed.
 
     """
 
@@ -1299,37 +1785,83 @@ def _differences(
         destination = managed / record["name"]
         if original.is_symlink() or destination.is_symlink():
             continue
-        if original.is_file() and destination.is_file():
+        kind = record.get("kind")
+        if kind is None:
+            kind = (
+                "file" if destination.is_file() and
+                record.get("files") == [original.name] else "folder"
+            )
+        if kind == "file":
             pairs = [
-                (original, destination, relative)
+                (original, destination, original.name)
                 for relative in record.get("files", [])
+                if relative == original.name and destination.is_file()
             ]
-        elif (
-            original.is_dir()
-            and destination.is_dir()
-            and any(original.iterdir())
-        ):
+        elif destination.is_dir():
             pairs = [
                 (original / relative, destination / relative, relative)
                 for relative in record.get("files", [])
                 if _is_regular_snapshot(destination, relative)
             ]
         else:
-            continue
+            pairs = []
         for source, copy, relative in pairs:
-            group: Literal["changed", "deleted", "edited"]
             stamp = record.get("stamps", {}).get(relative)
-            if stamp is None or source.is_symlink():
+            if stamp is None or _linked_source_parent(original, source):
                 continue
-            if source.exists():
-                if not source.is_file() or _copy_stamp(source) == stamp:
-                    continue
-                group = "changed"
-            else:
+            try:
+                status = source.lstat()
+            except (FileNotFoundError, NotADirectoryError):
                 group = "deleted"
+            else:
+                if stat.S_ISLNK(status.st_mode):
+                    continue
+                if not stat.S_ISREG(status.st_mode):
+                    group = "deleted"
+                elif (
+                    status.st_size == stamp["size"]
+                    and status.st_mtime_ns == stamp["mtime_ns"]
+                ):
+                    continue
+                else:
+                    group = "changed"
             if _copy_stamp(copy) != stamp:
                 group = "edited"
             found.append((record, group, source, copy, relative))
+
+        # Discovery is deliberately independent of archive storage and does
+        # not turn inaccessible source folders into an empty selection.
+        if kind == "file":
+            if (
+                not record.get("files") and _regular_original(original)
+                and 0 < original.stat().st_size <=
+                project.profile.max_file_bytes
+            ):
+                found.append((
+                    record, "added", original, destination, original.name
+                ))
+        elif original.is_dir() and not original.is_symlink():
+            excluded = (
+                (root.relative_to(original).as_posix(),)
+                if root.is_relative_to(original) else ()
+            )
+            report = scan_repository(
+                original,
+                extensions=project.profile.extensions,
+                max_file_bytes=project.profile.max_file_bytes,
+                exclude_paths=excluded,
+            )
+            if not report["complete"]:
+                raise OSError(
+                    f"Could not completely scan source folder: {original}"
+                )
+            tracked = set(record.get("files", []))
+            for relative in report["selected_files"]:
+                if relative not in tracked:
+                    found.append((
+                        record, "added", original / relative,
+                        destination / relative, relative
+                    ))
     return found
 
 
@@ -1353,10 +1885,11 @@ def include_explicit_imports(
 
     Notes
     -----
-    Only direct-file imports recorded in ``sources.json`` are added. A folder
-    imported from a repository retains the repository's ordinary selection
-    policy. The file-size limit and symlink safeguards still apply, and an
-    unsupported source format may fail during subsequent text extraction.
+    Direct-file imports and recorded retained versions are selected outside
+    normal extension and protected-name rules. Folder imports retain the
+    ordinary scanner policy. Unrecorded files in the reserved version folder
+    are never selected. File-size and symlink restrictions still apply, and
+    an unsupported format may fail during text extraction.
 
     """
 
@@ -1376,25 +1909,45 @@ def include_explicit_imports(
         if not isinstance(item, dict):
             raise ValueError("Invalid project source scan entry.")
         relative = item.get("path")
-        if isinstance(relative, str):
+        if isinstance(relative, str) and not relative.startswith(
+            f"{_VERSION_DIRECTORY}/"
+        ):
             indexed[relative] = dict(item)
-    selected = set(report.get("selected_files", []))
+    selected = {
+        name for name in report.get("selected_files", [])
+        if not name.startswith(f"{_VERSION_DIRECTORY}/")
+    }
     for record in records:
         name = record["name"]
         snapshot = managed / name
-        if snapshot.is_symlink() or not snapshot.is_file():
-            continue
-        size = snapshot.stat().st_size
-        if not 0 < size <= project.profile.max_file_bytes:
-            continue
-        indexed[name] = {
-            "path": name,
-            "kind": "file",
-            "size_bytes": size,
-            "status": "selected",
-            "reason": "explicitly imported file",
-        }
-        selected.add(name)
+        if not snapshot.is_symlink() and snapshot.is_file():
+            size = snapshot.stat().st_size
+            if 0 < size <= project.profile.max_file_bytes:
+                indexed[name] = {
+                    "path": name,
+                    "kind": "file",
+                    "size_bytes": size,
+                    "status": "selected",
+                    "reason": "explicitly imported file",
+                }
+                selected.add(name)
+        # Only recorded historical snapshots are added. The reserved
+        # version directory is excluded from ordinary recursive scanning.
+        for version in record.get("versions", []):
+            path = version["path"]
+            if not _is_regular_snapshot(managed, path):
+                continue
+            size = (managed / path).stat().st_size
+            if not 0 < size <= project.profile.max_file_bytes:
+                continue
+            indexed[path] = {
+                "path": path,
+                "kind": "file",
+                "size_bytes": size,
+                "status": "selected",
+                "reason": "retained source version",
+            }
+            selected.add(path)
     rows = [indexed[name] for name in sorted(indexed)]
     return {
         **report,

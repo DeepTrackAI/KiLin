@@ -376,15 +376,38 @@ button:disabled { opacity: .62; cursor: default; }
 .model-row button { min-height: 32px; flex: none; }
 .other-models { padding-top: 10px; border-top: 1px solid var(--line); color: var(--control); font-size: 13px; }
 .other-models summary { cursor: pointer; }
-.sync-dialog { width: min(calc(100% - 32px), 480px); padding: 24px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: var(--surface); box-shadow: 0 20px 60px rgb(25 36 44 / 18%); }
+.sync-dialog { width: min(calc(100% - 32px), 620px); padding: 24px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); background: var(--surface); box-shadow: 0 20px 60px rgb(25 36 44 / 18%); }
 .sync-dialog::backdrop { background: rgb(0 0 0 / 25%); }
-.sync-dialog h2 { margin: 0 0 10px; font-size: 18px; }
-.sync-dialog p { margin: 0 0 14px; line-height: 1.45; }
-.sync-files { color: var(--control); font-size: 13px; }
-.sync-files summary { cursor: pointer; }
-.sync-files h3 { margin: 12px 0 4px; font-size: 12px; color: var(--muted); }
-.sync-files ul { max-height: 30vh; overflow: auto; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
-.sync-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.sync-dialog h2 { margin: 0 0 8px; font-size: 18px; }
+.sync-dialog p { margin: 0 0 12px; color: var(--control); line-height: 1.45; }
+.sync-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.sync-count { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--control); background: var(--surface-soft); font-size: 12px; font-weight: 600; }
+.sync-count::before, .sync-row::before { content: ""; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+.sync-count.added::before, .sync-row.added::before { background: var(--citation); }
+.sync-count.changed::before, .sync-row.changed::before { background: var(--accent); }
+.sync-count.deleted::before, .sync-row.deleted::before { background: var(--error-text); }
+.sync-files { max-height: 45vh; overflow: auto; margin-top: 16px; border-top: 1px solid var(--line); }
+.sync-files h3 { margin: 14px 0 4px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.sync-files ul { margin: 0; padding: 0; list-style: none; }
+.sync-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.sync-row:last-child { border-bottom: 0; }
+.sync-name { display: flex; flex: 1; flex-direction: column; min-width: 160px; overflow-wrap: anywhere; }
+.sync-name strong { font-size: 13px; font-weight: 600; }
+.sync-name small { color: var(--muted); font-size: 11px; }
+.sync-kept { color: var(--muted); font-size: 12px; }
+.segmented { display: inline-flex; flex: none; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); }
+.segmented label { position: relative; }
+.segmented label + label { border-left: 1px solid var(--line); }
+.segmented input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.segmented span { display: block; padding: 5px 11px; color: var(--control); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.segmented input:checked + span { color: var(--surface); background: var(--control-strong); }
+.segmented input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: -2px; }
+.sync-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 22px; }
+.link-button { min-height: 0; margin-right: auto; padding: 0; border: 0; color: var(--citation); background: none; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+@media (max-width: 560px) {
+  .sync-actions > button { flex: 1 1 auto; }
+  .sync-actions > .link-button { flex-basis: 100%; min-height: 32px; }
+}
 /* Narrower defaults; widths dragged by the user (inline) take precedence. */
 @media (max-width: 1100px) {
   .app-shell { --left-width: 210px; --right-width: 290px; }
