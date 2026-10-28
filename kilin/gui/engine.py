@@ -1059,9 +1059,10 @@ class ChatEngine:
 
         Notes
         -----
-        Sends ``source_changes`` only when a copy can be updated or removed,
-        so the user can choose to sync. A failed check is traced but not
-        shown: the project is already open and usable.
+        Sends ``source_changes`` only when a file can be imported, updated
+        or removed, so the user can choose per file. Copies the user edited
+        are listed but always kept. A failed check is traced but not shown:
+        the project is already open and usable.
 
         """
 
@@ -1075,7 +1076,7 @@ class ChatEngine:
         self.active_trace.emit(
             "gui.sources.changes.found", component="gui_engine", data=changes
         )
-        if changes["changed"] or changes["deleted"]:
+        if changes["added"] or changes["changed"] or changes["deleted"]:
             self._send("source_changes", **changes)
 
     def settings(self, type_id: str, workspace: str) -> None:
@@ -2008,25 +2009,43 @@ class ChatEngine:
                 f"Could not remove sources: {error}",
             )
 
-    def sync_sources(self) -> None:
-        """Update source copies from changed originals and reindex.
+    def sync_sources(self, decisions: object = None) -> None:
+        """Apply the user's choice for each changed source, then reindex.
+
+        Parameters
+        ----------
+        decisions: object, optional
+            Mapping of ``sources/`` paths from ``source_changes`` to
+            ``import``, ``replace``, ``keep_both``, ``delete`` or ``keep``.
+            Unlisted files are left untouched. Defaults to ``None``, which
+            updates changed copies, removes deleted ones and imports nothing.
 
         Notes
         -----
-        Copies the user edited in the project are kept. The index is
-        refreshed even if a file fails, so it matches the files on disk.
+        Copies the user edited in the project are kept unless a decision
+        names them. The core checks every decision before changing files.
+        The index is refreshed even if a file fails, so it matches the
+        files on disk.
 
         """
 
         try:
             if self.session is None:
                 raise RuntimeError("Open a project first.")
+            if decisions is not None and not (
+                isinstance(decisions, dict)
+                and all(
+                    isinstance(path, str) and isinstance(action, str)
+                    for path, action in decisions.items()
+                )
+            ):
+                raise ValueError("Source decisions must map paths to actions.")
             project = self.session.project
             self._send(
                 "status", message="Updating sources and the index…"
             )
             try:
-                done = sync_project_sources(project)
+                done = sync_project_sources(project, decisions=decisions)
                 self.active_trace.emit(
                     "gui.sources.synced", component="gui_engine", data=done
                 )
@@ -3797,7 +3816,7 @@ def main() -> None:
                     elif action == "remove_project_sources":
                         engine.remove_project_sources(command["paths"])
                     elif action == "sync_sources":
-                        engine.sync_sources()
+                        engine.sync_sources(command.get("decisions"))
                     elif action == "edit_folder":
                         arguments = dict(command)
                         del arguments["action"]

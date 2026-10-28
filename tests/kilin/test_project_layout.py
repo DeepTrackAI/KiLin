@@ -281,6 +281,38 @@ class TestProjectLayout(unittest.TestCase):
         )
 
 
+    def test_managed_source_versions_are_not_automatically_scanned(
+        self,
+    ) -> None:
+        """Only recorded historical copies enter the retrieval scan."""
+
+        source = self.root / "external"
+        source.mkdir()
+        (source / "a.py").write_text("value = 1\n", encoding="utf-8")
+        project = prepare_sources_workspace(
+            [source], "code", self.root / "managed"
+        )
+        self.assertEqual(
+            source_scan_exclusions(project.root, project.source),
+            (".kilin_versions",),
+        )
+        folder = project.source / ".kilin_versions" / "untracked"
+        folder.mkdir(parents=True)
+        (folder / "untracked.py").write_text(
+            "untracked = True\n", encoding="utf-8"
+        )
+        report = scan_repository(
+            project.source,
+            extensions=project.profile.extensions,
+            exclude_paths=source_scan_exclusions(
+                project.root, project.source
+            ),
+        )
+        self.assertNotIn(
+            ".kilin_versions/untracked/untracked.py",
+            report["selected_files"],
+        )
+
     def test_root_source_excludes_managed_templates_from_scans(self) -> None:
         """Template Markdown is not indexed when source equals project root."""
 
