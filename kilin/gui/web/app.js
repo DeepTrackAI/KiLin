@@ -1676,16 +1676,16 @@ function clearError() {
 }
 
 /**
- * Count the files a sync would update or remove, and those it keeps.
+ * Count the files a sync can import, update or remove, and those it keeps.
  *
  * @param changes The ``source_changes`` event: lists of copy paths under
- *   ``changed``, ``deleted`` and ``edited``.
+ *   ``added``, ``changed``, ``deleted`` and ``edited``.
  * @returns The sentence at the top of the sync dialog.
  */
 function sourceSyncSummary(changes) {
   const files = (count) => `${count} file${count === 1 ? "" : "s"}`;
-  const count = changes.changed.length + changes.deleted.length;
-  let text = `KíLín found ${files(count)} that changed in the original sources. Update the project's copies?`;
+  const count = changes.added.length + changes.changed.length + changes.deleted.length;
+  let text = `${files(count)} changed in the original folders since KíLín copied them.`;
   if (changes.edited.length) {
     text += ` KíLín keeps the ${files(changes.edited.length)} you edited in the project.`;
   }
@@ -1693,51 +1693,180 @@ function sourceSyncSummary(changes) {
 }
 
 /**
- * Group the differing files under short headings, leaving out empty groups.
+ * List the choices for one group of files; the first one is the default.
  *
- * @param changes The ``source_changes`` event.
- * @returns Pairs of heading and paths, without the ``sources/`` prefix.
+ * @param group ``added``, ``changed``, ``deleted`` or ``edited``.
+ * @returns Pairs of sync action and label; empty for edited copies, which
+ *   are always kept.
  */
-function sourceSyncGroups(changes) {
-  return [
-    ["Changed in the original", changes.changed],
-    ["Deleted from the original", changes.deleted],
-    ["Edited in this project (kept)", changes.edited],
-  ].filter(([, paths]) => paths.length).map(([title, paths]) => [
-    title, paths.map((path) => path.replace(/^sources\//, "")),
-  ]);
+function sourceSyncChoices(group) {
+  return {
+    added: [["import", "Add"], ["keep", "Skip"]],
+    changed: [["replace", "Update"], ["keep_both", "Keep both"], ["keep", "Keep old"]],
+    deleted: [["delete", "Remove"], ["keep", "Keep"]],
+    edited: [],
+  }[group];
 }
 
 /**
- * Ask whether to update the project's copies from changed originals.
+ * Choose the same kind of action for every file at once.
+ *
+ * @param changes The ``source_changes`` event.
+ * @param mode ``update`` brings every change in; ``both`` also keeps the
+ *   old copy of changed files and the copy of deleted ones.
+ * @returns Sync actions keyed by ``sources/`` path; edited copies are left
+ *   out, so they are kept.
+ */
+function sourceSyncPlan(changes, mode) {
+  const actions = mode === "both"
+    ? { added: "import", changed: "keep_both", deleted: "keep" }
+    : { added: "import", changed: "replace", deleted: "delete" };
+  const decisions = {};
+  for (const [group, action] of Object.entries(actions)) {
+    for (const path of changes[group]) decisions[path] = action;
+  }
+  return decisions;
+}
+
+/**
+ * Group the differing files under short headings, leaving out empty groups.
+ *
+ * @param changes The ``source_changes`` event.
+ * @returns Groups with their key, heading and ``sources/`` paths.
+ */
+function sourceSyncGroups(changes) {
+  return [
+    ["added", "New"],
+    ["changed", "Changed"],
+    ["deleted", "Deleted"],
+    ["edited", "Edited by you"],
+  ].filter(([group]) => changes[group].length).map(([group, title]) => ({
+    group, title, paths: changes[group],
+  }));
+}
+
+let sourceSyncChanges = null;
+
+/**
+ * Build one file row: its name, folder and choices.
+ *
+ * @param group The file's change group.
+ * @param path The copy's ``sources/`` path.
+ * @param index A number that keeps each row's radio group separate.
+ * @returns The list item.
+ */
+function sourceSyncRow(group, path, index) {
+  const item = document.createElement("li");
+  item.className = `sync-row ${group}`;
+  const relative = path.replace(/^sources\//, "");
+  const slash = relative.lastIndexOf("/");
+  const name = document.createElement("span");
+  name.className = "sync-name";
+  const file = document.createElement("strong");
+  file.textContent = relative.slice(slash + 1);
+  name.append(file);
+  if (slash > 0) {
+    const folder = document.createElement("small");
+    folder.textContent = relative.slice(0, slash);
+    name.append(folder);
+  }
+  item.append(name);
+  const choices = sourceSyncChoices(group);
+  if (!choices.length) {
+    const note = document.createElement("span");
+    note.className = "sync-kept";
+    note.textContent = "Your edit is kept";
+    item.append(note);
+    return item;
+  }
+  const options = document.createElement("div");
+  options.className = "segmented";
+  options.setAttribute("role", "radiogroup");
+  options.setAttribute("aria-label", `Action for ${relative}`);
+  choices.forEach(([action, label], position) => {
+    const option = document.createElement("label");
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `source-sync-${index}`;
+    input.value = action;
+    input.dataset.path = path;
+    input.checked = position === 0;
+    const text = document.createElement("span");
+    text.textContent = label;
+    option.append(input, text);
+    options.append(option);
+  });
+  item.append(options);
+  return item;
+}
+
+/**
+ * Switch the sync dialog between the quick buttons and the file list.
+ *
+ * @param fileByFile Whether to show the list of files with their choices.
+ */
+function setSourceSyncFileByFile(fileByFile) {
+  byId("source-sync-files").classList.toggle("hidden", !fileByFile);
+  byId("source-sync-quick").classList.toggle("hidden", fileByFile);
+  byId("source-sync-manual").classList.toggle("hidden", !fileByFile);
+}
+
+/**
+ * Ask what to do with the files whose originals changed.
+ *
+ * The quick buttons update everything, keep old and new copies, or keep
+ * the old copies; "Choose file by file" lists each file with its own
+ * choice. Copies the user edited are always kept.
  *
  * @param changes The ``source_changes`` event.
  */
 function showSourceSync(changes) {
+  sourceSyncChanges = changes;
   byId("source-sync-summary").textContent = sourceSyncSummary(changes);
+  const counts = byId("source-sync-counts");
   const list = byId("source-sync-files");
+  counts.replaceChildren();
   list.replaceChildren();
-  for (const [title, paths] of sourceSyncGroups(changes)) {
+  let index = 0;
+  for (const { group, title, paths } of sourceSyncGroups(changes)) {
+    const count = document.createElement("li");
+    count.className = `sync-count ${group}`;
+    count.textContent = `${paths.length} ${title.toLowerCase()}`;
+    counts.append(count);
     const heading = document.createElement("h3");
     heading.textContent = title;
     const items = document.createElement("ul");
-    for (const path of paths) {
-      const item = document.createElement("li");
-      item.textContent = path;
-      items.append(item);
-    }
+    for (const path of paths) items.append(sourceSyncRow(group, path, index++));
     list.append(heading, items);
   }
-  list.parentElement.open = false;
+  byId("source-sync-both").classList.toggle("hidden", !changes.changed.length);
+  setSourceSyncFileByFile(false);
   byId("source-sync").showModal();
 }
 
-byId("source-sync-keep").addEventListener("click", () => byId("source-sync").close());
-byId("source-sync-update").addEventListener("click", () => {
+/**
+ * Close the sync dialog and send the chosen actions to the core.
+ *
+ * @param decisions Sync actions keyed by ``sources/`` path.
+ */
+function syncSources(decisions) {
   byId("source-sync").close();
   if (busy || !bridge) return;
   setBusy(true, "Updating sources and the index…");
-  bridge.syncProjectSources();
+  bridge.syncProjectSources(JSON.stringify(decisions));
+}
+
+byId("source-sync-keep").addEventListener("click", () => byId("source-sync").close());
+byId("source-sync-both").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "both")));
+byId("source-sync-update").addEventListener("click", () => syncSources(sourceSyncPlan(sourceSyncChanges, "update")));
+byId("source-sync-pick").addEventListener("click", () => setSourceSyncFileByFile(true));
+byId("source-sync-back").addEventListener("click", () => setSourceSyncFileByFile(false));
+byId("source-sync-apply").addEventListener("click", () => {
+  const decisions = {};
+  for (const input of byId("source-sync-files").querySelectorAll("input:checked")) {
+    decisions[input.dataset.path] = input.value;
+  }
+  syncSources(decisions);
 });
 
 /**

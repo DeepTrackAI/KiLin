@@ -157,7 +157,8 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "remove_project_sources",
             ),
             (
-                {"action": "sync_sources"},
+                {"action": "sync_sources",
+                 "decisions": {"sources/a.md": "replace"}},
                 "sync_sources",
             ),
             (
@@ -218,6 +219,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
         self.assertEqual(worker.resume_project.call_args_list, [
             unittest.mock.call("/project", "conversation_earlier"),
             unittest.mock.call("/project", None),
+        ])
+
+    def test_sync_forwards_the_users_choices(self) -> None:
+        """Pass per-file sync choices through; none means the defaults."""
+
+        decisions = {"sources/a.md": "keep_both"}
+        worker, events = self._run([
+            json.dumps({"action": "sync_sources", "decisions": decisions}),
+            json.dumps({"action": "sync_sources"}),
+        ])
+        self.assertEqual(events, [])
+        self.assertEqual(worker.sync_sources.call_args_list, [
+            unittest.mock.call(decisions),
+            unittest.mock.call(None),
         ])
 
     def test_invalid_commands_emit_errors_and_processing_continues(
