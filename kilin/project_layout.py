@@ -369,18 +369,24 @@ def source_scan_exclusions(root: Path, source: Path) -> tuple[str, ...]:
     -------
     tuple[str, ...]
         Managed top-level folders to exclude when source is the project
-        root, or an empty tuple when sources live in a separate directory.
+        root; the reserved version folder for managed sources; otherwise
+        an empty tuple.
 
     Notes
     -----
     Source folders of unrelated repositories named ``templates`` or
-    ``outputs`` are not excluded globally; only KíLín-owned root folders
-    are skipped in the root-as-source profile layout.
+    ``outputs`` are not excluded globally. Managed version files are added
+    separately from ``sources.json`` so only recorded versions are indexed.
 
     """
 
-    return (
-        _PROJECT_SOURCE_EXCLUDES
-        if Path(root).resolve() == Path(source).resolve()
-        else ()
-    )
+    resolved_root = Path(root).resolve()
+    resolved_source = Path(source).resolve()
+    if resolved_root == resolved_source:
+        return _PROJECT_SOURCE_EXCLUDES
+    if (
+        resolved_source == resolved_root / "sources"
+        and (resolved_root / "sources.json").is_file()
+    ):
+        return (".kilin_versions",)
+    return ()
