@@ -498,6 +498,21 @@ function isOversizedSkippedFile(item) {
 }
 
 /**
+ * Remind the user which files of added folders KíLín left out.
+ *
+ * @param files ``sources_left_out`` rows: ``path`` and ``reason_code``.
+ * @returns Short message naming up to ten files and why each was left out.
+ */
+function sourcesLeftOutMessage(files) {
+  const shown = files.slice(0, 10).map((file) => `${file.path} (${
+    file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE ? "too large" : "file type not included"
+  })`);
+  if (files.length > 10) shown.push(`and ${files.length - 10} more`);
+  const count = `${files.length} file${files.length === 1 ? "" : "s"}`;
+  return `KíLín left out ${count} it does not index in this project:\n\n${shown.join("\n")}\n\nThe other files were added.`;
+}
+
+/**
  * Say briefly why a preview file cannot be ticked.
  *
  * @param item Skipped-file preview row with a reason code.
@@ -3459,6 +3474,8 @@ function onEvent(raw) {
     }
   } else if (data.event === "source_changes") {
     showSourceSync(data);
+  } else if (data.event === "sources_left_out") {
+    alert(sourcesLeftOutMessage(data.files));
   } else if (data.event === "folder_changed") {
     renderWorkspace(data.workspace_files);
     setBusy(false);

@@ -149,6 +149,7 @@ from kilin.repository_reason_codes import (
     SELECTION_REASON_CODES,
     SELECTION_REASON_EMPTY_FILE,
     SELECTION_REASON_FILE_TOO_LARGE,
+    SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
 )
 from kilin.runtime import (
     BACKEND_AUTO,
@@ -1922,10 +1923,13 @@ class ChatEngine:
             self._send(
                 "status", message="Adding sources and updating the index…"
             )
+            left_out = _left_out_files(self.session.project, sources)
             project = add_project_sources(
                 root, sources, trace=self.active_trace
             )
             self._refresh_sources(project)
+            if left_out:
+                self._send("sources_left_out", files=left_out)
         except Exception as error:
             # A failed copy may have written some files: index what is there,
             # so an old in-memory index is never used.
@@ -3613,6 +3617,65 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
         ):
             return indexes
     raise ValueError("Choose an effort level and a search depth.")
+
+
+def _left_out_files(
+    project: QAProject, sources: list[str]
+) -> list[dict[str, str]]:
+    """List files in added folders that the project does not copy.
+
+    Parameters
+    ----------
+    project: QAProject
+        Open project whose file types and size limit decide what is copied.
+    sources: list[str]
+        Files and folders the user is adding.
+
+    Returns
+    -------
+    list[dict[str, str]]
+        ``path`` (folder name and file, such as ``GAUDI/settings.json``) and
+        ``reason_code`` of each file left out for its type or size, in scan
+        order.
+
+    Notes
+    -----
+    Folders are scanned with the same rules as the copy. Files left out on
+    purpose, such as secrets or ``.DS_Store``, are not listed, and neither
+    are directly added files, which are always copied.
+
+    """
+
+    shown = {
+        SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+        SELECTION_REASON_FILE_TOO_LARGE,
+    }
+    files = []
+    for value in sources:
+        source = Path(value).expanduser()
+        if source.is_symlink() or not source.is_dir():
+            continue
+        source = source.resolve()
+        root = project.root.resolve()
+        report = scan_repository(
+            source,
+            extensions=project.profile.extensions,
+            exclude_paths=(
+                (root.relative_to(source).as_posix(),)
+                if root.is_relative_to(source)
+                else ()
+            ),
+            max_file_bytes=project.profile.max_file_bytes,
+        )
+        files.extend(
+            {
+                "path": f"{source.name}/{row['path']}",
+                "reason_code": row["reason_code"],
+            }
+            for row in report["entries"]
+            if row["kind"] == "file" and row["reason_code"] in shown
+        )
+    return files
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:

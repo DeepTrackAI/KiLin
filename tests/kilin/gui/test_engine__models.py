@@ -301,6 +301,39 @@ class TestEngineModelTransitions(unittest.TestCase):
         )
         self.assertIn("gui_sources_remove_requested", self.trace_text())
 
+    def test_added_folder_reports_files_left_out(self):
+        """Remind the user of files the project does not index."""
+        folder = self.root / "notes"
+        folder.mkdir()
+        (folder / "kept.txt").write_text(
+            "Added note about attention.", encoding="utf-8"
+        )
+        (folder / "data.json").write_text("{}", encoding="utf-8")
+        (folder / ".DS_Store").write_text("finder", encoding="utf-8")
+        self.engine.add_project_sources([str(folder)])
+        names = [event["event"] for event in self.events]
+        self.assertLess(names.index("opened"), names.index("sources_left_out"))
+        self.assertEqual(
+            self.events[-1],
+            {
+                "event": "sources_left_out",
+                "files": [
+                    {
+                        "path": "notes/data.json",
+                        "reason_code": "file_type_not_selected",
+                    }
+                ],
+            },
+        )
+        self.assertTrue((self.project.source / "notes/kept.txt").is_file())
+
+        self.events.clear()
+        (folder / "data.json").unlink()
+        self.engine.add_project_sources([str(folder)])
+        self.assertNotIn(
+            "sources_left_out", [event["event"] for event in self.events]
+        )
+
     def test_remove_source_rejects_paths_outside_sources(self):
         """Reject source-removal requests targeting project metadata."""
         for path in ("sources", "profile.ini", "sources/../profile.ini"):

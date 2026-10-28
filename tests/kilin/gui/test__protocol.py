@@ -590,7 +590,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "model_downloaded", "models_applied", "opened", "preview",
             "progress", "projects", "readiness", "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
-            "status", "stopped", "trace_ready", "usage_progress",
+            "sources_left_out", "status", "stopped", "trace_ready",
+            "usage_progress",
         })
 
 
