@@ -31,9 +31,11 @@ from _si_article_.benchmarks.common import (  # noqa: E402
     citation_coverage,
     citation_validity,
     extract_cited_indices,
+    final_answer,
     format_query,
     gold_evidence_indices,
     open_or_initialize,
+    verbatim_overlap_chars,
 )
 from kilin import PROJECT_TYPE_ID_CODE  # noqa: E402
 from kilin.project import (  # noqa: E402
@@ -90,6 +92,30 @@ class TestBenchmarkHelpers(unittest.TestCase):
         self.assertIsNone(
             citation_coverage("No sources", evidence, ("other.py:1",))
         )
+
+    def test_reasoning_is_not_scored(self) -> None:
+        """Read citations and overlap from the final answer only."""
+
+        reply = (
+            "<think>Evidence [7] has the list [0, 1, 2] and the text "
+            "repeated verbatim across many characters.</think>\n"
+            "The function is defined in the module [1]."
+        )
+        self.assertEqual(
+            final_answer(reply), "The function is defined in the module [1]."
+        )
+        self.assertEqual(final_answer("Opened by the template</think> A"), "A")
+        self.assertEqual(extract_cited_indices(reply), [1])
+        self.assertEqual(
+            citation_validity(reply, evidence_count=1), (True, [])
+        )
+
+        class Excerpt:
+            """Evidence text needed by the overlap check."""
+
+            text = "repeated verbatim across many characters"
+
+        self.assertLess(verbatim_overlap_chars(reply, [Excerpt()]), 20)
 
     def test_abstention_is_only_a_heuristic(self) -> None:
         """Count final abstention phrasing, not an incidental mention."""

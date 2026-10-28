@@ -81,6 +81,7 @@ __all__ = [
     "open_or_initialize",
     "local_run_timestamp",
     "load_generation_tasks",
+    "final_answer",
     "extract_cited_indices",
     "citation_validity",
     "gold_evidence_indices",
@@ -391,6 +392,35 @@ def load_generation_tasks(path: Path) -> list[GenerationTask]:
 _CITATION_PATTERN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
 
 
+def final_answer(answer: str) -> str:
+    """Return the part of a model reply that is shown as the answer.
+
+    Parameters
+    ----------
+    answer: str
+        A chat-model reply, possibly with reasoning in ``<think>`` tags.
+
+    Returns
+    -------
+    str
+        The reply without its reasoning, stripped of surrounding space.
+
+    Notes
+    -----
+    Reasoning is the model's working draft: citations, list literals and
+    quoted evidence there are not claims made to the reader, so the
+    citation, abstention and overlap checks read only the final answer.
+    This mirrors ``kilin.answering.strip_thinking``.
+
+    """
+
+    text = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.S)
+    # A chat template that opens <think> itself leaves only the closing tag.
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    return text.split("<think>", 1)[0].strip()
+
+
 def extract_cited_indices(answer: str) -> list[int]:
     """Extract numeric citations from standalone and grouped references.
 
@@ -402,13 +432,14 @@ def extract_cited_indices(answer: str) -> list[int]:
     Returns
     -------
     list[int]
-        Cited indices from ``[1]`` or ``[1, 2]`` in appearance order,
-        including duplicates. Callers needing unique numbers must dedupe.
+        Cited indices from ``[1]`` or ``[1, 2]`` in the final answer
+        (``final_answer``), in appearance order and including duplicates.
+        Callers needing unique numbers must dedupe.
 
     """
 
     indices: list[int] = []
-    for group in _CITATION_PATTERN.findall(answer):
+    for group in _CITATION_PATTERN.findall(final_answer(answer)):
         indices.extend(int(part.strip()) for part in group.split(","))
     return indices
 
@@ -613,7 +644,7 @@ def abstains(answer: str) -> bool:
 
     Notes
     -----
-    Reasoning before a closing ``</think>`` tag and quoted text are ignored.
+    Reasoning (``final_answer``) and quoted text are ignored.
     The opening and closing sentences carry an answer's conclusion. Either
     counts as an abstention when it uses the requested phrase
     ``Insufficient evidence.`` or a common paraphrase ("the evidence does
@@ -625,8 +656,7 @@ def abstains(answer: str) -> bool:
 
     """
 
-    text = answer.split("</think>")[-1].strip()
-    text = _QUOTATION_PATTERN.sub('""', text)
+    text = _QUOTATION_PATTERN.sub('""', final_answer(answer))
     sentences = [
         sentence
         for sentence in _SENTENCE_BREAK.split(text)
@@ -654,7 +684,8 @@ def verbatim_overlap_chars(answer: str, evidence) -> int:
     Returns
     -------
     int
-        Length in characters of the longest exact matching substring.
+        Length in characters of the longest exact substring shared by the
+        final answer (``final_answer``) and one excerpt.
 
     Notes
     -----
@@ -664,6 +695,7 @@ def verbatim_overlap_chars(answer: str, evidence) -> int:
 
     """
 
+    answer = final_answer(answer)
     longest = 0
     matcher = SequenceMatcher(None, answer, "")
     for item in evidence:
