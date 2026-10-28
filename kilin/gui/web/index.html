@@ -203,15 +203,19 @@
       </div>
     </section>
     <dialog id="source-sync" class="sync-dialog" aria-labelledby="source-sync-title">
-      <h2 id="source-sync-title">Original sources changed</h2>
+      <h2 id="source-sync-title">Original files changed</h2>
       <p id="source-sync-summary"></p>
-      <details class="sync-files">
-        <summary>Show files</summary>
-        <div id="source-sync-files"></div>
-      </details>
-      <div class="sync-actions">
+      <ul id="source-sync-counts" class="sync-counts"></ul>
+      <div id="source-sync-files" class="sync-files hidden"></div>
+      <div id="source-sync-quick" class="sync-actions">
+        <button id="source-sync-pick" type="button" class="link-button">Choose file by file</button>
         <button id="source-sync-keep" type="button" class="secondary">Keep old copies</button>
-        <button id="source-sync-update" type="button" class="primary">Update</button>
+        <button id="source-sync-both" type="button" class="secondary">Keep both</button>
+        <button id="source-sync-update" type="button" class="primary">Update all</button>
+      </div>
+      <div id="source-sync-manual" class="sync-actions hidden">
+        <button id="source-sync-back" type="button" class="secondary">Back</button>
+        <button id="source-sync-apply" type="button" class="primary">Apply choices</button>
       </div>
     </dialog>
   </body>

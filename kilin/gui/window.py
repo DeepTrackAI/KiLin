@@ -728,11 +728,23 @@ class ChatBridge(QObject):
             }
         )
 
-    @Slot()
-    def syncProjectSources(self) -> None:
-        """Update source copies from changed originals and reindex."""
+    @Slot(str)
+    def syncProjectSources(self, decisions_json: str) -> None:
+        """Apply the user's choice for each changed source and reindex.
 
-        self.commandRequested.emit({"action": "sync_sources"})
+        Parameters
+        ----------
+        decisions_json: str
+            JSON object mapping ``sources/`` paths to sync actions.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "sync_sources",
+                "decisions": json.loads(decisions_json),
+            }
+        )
 
     @Slot(str)
     def renameProject(self, name: str) -> None:
