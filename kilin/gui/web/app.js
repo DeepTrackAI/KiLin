@@ -2710,7 +2710,11 @@ function keepStoppedTurn(current) {
   current.item.classList.remove("pending");
   current.item.classList.add("stopped");
   current.answer.classList.remove("answer-phase", "streaming");
-  current.durationLine.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  const line = document.createElement("div");
+  line.className = "answer-duration";
+  line.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  current.durationLine.replaceWith(line);
+  current.durationLine = line;
   stoppedTurn = { item: current.item, conversationId: activeConversationId };
 }
 
@@ -2983,18 +2987,56 @@ function markTimelineStep(label) {
  * @returns The total time and each step's label and duration.
  */
 function timelineRecord(current, turn, totalMs) {
-  const end = current.started + totalMs;
-  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
   const query = turn.parameters?.retrieval_query;
   return {
     elapsed_ms: Math.round(totalMs),
-    steps: steps.map((step, index) => ({
+    steps: timelineSteps(current.timeline || [], current.started + totalMs).map((step) => ({
       label: query && /semantic search/i.test(step.label)
         ? `${step.label} for “${query}”`
         : step.label,
-      ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+      ms: step.ms,
     })),
   };
+}
+
+/**
+ * Turn the recorded step start times into labels and durations.
+ *
+ * @param timeline Steps with ``label`` and start time ``at``, in order.
+ * @param end Time the last step ended, or now for a step still running.
+ * @returns Each step's label and duration in milliseconds, without the
+ *   initial "Starting" step.
+ */
+function timelineSteps(timeline, end) {
+  const steps = timeline.filter((step) => step.label !== "Starting");
+  return steps.map((step, index) => ({
+    label: step.label,
+    ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+  }));
+}
+
+/**
+ * Add one row per step, with its duration, to a timeline list.
+ *
+ * Used both while an answer is made and for the saved "Took …" list, so
+ * they look the same.
+ *
+ * @param list The ``answer-timeline`` list to fill.
+ * @param steps Step labels and durations in milliseconds.
+ * @param running Whether the last step is still going on.
+ */
+function appendTimelineRows(list, steps, running = false) {
+  steps.forEach((step, index) => {
+    const row = document.createElement("li");
+    if (running && index === steps.length - 1) row.className = "timeline-running";
+    const label = document.createElement("span");
+    label.textContent = step.label;
+    const time = document.createElement("span");
+    time.className = "timeline-time";
+    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
+    row.append(label, time);
+    list.append(row);
+  });
 }
 
 /**
@@ -3022,16 +3064,7 @@ function renderTimeline(record, turn) {
   }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
-  for (const step of record?.steps || []) {
-    const row = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = step.label;
-    const time = document.createElement("span");
-    time.className = "timeline-time";
-    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
-    row.append(label, time);
-    list.append(row);
-  }
+  appendTimelineRows(list, record?.steps || []);
   if (tokens) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
@@ -3146,7 +3179,12 @@ function paintPendingTurn() {
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
+  // The steps so far, with the running one's time still counting.
+  const list = pendingTurn.steps;
+  if (list && pendingTurn.durationLine.open) {
+    list.replaceChildren();
+    appendTimelineRows(list, timelineSteps(pendingTurn.timeline, performance.now()), true);
+  }
 }
 
 /**
@@ -3170,16 +3208,23 @@ function addPendingTurn(question) {
   phaseHeader.className = "answer-phase-header";
   const phaseLabel = document.createElement("span");
   phaseLabel.className = "answer-phase-label";
-  const phaseTimerLabel = document.createElement("span");
-  phaseTimerLabel.className = "answer-phase-timer";
-  phaseHeader.append(phaseLabel, phaseTimerLabel);
+  phaseHeader.append(phaseLabel);
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
   answer.append(phaseHeader, phaseDetail);
-  item.append(questionNode, answer);
+  // The steps are listed as they happen, open so the route can be followed;
+  // the line becomes the collapsed "Took …" summary when the answer arrives.
+  const durationLine = document.createElement("details");
+  durationLine.className = "answer-duration";
+  durationLine.open = true;
+  const timer = document.createElement("summary");
+  const steps = document.createElement("ol");
+  steps.className = "answer-timeline";
+  durationLine.append(timer, steps);
+  item.append(questionNode, durationLine, answer);
   conversation.append(item);
   pendingTurn = {
-    item, answer, label: phaseLabel, timer: phaseTimerLabel, detail: phaseDetail,
+    item, answer, label: phaseLabel, timer, steps, durationLine, detail: phaseDetail,
     phase: "Generating", started: performance.now(), elapsedMs: null,
     timeline: [],
   };
@@ -3448,10 +3493,6 @@ function appendAnswerText(text) {
     current.streaming = true;
     resetAnswerStages();
     markTimelineStep("Generating the answer");
-    // Live elapsed time above the answer; it becomes "Took …" at the end.
-    current.durationLine = document.createElement("div");
-    current.durationLine.className = "answer-duration";
-    current.item.insertBefore(current.durationLine, current.answer);
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
