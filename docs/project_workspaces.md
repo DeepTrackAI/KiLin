@@ -212,6 +212,15 @@ modified, and `sources.json` is updated to reflect removed entries. Projects
 with external or root-as-source locations cannot use that deletion API.
 Index refreshing is a separate core operation.
 
+`kilin.preview_project_sources(project, paths)` previews cumulative imports
+without writing or reserving any files. It uses the core importer's
+source-validation, file-size, directory-selection, and destination-naming
+rules. Direct files of zero bytes or above the saved limit appear in the
+excluded-file report; missing or linked paths fail validation. Same-name
+sources in one batch receive the same distinct destination names the
+importer would allocate. Preview is advisory: importing revalidates the
+filesystem and project profile before copying.
+
 `kilin.find_source_changes(project)` compares previously imported files with
 originals using the saved metadata stamps. It also recursively scans tracked
 source folders for **new eligible files**, including files in newly created
@@ -226,6 +235,8 @@ paths that vanish are `deleted`, including files renamed or moved to another
 path. Files at the new path may independently be reported as `added`; KíLín
 does not infer a relocation or transfer tracking identity between paths.
 Files without stamps, missing workspace copies, and symlinks are skipped.
+Older pre-release manifests without copy stamps remain readable, but
+their existing snapshots do not automatically acquire change tracking.
 An original directory that is unavailable may look deleted, so a caller
 should confirm bulk deletions. Unreadable source paths raise errors rather
 than silently triggering deletion. Independently edited workspace copies
@@ -238,7 +249,7 @@ change category:
 | Category | Available actions | Default without `decisions` |
 | --- | --- | --- |
 | `added` | `import`, `keep` | `keep` (ignore new path) |
-| `changed` | `replace`, `keep`, `keep_both` | `replace` |
+| `changed` | `replace`, `keep`, `keep_both` | `replace` for tracked files; `keep` for restored detached files |
 | `deleted` | `delete`, `keep` | `delete` |
 | `edited` | `keep`; also `replace` / `keep_both` when the original exists, or `delete` if it does not | `keep` |
 
@@ -246,8 +257,13 @@ When a `decisions` mapping is given, **unlisted files are untouched**. All
 requested actions are validated before changes start. `keep` on a changed
 original leaves the difference pending; `keep` on a deleted original detaches
 the file from the original inventory while preserving the workspace copy.
-`import` rejects collisions with existing workspace files. `replace` on an
-edited copy is destructive and therefore requires an explicit per-file
+If its original returns at the same path, the retained copy is reported
+as `changed`, not `added`: the user can explicitly `replace` or
+`keep_both` without overwriting it automatically. Until then, the
+detached copy remains untouched, even by default synchronization.
+
+`import` rejects unrelated collisions with workspace files. `replace` on
+an edited copy is destructive and therefore requires an explicit per-file
 action. Without `decisions`, the existing automatic replacement/deletion
 behavior is preserved; new files are not automatically imported.
 
@@ -275,19 +291,23 @@ conflicting evidence; their distinct citation paths identify the version.
 If original metadata changes but the contents remain identical according to
 SHA-256, synchronization updates filesystem metadata and the copy's stamp
 without recopying bytes or creating a redundant version. Unchanged metadata
-does not trigger a hash comparison. Existing-source synchronization does not
-reapply the import file-size limit, although repository indexing continues to
-apply its own size policy. Files are processed independently: earlier
-successful operations can remain if a later operation fails. A failed archive
-copy does not overwrite the active source.
+does not trigger a hash comparison. Synchronization refuses to replace
+an existing copy with an empty or oversized original under the saved
+project file-size limit, before changing any files. The saved limit also
+applies when importing newly discovered files. Files are processed
+independently: earlier successful operations can remain if a later
+operation fails. A failed archive copy does not overwrite the active
+source.
 
-Neither source-change detection nor synchronization runs automatically on
-reopening a project. `sync_project_sources` does not refresh retrieval
-indexes: after accepted changes, the caller should invoke
-`RAGSession.refresh_sources(project)` once, or reopen a RAG session to trigger
-normal incremental indexing. A later GUI PR will collect per-file actions
-and arrange that refresh. This core API is specific to managed multi-source
-workspaces; `kilin.synchronize_project_workspace()` is an older single-source
+On project resume, the desktop engine runs change detection and offers
+per-file choices when an original differs; dismissing the dialog leaves
+copies unchanged. Synchronization is always a deliberate user action in
+the GUI. The core `sync_project_sources` API does not refresh indexes:
+after accepted changes, callers should invoke
+`RAGSession.refresh_sources(project)` once, or reopen a RAG session to
+trigger incremental indexing. The GUI refreshes once after applying a
+batch. This API is specific to managed multi-source workspaces;
+`kilin.synchronize_project_workspace()` is an older single-source
 mirroring API with different semantics.
 
 ## Project-owned outputs and templates

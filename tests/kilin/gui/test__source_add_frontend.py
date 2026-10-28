@@ -62,7 +62,9 @@ class TestSourceAddFrontend(unittest.TestCase):
         source = _APP.read_text(encoding="utf-8")
         script = r"""
 const assert = require("node:assert/strict");
-const selectionReasonCodes = { FILE_TOO_LARGE: "file_too_large" };
+const selectionReasonCodes = {
+  FILE_TOO_LARGE: "file_too_large", EMPTY_FILE: "empty_file"
+};
 """
         script += _function(source, "sourceAddPending")
         script += _function(source, "sourceAddSummary")
@@ -120,6 +122,9 @@ assert.equal(
 );
 assert.equal(sourceAddReason(left[0]), "File type not included");
 assert.equal(sourceAddReason(left[1]), "Too large");
+assert.equal(sourceAddReason(
+  { path: "empty.txt", reason_code: "empty_file" }
+), "Empty file");
 console.log("source add passed");
 """
         result = subprocess.run(

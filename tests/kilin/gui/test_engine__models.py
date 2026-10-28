@@ -389,6 +389,60 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.engine.add_project_sources([str(note)], ["not", "a", "dict"])
         self.assertEqual(self.events[-1]["event"], "error")
 
+    def test_check_rejects_unimportable_direct_files(self):
+        """An invalid direct file is never announced as one to add."""
+
+        empty = self.root / "empty.txt"
+        empty.write_bytes(b"")
+        large = self.root / "large.txt"
+        large.write_bytes(
+            b"x" * (self.project.profile.max_file_bytes + 1)
+        )
+        paths = [str(empty), str(large)]
+        self.events.clear()
+        self.engine.check_sources(paths)
+        checked = self.events[-1]
+        self.assertEqual(checked["event"], "sources_checked")
+        self.assertEqual(checked["add"], [])
+        self.assertEqual(checked["files"], [
+            {"path": "empty.txt", "reason_code": "empty_file"},
+            {"path": "large.txt", "reason_code": "file_too_large"},
+        ])
+        self.assertFalse((self.project.source / "empty.txt").exists())
+        self.assertFalse((self.project.source / "large.txt").exists())
+
+        for invalid in (self.root / "missing.txt",):
+            with self.subTest(invalid=invalid):
+                self.events.clear()
+                self.engine.check_sources([str(invalid)])
+                self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_check_allocates_duplicate_names_before_confirmation(self):
+        """The preview reports the names used by a mixed source batch."""
+
+        from hashlib import sha256
+
+        a = self.root / "a" / "same.txt"
+        b = self.root / "b" / "same.txt"
+        for path in (a, b):
+            path.parent.mkdir()
+            path.write_text(str(path), encoding="utf-8")
+        self.events.clear()
+        self.engine.check_sources([str(a), str(b)])
+        plan = self.events[-1]
+        self.assertEqual(plan["event"], "sources_checked")
+        self.assertEqual(plan["add"][0]["state"], "new")
+        self.assertEqual(plan["add"][1]["state"], "renamed")
+        self.assertEqual(
+            plan["add"][1]["name"],
+            f"same-{sha256(str(b).encode()).hexdigest()[:8]}.txt",
+        )
+        self.engine.add_project_sources([str(a), str(b)])
+        self.assertTrue((self.project.source / "same.txt").is_file())
+        self.assertTrue(
+            (self.project.source / plan["add"][1]["name"]).is_file()
+        )
+
     def test_folder_without_project_files_is_skipped(self):
         """Adding skips a folder with nothing to copy instead of failing."""
         code = self.root / "ops"

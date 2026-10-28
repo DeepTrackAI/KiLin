@@ -160,6 +160,33 @@ The process-recovery events `stopped` and `backend_restarted`, and some
 event names such as `gui.project.settings.saved` are a **separate** trace
 schema and are not browser events.
 
+### Open-project source-add confirmation
+
+`check_sources` delegates the import plan to
+`kilin.preview_project_sources()`. A `sources_checked` event lists only
+eligible imports in `add`, with core-allocated destination names (`state` is
+`new`, `renamed`, or `existing`). The `sources` array in the plan corresponds
+to these eligible imports, even when the user's original selection includes
+files that cannot be copied. The GUI keeps the originally requested paths in
+the event for confirmation and rechecks the plan on the add command.
+
+Direct files bypass directory suffix and protected-name filters but remain
+subject to the project's saved nonempty/file-size rule. Empty and oversized
+files appear in `files` with `empty_file` and `file_too_large` reason codes.
+Missing, linked, or unsupported paths and conflicting destination names
+produce an `error` event rather than a misleading addition preview. Name
+collisions within one selection batch use the same hashed destination names
+as the importer. The plan is read-only, not a reservation: filesystem changes
+between preview and import are checked again by the core.
+
+On resume, `source_changes` describes pending source differences without
+modifying snapshots. The user must confirm synchronization; accepted changes
+are indexed once afterward. A deleted original explicitly kept by the user
+is detached. If that original later returns to the same path, the retained
+copy is reported as `changed`, and an explicit `replace` or `keep_both`
+choice is needed to reconcile it; the automatic core policy keeps it.
+Replacing a source with an empty or oversized original fails before copying.
+
 ### Source-preview contract
 
 `preview.roots` is an ordered array corresponding to selected input roots.
