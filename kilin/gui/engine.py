@@ -121,6 +121,7 @@ from kilin.workspace import (
     add_project_sources,
     default_workspace_path,
     find_source_changes,
+    preview_project_sources,
     remove_workspace_sources,
     sync_project_sources,
 )
@@ -149,7 +150,6 @@ from kilin.repository_reason_codes import (
     SELECTION_REASON_CODES,
     SELECTION_REASON_EMPTY_FILE,
     SELECTION_REASON_FILE_TOO_LARGE,
-    SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
 )
 from kilin.runtime import (
     BACKEND_AUTO,
@@ -1920,7 +1920,7 @@ class ChatEngine:
             ):
                 raise ValueError("Choose source files or folders.")
             project = self.session.project
-            plan = _source_plan(project, sources)
+            plan = preview_project_sources(project, sources)
             changes = {"added": [], "changed": [], "deleted": [], "edited": []}
             existing = [
                 item["name"] for item in plan["add"]
@@ -2009,7 +2009,7 @@ class ChatEngine:
             # A folder without a single file of the project's types cannot
             # be copied, and a source already in the project changes only
             # through the user's choices; the check told the user both.
-            plan = _source_plan(self.session.project, sources)
+            plan = preview_project_sources(self.session.project, sources)
             new = [
                 value
                 for value, item in zip(plan["sources"], plan["add"])
@@ -3735,120 +3735,6 @@ def _effort_indexes(effort: object) -> tuple[int, int] | None:
         ):
             return indexes
     raise ValueError("Choose an effort level and a search depth.")
-
-
-def _imported_sources(project: QAProject) -> dict[str, str]:
-    """Map each imported original path to its name under ``sources/``.
-
-    Parameters
-    ----------
-    project: QAProject
-        Open project whose ``sources.json`` records the imports.
-
-    Returns
-    -------
-    dict[str, str]
-        Resolved original path to copy name; empty without a manifest.
-
-    """
-
-    manifest = project.root / "sources.json"
-    if not manifest.is_file():
-        return {}
-    records = json.loads(manifest.read_text(encoding="utf-8"))["sources"]
-    return {record["original"]: record["name"] for record in records}
-
-
-def _source_plan(
-    project: QAProject, sources: list[str]
-) -> dict[str, list]:
-    """Work out what adding these sources would copy, without copying.
-
-    Parameters
-    ----------
-    project: QAProject
-        Open project whose file types and size limit decide what is copied.
-    sources: list[str]
-        Files and folders the user is adding.
-
-    Returns
-    -------
-    dict[str, list]
-        ``add``: ``name``, ``kind`` (``file`` or ``folder``), number of
-        ``files`` and ``state`` for each source that adds something:
-        ``new``; ``renamed``, a different source whose name is taken, so
-        the core copies it under another name; or ``existing``, already
-        imported from this path, with ``name`` its copy under ``sources/``.
-        ``sources``: the given values in the same order as ``add``.
-        ``files``: ``path`` (folder name and file, such as
-        ``GAUDI/settings.json``) and ``reason_code`` of each file left out
-        for its type or size, in scan order. ``skipped``: the sources, as
-        given, of folders with no file to copy.
-
-    Notes
-    -----
-    Folders are scanned with the same rules as the copy. Files left out on
-    purpose, such as secrets or ``.DS_Store``, are not listed. Directly
-    added files are always copied. Sources are matched by the original
-    path, as the core does, not by name.
-
-    """
-
-    shown = {
-        SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
-        SELECTION_REASON_FILE_TOO_LARGE,
-    }
-    imported = _imported_sources(project)
-    taken = set(imported.values())
-    plan: dict[str, list] = {
-        "add": [], "sources": [], "files": [], "skipped": []
-    }
-    root = project.root.resolve()
-    for value in sources:
-        source = Path(value).expanduser()
-        resolved = source.resolve()
-        name = imported.get(str(resolved))
-        state = (
-            "existing" if name is not None
-            else "renamed" if source.name in taken
-            or (project.root / "sources" / source.name).exists()
-            else "new"
-        )
-        if source.is_symlink() or not source.is_dir():
-            plan["add"].append({
-                "name": name or source.name, "kind": "file", "files": 1,
-                "state": state,
-            })
-            plan["sources"].append(value)
-            continue
-        report = scan_repository(
-            resolved,
-            extensions=project.profile.extensions,
-            exclude_paths=(
-                (root.relative_to(resolved).as_posix(),)
-                if root.is_relative_to(resolved)
-                else ()
-            ),
-            max_file_bytes=project.profile.max_file_bytes,
-        )
-        plan["files"].extend(
-            {
-                "path": f"{source.name}/{row['path']}",
-                "reason_code": row["reason_code"],
-            }
-            for row in report["entries"]
-            if row["kind"] == "file" and row["reason_code"] in shown
-        )
-        selected = len(report["selected_files"])
-        if selected:
-            plan["add"].append({
-                "name": name or source.name, "kind": "folder",
-                "files": selected, "state": state,
-            })
-            plan["sources"].append(value)
-        elif report["complete"]:
-            plan["skipped"].append(value)
-    return plan
 
 
 def _workspace_path(sources: list[str], sandbox: Path, chosen: str) -> Path:

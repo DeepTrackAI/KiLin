@@ -40,6 +40,7 @@ Key Features
     Recursively detect eligible new files, changed originals, and deletions.
     A caller may import, replace, keep, delete, or preserve both versions for
     individual files. Metadata-only changes avoid rewriting file contents.
+    Restored originals of detached copies require explicit reconciliation.
 
 - **Separately retrievable versions**
 
@@ -51,7 +52,8 @@ Key Features
 
     Use profile selection rules and optional per-source selections for
     directory inputs. Preserve existing snapshot files by default; require
-    ``replace_existing=True`` to overwrite them.
+    ``replace_existing=True`` to overwrite them. New and updated copies
+    obey the saved project file-size limit.
 
 - **Profile integration**
 
@@ -73,6 +75,10 @@ Module Structure
 - ``add_project_sources``
 
     Deliberately add sources to an existing managed project.
+
+- ``preview_project_sources``
+
+    Plan eligible source imports and destinations without copying files.
 
 - ``default_workspace_path``
 
@@ -139,11 +145,17 @@ from kilin.project import (
     open_project,
 )
 from kilin.repository import scan_repository
+from kilin.repository_reason_codes import (
+    SELECTION_REASON_EMPTY_FILE,
+    SELECTION_REASON_FILE_TOO_LARGE,
+    SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+)
 from kilin.trace_logging import NullTraceLogger, TraceSink
 
 __all__ = [
     "prepare_sources_workspace",
     "add_project_sources",
+    "preview_project_sources",
     "default_workspace_path",
     "remove_workspace_sources",
     "find_source_changes",
@@ -403,6 +415,132 @@ def add_project_sources(
         selected_files=selected_files, replace_existing=replace_existing,
         trace=trace, existing=project,
     )
+
+
+
+def preview_project_sources(
+    project: QAProject, source_paths: Sequence[str | Path]
+) -> dict[str, list]:
+    """Preview cumulative source imports without modifying the workspace.
+
+    Parameters
+    ----------
+    project: QAProject
+        Opened project with a managed ``sources/`` directory.
+    source_paths: Sequence[str | pathlib.Path]
+        Candidate direct files and folders, in user-selected order.
+
+    Returns
+    -------
+    dict[str, list]
+        ``add`` describes eligible sources and their allocated destination
+        names; ``sources`` retains corresponding input values. ``files``
+        lists excluded files and selection reasons; ``skipped`` lists folders
+        without eligible files. Existing sources use state ``existing``.
+
+    Raises
+    ------
+    ValueError
+        If a source or destination violates import rules, or a directory
+        cannot be scanned completely.
+    OSError
+        If a selected path cannot be inspected.
+
+    Notes
+    -----
+    The plan shares destination allocation and profile limits with the core
+    importer, but does not reserve paths. Copying revalidates these rules.
+    Explicit files bypass directory extension and protected-name filters.
+
+    """
+
+    root = _managed_root(project)
+    if root is None:
+        raise ValueError("Only managed sources/ snapshots can be imported.")
+    if not isinstance(source_paths, (list, tuple)):
+        raise ValueError("Choose source files or folders.")
+    records = _read_records(root / "sources.json")
+    imported = {item["original"]: item["name"] for item in records}
+    used = set(imported.values())
+    shown = {
+        SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
+        SELECTION_REASON_FILE_TOO_LARGE,
+        SELECTION_REASON_EMPTY_FILE,
+    }
+    plan: dict[str, list] = {
+        "add": [], "sources": [], "files": [], "skipped": []
+    }
+    seen: set[Path] = set()
+    for value in source_paths:
+        if not isinstance(value, (str, Path)) or not str(value).strip():
+            raise ValueError("Choose source files or folders.")
+        requested = Path(value).expanduser()
+        if requested.is_symlink():
+            raise ValueError(f"Do not add a symbolic link: {requested}")
+        source = requested.resolve(strict=True)
+        if not source.is_file() and not source.is_dir():
+            raise ValueError(f"Choose a regular file or folder: {source}")
+        if source in seen:
+            continue
+        seen.add(source)
+        if (source == root or source.is_relative_to(root)) and not any(
+            source.is_relative_to(root / folder)
+            and source != root / folder
+            for folder in _COPYABLE_WORKSPACE_FOLDERS
+        ):
+            raise ValueError("Do not add the workspace as its own source.")
+        if source.is_file():
+            size = source.stat().st_size
+            if not _eligible_file_size(source, project.profile.max_file_bytes):
+                plan["files"].append({
+                    "path": source.name,
+                    "reason_code": (
+                        SELECTION_REASON_EMPTY_FILE if size == 0
+                        else SELECTION_REASON_FILE_TOO_LARGE
+                    ),
+                })
+                continue
+            selected = 1
+            kind = "file"
+        else:
+            excluded = (
+                (root.relative_to(source).as_posix(),)
+                if root.is_relative_to(source) else ()
+            )
+            report = scan_repository(
+                source,
+                extensions=project.profile.extensions,
+                max_file_bytes=project.profile.max_file_bytes,
+                exclude_paths=excluded,
+            )
+            if not report["complete"]:
+                raise ValueError(
+                    f"Could not completely scan source folder: {source}"
+                )
+            plan["files"].extend({
+                "path": f"{source.name}/{row['path']}",
+                "reason_code": row["reason_code"],
+            } for row in report["entries"] if (
+                row["kind"] == "file" and row["reason_code"] in shown
+            ))
+            selected = len(report["selected_files"])
+            if not selected:
+                plan["skipped"].append(str(value))
+                continue
+            kind = "folder"
+        name = imported.get(str(source))
+        if name is None:
+            name = _unique_name(source, used, root / "sources")
+            state = "renamed" if name != source.name else "new"
+            used.add(name)
+        else:
+            state = "existing"
+        plan["add"].append({
+            "name": name, "kind": kind, "files": selected,
+            "state": state,
+        })
+        plan["sources"].append(str(value))
+    return plan
 
 
 def _prepare_sources_workspace(
@@ -668,6 +806,27 @@ def _unique_name(source: Path, used: set[str], root: Path) -> str:
     return name
 
 
+
+def _eligible_file_size(source: Path, max_file_bytes: int) -> bool:
+    """Check the size policy shared by source imports and synchronization.
+
+    Parameters
+    ----------
+    source: pathlib.Path
+        Existing regular source file.
+    max_file_bytes: int
+        Maximum size saved in the project profile.
+
+    Returns
+    -------
+    bool
+        Whether the source is nonempty and within the size limit.
+
+    """
+
+    return 0 < source.stat().st_size <= max_file_bytes
+
+
 def _copy_source(
     source: Path,
     destination: Path,
@@ -730,8 +889,7 @@ def _copy_source(
             source.name
         ]:
             raise ValueError(f"Invalid file selection: {source}")
-        size = source.stat().st_size
-        if not 0 < size <= profile.max_file_bytes:
+        if not _eligible_file_size(source, profile.max_file_bytes):
             raise ValueError(
                 f"File is empty or exceeds the size limit: {source}"
             )
@@ -1354,8 +1512,8 @@ def sync_project_sources(
         alone or detaches a deleted original; ``keep_both`` saves the
         previous copy as a separately indexed version before replacement;
         ``delete`` removes a missing original's copy. Unlisted paths are
-        untouched. None preserves the earlier default: replace changed,
-        delete missing, preserve edited copies, and ignore new originals.
+        untouched. None replaces tracked changes and deletes missing
+        copies, while preserving edited and detached copies.
 
     Returns
     -------
@@ -1375,12 +1533,14 @@ def sync_project_sources(
     -----
     Rechecks pending changes before acting and validates all requested
     decisions before writing. Edits to a workspace copy are never discarded
-    by the default policy. ``keep_both`` needs an existing original and
-    archives the old copy under ``sources/.kilin_versions``. The archive
+    by the default policy. A restored original with a detached copy needs
+    an explicit replacement or ``keep_both`` choice. The latter requires
+    an existing original and archives the old copy under
+    ``sources/.kilin_versions``. The archive
     is tracked and exposed for indexing as an independent file, not as an
     untracked backup. Identical bytes trigger a metadata-only update rather
-    than an unnecessary duplicate. Updated files bypass the import-size
-    limit; indexing keeps its own profile limits and format restrictions.
+    than an unnecessary duplicate. Updated files obey the saved file-size
+    limit, as do new imports and retrieval indexing.
     Index refresh remains the caller's responsibility and should happen
     once after the full batch. Multi-file updates are not transactional.
 
@@ -1438,6 +1598,22 @@ def sync_project_sources(
                 raise ValueError(
                     f"New source conflicts with a workspace copy: {path}"
                 )
+    for record, group, source, copy, relative in pending:
+        path = copy.relative_to(root).as_posix()
+        action = (
+            decisions.get(path, "keep") if decisions is not None else
+            "replace" if group == "changed" and relative in
+            record.get("files", []) else "keep"
+        )
+        if action in ("import", "replace", "keep_both") and (
+            _regular_original(source)
+            and not _eligible_file_size(
+                source, project.profile.max_file_bytes
+            )
+        ):
+            raise ValueError(
+                f"Source is empty or exceeds the file-size limit: {source}"
+            )
     modified = False
     try:
         for record, group, source, copy, relative in pending:
@@ -1445,7 +1621,10 @@ def sync_project_sources(
             action = (
                 decisions.get(path, "keep") if decisions is not None else
                 {
-                    "added": "keep", "changed": "replace",
+                    "added": "keep", "changed": (
+                        "replace" if relative in record.get("files", [])
+                        else "keep"
+                    ),
                     "deleted": "delete", "edited": "keep",
                 }[group]
             )
@@ -1505,6 +1684,9 @@ def sync_project_sources(
                     shutil.copystat(source, copy)
                 else:
                     _copy_file(source, copy, replace_existing=True)
+                record["files"] = sorted(
+                    set(record.get("files", [])) | {relative}
+                )
                 record.setdefault("stamps", {})[relative] = _copy_stamp(copy)
                 done["changed"].append(path)
                 modified = True
@@ -1517,7 +1699,10 @@ def sync_project_sources(
                 _untrack_file(record, relative)
                 folder = root / "sources" / record["name"]
                 parent = copy.parent
-                while parent != folder and not any(parent.iterdir()):
+                while (
+                    parent != folder and parent.is_relative_to(folder)
+                    and not any(parent.iterdir())
+                ):
                     parent.rmdir()
                     parent = parent.parent
                 done["deleted"].append(path)
@@ -1774,7 +1959,9 @@ def _differences(
     Previously imported files are compared by metadata, while new paths
     are discovered with the same recursive selection rules used at import.
     An inaccessible original aborts scanning rather than suggesting a bulk
-    deletion; symlink paths are never followed.
+    deletion; symlink paths are never followed. When a detached copy has
+    a restored eligible original, the pair is reported as changed so a
+    caller can explicitly reconcile it without an import collision.
 
     """
 
@@ -1834,11 +2021,17 @@ def _differences(
         if kind == "file":
             if (
                 not record.get("files") and _regular_original(original)
-                and 0 < original.stat().st_size <=
-                project.profile.max_file_bytes
+                and _eligible_file_size(
+                    original, project.profile.max_file_bytes
+                )
             ):
+                group = (
+                    "changed" if _is_regular_snapshot(
+                        managed, record["name"]
+                    ) else "added"
+                )
                 found.append((
-                    record, "added", original, destination, original.name
+                    record, group, original, destination, original.name
                 ))
         elif original.is_dir() and not original.is_symlink():
             excluded = (
@@ -1858,8 +2051,13 @@ def _differences(
             tracked = set(record.get("files", []))
             for relative in report["selected_files"]:
                 if relative not in tracked:
+                    group = (
+                        "changed" if _is_regular_snapshot(
+                            destination, relative
+                        ) else "added"
+                    )
                     found.append((
-                        record, "added", original / relative,
+                        record, group, original / relative,
                         destination / relative, relative
                     ))
     return found

@@ -1899,7 +1899,9 @@ function sourceAddSummary(check) {
  * @returns Short text shown next to the file.
  */
 function sourceAddReason(file) {
-  return file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE ? "Too large" : "File type not included";
+  if (file.reason_code === selectionReasonCodes?.FILE_TOO_LARGE) return "Too large";
+  if (file.reason_code === selectionReasonCodes?.EMPTY_FILE) return "Empty file";
+  return "File type not included";
 }
 
 let sourceAddPaths = [];

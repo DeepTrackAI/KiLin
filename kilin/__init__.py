@@ -246,6 +246,7 @@ from .workspace import (
     find_source_changes,
     list_source_versions,
     prepare_sources_workspace,
+    preview_project_sources,
     remove_workspace_sources,
     sync_project_sources,
 )
@@ -362,6 +363,7 @@ __all__ = [
     "prepare_persistent_indexes",
     "prepare_project_workspace",
     "prepare_sources_workspace",
+    "preview_project_sources",
     "remove_workspace_sources",
     "sync_project_sources",
     "SourceAction",

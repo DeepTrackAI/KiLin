@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from kilin.project import open_project
 from kilin.workspace import (
     find_source_changes,
     list_source_versions,
@@ -421,17 +422,29 @@ class TestSourceChanges(unittest.TestCase):
         self.assertEqual(result["edited"], ["sources/repository/a.py"])
         self.assertEqual(manifest.read_bytes(), before)
 
-    def test_sync_ignores_updated_file_size_limit(self) -> None:
-        """An original grown beyond the import limit can be synchronized."""
+    def test_sync_rejects_updated_file_size_limit(self) -> None:
+        """Oversized or empty originals cannot replace indexed copies."""
 
         original = self.folder / "a.py"
+        copy = self.copies / "repository/a.py"
+        manifest = self.project.root / "sources.json"
+        before = manifest.read_bytes()
         original.write_bytes(b"x" * (self.project.profile.max_file_bytes + 1))
-        done = sync_project_sources(self.project)
-        self.assertEqual(done["changed"], ["sources/repository/a.py"])
-        self.assertEqual(
-            (self.copies / "repository/a.py").stat().st_size,
-            self.project.profile.max_file_bytes + 1,
-        )
+        self._changes(changed=["repository/a.py"])
+        with self.assertRaisesRegex(ValueError, "file-size limit"):
+            sync_project_sources(self.project)
+        with self.assertRaisesRegex(ValueError, "file-size limit"):
+            sync_project_sources(self.project, decisions={
+                "sources/repository/a.py": "keep_both",
+            })
+        self.assertEqual(copy.read_text(encoding="utf-8"), "x = 1\n")
+        self.assertEqual(manifest.read_bytes(), before)
+        self.assertEqual(list_source_versions(self.project), [])
+        original.write_bytes(b"")
+        with self.assertRaisesRegex(ValueError, "file-size limit"):
+            sync_project_sources(self.project)
+        self.assertEqual(manifest.read_bytes(), before)
+
 
     def test_sync_renews_the_manifest(self) -> None:
         """Updated copies get new stamps; removed copies leave the record."""
@@ -605,24 +618,91 @@ class TestSourceChanges(unittest.TestCase):
         self._changes()
 
     def test_deleted_keep_detaches_copy_from_missing_origin(self) -> None:
-        """A kept deletion remains local without recurring prompts."""
+        """Restoring a kept original permits safe, explicit reconciliation."""
 
+        copy = self.copies / "repository/a.py"
         (self.folder / "a.py").unlink()
         done = sync_project_sources(self.project, decisions={
             "sources/repository/a.py": "keep",
         })
         self.assertEqual(done["deleted"], [])
-        self.assertTrue((self.copies / "repository/a.py").is_file())
+        self.assertTrue(copy.is_file())
         self._changes()
         self._write(self.folder / "a.py", "new upstream\n", 2)
-        self._changes(added=["repository/a.py"])
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            sync_project_sources(self.project, decisions={
-                "sources/repository/a.py": "import",
-            })
+        self._changes(changed=["repository/a.py"])
+        # Detached copies cannot be replaced by the automatic policy.
+        self.assertEqual(sync_project_sources(self.project), {
+            "added": [], "changed": [], "deleted": [], "edited": [],
+        })
+        self.assertEqual(copy.read_text(), "x = 1\n")
+        sync_project_sources(self.project, decisions={
+            "sources/repository/a.py": "keep_both",
+        })
+        self.assertEqual(copy.read_text(), "new upstream\n")
+        version = list_source_versions(self.project)[0]
         self.assertEqual(
-            (self.copies / "repository/a.py").read_text(), "x = 1\n"
+            (self.project.root / version["version"]).read_text(),
+            "x = 1\n",
         )
+        self._changes()
+
+
+    def test_keep_deleted_direct_file_reconciles_without_overwriting(
+        self,
+    ) -> None:
+        """A retained direct file can be safely reconnected to its origin."""
+
+        copy = self.copies / "notes.md"
+        self.single.unlink()
+        sync_project_sources(self.project, decisions={
+            "sources/notes.md": "keep",
+        })
+        self._changes()
+        self._write(self.single, "notes restored\n", 3)
+        self._changes(changed=["notes.md"])
+        sync_project_sources(self.project)
+        self.assertEqual(copy.read_text(), "notes\n")
+        sync_project_sources(self.project, decisions={
+            "sources/notes.md": "replace",
+        })
+        self.assertEqual(copy.read_text(), "notes restored\n")
+        self._changes()
+
+    def test_delete_only_direct_file_keeps_managed_sources(self) -> None:
+        """The final direct-file deletion must not remove ``sources/``."""
+
+        directory = self.root / "last-project"
+        single_project = prepare_sources_workspace(
+            [self.single], "literature", directory
+        )
+        self.single.unlink()
+        result = sync_project_sources(single_project)
+        self.assertEqual(result["deleted"], ["sources/notes.md"])
+        self.assertTrue(single_project.source.is_dir())
+        reopened = open_project(directory)
+        self.assertEqual(reopened.source, single_project.source)
+        self.assertFalse((reopened.source / "notes.md").exists())
+        self.assertEqual(find_source_changes(reopened)["deleted"], [])
+
+    def test_deletion_never_prunes_folder_or_sibling(self) -> None:
+        """Folder cleanup stops at its imported directory boundary."""
+
+        directory = self.root / "folder-only"
+        folder = self.root / "nested"
+        folder.mkdir()
+        nested = folder / "sub"
+        nested.mkdir()
+        file = self._write(nested / "a.py", "a = 1\n", 1)
+        project = prepare_sources_workspace(
+            [folder], "code", directory
+        )
+        file.unlink()
+        result = sync_project_sources(project)
+        self.assertEqual(result["deleted"], ["sources/nested/sub/a.py"])
+        self.assertTrue(project.source.is_dir())
+        self.assertTrue((project.source / "nested").is_dir())
+        self.assertFalse((project.source / "nested/sub").exists())
+        self.assertTrue(open_project(project.root).source.is_dir())
 
     def test_direct_file_reappearing_is_a_new_original(self) -> None:
         """Re-created direct imports can be imported individually."""
