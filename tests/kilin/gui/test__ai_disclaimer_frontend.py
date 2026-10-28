@@ -27,7 +27,7 @@ class TestAiDisclaimerFrontend(unittest.TestCase):
         chat = chat[: chat.index("</section>")]
         line = (
             '<p class="ai-disclaimer">AI-generated answers can be wrong. '
-            "Verify them against your sources.</p>"
+            "Always verify them.</p>"
         )
         self.assertEqual(page.count('class="ai-disclaimer"'), 1)
         self.assertIn(line, chat)
