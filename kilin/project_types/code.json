@@ -214,6 +214,7 @@
       }
     },
     "small_talk": {
+      "thinking": false,
       "description": "Only greetings, thanks, goodbyes, or pleasantries such as 'how are you?'. Any question about a term, name, method, the sources, an earlier answer, or the conversation itself is never small talk.",
       "system_prompt": "This message is small talk, not a question about the sources, so the evidence rules above do not apply. Reply in one short, friendly sentence. Do not cite sources, summarize the conversation, mention evidence, or invent project details.",
       "answer_guidance": "Reply in one short sentence.",

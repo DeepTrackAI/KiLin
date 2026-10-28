@@ -498,6 +498,122 @@ class TestChatReply(unittest.TestCase):
 
         self.session = _session(system_prompt="Instruction")
 
+    def test_thinking_override_and_inheritance_on_both_backends(self) -> None:
+        """Use the effective policy at tokenization without changing state."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                for options in (
+                    {}, {"thinking": None},
+                    {"thinking": True}, {"thinking": False},
+                ):
+                    with self.subTest(
+                        backend=backend, configured=configured,
+                        options=options,
+                    ):
+                        session = _session(
+                            thinking=configured, max_new_tokens=8
+                        )
+                        session.backend = backend
+                        override = options.get("thinking")
+                        expected = (
+                            configured if override is None else override
+                        )
+                        with patch.object(
+                            session, f"_{backend}_reply",
+                            return_value="Answer",
+                        ) as generate:
+                            session.reply("Question", **options)
+                        generate.assert_called_once_with([4, 5, 6], 8)
+                        template = session._tokenizer.apply_chat_template
+                        template.assert_called_once()
+                        self.assertIs(
+                            template.call_args.kwargs["enable_thinking"],
+                            expected,
+                        )
+                        self.assertIs(session.thinking, configured)
+
+    def test_thinking_override_does_not_leak_to_next_reply(self) -> None:
+        """Explicit on and off overrides affect exactly one invocation."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                with self.subTest(backend=backend, configured=configured):
+                    session = _session(
+                        thinking=configured, max_new_tokens=8
+                    )
+                    session.backend = backend
+                    with patch.object(
+                        session, f"_{backend}_reply", return_value="Answer"
+                    ):
+                        session.reply("First", thinking=not configured)
+                        session.reply("Second")
+                    calls = (
+                        session._tokenizer.apply_chat_template.call_args_list
+                    )
+                    self.assertEqual(
+                        [call.kwargs["enable_thinking"] for call in calls],
+                        [not configured, configured],
+                    )
+                    self.assertIs(session.thinking, configured)
+
+    def test_invalid_thinking_is_rejected_before_model_work(self) -> None:
+        """Validate request overrides without changing history or counters."""
+
+        session = self.session
+        history = list(session.messages)
+        with patch.object(session, "_torch_reply") as generate:
+            for value in ("false", "true", 0, 1, 0.0, [], {}):
+                with self.subTest(value=value):
+                    with self.assertRaisesRegex(ValueError, "thinking"):
+                        session.reply("Question", thinking=value)
+        generate.assert_not_called()
+        session._tokenizer.apply_chat_template.assert_not_called()
+        self.assertEqual(session.messages, history)
+        self.assertFalse(session.thinking)
+        self.assertEqual(session.input_token_total, 0)
+        self.assertEqual(session.output_token_total, 0)
+
+    def test_failed_thinking_override_preserves_configured_setting(
+        self,
+    ) -> None:
+        """Tokenization and inference failures cannot persist an override."""
+
+        for backend in ("torch", "mlx"):
+            for stage in ("template", "generation"):
+                for configured in (True, False):
+                    with self.subTest(
+                        backend=backend, stage=stage, configured=configured
+                    ):
+                        session = _session(
+                            thinking=configured, max_new_tokens=8
+                        )
+                        session.backend = backend
+                        template = session._tokenizer.apply_chat_template
+                        if stage == "template":
+                            template.side_effect = RuntimeError("failed")
+                        with patch.object(
+                            session, f"_{backend}_reply",
+                            side_effect=RuntimeError("failed"),
+                        ):
+                            with self.assertRaisesRegex(
+                                RuntimeError, "failed"
+                            ):
+                                session.reply(
+                                    "Question", thinking=not configured
+                                )
+                        self.assertIs(session.thinking, configured)
+                        self.assertEqual(session.messages, [])
+                        template.side_effect = None
+                        with patch.object(
+                            session, f"_{backend}_reply", return_value="Answer"
+                        ):
+                            session.reply("Retry")
+                        self.assertIs(
+                            template.call_args.kwargs["enable_thinking"],
+                            configured,
+                        )
+
     def test_successful_reply_updates_history(self) -> None:
         """Commit exactly one stripped user/assistant exchange."""
 
@@ -973,6 +1089,50 @@ class TestChatTracing(unittest.TestCase):
             lambda name, value, **kwargs: {"name": name, "value": value}
         )
         return trace
+
+    def test_trace_and_rendering_use_effective_thinking(self) -> None:
+        """Keep forensic prompts, input metadata, and tokenization aligned."""
+
+        for backend in ("torch", "mlx"):
+            for configured in (True, False):
+                for override in (None, True, False):
+                    with self.subTest(
+                        backend=backend, configured=configured,
+                        override=override,
+                    ):
+                        trace = self._trace(content=True)
+                        session = _session(
+                            thinking=configured, trace=trace,
+                            max_new_tokens=8,
+                        )
+                        session.backend = backend
+                        template = session._tokenizer.apply_chat_template
+                        template.side_effect = ["prompt", [4, 5, 6]]
+                        session._tokenizer.encode.return_value = [7]
+                        expected = (
+                            configured if override is None else override
+                        )
+                        with patch.object(
+                            session, f"_{backend}_reply", return_value="Answer"
+                        ):
+                            session.reply("Question", thinking=override)
+                        self.assertEqual(template.call_count, 2)
+                        for call in template.call_args_list:
+                            self.assertIs(
+                                call.kwargs["enable_thinking"], expected
+                            )
+                        self.assertEqual(trace.emit.call_count, 2)
+                        call = trace.emit.call_args_list[0]
+                        self.assertEqual(
+                            call.args[0], TRACE_EVENT_LLM_CALL_INPUT
+                        )
+                        data = call.kwargs["data"]
+                        self.assertIs(data["thinking"], expected)
+                        self.assertIs(
+                            data["chat_template"]["enable_thinking"], expected
+                        )
+                        self.assertIs(session.thinking, configured)
+                        trace.settings_changed.assert_not_called()
 
     def test_enabled_trace_emits_input_and_output_metadata(self) -> None:
         """Forward call IDs and record retokenized output counts."""

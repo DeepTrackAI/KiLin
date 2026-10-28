@@ -366,6 +366,14 @@ a change is saved to its profile.ini when the next question is asked, every
 chat in the project uses it, switching chats keeps it, and opening another
 project loads that project's own values.
 
+An ordinary answer intent can override thinking for that reply without
+changing these controls or the saved project setting. Both packaged
+`small_talk` intents disable thinking; an omitted or null intent policy
+inherits the configured value. A following intent without an override
+therefore uses the configured value again. This uses the selected model/template
+control, not a model switch, and does not control tool-internal calls.
+See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking-policy).
+
 ## Conversations, references, and progress
 
 New chat creates a separate conversation record while retaining earlier

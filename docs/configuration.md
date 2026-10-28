@@ -114,6 +114,53 @@ combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
 
+### Per-intent thinking policy
+
+An intent may set `thinking` to `true`, `false`, or `null`. Omitting the
+field is equivalent to `null`: inherit the loaded chat session's configured
+setting. This is inheritance, not automatic reasoning-effort selection.
+Strings such as `"false"`, numbers, arrays, and objects are rejected.
+
+For ordinary model answers, an explicit boolean overrides the configured
+setting for **that reply only**, including a thinking setting passed in
+`RAGSession.ask(generation_settings=...)`. Those generation updates still
+persist on the session; the intent override never rewrites them, the project
+profile, or GUI preferences. It does not switch models, change token budgets,
+or add a model call. Both packaged `small_talk` intents set `thinking` to
+`false`; other packaged intents inherit the session setting.
+
+For example, a minimal ordinary intent can declare:
+
+```json
+{
+  "description": "Greetings and thanks.",
+  "system_prompt": "Reply briefly without citing sources.",
+  "history": {"policy": "none"},
+  "retrieval": {"mode": "none"},
+  "thinking": false
+}
+```
+
+This object belongs under an intent key in the project type's `intents`
+object. Tool-backed intents must omit `thinking` or set it to `null`;
+explicit booleans are rejected because tools own their internal model calls.
+The policy does not control the router or other side requests. Disabling
+routing still selects the configured default intent and its policy.
+
+The control uses the selected model's existing `enable_thinking`
+chat-template argument. Templates or models that do not support this control
+cannot be made non-thinking by this setting; no model fallback or output
+filter is added. Restart after editing a packaged project-type JSON because
+validated types are cached. Existing workspaces use the updated intent policy
+on subsequent requests after restart; saved answers are not rewritten and no
+profile migration or reindexing is needed.
+
+Saved turn parameters keep `thinking` as the configured value used to restore
+a conversation. Direct model answers additionally record `thinking_effective`
+as the resolved value requested for that answer; tool answers do not claim a
+single effective thinking policy. See [Model management](model_management.md)
+and [Trace recording](trace_recording.md).
+
 ### Canonical identifiers and schemas
 
 `ProjectTypeId` is an open string alias, not a closed enum. A validated
