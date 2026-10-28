@@ -213,6 +213,40 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertEqual(events[-1]["event"], "opened")
 
     @patch("kilin.gui.engine.RAGSession")
+    def test_chat_events_refresh_the_workspace_tree(self, rag):
+        """Creating or deleting a chat sends the updated project files."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        old = engine.active_conversation
+        root = session.project.root
+
+        def shown(path: Path) -> bool:
+            """Whether the latest chat event lists this file."""
+            latest = [
+                event for event in events
+                if event["event"] in {"conversation_opened", "conversations"}
+            ][-1]
+            return path.relative_to(root).as_posix() in latest[
+                "workspace_files"
+            ]
+
+        engine.create_conversation()
+        new = engine.conversation_store.state_path(engine.active_conversation)
+        self.assertTrue(shown(new))
+        path = engine.conversation_store.state_path(old)
+        self.assertTrue(shown(path))
+
+        engine.delete_conversation(old.conversation_id)
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertFalse(path.exists())
+        self.assertFalse(shown(path))
+
+    @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):
         """Deletion archives durable content without a closing rewrite."""
 

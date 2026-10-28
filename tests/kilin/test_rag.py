@@ -23,6 +23,11 @@ from unittest.mock import DEFAULT, MagicMock, Mock, patch, sentinel
 import warnings
 
 from kilin import rag
+from kilin.workspace import (
+    list_source_versions,
+    prepare_sources_workspace,
+    sync_project_sources,
+)
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     new_conversation_session,
@@ -1512,6 +1517,237 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         self.assertEqual(session.turns, [])
 
 
+class TestRAGIntentThinking(unittest.TestCase):
+    """Exercise intent policy with real reply orchestration and fake models."""
+
+    def _chat(self, *, thinking: bool) -> rag.ChatSession:
+        """Create a chat with real settings and a deterministic tokenizer.
+
+        Parameters
+        ----------
+        thinking: bool
+            Configured setting that intent overrides must not mutate.
+
+        Returns
+        -------
+        kilin.ChatSession
+            Session whose model generation must be patched by the test.
+
+        """
+
+        with patch.object(rag.ChatSession, "_load"):
+            chat = rag.ChatSession(
+                "chat-model", backend="torch", thinking=thinking,
+                max_new_tokens=16, block_unrequested_cjk=False,
+            )
+        self.addCleanup(chat.close)
+        chat._model = object()
+        chat._tokenizer = Mock()
+        chat._tokenizer.apply_chat_template.return_value = [1, 2, 3]
+        chat._tokenizer.encode.return_value = [4]
+        return chat
+
+    def test_intent_policy_propagates_without_reconfiguration(self) -> None:
+        """Apply generic intent policies without a small-talk special case."""
+
+        for configured in (True, False):
+            for override in (None, True, False):
+                with self.subTest(configured=configured, override=override):
+                    session = _session()
+                    session.chat_session.thinking = configured
+                    intent = replace(_intent(), thinking=override)
+                    with _answer_patches(session, intent) as mocks:
+                        session.ask("Question", use_router=False)
+                    options = session.chat_session.reply.call_args.kwargs
+                    if override is None:
+                        self.assertNotIn("thinking", options)
+                    else:
+                        self.assertIs(options["thinking"], override)
+                    expected = (
+                        configured if override is None else override
+                    )
+                    parameters = session.turns[-1].parameters
+                    self.assertIs(parameters["thinking"], configured)
+                    self.assertIs(parameters["thinking_effective"], expected)
+                    self.assertIs(session.chat_session.thinking, configured)
+                    configure = session.chat_session.configure_generation
+                    configure.assert_not_called()
+                    session.chat_session.reply.assert_called_once()
+                    mocks.route.assert_called_once()
+
+    def test_intent_override_has_precedence_over_generation_update(
+        self,
+    ) -> None:
+        """Retain explicit session updates while overriding only the answer."""
+
+        for configured, updated, override in (
+            (False, True, False), (True, False, True), (False, True, None),
+        ):
+            with self.subTest(updated=updated, override=override):
+                session = _session()
+                chat = self._chat(thinking=configured)
+                session.chat_session = chat
+                intent = replace(_intent(), thinking=override)
+                with (
+                    _answer_patches(session, intent),
+                    patch.object(chat, "_torch_reply", return_value="Answer"),
+                ):
+                    session.ask(
+                        "Question", use_router=False,
+                        generation_settings={"thinking": updated},
+                    )
+                expected = updated if override is None else override
+                self.assertIs(chat.thinking, updated)
+                self.assertIs(
+                    chat._tokenizer.apply_chat_template.call_args.kwargs[
+                        "enable_thinking"
+                    ], expected,
+                )
+                parameters = session.turns[-1].parameters
+                self.assertIs(parameters["thinking"], updated)
+                self.assertIs(parameters["thinking_effective"], expected)
+
+    def test_small_talk_then_normal_answer_uses_configured_thinking(
+        self,
+    ) -> None:
+        """Packaged small talk affects only its answer on the same model."""
+
+        for type_id in ("code", "literature"):
+            with self.subTest(type_id=type_id):
+                config = rag.project_type(type_id)
+                session = _session()
+                session.project.profile.type_id = type_id
+                chat = self._chat(thinking=True)
+                session.chat_session = chat
+                small_talk = config.intents["small_talk"]
+                normal = config.intents[config.default_intent]
+                with patch.object(
+                    chat, "_torch_reply", return_value="Answer"
+                ) as generate:
+                    with (
+                        _answer_patches(session, small_talk) as mocks,
+                        patch.object(rag, "project_type", return_value=config),
+                    ):
+                        mocks.route.side_effect = lambda *args: (
+                            rag.RAGSession._route(session, *args)
+                        )
+                        session.ask("Hello")
+                    with _answer_patches(session, normal):
+                        session.ask("Explain the sources", use_router=False)
+                calls = chat._tokenizer.apply_chat_template.call_args_list
+                self.assertEqual(
+                    [call.kwargs["enable_thinking"] for call in calls],
+                    [False, True],
+                )
+                self.assertEqual(generate.call_count, 2)
+                self.assertIs(session.chat_session, chat)
+                self.assertTrue(chat.thinking)
+                self.assertEqual(
+                    [turn.parameters["thinking"] for turn in session.turns],
+                    [True, True],
+                )
+                self.assertEqual(
+                    [turn.parameters["thinking_effective"]
+                     for turn in session.turns],
+                    [False, True],
+                )
+
+    def test_failed_small_talk_does_not_disable_following_answer(
+        self,
+    ) -> None:
+        """A failed answer leaves configured thinking available to retries."""
+
+        session = _session()
+        chat = self._chat(thinking=True)
+        session.chat_session = chat
+        with (
+            _answer_patches(session, replace(_intent(), thinking=False)),
+            patch.object(
+                chat, "_torch_reply", side_effect=RuntimeError("failed")
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "failed"):
+                session.ask("First", use_router=False)
+        self.assertTrue(chat.thinking)
+        self.assertEqual(session.turns, [])
+        with (
+            _answer_patches(session, _intent()),
+            patch.object(chat, "_torch_reply", return_value="Answer"),
+        ):
+            session.ask("Second", use_router=False)
+        self.assertTrue(
+            chat._tokenizer.apply_chat_template.call_args.kwargs[
+                "enable_thinking"
+            ]
+        )
+        self.assertEqual(len(session.turns), 1)
+
+    def test_tool_answer_has_no_direct_model_thinking_metadata(self) -> None:
+        """Do not claim one effective policy for tool-owned model calls."""
+
+        session = _session()
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("project_inventory", object()),
+        )
+        with _answer_patches(session, intent):
+            session.ask("Inventory", use_router=False)
+        session.chat_session.reply.assert_not_called()
+        session.chat_session.configure_generation.assert_not_called()
+        self.assertNotIn("thinking_effective", session.turns[-1].parameters)
+
+    def test_saved_small_talk_restores_configured_not_effective_thinking(
+        self,
+    ) -> None:
+        """Round-trip real checkpoints with tracing both enabled and off."""
+
+        for tracing in (False, True):
+            with self.subTest(tracing=tracing), TemporaryDirectory() as root:
+                session = _session(Path(root))
+                chat = self._chat(thinking=True)
+                session.chat_session = chat
+                trace = (
+                    TraceLogger(
+                        TraceConfig(
+                            enabled=True, output_path=session.conversation_path
+                        ),
+                        default_directory=Path(root),
+                    ) if tracing else NullTraceLogger()
+                )
+                session.trace = trace
+                chat.trace = trace
+                try:
+                    with (
+                        _answer_patches(
+                            session, replace(_intent(), thinking=False)
+                        ) as mocks,
+                        patch.object(
+                            chat, "_torch_reply", return_value="Answer"
+                        ),
+                    ):
+                        mocks.save.side_effect = lambda **options: (
+                            rag.RAGSession._save_conversation(
+                                session, **options
+                            )
+                        )
+                        session.ask("Hello", use_router=False)
+                    _, turns, _ = session._load_conversation()
+                    self.assertIs(turns[0].parameters["thinking"], True)
+                    self.assertIs(
+                        turns[0].parameters["thinking_effective"], False
+                    )
+                    chat.configure_generation({"thinking": False})
+                    session.switch_conversation(
+                        session.conversation_path, trace=trace
+                    )
+                    self.assertTrue(chat.thinking)
+                    self.assertIs(session.chat_session, chat)
+                    self.assertEqual(len(session.turns), 1)
+                finally:
+                    session.close()
+                    trace.close()
+
+
 class TestRAGLifecycle(unittest.TestCase):
     """Test model ownership, switching, refresh, and token bookkeeping."""
 
@@ -2444,6 +2680,85 @@ class TestRAGSourcePreparation(unittest.TestCase):
             "entries": [],
         }
 
+    def test_preserved_versions_are_separately_indexed(self) -> None:
+        """Retained and current copies yield distinct indexed evidence."""
+
+        original = self.root / "external"
+        original.mkdir()
+        file = original / "analysis.py"
+        file.write_text(
+            "def evaluate():\n    return 10\n", encoding="utf-8"
+        )
+        project = prepare_sources_workspace(
+            [original], "code", self.root / "managed"
+        )
+        file.write_text(
+            "def evaluate():\n    return 20\n", encoding="utf-8"
+        )
+        sync_project_sources(project, decisions={
+            "sources/external/analysis.py": "keep_both",
+        })
+        versions = list_source_versions(project)
+        self.assertEqual(len(versions), 1)
+        self.session.project = project
+        embedding = FakeEmbeddings()
+        embedding.model_id = "fake-embedding"
+        embedding.model_source = "local-test-model"
+        embedding.count_tokens = lambda text: len(text.split())
+        with patch.object(
+            rag, "embedding_model_identity", return_value="fake-id"
+        ):
+            chunks, indexes, status, _ = self.session._prepare_retrieval(
+                embedding
+            )
+        self.assertEqual(status, "rebuilt")
+        expected = {
+            Path("external/analysis.py"),
+            Path(versions[0]["version"]).relative_to("sources"),
+        }
+        self.assertEqual({item.path for item in chunks}, expected)
+        self.assertEqual(
+            {item.path for item in indexes.semantic.chunks}, expected
+        )
+        manifest = json.loads(
+            (project.indexes / "source_manifest.json").read_text()
+        )
+        self.assertEqual(set(manifest["files"]), {
+            item.as_posix() for item in expected
+        })
+        self.assertEqual(len(embedding.calls), 1)
+        self.assertEqual(len(embedding.calls[0]), 2)
+        self.assertEqual({
+            str(item.path): item.text for item in chunks
+        }["external/analysis.py"], "def evaluate():\n    return 20\n")
+        self.assertIn(
+            "return 10", next(
+                item.text for item in chunks
+                if item.path != Path("external/analysis.py")
+            )
+        )
+
+        # The retained version is unchanged on the next refresh, so the
+        # source identity and its embedding can be reused as-is.
+        file.write_text(
+            "def evaluate():\n    return 30\n", encoding="utf-8"
+        )
+        sync_project_sources(project, decisions={
+            "sources/external/analysis.py": "replace",
+        })
+        with patch.object(
+            rag, "embedding_model_identity", return_value="fake-id"
+        ):
+            updated, _, refreshed, delta = self.session._prepare_retrieval(
+                embedding
+            )
+        self.assertEqual(refreshed, "rebuilt")
+        self.assertEqual(
+            {item.path for item in updated}, expected
+        )
+        self.assertEqual(delta["modified"], ["external/analysis.py"])
+        self.assertEqual(len(embedding.calls[-1]), 1)
+
     def test_source_preparation_extracts_chunks_and_code_graph(self) -> None:
         """Build source chunks and code graphs from the repository."""
         chunks, code_graph = self.session._prepare_source(
@@ -2696,6 +3011,24 @@ class TestRAGSessionConstruction(unittest.TestCase):
         mocks.chat.return_value.configure_generation.assert_called_once_with(
             {"thinking": True, "temperature": 0.3,
              "max_new_tokens": 64}
+        )
+
+    def test_constructor_ignores_saved_effective_thinking_for_restore(
+        self,
+    ) -> None:
+        """Newly loaded sessions restore configuration, not intent policy."""
+
+        previous = _turn(parameters={
+            "thinking": True, "thinking_effective": False,
+            "temperature": 0.3, "max_new_tokens": 64,
+        })
+        with self._construction_patches(
+            restored=([], [previous], "checkpoint")
+        ) as mocks:
+            session = rag.RAGSession(self.root)
+        self.addCleanup(session.close)
+        mocks.chat.return_value.configure_generation.assert_called_once_with(
+            {"thinking": True, "temperature": 0.3, "max_new_tokens": 64}
         )
 
     def test_untraced_constructor_holds_lease_until_close(self) -> None:

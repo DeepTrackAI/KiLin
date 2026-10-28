@@ -80,7 +80,8 @@ Project types currently package several intents for `code` and `literature`:
 a mixture of normal answering, named-document reading, source inventory,
 mention finding/classification, report generation, related-turn reuse and
 small talk. Intent JSON selects retrieval and history behavior, a system
-instruction, optional answer guidance and possibly a registered tool.
+instruction, optional answer guidance, a request-local thinking policy,
+and possibly a registered tool.
 `project_type._parse_intent()` defaults to `search` for ordinary intents,
 `none` for tools if no mode is specified, `hybrid` strategy and `relevant`
 history. Always inspect the validated `Intent` record rather than relying
@@ -136,6 +137,14 @@ calls `ChatSession.reply()`. Generation settings permit validated
 chat history if a pre-commit failure would otherwise leave uncommitted
 messages in memory. A model's `finish_reason = length` may be stored to
 indicate output truncated by its generation cap.
+
+An intent can override thinking for this direct model answer only. A
+missing or null policy inherits the session setting; an explicit boolean
+is passed to `ChatSession.reply(thinking=...)` without reconfiguring the
+session. The configured `thinking` remains resumable state, while
+`thinking_effective` records the requested value for this answer. Tool
+intents cannot declare explicit overrides. See
+[Per-intent thinking policy](configuration.md#per-intent-thinking-policy).
 
 For a tool intent, `tools/_registry.run_tool()` invokes the registered
 package with a `ToolRequest` and a `ToolContext`. It returns `ToolResult`

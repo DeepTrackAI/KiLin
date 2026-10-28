@@ -83,16 +83,25 @@ explanations do not control which files are selectable. See
 Additional UTF-8 suffixes can be entered in Settings.
 
 The selected sources are copied into the workspace's `sources/` directory.
-This multi-source route is cumulative: re-adding a source updates matching
-files, but deletion or deselection at the origin does not automatically remove
-old workspace copies. It differs from the single-source synchronization API
+This multi-source route is cumulative: new sources are copied, while
+previously imported copies change only after explicit synchronization
+choices. Deletion or deselection at the origin does not remove snapshots
+until approved. It differs from the single-source synchronization API
 in `kilin.project`. The original source is not intentionally modified.
 
 In an open project, only the sidebar's `sources` tree accepts dropped files
 or folders. It highlights during a native file drag; other workspace areas
 reject drops. A confirmation explains the copy and index update before any
-import command is sent. Confirmed imports use the saved project filters,
+import command is sent. Direct empty and oversized files are left out,
+missing or linked source paths are rejected, and same-name imports show
+their distinct destination names. Confirmed imports use saved filters,
 update the source manifest and indexes, and restore the active conversation.
+On resume, the GUI checks imported originals for changes and asks which
+files to update, preserve as versions, keep, or remove. A kept copy whose
+original has disappeared remains detached; restoring the original offers
+explicit reconciliation without silently overwriting the kept copy.
+Sync rejects updates that exceed the project's saved file-size limit.
+
 Right-clicking a file or folder inside `sources` (not `sources` itself or any
 other workspace item) offers deletion. After confirmation the workspace copy
 is deleted and the project is reopened, so the index drops the removed files;
@@ -356,6 +365,14 @@ that turn. Temperature, thinking, and answer length belong to the project:
 a change is saved to its profile.ini when the next question is asked, every
 chat in the project uses it, switching chats keeps it, and opening another
 project loads that project's own values.
+
+An ordinary answer intent can override thinking for that reply without
+changing these controls or the saved project setting. Both packaged
+`small_talk` intents disable thinking; an omitted or null intent policy
+inherits the configured value. A following intent without an override
+therefore uses the configured value again. This uses the selected model/template
+control, not a model switch, and does not control tool-internal calls.
+See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking-policy).
 
 ## Conversations, references, and progress
 

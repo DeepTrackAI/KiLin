@@ -1,7 +1,8 @@
 """Test explicit imports and safe removal of managed source snapshots.
 
-These tests exercise direct-file selection, project-owned source manifests,
-folder deletion, safety boundaries, and effective RAG scan selection.
+These tests exercise direct-file selection, project-owned source manifests
+and their copy stamps, folder deletion, safety boundaries, and effective RAG
+scan selection.
 
 """
 
@@ -12,6 +13,7 @@ folder deletion, safety boundaries, and effective RAG scan selection.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -19,6 +21,7 @@ import unittest
 from kilin.project import initialize_project, open_project
 from kilin.repository import scan_repository
 from kilin.workspace import (
+    add_project_sources,
     include_explicit_imports,
     prepare_sources_workspace,
     remove_workspace_sources,
@@ -109,6 +112,93 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         self.assertFalse((project.source / "note.md").exists())
         self.assertTrue(original.is_file())
         self.assertEqual(self._records(), [])
+
+    def test_import_stamps_each_copy_and_removal_drops_it(self) -> None:
+        """Every tracked copy has a stamp; removed copies lose theirs."""
+
+        source = self.root / "repository"
+        (source / "sub").mkdir(parents=True)
+        (source / "sub/a.py").write_text("a = 1\n", encoding="utf-8")
+        (source / "sub/b.py").write_text("bb = 22\n", encoding="utf-8")
+        project = prepare_sources_workspace(
+            [source], "code", self.destination
+        )
+        stamps = self._records()[0]["stamps"]
+        self.assertEqual(set(stamps), {"sub/a.py", "sub/b.py"})
+        copy = project.source / "repository/sub/b.py"
+        self.assertEqual(stamps["sub/b.py"], {
+            "size": copy.stat().st_size,
+            "mtime_ns": copy.stat().st_mtime_ns,
+        })
+        remove_workspace_sources(
+            project, ["sources/repository/sub/a.py"]
+        )
+        self.assertEqual(set(self._records()[0]["stamps"]), {"sub/b.py"})
+
+    def test_reimport_renews_only_replaced_stamps(self) -> None:
+        """Replaced copies get new stamps; preserved copies keep theirs."""
+
+        source = self.root / "repository"
+        source.mkdir()
+        changed = source / "changed.py"
+        kept = source / "kept.py"
+        changed.write_text("x = 1\n", encoding="utf-8")
+        kept.write_text("y = 1\n", encoding="utf-8")
+        for path in (changed, kept):
+            os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+        prepare_sources_workspace([source], "code", self.destination)
+        before = self._records()[0]["stamps"]
+
+        changed.write_text("x = 22\n", encoding="utf-8")
+        os.utime(changed, ns=(2_000_000_000, 2_000_000_000))
+        add_project_sources(
+            self.destination, [source],
+            selected_files={str(source): ["changed.py"]},
+            replace_existing=True,
+        )
+        after = self._records()[0]["stamps"]
+        self.assertEqual(
+            after["changed.py"], {"size": 7, "mtime_ns": 2_000_000_000}
+        )
+        self.assertEqual(after["kept.py"], before["kept.py"])
+
+    def test_manifest_without_stamps_is_still_accepted(self) -> None:
+        """Older manifests open, and the next import adds stamps."""
+
+        original = self._file("note.md")
+        prepare_sources_workspace([original], "code", self.destination)
+        manifest = self.destination / "sources.json"
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        del payload["sources"][0]["stamps"]
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+        open_project(self.destination)
+        add_project_sources(self.destination, [])
+        self.assertNotIn("stamps", self._records()[0])
+        add_project_sources(self.destination, [original])
+        self.assertEqual(set(self._records()[0]["stamps"]), {"note.md"})
+
+    def test_invalid_stamps_are_rejected(self) -> None:
+        """Stamps must be non-negative integers for tracked files only."""
+
+        original = self._file("note.md")
+        prepare_sources_workspace([original], "code", self.destination)
+        manifest = self.destination / "sources.json"
+        valid = json.loads(manifest.read_text(encoding="utf-8"))
+        for stamps in (
+            [],
+            {"other.md": {"size": 1, "mtime_ns": 1}},
+            {"note.md": {"size": -1, "mtime_ns": 1}},
+            {"note.md": {"size": 1}},
+            {"note.md": {"size": 1.5, "mtime_ns": 1}},
+            {"note.md": {"size": True, "mtime_ns": 1}},
+        ):
+            with self.subTest(stamps=stamps):
+                payload = json.loads(json.dumps(valid))
+                payload["sources"][0]["stamps"] = stamps
+                manifest.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "stamps"):
+                    add_project_sources(self.destination, [original])
 
     def test_nested_deletion_updates_directory_inventory(self) -> None:
         """Removing one imported file preserves other tracked files."""

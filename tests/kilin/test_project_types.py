@@ -205,6 +205,17 @@ class TestPackagedProjectTypes(unittest.TestCase):
                             self.assertIsInstance(shortcut, re.Pattern)
                             self.assertTrue(shortcut.flags & re.IGNORECASE)
 
+    def test_only_packaged_small_talk_disables_thinking(self) -> None:
+        """Other packaged intents inherit the configured session setting."""
+
+        for type_id in ("code", "literature"):
+            for intent_id, intent in project_type(type_id).intents.items():
+                with self.subTest(type_id=type_id, intent_id=intent_id):
+                    if intent_id == "small_talk":
+                        self.assertIs(intent.thinking, False)
+                    else:
+                        self.assertIsNone(intent.thinking)
+
     def test_builtin_defaults_follow_current_json_configuration(self) -> None:
         """Project profiles adopt configured file suffixes and size limits."""
 
@@ -740,6 +751,62 @@ class TestIntentFields(ProjectTypeFixture):
         data = _type_data()
         data["intents"]["explain"].update(changes)
         return data
+
+    def test_omitted_thinking_defaults_to_inheritance(self) -> None:
+        """Old JSON definitions acquire no explicit thinking policy."""
+
+        intent = self._load("omittedthinking", _type_data()).intents[
+            "explain"
+        ]
+        self.assertIsNone(intent.thinking)
+
+    def test_thinking_accepts_only_boolean_or_null_values(self) -> None:
+        """Preserve explicit true, false, and null without coercion."""
+
+        for index, value in enumerate((True, False, None)):
+            with self.subTest(value=value):
+                data = self._with_intent(thinking=value)
+                intent = self._load(f"thinking{index}", data).intents[
+                    "explain"
+                ]
+                self.assertIs(intent.thinking, value)
+
+    def test_thinking_rejects_other_json_types(self) -> None:
+        """Reject strings and numbers, including bool-like zero and one."""
+
+        invalid = ("false", "true", "null", "", 0, 1, 0.0, 1.0, [], {})
+        for index, value in enumerate(invalid):
+            with self.subTest(value=value):
+                data = self._with_intent(thinking=value)
+                with self.assertRaisesRegex(
+                    ValueError, "thinking must be true, false, or null"
+                ) as caught:
+                    self._load(f"invalidthinking{index}", data)
+                self.assertIn("samples.intents.explain", str(caught.exception))
+
+    def test_tool_thinking_accepts_only_inheritance(self) -> None:
+        """Do not imply control over internal model calls made by tools."""
+
+        for index, options in enumerate(({}, {"thinking": None})):
+            with self.subTest(options=options):
+                data = self._with_intent(
+                    tool={"name": "scan_and_list"}, **options
+                )
+                intent = self._load(f"toolthinking{index}", data).intents[
+                    "explain"
+                ]
+                self.assertIsNone(intent.thinking)
+                self.assertIsNotNone(intent.tool)
+        for value in (True, False):
+            with self.subTest(value=value):
+                data = self._with_intent(
+                    tool={"name": "scan_and_list"}, thinking=value
+                )
+                with self.assertRaisesRegex(
+                    ValueError, "thinking must be null or omitted"
+                ) as caught:
+                    self._load(f"tooloverride{value}", data)
+                self.assertIn("samples.intents.explain", str(caught.exception))
 
     def test_invalid_intent_identifiers_and_non_object_values(self) -> None:
         """Reject bad names and arrays where an intent object is needed."""

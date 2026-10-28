@@ -61,6 +61,7 @@
           <h2 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h2>
           <div id="conversation" class="conversation" aria-live="polite"></div>
         </div>
+        <p class="ai-disclaimer">AI-generated answers can be wrong. Always verify them.</p>
         <form id="question-form" class="composer">
           <textarea id="question" rows="2" placeholder="Write a message…"></textarea>
           <div id="attachment-list" class="attachment-list hidden"></div>
@@ -202,5 +203,31 @@
         </section>
       </div>
     </section>
+    <dialog id="source-sync" class="sync-dialog" aria-labelledby="source-sync-title">
+      <h2 id="source-sync-title">Original files changed</h2>
+      <p id="source-sync-summary"></p>
+      <ul id="source-sync-counts" class="sync-counts"></ul>
+      <div id="source-sync-files" class="sync-files hidden"></div>
+      <div id="source-sync-quick" class="sync-actions">
+        <button id="source-sync-pick" type="button" class="link-button">Choose file by file</button>
+        <button id="source-sync-keep" type="button" class="secondary">Keep old copies</button>
+        <button id="source-sync-both" type="button" class="secondary">Keep both</button>
+        <button id="source-sync-update" type="button" class="primary">Update all</button>
+      </div>
+      <div id="source-sync-manual" class="sync-actions hidden">
+        <button id="source-sync-back" type="button" class="secondary">Back</button>
+        <button id="source-sync-apply" type="button" class="primary">Apply choices</button>
+      </div>
+    </dialog>
+    <dialog id="source-add" class="sync-dialog" aria-labelledby="source-add-title">
+      <h2 id="source-add-title">Add sources</h2>
+      <p id="source-add-summary"></p>
+      <ul id="source-add-counts" class="sync-counts"></ul>
+      <div id="source-add-files" class="sync-files"></div>
+      <div class="sync-actions">
+        <button id="source-add-cancel" type="button" class="secondary">Cancel</button>
+        <button id="source-add-confirm" type="button" class="primary">Add</button>
+      </div>
+    </dialog>
   </body>
 </html>

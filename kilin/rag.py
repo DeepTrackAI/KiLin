@@ -70,7 +70,8 @@ Key Features
 - **Intent routing and tools**
 
     Route each question to a configured intent that chooses history,
-    retrieval mode, and an optional tool that writes the answer.
+    retrieval mode, request-local thinking policy, and an optional tool
+    that writes the answer.
 
 - **Incremental indexing**
 
@@ -1164,7 +1165,8 @@ class RAGSession:
         The initial retrieval count applies to each ranking and fusion stage;
         explicit file/function context may expand the final evidence.
         Generation settings supplied here persist on the loaded chat session
-        after validation.
+        after validation. An explicit intent thinking override applies
+        only to the current direct model answer, not these settings.
 
         Each question is first routed to one of the project type's intents.
         The intent decides which earlier turns are sent as history and
@@ -1181,7 +1183,10 @@ class RAGSession:
             ``None``.
         generation_settings: dict[str, object] | None, optional
             Optional temperature, thinking, and answer length for this and
-            later questions, until changed again. Defaults to ``None``.
+            later questions, until changed again. An explicit intent
+            thinking policy takes precedence for this answer only; the
+            configured setting is retained for subsequent requests and
+            conversation restoration. Defaults to ``None``.
         phase_callback: AnswerPhaseCallback | None, optional
             Optional callback receiving (phase_name, details_dict) for answer
             phases. Exceptions during processing propagate. An exception from
@@ -1692,6 +1697,14 @@ class RAGSession:
                         question,
                     ),
                 }
+                # Persist configured thinking separately so reopening a
+                # conversation cannot turn an intent override into state.
+                effective["thinking_effective"] = (
+                    self.chat_session.thinking if intent.thinking is None
+                    else intent.thinking
+                )
+                if intent.thinking is not None:
+                    reply_options["thinking"] = intent.thinking
                 if token_callback is not None:
                     reply_options["token_callback"] = token_callback
                 answer = self.chat_session.reply(prompt, **reply_options)
@@ -4086,7 +4099,10 @@ class RAGSession:
         -----
         Returns configured project/model metadata and live chat generation
         settings. A retrieval-count argument records an answer-specific
-        override; callers omitting it record the profile count.
+        override; callers omitting it record the profile count. Thinking
+        remains the configured session value used for restoration;
+        ``ask`` separately records ``thinking_effective`` for direct
+        model answers after resolving the selected intent.
 
         """
 

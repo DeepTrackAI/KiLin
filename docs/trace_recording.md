@@ -63,6 +63,15 @@ Token IDs are included when available; embeddings are included only when
 explicitly enabled. The JSON format and existing event identifiers are
 otherwise unchanged by this simplification.
 
+For a direct model answer, `llm.call.input` records the resolved request
+in both `thinking` and `chat_template.enable_thinking`, matching prompt
+rendering and tokenization. Turn parameters instead retain `thinking` as
+the configured session value used on reopening and record
+`thinking_effective` separately. The latter is absent on tool-written
+answers and older turns. These values describe the requested template
+policy, not proof that a particular model complied. No extra event or
+checkpoint is introduced for an intent override.
+
 ## Persistence and write failures
 
 Each trace update writes through a uniquely created temporary file in the

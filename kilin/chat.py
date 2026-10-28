@@ -17,7 +17,10 @@ Every reply renders the complete retained history. This layer does not
 summarize, truncate, persist, or retrieve old messages. A caller-specified
 generation limit takes precedence over the automatic remaining-context
 calculation. Explicit limits are not checked against the context size here.
-Tracing can retain prompts and answers according to the supplied sink.
+A per-reply thinking override changes only the chat-template request, not
+the configured session setting. Thinking control depends on the selected
+model and its template. Tracing can retain prompts and answers according
+to the supplied sink.
 
 Key Features
 ------------
@@ -256,7 +259,8 @@ class ChatSession:
         Device used for generation, such as ``metal``, ``cuda``, ``mps``, or
         ``cpu``.
     thinking: bool
-        Whether compatible templates enable thinking output.
+        Configured thinking setting for compatible templates. A per-reply
+        override does not change this value.
     temperature: float
         Current sampling temperature.
     max_new_tokens: int | None
@@ -622,6 +626,7 @@ class ChatSession:
         message: str,
         *,
         max_new_tokens: int | None = None,
+        thinking: bool | None = None,
         trace_turn_id: str | None = None,
         token_callback: Callable[[str], None] | None = None,
         language_context: Sequence[str] | None = None,
@@ -642,6 +647,11 @@ class ChatSession:
             Per-reply generation-length override. ``None`` uses the session
             setting and, if that is also ``None``, the remaining model context.
             Defaults to ``None``.
+        thinking: bool | None, optional
+            Per-reply thinking override passed to a compatible chat
+            template. ``None`` inherits the session setting; ``True`` or
+            ``False`` overrides it for this reply only. Does not change
+            ``self.thinking``, including on failure. Defaults to ``None``.
         trace_turn_id: str | None, optional
             Optional trace identifier associating emitted events and artifacts
             with the current conversation turn. Defaults to ``None``.
@@ -670,7 +680,8 @@ class ChatSession:
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has
             exhausted the model context.
-            Also raised when ``token_callback`` is not callable or
+            Also raised when ``thinking`` is neither a bool nor None,
+            ``token_callback`` is not callable, or
             ``language_context`` is not a sequence of strings.
 
         Notes
@@ -693,6 +704,11 @@ class ChatSession:
 
         if token_callback is not None and not callable(token_callback):
             raise ValueError("token_callback must be callable or None.")
+
+        effective_thinking = (
+            self.thinking if thinking is None
+            else _check_bool(thinking, "thinking")
+        )
 
         if language_context is None:
             user_texts = [
@@ -721,7 +737,7 @@ class ChatSession:
                     messages,
                     tokenize=False,
                     add_generation_prompt=True,
-                    enable_thinking=self.thinking,
+                    enable_thinking=effective_thinking,
                 )
             except (TypeError, ValueError):
                 rendered_prompt = None
@@ -731,7 +747,7 @@ class ChatSession:
             tokenize=True,
             return_dict=False,
             add_generation_prompt=True,
-            enable_thinking=self.thinking,
+            enable_thinking=effective_thinking,
         )
         token_budget = token_override or self.max_new_tokens
         if token_budget is None:
@@ -754,7 +770,7 @@ class ChatSession:
             "roles": [item["role"] for item in messages],
             "input_token_count": len(tokens),
             "prompt_token_count": len(tokens),
-            "thinking": self.thinking,
+            "thinking": effective_thinking,
             "generation": {
                 "temperature": self.temperature,
                 "max_new_tokens": token_budget,
@@ -765,7 +781,7 @@ class ChatSession:
             },
             "chat_template": {
                 "add_generation_prompt": True,
-                "enable_thinking": self.thinking,
+                "enable_thinking": effective_thinking,
             },
         }
         artifact_stem = trace_turn_id or self.trace.new_id("chat-input")

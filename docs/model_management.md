@@ -81,10 +81,19 @@ constructs a model session and records its effective settings.
 `max_new_tokens` before applying any values; unsupported fields are rejected.
 Settings persist on the loaded session until changed.
 
-`reply(message, *, max_new_tokens, trace_turn_id, token_callback,
-language_context)` validates the request, renders the chat template, generates
-an answer, and commits the messages only on success. Tracing records timing,
-token statistics, and the requested/effective CJK token policy.
+`reply(message, *, max_new_tokens, thinking, trace_turn_id, token_callback,
+language_context)` validates the request, renders the chat template,
+generates an answer, and commits the messages only on success. The optional
+`thinking` argument defaults to `None` (inherit the session setting); an
+explicit boolean applies only to this reply, including when generation
+fails. Both prompt rendering and tokenization receive the resolved
+`enable_thinking` value. This does not mutate `ChatSession.thinking`,
+reload a model, or guarantee control over an unsupported template.
+
+RAG passes an explicit intent override through this interface; see
+[Per-intent thinking policy](configuration.md#per-intent-thinking-policy).
+Tracing records the effective thinking request, timing, token statistics,
+and the requested/effective CJK token policy.
 
 ### Best-effort suppression of unsolicited CJK output
 

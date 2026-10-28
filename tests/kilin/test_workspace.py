@@ -192,12 +192,18 @@ class TestWorkspaceInitialization(WorkspaceFixture):
             (project.source / "code.py").read_bytes(),
             original.read_bytes(),
         )
+        # The copy keeps the original's modification time.
+        status = original.stat()
         self.assertEqual(
             self._records(),
             [{
                 "original": str(original.resolve()),
                 "name": "code.py",
+                "kind": "file",
                 "files": ["code.py"],
+                "stamps": {"code.py": {
+                    "size": status.st_size, "mtime_ns": status.st_mtime_ns,
+                }},
             }],
         )
 

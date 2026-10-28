@@ -3,9 +3,9 @@
 A project type (for example a code repository or a literature collection)
 decides which files a new project reads by default, which intents the
 router may choose, and for each intent the instructions, history,
-retrieval, or tool. Editing a JSON file changes behaviour without code
-changes; restart KíLín afterwards. Saved conversations keep the system
-prompt they were answered with.
+retrieval, thinking override, or tool. Editing a JSON file changes
+behaviour without code changes; restart KíLín afterwards. Saved conversations
+keep the system prompt they were answered with.
 
 Files are read once per folder and cached for the process. A malformed
 file stops loading with a ``ValueError``; no type is skipped silently. This
@@ -26,6 +26,12 @@ Key Features
 
     An intent may name a registered tool (``kilin.tools._registry``) with
     its settings; the tool validates them.
+
+- **Request-local thinking**
+
+    An ordinary intent may enable or disable thinking for its answer.
+    An omitted or null setting inherits the configured chat setting.
+    Tools own their model calls and cannot declare a thinking override.
 
 - **Validated on load**
 
@@ -286,6 +292,11 @@ class Intent:
     tool: ToolUse | None
         Tool that replaces retrieval and the answering model, if any (see
         ``kilin.tools``).
+    thinking: bool | None
+        Per-answer thinking override for a compatible chat template.
+        ``None`` inherits the session setting; ``True`` or ``False``
+        overrides it without changing the session. Defaults to ``None``.
+        Tool-backed intents must leave this unset or null.
 
     """
 
@@ -301,6 +312,7 @@ class Intent:
     prefer_source_code: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
+    thinking: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -485,7 +497,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
 
     Missing settings take their defaults: history policy ``relevant``,
     retrieval mode ``search`` (``none`` when a tool is named), strategy
-    ``hybrid``, and budget ``DOCUMENT_MAX_TOKENS``.
+    ``hybrid``, budget ``DOCUMENT_MAX_TOKENS``, and thinking ``None``
+    (inherit the configured chat setting for ordinary model answers).
 
     Parameters
     ----------
@@ -506,7 +519,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     ValueError
         If the ID, a field, a shortcut pattern, or the tool settings are
         invalid, an unknown field is present, or a tool is combined with
-        a retrieval mode.
+        a retrieval mode or an explicit thinking override.
 
     """
 
@@ -530,6 +543,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "retrieval",
             "shortcuts",
             "tool",
+            "thinking",
         ),
     )
     history = _object(where, data, "history")
@@ -556,6 +570,16 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
 
     # A tool replaces retrieval, so its intent defaults to no retrieval.
     tool = parse_tool(where, data["tool"]) if "tool" in data else None
+    thinking = data.get("thinking")
+    if thinking is not None and type(thinking) is not bool:
+        raise ValueError(
+            f"Intent {where!r} thinking must be true, false, or null."
+        )
+    if tool is not None and thinking is not None:
+        raise ValueError(
+            f"Intent {where!r} thinking must be null or omitted when "
+            "a tool writes the answer."
+        )
     mode = retrieval.get(
         "mode",
         RETRIEVAL_MODE_NONE if tool is not None else RETRIEVAL_MODE_SEARCH,
@@ -632,6 +656,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         prefer_source_code=prefer_source,
         max_tokens=max_tokens,
         tool=tool,
+        thinking=thinking,
     )
 
 

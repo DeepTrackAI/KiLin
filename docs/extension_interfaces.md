@@ -57,6 +57,13 @@ retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
 retrieval strategy is `hybrid`. A missing tool name or an unregistered name
 fails validation rather than importing a module by string.
 
+Ordinary intents can also declare `thinking: true`, `false`, or `null`.
+An omitted or null field inherits the configured chat setting; a boolean
+overrides only the direct answer request. Tool-backed intents must leave
+this field omitted or null, because their model calls are tool-owned.
+The parser rejects explicit overrides on tools. See the complete
+[thinking policy and precedence](configuration.md#per-intent-thinking-policy).
+
 Adding a new project type requires checking its source-selection defaults,
 router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the
