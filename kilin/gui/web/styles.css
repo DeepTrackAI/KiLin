@@ -1,6 +1,7 @@
 :root {
   --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%233f5149' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --page: #f4f5f2;
+  --logo-image: url("../icons/kilin-qilin.png");
   --surface: #fff;
   --surface-soft: #f8faf7;
   --text: #17202a;
@@ -41,6 +42,7 @@
 :root[data-appearance="dark"] {
   --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+  --logo-image: url("../icons/kilin-qilin-dark.png");
   --text: #f0f0f0; --muted: #ababab; --line: #444;
   --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
   --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
@@ -59,6 +61,7 @@
   :root[data-appearance="system"] {
     --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+    --logo-image: url("../icons/kilin-qilin-dark.png");
     --text: #f0f0f0; --muted: #ababab; --line: #444;
     --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
     --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
@@ -210,7 +213,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .sidebar-logo:hover:not(:disabled) { background: var(--hover); }
 .sidebar-logo:disabled { opacity: .55; }
 /* The qilin image is about 1.37 times wider than tall. */
-.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.37; background: url("../icons/kilin-qilin.png") center / contain no-repeat; }
+.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.37; background: var(--logo-image) center / contain no-repeat; }
 .sidebar-section { display: flex; flex-direction: column; min-height: 0; }
 .sidebar-section[data-section="conversations"] { flex: 1 1 auto; }
 .sidebar-section-head { display: flex; align-items: center; gap: 2px; margin: 10px 0 4px; }

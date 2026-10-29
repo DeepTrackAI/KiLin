@@ -63,13 +63,30 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         self.assertNotIn("change-project", source)
 
     def test_logo_is_the_qilin(self):
-        """One image that works on light and dark backgrounds."""
+        """Gold qilin on light pages, blue-black one in dark mode."""
 
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         start = styles.index(".sidebar-logo-mark {")
         rule = styles[start : styles.index("}", start)]
-        self.assertIn('url("../icons/kilin-qilin.png")', rule)
-        self.assertTrue((_ROOT / "kilin/gui/icons/kilin-qilin.png").is_file())
+        self.assertIn("var(--logo-image)", rule)
+        self.assertEqual(
+            styles.count('--logo-image: url("../icons/kilin-qilin.png");'), 1
+        )
+        # Both dark blocks: the chosen dark look and the system one.
+        self.assertEqual(
+            styles.count(
+                '--logo-image: url("../icons/kilin-qilin-dark.png");'
+            ),
+            2,
+        )
+        for name in ("kilin-qilin.png", "kilin-qilin-dark.png"):
+            self.assertTrue((_ROOT / "kilin/gui/icons" / name).is_file())
+        # The source drawing is CC BY-SA 4.0, so the credit ships with it.
+        credit = (_ROOT / "kilin/gui/icons/README.md").read_text(
+            encoding="utf-8"
+        )
+        for text in ("RootOfAllLight", "CC BY-SA 4.0", "kilin-qilin-dark"):
+            self.assertIn(text, credit)
 
     def test_sections_have_fold_sort_and_new(self):
         """Logo, Projects, then Conversations, each with ⋯ and ＋."""

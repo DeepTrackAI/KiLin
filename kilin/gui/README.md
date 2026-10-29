@@ -253,6 +253,8 @@ write and register a new tool.
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
+The left-panel qilin logo is gold in light mode and blue-black in dark
+mode; `icons/README.md` credits its CC BY-SA 4.0 source.
 
 Settings are ordered Appearance, Effort levels, Search depth, Embedding
 model, Intent model, Answers, then Project. Clicking
