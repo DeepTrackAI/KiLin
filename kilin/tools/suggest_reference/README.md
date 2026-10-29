@@ -32,9 +32,20 @@ cells", the tool:
    is dropped, and a paper is called contradicted only with a confirmed
    quote. The plan is shown first when it has more than `LARGE_BATCHES`
    papers.
-4. Answers with the papers that could be cited (supported, partly
-   supported, background), best first, each with its comment and any
-   confirmed quotation as evidence, then lists the other papers checked.
+4. Assigns each suggested paper an ordinal one-to-five-star citation
+   suitability rating (`_rating.py`). The support verdict determines
+   the rating band: supported usually gets 4–5 stars, partly supported
+   2–3, and background 1–2. A checked quotation and the coverage of
+   distinctive statement words in that quote (or the best available
+   passage) refine the rating within its band. Unconfirmed quotations
+   cannot earn the higher star of their verdict band. Ratings are
+   heuristic, **not** calibrated probabilities or measures of scientific
+   quality. They require no extra model, embedding, or network call.
+5. Answers with the papers that could be cited (supported, partly
+   supported, background), best first, each with its rating, comment,
+   and any confirmed quotation as evidence. Within a verdict group,
+   more suitable papers appear first. Other checked papers are listed
+   without stars, rather than recommended.
 
 Limits: only the project's files are searched, so a paper that is not in
 the folder cannot be suggested (the answer says so when none supports the

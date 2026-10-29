@@ -27,7 +27,11 @@ from kilin.tools.reference_check import _configuration as config
 from kilin.tools.reference_check._resolution import offline_link
 from kilin.tools._shared.sentences import Sentence
 from kilin.tools.reference_check._citations import Citation
-from kilin.tools.reference_check.tool import _cited_for
+from kilin.tools.reference_check.tool import (
+    _citation_context,
+    _cited_for,
+)
+from kilin.tools._shared.sentences import split_sentences
 from tests.kilin.tools._shared._support import chunk
 
 PAPER = """Introduction
@@ -145,7 +149,9 @@ class TestReferenceCheckRun(unittest.TestCase):
         context = SimpleNamespace(
             project_root=self.root, chunks=self.chunks,
             progress=Mock(), done=Mock(), choose=None,
-            rank=lambda text: [SimpleNamespace(chunk=c) for c in self.chunks],
+            rank=Mock(side_effect=lambda text: [
+                SimpleNamespace(chunk=c) for c in self.chunks
+            ]),
             ask_model=Mock(side_effect=ask_model),
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
@@ -221,6 +227,81 @@ class TestReferenceCheckRun(unittest.TestCase):
         )
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_two_preceding_sentences_resolve_this_study(self) -> None:
+        original = (
+            "Software such as\nBRAPH implements these measures [2, 3]."
+        )
+        replacement = (
+            "The second case study implements recursive feature "
+            "elimination for schizophrenia classification. Most building "
+            "blocks, including the classifiers, are reused from the "
+            "standard distribution. The results of this study were "
+            "published [2]. As shown in Figure 3, the project adds a "
+            "single generator file."
+        )
+        self.chunks[0] = chunk(
+            "p1", PAPER.replace(original, replacement), path="paper.md"
+        )
+        result, context = self._run((Path("paper.md"), "named", False))
+        self.assertGreater(result.summary["claims_checked"], 0)
+        prompt = next(
+            call.args[1] for call in context.ask_model.call_args_list
+            if '"The results of this study were published [2]."' in
+            call.args[1]
+        )
+        self.assertIn("The second case study implements", prompt)
+        self.assertIn("Most building blocks", prompt)
+        self.assertIn("Following context: ", prompt)
+        self.assertIn("As shown in Figure 3", prompt)
+        self.assertIn("Judge only what the cited sentence", prompt)
+        queries = [call.args[0] for call in context.rank.call_args_list]
+        self.assertTrue(any(
+            "schizophrenia classification" in query
+            and "results of this study were published" in query
+            for query in queries
+        ))
+
+    def test_context_respects_paragraphs_and_word_budget(self) -> None:
+        text = (
+            "A previous paragraph discusses an unrelated experiment.\n\n"
+            "The second case study implements a classification pipeline. "
+            "Most building blocks are reused from the main framework. "
+            "The results of this study were published [22]. "
+            "As shown in the next figure, a generator file is added.\n\n"
+            "An unrelated new paragraph starts here."
+        )
+        sentences = split_sentences((chunk("p", text),), min_words=1)
+        citing = next(
+            sentence for sentence in sentences
+            if "results of this study" in sentence.text
+        )
+        before, after = _citation_context(sentences, {citing: []})
+        self.assertIn("The second case study", before[citing])
+        self.assertIn("Most building blocks", before[citing])
+        self.assertNotIn("unrelated experiment", before[citing])
+        self.assertIn("As shown in the next figure", after[citing])
+        self.assertNotIn("unrelated new paragraph", after[citing])
+
+        lengthy = " ".join("antecedent" for _ in range(145))
+        long_text = (
+            f"{lengthy}. This study was published [22]. "
+            "An additional supporting sentence follows."
+        )
+        sentences = split_sentences(
+            (chunk("l", long_text),), min_words=1
+        )
+        citing = next(
+            sentence for sentence in sentences
+            if "This study was published" in sentence.text
+        )
+        before, after = _citation_context(sentences, {citing: []})
+        total = (
+            len(before.get(citing, "").split())
+            + len(citing.text.split())
+            + len(after.get(citing, "").split())
+        )
+        self.assertLessEqual(total, 140)
 
     def test_titleless_missing_reference_links_in_report(self) -> None:
         original = (
@@ -372,7 +453,7 @@ class TestReferenceCheckRun(unittest.TestCase):
             'Reference [2] is cited for: "an established tracking method"',
             prompt,
         )
-        self.assertIn("It follows this sentence:", prompt)
+        self.assertIn("Preceding context:", prompt)
 
     def test_attribution_is_judged_as_the_whole_sentence(self) -> None:
         sentence = Sentence(

@@ -173,6 +173,16 @@ class TestSuggestReferenceRun(unittest.TestCase):
         self.assertIn("1. **Supported** · `review.md`", answer)
         self.assertIn("2. **Partly supported** · `repeat.md`", answer)
         self.assertLess(answer.index("review.md"), answer.index("repeat.md"))
+        self.assertIn("★★★★★ (5/5 suitability)", answer)
+        self.assertIn("☆☆", answer)
+        self.assertIn("not probabilities or paper-quality", answer)
+        self.assertEqual(
+            result.summary["suitability"]["review.md"]["stars"], 5
+        )
+        self.assertEqual(
+            result.summary["suitability"]["repeat.md"]["stars"], 2
+        )
+        self.assertNotIn("other.md", result.summary["suitability"])
         self.assertIn(
             "*It says:* “Anomalous diffusion has been observed in the "
             "cytoplasm of many living cells” [1]",

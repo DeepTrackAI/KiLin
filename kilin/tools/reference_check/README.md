@@ -30,7 +30,12 @@ For "check the references of the Smith paper", the tool:
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
    the cited file's passages most related to the sentence and to what
-   the reference is cited for (and the sentence before it), and answers
+   the reference is cited for. To resolve phrases such as "this study",
+   up to two preceding sentences and one following sentence from the
+   same paragraph are supplied as context, within 140 words including
+   the cited sentence. For anaphoric claims, the preceding context also
+   augments the existing retrieval query, without another model call.
+   The model answers
    with a verdict (supported, partly supported, not supported,
    contradicted, background, or no matching passage), the passage
    sentence it rests on, and a critical comment. A cited file without

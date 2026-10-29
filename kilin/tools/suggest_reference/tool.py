@@ -14,8 +14,9 @@ is about one statement and the project's papers. The tool:
    passages most related to the statement, a verdict, the passage sentence
    it rests on (checked to be in the passages), and a critical comment.
    The plan is shown first when it is large.
-4. Answers with papers that could be cited, best first, with comments
-   and confirmed quotations when available, then lists the others.
+4. Rates suggested papers by verdict, confirmed quotation, and
+   textual overlap. Shows one-to-five-star citation suitability beside
+   each recommended paper, then lists the non-suggestions without stars.
 
 Only the project's files are searched: a paper that is not in the folder
 cannot be suggested, and the answer says so when none supports the
@@ -56,7 +57,11 @@ Module Structure
 
 - ``chat_answer``
 
-    The answer, with the suggestions first.
+    The answer, with rated suggestions first.
+
+- ``_rating.citation_suitability``
+
+    Deterministic suitability score, with no extra model calls.
 
 - ``run``
 
@@ -119,6 +124,7 @@ from kilin.tools._shared.planning import (
     confirm_plan,
 )
 from kilin.tools.suggest_reference import _configuration as _config
+from kilin.tools.suggest_reference._rating import citation_suitability
 
 __all__ = [
     "SuggestReferenceSettings",
@@ -368,7 +374,17 @@ def chat_answer(
 
     """
 
-    ordered = sorted(supports, key=lambda s: _ORDER.get(s.verdict, 99))
+    ratings = {
+        support.cited: citation_suitability(support)
+        for support in supports
+    }
+    ordered = sorted(
+        supports,
+        key=lambda s: (
+            _ORDER.get(s.verdict, 99),
+            -(ratings[s.cited].score if ratings[s.cited] else 0),
+        ),
+    )
     suggested = [s for s in ordered if s.verdict in _SUGGESTED]
     others = [s for s in ordered if s.verdict not in _SUGGESTED]
     lines = [f"**Statement:** “{_escape(statement)}”", ""]
@@ -381,8 +397,14 @@ def chat_answer(
         )
         for index, support in enumerate(suggested, start=1):
             label = verdict_label(support.verdict).capitalize()
-            lines += ["", f"{index}. **{label}** · "
-                      f"`{support.cited.as_posix()}`"]
+            rating = ratings[support.cited]
+            assert rating is not None  # Each suggested verdict is rated.
+            stars = "★" * rating.stars + "☆" * (5 - rating.stars)
+            lines += [
+                "", f"{index}. **{label}** · "
+                f"`{support.cited.as_posix()}` · {stars} "
+                f"({rating.stars}/5 suitability)"
+            ]
             if support.quote and support.quote_chunk is not None:
                 evidence.append(support.quote_chunk)
                 lines.append(
@@ -391,6 +413,12 @@ def chat_answer(
                 )
             if support.comment:
                 lines.append(f"   {_escape(support.comment)}")
+        lines += [
+            "",
+            "*Stars indicate heuristic citation suitability, based on "
+            "the support verdict, confirmed evidence, and textual "
+            "overlap; they are not probabilities or paper-quality ratings.*",
+        ]
     else:
         lines.append(
             f"None of the {len(ordered)} papers most related to it in the "
@@ -505,6 +533,7 @@ def run(
             settings.answer_tokens,
         )
         supports.append(support)
+        rating = citation_suitability(support)
         context.trace.emit(
             "tool.suggest_reference.paper",
             component="tool",
@@ -512,6 +541,7 @@ def run(
                 "paper": path.as_posix(),
                 "verdict": support.verdict,
                 "quote_found": support.quote_chunk is not None,
+                "suitability_stars": rating.stars if rating else None,
             },
             turn_id=context.trace_turn_id,
         )
@@ -535,6 +565,14 @@ def run(
             "papers_checked": len(supports),
             "suggested": sum(verdicts[v] for v in _SUGGESTED),
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
+            "suitability": {
+                support.cited.as_posix(): {
+                    "stars": rating.stars,
+                    "score": rating.score,
+                }
+                for support in supports
+                if (rating := citation_suitability(support)) is not None
+            },
         }
     )
     context.done(

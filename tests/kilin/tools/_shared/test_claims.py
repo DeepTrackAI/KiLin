@@ -229,8 +229,9 @@ class TestVerifyClaim(unittest.TestCase):
     def test_prompt_names_reference_context_and_passages(self) -> None:
         _, prompt = verification_prompt(CLAIM, PASSAGES)
         self.assertIn("citing reference [7]", prompt)
-        self.assertIn('It follows this sentence: "Exercise matters."', prompt)
+        self.assertIn('Preceding context: "Exercise matters."', prompt)
         self.assertIn("also cites [3]", prompt)
+        self.assertIn("Judge only what the cited sentence", prompt)
         self.assertIn("Passage 2:\nMethods were standard.", prompt)
 
     def test_prompt_rules_for_sources_and_descriptions(self) -> None:

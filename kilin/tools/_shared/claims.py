@@ -195,8 +195,9 @@ class Claim:
     also_cited: tuple[int, ...]
         Other reference numbers the same sentence cites.
     before: str
-        The sentence before it, for context ("The results of this study
-        were published [22]." needs it); empty when none.
+        Up to two preceding sentences in the same paragraph, for
+        disambiguating "this study" and similar references; empty when
+        no safe context is available.
     marked: str
         The sentence with every citation marker written in brackets where
         it stands ("a tracking method [5,40,88–91] and then"), so the model
@@ -205,6 +206,9 @@ class Claim:
         The words the reference is cited for: usually the phrase just
         before its marker ("a previously established tracking method");
         empty when unknown.
+    after: str
+        A following sentence from the same paragraph, if available.
+        Used only to disambiguate the citing sentence.
 
     """
 
@@ -215,6 +219,7 @@ class Claim:
     before: str = ""
     marked: str = ""
     cited_for: str = ""
+    after: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,13 +411,21 @@ def verification_prompt(
         f"Passage {index}:\n{chunk.text.strip()}"
         for index, chunk in enumerate(passages, start=1)
     )
-    before = (
-        f'It follows this sentence: "{claim.before}"\n' if claim.before else ""
+    preceding = (
+        f'Preceding context: "{claim.before}"\n'
+        if claim.before else ""
+    )
+    following = (
+        f'Following context: "{claim.after}"\n'
+        if claim.after else ""
     )
     user = f"""A paper writes this sentence, citing reference [{number}]:
 
 "{claim.marked or claim.sentence.text}"
-{before}{cited_for}{others}
+{preceding}{following}{cited_for}{others}
+The surrounding sentences identify what expressions such as "this study"
+refer to. Judge only what the cited sentence attributes to [{number}];
+do not require the cited paper to restate the citing paper's own wording.
 Passages of the cited work [{number}] ({claim.cited.name}), the parts most
 related to the sentence:
 

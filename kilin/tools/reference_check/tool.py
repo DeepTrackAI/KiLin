@@ -207,6 +207,16 @@ _ATTRIBUTION: Final[re.Pattern[str]] = re.compile(
 )
 # Most words of the phrase a reference is cited for.
 _CITED_FOR_WORDS: Final[int] = 15
+# Surrounding context is bounded, and never crosses an explicit paragraph
+# break or a source section. Retrieval remains two queries per claim.
+_CONTEXT_BEFORE: Final[int] = 2
+_CONTEXT_AFTER: Final[int] = 1
+_CONTEXT_WORDS: Final[int] = 140
+# Anaphoric claims need the antecedent to retrieve relevant passages.
+_ANAPHORA: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:this|these|those|such|its|their|it|they)\b",
+    flags=re.I,
+)
 # Longest citing sentence shown whole; longer ones (often a table read as
 # one sentence) are shown around the marker, in characters.
 _SHOWN_CHARACTERS: Final[int] = 320
@@ -293,8 +303,11 @@ class ReferenceReport:
     cited_by: dict[int, tuple[Sentence, ...]]
         For each reference number, the sentences citing it, in order.
     before: dict[Sentence, str]
-        For each citing sentence, the sentence before it, with its markers
-        in brackets.
+        Up to two preceding sentences of the same paragraph, with
+        markers in brackets, within the shared context word budget.
+    after: dict[Sentence, str]
+        Up to one following sentence of the same paragraph, within
+        the shared context word budget.
     verdicts: tuple[Verdict, ...]
         The checked claims, in reading order.
     verification: str
@@ -313,6 +326,7 @@ class ReferenceReport:
     scan: CitationScan
     cited_by: dict[int, tuple[Sentence, ...]] = field(default_factory=dict)
     before: dict[Sentence, str] = field(default_factory=dict)
+    after: dict[Sentence, str] = field(default_factory=dict)
     verdicts: tuple[Verdict, ...] = ()
     verification: str = ""
     links: dict[int, ReferenceLink] = field(default_factory=dict)
@@ -473,11 +487,7 @@ def check_references(
     for citation in scan.citations:
         markers[citation.sentence].append(citation)
     sentences = split_sentences(body, min_words=1)
-    before = {
-        sentence: _marked(previous, markers.get(previous, ()))
-        for previous, sentence in zip(sentences, sentences[1:])
-        if sentence in markers
-    }
+    before, after = _citation_context(sentences, markers)
 
     links = {
         entry.number: offline_link(entry.number, entry.text)
@@ -494,8 +504,98 @@ def check_references(
         scan=scan,
         cited_by={number: tuple(found) for number, found in cited_by.items()},
         before=before,
+        after=after,
         links=links,
     )
+
+
+def _citation_context(
+    sentences: Sequence[Sentence],
+    markers: dict[Sentence, list[Citation]],
+) -> tuple[dict[Sentence, str], dict[Sentence, str]]:
+    """Collect bounded neighboring sentences from the same paragraph.
+
+    Parameters
+    ----------
+    sentences: Sequence[Sentence]
+        Sentences in source reading order.
+    markers: dict[Sentence, list[Citation]]
+        Citation markers identified in each citing sentence.
+
+    Returns
+    -------
+    tuple[dict[Sentence, str], dict[Sentence, str]]
+        Preceding and following contexts keyed by citing sentence. The
+        target sentence also counts toward the word budget.
+
+    """
+
+    before: dict[Sentence, str] = {}
+    after: dict[Sentence, str] = {}
+    for index, sentence in enumerate(sentences):
+        if sentence not in markers:
+            continue
+        budget = max(0, _CONTEXT_WORDS - len(sentence.text.split()))
+        previous: list[Sentence] = []
+        for earlier in range(
+            index - 1, max(-1, index - _CONTEXT_BEFORE - 1), -1,
+        ):
+            adjacent = sentences[earlier + 1]
+            if not _same_paragraph(sentences[earlier], adjacent):
+                break
+            previous.insert(0, sentences[earlier])
+        words = " ".join(
+            _marked(s, markers.get(s, ())) for s in previous
+        ).split()
+        # Retain the nearest preceding text when the budget is tight.
+        chosen = words[-budget:] if budget else []
+        if chosen:
+            before[sentence] = " ".join(chosen)
+        budget -= len(chosen)
+        following: list[Sentence] = []
+        for later in range(index + 1, min(
+            len(sentences), index + 1 + _CONTEXT_AFTER,
+        )):
+            if not _same_paragraph(sentences[later - 1], sentences[later]):
+                break
+            following.append(sentences[later])
+        words = " ".join(
+            _marked(s, markers.get(s, ())) for s in following
+        ).split()
+        if budget and words:
+            after[sentence] = " ".join(words[:budget])
+    return before, after
+
+
+def _same_paragraph(left: Sentence, right: Sentence) -> bool:
+    """Check whether neighboring source sentences share a paragraph.
+
+    Parameters
+    ----------
+    left: Sentence
+        Earlier sentence.
+    right: Sentence
+        Following sentence.
+
+    Returns
+    -------
+    bool
+        True when their source text supports a continuous paragraph.
+
+    """
+
+    if left.path != right.path or left.chunk.section != right.chunk.section:
+        return False
+    if left.chunk is not right.chunk:
+        # Do not infer a paragraph across unrelated indexed passages.
+        return False
+    first = " ".join(left.text.split()).casefold()
+    second = " ".join(right.text.split()).casefold()
+    for paragraph in re.split(r"\n\s*\n", left.chunk.text):
+        passage = " ".join(paragraph.split()).casefold()
+        if first in passage and second in passage:
+            return passage.index(first) < passage.index(second)
+    return False
 
 
 def report_claims(report: ReferenceReport) -> list[Claim]:
@@ -512,9 +612,9 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
         For each citation in reading order, one claim per cited reference
         whose file is in the project (found or probable), each sentence
         and reference once; ``also_cited`` holds the sentence's other
-        references, ``before`` the sentence before it, ``marked`` the
-        sentence with its markers in brackets, and ``cited_for`` the
-        phrase the reference is cited for.
+        references, ``before`` up to two preceding sentences, ``after``
+        one following sentence, ``marked`` the sentence with its markers
+        in brackets, and ``cited_for`` the phrase cited for.
 
     """
 
@@ -546,6 +646,7 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
                         report.before.get(sentence, ""),
                         marked,
                         _cited_for(sentence, markers[sentence], number),
+                        report.after.get(sentence, ""),
                     )
                 )
     return claims
@@ -1021,8 +1122,11 @@ def _verify(
             f"(reference [{claim.number}])"
         )
         plain = _UNMARKED.sub("", claim.marked or claim.sentence.text)
+        query = plain
+        if claim.before and _ANAPHORA.search(plain):
+            query = f"{_UNMARKED.sub('', claim.before)} {plain}"
         passages = claim_passages(
-            (plain, claim.cited_for),
+            (query, claim.cited_for),
             by_file.get(claim.cited, []),
             context.rank,
             settings.passages,
