@@ -380,7 +380,11 @@ New chat creates a separate conversation record while retaining earlier
 conversations in the picker. It does not archive and delete the previous GUI
 conversation. Branch copies resumable parent state and records parent and
 checkpoint identifiers; it does not copy the entire parent event history.
-Renaming a conversation updates display metadata. The project name can be edited in the heading or floating top bar.
+Renaming a conversation updates display metadata. The chat heading and the
+floating top bar show only the open chat's name and turn count. The left
+panel lists projects; right-click the open project to rename it, and its
+settings icon opens its Settings. Other projects have no settings icon,
+because Settings save into the open project.
 Renaming a project moves
 its workspace folder, reloads the conversation registry, and restores the
 selected chat. If reopening fails, KíLín attempts to restore the old folder. Changing conversation retains already loaded

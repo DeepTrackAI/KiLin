@@ -121,6 +121,8 @@ let currentTurnCount = 0;
 let projectTypes = Object.create(null);
 // Saved projects last listed, shown again once the types' names arrive.
 let savedProjects = [];
+// Folder of the open project, highlighted in the left panel's Projects.
+let openProjectPath = "";
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
   welcome_prompts: ["What would you like to work on?"],
@@ -136,6 +138,7 @@ function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
+  if (openProjectPath) renderSidebarProjects(savedProjects, openProjectPath);
   const select = byId("type-id");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
@@ -160,25 +163,24 @@ function turnCountLabel(count) {
 }
 
 /**
- * Refresh the header and project summary from the saved turn count.
+ * Refresh the chat's name and turn count in its heading and the top bar.
  *
  * @param count Latest saved count; defaults to the current count.
  */
-function updateProjectSummary(count = currentTurnCount) {
+function updateChatSummary(count = currentTurnCount) {
   currentTurnCount = Number(count) || 0;
-  const projectName = byId("project-name").textContent.trim();
-  byId("topbar-project-name").textContent = projectName;
+  byId("topbar-chat-name").textContent = byId("conversation-name").textContent.trim() || "New chat";
   byId("topbar-turn-count").textContent = turnCountLabel(currentTurnCount);
-  byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
+  byId("conversation-detail").textContent = currentTurnCount ? turnCountLabel(currentTurnCount) : "";
 }
 
 /**
- * Keep the compact project header visible after scrolling the conversation.
+ * Keep the compact chat header visible after scrolling the conversation.
  */
 function updateFloatingHeader() {
   const scrolled = ready && conversationScroll.scrollTop > 96;
   document.querySelector(".topbar").classList.toggle("floating", scrolled);
-  byId("topbar-project").classList.toggle("hidden", !scrolled);
+  byId("topbar-chat").classList.toggle("hidden", !scrolled);
 }
 
 /**
@@ -296,6 +298,286 @@ function renderSavedProjects(projects) {
     host.append(group);
   }
   host.classList.toggle("hidden", !host.children.length);
+}
+
+// The left panel shows this many projects until the user asks for more.
+const SIDEBAR_PROJECTS = 5;
+let sidebarProjectsExpanded = false;
+
+/**
+ * Read a left-panel choice remembered on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param fallback Value when nothing is saved or storage is unavailable.
+ * @returns The saved value, or ``fallback``.
+ */
+function sidebarPref(key, fallback) {
+  try {
+    const saved = localStorage.getItem(`kilin-sidebar-${key}`);
+    return saved == null ? fallback : JSON.parse(saved);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Remember a left-panel choice on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param value JSON-serializable value.
+ */
+function setSidebarPref(key, value) {
+  try { localStorage.setItem(`kilin-sidebar-${key}`, JSON.stringify(value)); } catch {}
+}
+
+/**
+ * Put items in the user's dragged order; items not yet placed come first,
+ * in their given order.
+ *
+ * @param items Items in their default order.
+ * @param idOf Returns an item's identifier.
+ * @param saved Identifiers in the user's order.
+ * @returns New list of the same items.
+ */
+function manualOrder(items, idOf, saved) {
+  const rank = new Map((saved || []).map((id, index) => [id, index]));
+  const fresh = items.filter((item) => !rank.has(idOf(item)));
+  const placed = items.filter((item) => rank.has(idOf(item)))
+    .sort((a, b) => rank.get(idOf(a)) - rank.get(idOf(b)));
+  return [...fresh, ...placed];
+}
+
+/**
+ * Move one identifier to the place of another, as a dropped row does.
+ *
+ * @param ids Identifiers in their shown order.
+ * @param moved The dragged row's identifier.
+ * @param target The identifier of the row it was dropped on.
+ * @returns New list of identifiers.
+ */
+function moveInOrder(ids, moved, target) {
+  const index = ids.indexOf(target);
+  const rest = ids.filter((id) => id !== moved);
+  rest.splice(index, 0, moved);
+  return rest;
+}
+
+/**
+ * Let a row be dragged onto another row of the same list.
+ *
+ * @param row Row element.
+ * @param id The row's identifier.
+ * @param ids Identifiers of the whole list, in shown order.
+ * @param save Receives the new order after a drop.
+ */
+function makeReorderable(row, id, ids, save) {
+  const type = "application/x-kilin-order";
+  row.draggable = true;
+  row.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData(type, id);
+    event.dataTransfer.effectAllowed = "move";
+    row.classList.add("dragging");
+  });
+  row.addEventListener("dragend", () => row.classList.remove("dragging"));
+  // Stop here, so the page-wide guard against file drops does not refuse it.
+  row.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer.types.includes(type)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  });
+  row.addEventListener("drop", (event) => {
+    const moved = event.dataTransfer.getData(type);
+    if (!moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (moved !== id && ids.includes(moved)) save(moveInOrder(ids, moved, id));
+  });
+}
+
+/**
+ * Order the projects for the left panel.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project, listed first when it is not
+ *   among the saved projects.
+ * @param currentType Project type of the open project.
+ * @param mode "updated" keeps recent use; "manual" uses ``saved``.
+ * @param saved Project folders in the user's dragged order.
+ * @returns New list of projects to show.
+ */
+function sidebarProjectOrder(projects, current, currentType = "", mode = "updated", saved = []) {
+  const listed = !current || projects.some((project) => project.project === current)
+    ? [...projects]
+    : [{ project: current, name: current.split(/[\\/]/).pop(), type_id: currentType }, ...projects];
+  return mode === "manual" ? manualOrder(listed, (project) => project.project, saved) : listed;
+}
+
+/**
+ * Order the conversations for the left panel.
+ *
+ * @param items Conversation records with ``updated_at_utc``.
+ * @param mode "updated" puts the latest change first; "manual" uses
+ *   ``saved``.
+ * @param saved Conversation identifiers in the user's dragged order.
+ * @returns New list of conversations.
+ */
+function sidebarConversationOrder(items, mode = "updated", saved = []) {
+  const recent = [...items].sort((a, b) =>
+    (Date.parse(b.updated_at_utc) || 0) - (Date.parse(a.updated_at_utc) || 0));
+  return mode === "manual" ? manualOrder(recent, (item) => item.conversation_id, saved) : recent;
+}
+
+/**
+ * List the most recent projects in the left panel, each with its type, the
+ * open one highlighted; clicking another one switches to it, and More shows
+ * the rest.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project.
+ */
+function renderSidebarProjects(projects, current) {
+  const list = byId("project-list");
+  list.replaceChildren();
+  const mode = sidebarPref("projects-sort", "updated");
+  const ordered = sidebarProjectOrder(
+    projects, current, activeProjectTypeId, mode, sidebarPref("projects-order", []));
+  const ids = ordered.map((project) => project.project);
+  const shown = sidebarProjectsExpanded ? ordered : ordered.slice(0, SIDEBAR_PROJECTS);
+  for (const project of shown) {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "project-item";
+    const name = document.createElement("span");
+    name.className = "project-item-name";
+    name.textContent = project.name;
+    const type = document.createElement("span");
+    type.className = "project-item-type";
+    type.textContent = projectTypes[project.type_id]?.label || project.type_id || "";
+    button.append(name, type);
+    button.title = project.project;
+    const active = project.project === current;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "true");
+    button.disabled = busy;
+    const open = () => {
+      if (busy || active) return;
+      setBusy(true, `Opening ${project.name}…`);
+      bridge.resumeProject(project.project);
+    };
+    button.addEventListener("click", () => open());
+    // Settings save into the open project, so only its row has the icon.
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.className = "project-settings";
+    settings.setAttribute("aria-label", `Settings for ${project.name}`);
+    settings.title = "Project settings";
+    settings.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    settings.disabled = busy;
+    settings.addEventListener("click", () => openModels());
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showWorkspaceMenu(event.clientX, event.clientY, active
+        ? [["Rename", () => renameProjectInSidebar(button, project)], ["Settings", openModels]]
+        : [["Open", open]]);
+    });
+    row.append(button);
+    if (active) row.append(settings);
+    if (mode === "manual") {
+      makeReorderable(row, project.project, ids, (order) => {
+        setSidebarPref("projects-order", order);
+        renderSidebarProjects(projects, current);
+      });
+    }
+    list.append(row);
+  }
+  if (ordered.length > SIDEBAR_PROJECTS) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "project-more";
+    more.textContent = sidebarProjectsExpanded ? "Fewer" : `More (${ordered.length - SIDEBAR_PROJECTS})`;
+    more.addEventListener("click", () => {
+      sidebarProjectsExpanded = !sidebarProjectsExpanded;
+      renderSidebarProjects(projects, current);
+    });
+    list.append(more);
+  }
+}
+
+/**
+ * Rename the open project in place: Enter or leaving the field saves,
+ * Escape cancels.
+ *
+ * @param button The project's row button, replaced while editing.
+ * @param project The open project.
+ */
+function renameProjectInSidebar(button, project) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "conversation-rename";
+  input.value = project.name;
+  input.setAttribute("aria-label", `Rename ${project.name}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.replaceWith(button);
+    if (save && name && name !== project.name && !busy && ready) {
+      setBusy(true, "Renaming project…");
+      bridge.renameProject(name);
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  button.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/**
+ * Show the ⋯ menu of a left-panel section: sort by last update, or in the
+ * user's own dragged order.
+ *
+ * @param anchor The ⋯ button.
+ * @param section "projects" or "conversations".
+ * @param refresh Redraws the section's list.
+ */
+function showSidebarSortMenu(anchor, section, refresh) {
+  const mode = sidebarPref(`${section}-sort`, "updated");
+  const heading = document.createElement("div");
+  heading.className = "menu-heading";
+  heading.textContent = "Sort by";
+  const options = [["updated", "Last updated"], ["manual", "Manual order"]].map(([value, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === mode));
+    button.textContent = label;
+    if (value === mode) {
+      const check = document.createElement("span");
+      check.className = "menu-check";
+      check.textContent = "✓";
+      button.append(check);
+    }
+    button.addEventListener("click", () => {
+      hideSourceMenu();
+      setSidebarPref(`${section}-sort`, value);
+      refresh();
+    });
+    return button;
+  });
+  sourceMenu.replaceChildren(heading, ...options);
+  sourceMenu.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const { width } = sourceMenu.getBoundingClientRect();
+  sourceMenu.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+  sourceMenu.style.top = `${box.bottom + 4}px`;
 }
 
 /**
@@ -1614,10 +1896,6 @@ function showError(message, tracePath = "") {
   applyingModels = false;
   closeAfterModelsApply = false;
   byId("model-download-status").textContent = message;
-  if (ready) {
-    byId("project-name").textContent = byId("workspace-path").value.split(/[\\/]/).pop();
-    updateProjectSummary();
-  }
   stopPhaseAnimation();
   resetAnswerStages();
   if (pendingTurn) {
@@ -2033,8 +2311,6 @@ byId("source-add-confirm").addEventListener("click", () => {
  */
 function setBusy(value, message = "") {
   busy = value;
-  byId("project-name").contentEditable = String(!value);
-  byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
   // Settings can close while KíLín works; only unsaved edits must wait.
@@ -2065,8 +2341,9 @@ function setBusy(value, message = "") {
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
   byId("branch-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
-  byId("change-project").disabled = value;
+  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings").forEach((item) => { item.disabled = value || !ready; });
+  byId("home-logo").disabled = value;
+  byId("new-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
   byId("activity-text").textContent = message;
@@ -2639,7 +2916,11 @@ function renderConversations(data) {
   list.replaceChildren();
   let activeName = "";
   let activeEmpty = false;
-  for (const item of data.conversations || []) {
+  const mode = sidebarPref("conversations-sort", "updated");
+  const orderKey = `conversations-order:${openProjectPath}`;
+  const ordered = sidebarConversationOrder(data.conversations || [], mode, sidebarPref(orderKey, []));
+  const rows = [];
+  for (const item of ordered) {
     if (item.conversation_id === activeConversationId) {
       activeName = item.name;
       activeEmpty = Boolean(item.empty);
@@ -2672,7 +2953,15 @@ function renderConversations(data) {
       clearTimeout(opening);
       if (!busy && !provisional) renameInSidebar(row, button, item);
     });
-    button.title = `${name}\nDouble-click to rename`;
+    button.title = `${name}\nDouble-click or right-click to rename`;
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (provisional) return;
+      showWorkspaceMenu(event.clientX, event.clientY, [
+        ["Rename", () => renameInSidebar(row, button, item)],
+        ["Delete…", () => remove.click()],
+      ]);
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "conversation-delete";
@@ -2686,9 +2975,20 @@ function renderConversations(data) {
     });
     row.append(button, remove);
     list.append(row);
+    rows.push([row, item.conversation_id]);
+  }
+  if (mode === "manual") {
+    const ids = rows.map(([, id]) => id);
+    for (const [row, id] of rows) {
+      makeReorderable(row, id, ids, (order) => {
+        setSidebarPref(orderKey, order);
+        renderConversations(lastConversationData);
+      });
+    }
   }
   byId("conversation-name").textContent = activeEmpty ? "" : activeName;
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
+  updateChatSummary();
 }
 
 /**
@@ -3212,11 +3512,10 @@ function addPendingTurn(question) {
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
   answer.append(phaseHeader, phaseDetail);
-  // The steps are listed as they happen, open so the route can be followed;
-  // the line becomes the collapsed "Took …" summary when the answer arrives.
+  // The steps are listed as they happen, folded like the "Took …" summary
+  // it becomes when the answer arrives; expanding it follows the route live.
   const durationLine = document.createElement("details");
   durationLine.className = "answer-duration";
-  durationLine.open = true;
   const timer = document.createElement("summary");
   const steps = document.createElement("ol");
   steps.className = "answer-timeline";
@@ -3361,7 +3660,7 @@ function bindAnswerSelection(answer, item, turn) {
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   resetAnswerStages();
-  updateProjectSummary(currentTurnCount + 1);
+  updateChatSummary(currentTurnCount + 1);
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -3628,6 +3927,7 @@ function onEvent(raw) {
     showSettings(data);
   } else if (data.event === "projects") {
     renderSavedProjects(data.projects || []);
+    renderSidebarProjects(savedProjects, openProjectPath);
   } else if (data.event === "conversation_delete_started") {
     const button = [...document.querySelectorAll(".conversation-item")]
       .find((item) => item.dataset.conversationId === data.conversation_id);
@@ -3808,6 +4108,8 @@ function onEvent(raw) {
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
+    // Set before the lists are drawn: chats keep their order per project.
+    openProjectPath = data.project;
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -3828,14 +4130,15 @@ function onEvent(raw) {
     if (!data.turns.length) renderConversationEmpty();
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
+    renderSidebarProjects(savedProjects, openProjectPath);
+    if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
     showWorkspace(sidePanelChoice ?? true);
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    byId("project-name").textContent = data.project.split(/[\\/]/).pop();
-    updateProjectSummary(data.turns.length);
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversation_opened") {
@@ -3860,7 +4163,7 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    updateProjectSummary(data.turns.length);
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversations") {
@@ -3890,7 +4193,7 @@ function onEvent(raw) {
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
-    updateProjectSummary(0);
+    updateChatSummary(0);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
@@ -4103,9 +4406,7 @@ byId("question").addEventListener("keydown", (event) => {
   }
 });
 conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
-byId("project-name").addEventListener("input", () => {
-  byId("topbar-project-name").textContent = byId("project-name").textContent.trim();
-});
+byId("conversation-name").addEventListener("input", () => updateChatSummary());
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
   setBusy(true, "Starting a new conversation…");
@@ -4123,29 +4424,19 @@ function commitConversationName() {
   const name = byId("conversation-name").textContent.trim();
   if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
 }
-/**
- * Rename the current project when the edited title differs.
- */
-function commitProjectName() {
-  const name = byId("project-name").textContent.trim();
-  const current = byId("workspace-path").value.split(/[\\/]/).pop();
-  if (!busy && ready && name && name !== current) {
-    setBusy(true, "Renaming project…");
-    bridge.renameProject(name);
-  }
-}
-byId("topbar-project-name").addEventListener("input", () => {
-  byId("project-name").textContent = byId("topbar-project-name").textContent;
-});
-for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName], ["topbar-project-name", commitProjectName]]) {
+for (const [id, commit] of [["conversation-name", commitConversationName]]) {
   byId(id).addEventListener("blur", commit);
   byId(id).addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
   });
 }
-byId("change-project").addEventListener("click", () => {
-  if (busy) return;
+/**
+ * Close the open project and show the start screen, where a project can be
+ * resumed or created.
+ */
+function returnToLaunch() {
   bridge.closeProject();
+  openProjectPath = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");
@@ -4164,6 +4455,47 @@ byId("change-project").addEventListener("click", () => {
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
+}
+
+// The logo and the Projects ＋ lead back to the start screen, where new
+// projects are made; both are disabled while busy.
+for (const id of ["home-logo", "new-project"]) {
+  byId(id).addEventListener("click", () => {
+    if (busy) return;
+    byId("leave-project").showModal();
+  });
+}
+// Each left-panel section folds, and sorts from its ⋯ menu; both choices
+// are remembered on this computer.
+for (const section of document.querySelectorAll(".sidebar-section")) {
+  const name = section.dataset.section;
+  const toggle = section.querySelector(".sidebar-section-toggle");
+  const fold = (collapsed) => {
+    section.classList.toggle("collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  };
+  fold(sidebarPref(`${name}-collapsed`, false));
+  toggle.addEventListener("click", () => {
+    const collapsed = !section.classList.contains("collapsed");
+    fold(collapsed);
+    setSidebarPref(`${name}-collapsed`, collapsed);
+  });
+}
+byId("sort-projects").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "projects",
+    () => renderSidebarProjects(savedProjects, openProjectPath));
+});
+byId("sort-conversations").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "conversations",
+    () => lastConversationData && renderConversations(lastConversationData));
+});
+byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
+byId("leave-project-confirm").addEventListener("click", () => {
+  byId("leave-project").close();
+  if (busy) return;
+  returnToLaunch();
 });
 byId("toggle-workspace").addEventListener("click", () => {
   chooseSidePanels(!shell.classList.contains("sidebar-open"));
