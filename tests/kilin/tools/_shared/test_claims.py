@@ -31,6 +31,7 @@ from kilin.tools._shared.claims import (
     claim_passages,
     judge_support,
     parse_verdict,
+    quote_line_range,
     support_prompt,
     verdict_label,
     verification_prompt,
@@ -108,6 +109,144 @@ class TestParseVerdict(unittest.TestCase):
             "Numerous solutions have been proposed and compared in open "
             "challenges",
         )
+
+    def test_changed_number_is_not_a_confirmed_quote(self) -> None:
+        """Reject a fabricated numerical effect despite word overlap."""
+
+        passages = (chunk(
+            "numbers", "Treatment reduced mortality by 10% in mice.",
+            path="trial.md",
+        ),)
+        reply = (
+            "VERDICT: supported\n"
+            "QUOTE: Treatment reduced mortality by 90% in mice.\n"
+            "COMMENT: Reports the result."
+        )
+        verdict, quote, found, comment = parse_verdict(reply, passages)
+        self.assertEqual(verdict, VERDICT_SUPPORTED)
+        self.assertEqual(quote, "")
+        self.assertIsNone(found)
+        self.assertIn("not in the passages", comment)
+
+    def test_reversed_effect_and_negation_are_not_confirmed(self) -> None:
+        """A near-identical quote may reverse the scientific meaning."""
+
+        passages = (chunk(
+            "direction", "Treatment reduced mortality in mice after "
+            "twelve weeks of observation.", path="trial.md",
+        ),)
+        for model_quote in (
+            "Treatment increased mortality in mice after twelve "
+            "weeks of observation.",
+            "Treatment did not reduce mortality in mice after twelve "
+            "weeks of observation.",
+        ):
+            with self.subTest(model_quote=model_quote):
+                verdict, quote, found, _ = parse_verdict(
+                    "VERDICT: supported\nQUOTE: " + model_quote +
+                    "\nCOMMENT: result", passages,
+                )
+                self.assertEqual(verdict, VERDICT_SUPPORTED)
+                self.assertEqual(quote, "")
+                self.assertIsNone(found)
+
+    def test_changed_units_and_signed_values_are_rejected(self) -> None:
+        """A matched numeral is insufficient when the units differ."""
+
+        passages = (chunk(
+            "dose", "Dose of -10 mg was applied to exposed tissue "
+            "and measured after seven days.", path="trial.md",
+        ),)
+        for altered in (
+            "Dose of 10 mg was applied to exposed tissue and "
+            "measured after seven days.",
+            "Dose of -10 g was applied to exposed tissue and "
+            "measured after seven days.",
+        ):
+            with self.subTest(altered=altered):
+                _, _, found, _ = parse_verdict(
+                    "VERDICT: supported\nQUOTE: " + altered +
+                    "\nCOMMENT: Direct.", passages,
+                )
+                self.assertIsNone(found)
+
+    def test_quotation_evidence_status_and_source_lines(self) -> None:
+        """Expose exact, approximate and rejected evidence separately."""
+
+        passage = chunk(
+            "lines", "Opening line.\nTreatment reduced mortality by "
+            "10% in mice.\nClosing line.", path="trial.md", line=20,
+        )
+        exact = judge_support(
+            "Treatment reduced mortality by 10% in mice.",
+            Path("trial.md"), (passage,),
+            lambda *_: (
+                "VERDICT: supported\nQUOTE: Treatment reduced mortality "
+                "by 10% in mice.\nCOMMENT: exact"
+            ), 250,
+        )
+        self.assertEqual(exact.evidence_status, "exact")
+        self.assertEqual(quote_line_range(exact.quote, passage), (21, 21))
+        approximate = judge_support(
+            "Treatment reduced mortality in mice.",
+            Path("trial.md"), (passage,),
+            lambda *_: (
+                "VERDICT: supported\nQUOTE: Treatment reduced "
+                "mortality by 10% in mice\nCOMMENT: partial"
+            ), 250,
+        )
+        self.assertIn(approximate.evidence_status, ("exact", "approximate"))
+        rejected = judge_support(
+            "Treatment changed mortality by 90% in mice.",
+            Path("trial.md"), (passage,),
+            lambda *_: (
+                "VERDICT: supported\nQUOTE: Treatment reduced mortality "
+                "by 90% in mice.\nCOMMENT: changed"
+            ), 250,
+        )
+        self.assertEqual(rejected.evidence_status, "rejected")
+        self.assertIsNone(rejected.quote_chunk)
+        self.assertIsNone(quote_line_range("", passage))
+
+    def test_no_quote_is_expected_for_negative_verdicts(self) -> None:
+        """No-positive-evidence cases should not trigger missing warnings."""
+
+        for verdict in ("not supported", "not found", "unclear"):
+            with self.subTest(verdict=verdict):
+                result = judge_support(
+                    "Running benefits mice", Path("cited.md"), PASSAGES,
+                    lambda *_: (
+                        f"VERDICT: {verdict}\nQUOTE: NONE\n"
+                        "COMMENT: Not demonstrated by the excerpts."
+                    ), None,
+                )
+                self.assertEqual(result.evidence_status, "not required")
+                self.assertIsNone(result.quote_chunk)
+        positive = judge_support(
+            "Running benefits mice", Path("cited.md"), PASSAGES,
+            lambda *_: (
+                "VERDICT: supported\nQUOTE: NONE\nCOMMENT: Supported."
+            ), None,
+        )
+        self.assertEqual(positive.evidence_status, "missing")
+
+    def test_inherited_token_limit_reaches_model_callback(self) -> None:
+        """No tool-specific cap is passed to reference verification."""
+
+        received = []
+        def model(system: str, prompt: str, tokens: int | None) -> str:
+            received.append(tokens)
+            return (
+                "VERDICT: partly supported\n"
+                "QUOTE: Mice that ran daily lived 20% longer than "
+                "sedentary mice.\nCOMMENT: Only in mice."
+            )
+        result = judge_support(
+            "Running extends lifespan in mice", Path("cited.md"),
+            PASSAGES, model, None,
+        )
+        self.assertEqual(received, [None])
+        self.assertIs(result.quote_chunk, PASSAGES[0])
 
     def test_quote_broken_by_interleaved_text(self) -> None:
         margin = " ".join(f"word{index}" for index in range(30))

@@ -101,6 +101,22 @@ class TestReferenceCheckPackage(unittest.TestCase):
             frozenset(data["MATCHING"]["COMMON_WORDS"]),
         )
 
+    def test_verdict_tokens_inherit_session_by_default(self) -> None:
+        """An omitted limit never imposes the historical 250-token cap."""
+
+        settings = tool.parse_settings({}, "test")
+        self.assertIsNone(settings.answer_tokens)
+        self.assertIsNone(tool.parse_settings(
+            {"answer_tokens": None}, "test",
+        ).answer_tokens)
+        self.assertEqual(tool.parse_settings(
+            {"answer_tokens": 4096}, "test",
+        ).answer_tokens, 4096)
+        for bad in (0, -1, "250", False, 131073):
+            with self.subTest(value=bad):
+                with self.assertRaises(ValueError):
+                    tool.parse_settings({"answer_tokens": bad}, "test")
+
     def test_invalid_project_type_settings(self) -> None:
         for values in (
             {"max_listed": 0}, {"unknown": 1}, {"verify": "yes"},
@@ -223,15 +239,15 @@ class TestReferenceCheckRun(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("## Claims checked against the cited papers", report)
         self.assertIn(
-            "**Verdict:** partly supported · ★★☆☆☆ (50/100) "
+            "**Verdict:** partly supported · ★★★☆☆ (50/100) "
             "— Names the authors.", report
         )
-        self.assertIn("★★☆☆☆ (50/100)", report)
+        self.assertIn("★★★☆☆ (50/100)", report)
         self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
         self.assertEqual(len(result.summary["suitability"]), 3)
         self.assertEqual(
             [rating["stars"] for rating in result.summary["suitability"]],
-            [2, None, 2],
+            [3.0, None, 3.0],
         )
         record = next(
             call.kwargs["data"]
@@ -245,17 +261,54 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertIn("retrieval_queries", record)
         self.assertEqual(record["passages"][0]["id"], "b1")
         self.assertIn("quote_passage_id", record)
-        self.assertEqual(record["suitability"]["stars"], 2)
+        self.assertEqual(record["suitability"]["stars"], 3.0)
         self.assertIn("*Preceding context used:*", report)
         self.assertIn("*Evidence retrieval queries:*", report)
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
 
+    def test_claim_rank_queries_are_cached_within_run(self) -> None:
+        """Repeated citation queries need only one retrieval per string."""
+
+        _, context = self._run(
+            (Path("paper.md"), "named", False), max_listed=5,
+        )
+        queries = [
+            call.args[0] for call in context.rank.call_args_list
+        ]
+        self.assertTrue(queries)
+        self.assertEqual(len(queries), len(set(queries)))
+
+    def test_probable_reference_and_evidence_status_are_reported(
+        self,
+    ) -> None:
+        """A model verdict cannot hide uncertainty in the source file."""
+
+        result, context = self._run(
+            (Path("paper.md"), "named", False), max_listed=5,
+        )
+        probable = next(
+            item for item in result.summary["suitability"]
+            if item["reference"] == 3
+        )
+        self.assertEqual(probable["match_status"], "probable")
+        self.assertEqual(probable["evidence_status"], "not required")
+        self.assertIn("Provisional:", result.answer)
+        trace = [
+            call.kwargs["data"]
+            for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+        ]
+        self.assertEqual(
+            next(item for item in trace if item["reference"] == 3)
+            ["match_status"], "probable",
+        )
+
     def test_all_checked_stars_appear_when_chat_limit_allows(self) -> None:
         result, _ = self._run(
             (Path("paper.md"), "named", False), max_listed=5,
         )
-        self.assertIn("★★☆☆☆ (50/100)", result.answer)
+        self.assertIn("★★★☆☆ (50/100)", result.answer)
         self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
         self.assertIn("heuristic", result.answer)
 

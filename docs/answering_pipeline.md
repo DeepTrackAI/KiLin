@@ -221,3 +221,13 @@ Related: [Architecture](architecture.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [Model management](model_management.md),
 [Tool packages](tool_packages.md), [GUI architecture](gui_architecture.md).
+
+### Tool model-call inheritance
+
+Registered tools use `ToolContext.ask_model` for internal judgments and
+`ToolContext.write` for streamed final answers. Both preserve the current
+answering model's thinking and temperature, while the per-call output
+limit does not exceed either the tool budget or the session's
+`max_new_tokens` setting. The router keeps its separate deterministic
+nonthinking behavior. Isolated tool replies never enter persistent chat
+history.

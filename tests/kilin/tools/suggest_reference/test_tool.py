@@ -70,6 +70,22 @@ class TestSuggestReferencePackage(unittest.TestCase):
             {name.lower() for name in data["SETTINGS"]},
         )
 
+    def test_verdict_tokens_inherit_session_by_default(self) -> None:
+        """An omitted limit never imposes the historical 250-token cap."""
+
+        settings = tool.parse_settings({}, "test")
+        self.assertIsNone(settings.answer_tokens)
+        self.assertIsNone(tool.parse_settings(
+            {"answer_tokens": None}, "test",
+        ).answer_tokens)
+        self.assertEqual(tool.parse_settings(
+            {"answer_tokens": 4096}, "test",
+        ).answer_tokens, 4096)
+        for bad in (0, -1, "250", False, 131073):
+            with self.subTest(value=bad):
+                with self.assertRaises(ValueError):
+                    tool.parse_settings({"answer_tokens": bad}, "test")
+
     def test_invalid_project_type_settings(self) -> None:
         for values in (
             {"files": 0}, {"unknown": 1}, {"passages": 21},
@@ -163,13 +179,13 @@ class TestSuggestReferenceRun(unittest.TestCase):
 
     def test_suggestions_with_quotes(self) -> None:
         result, context = self._run()
-        # The draft contains the statement: left out, not judged.
-        self.assertEqual(context.ask_model.call_count, 3)
-        self.assertEqual(result.summary["left_out"], ["draft.md"])
+        # A verbatim match alone is not grounds to exclude a source.
+        self.assertEqual(context.ask_model.call_count, 4)
+        self.assertEqual(result.summary["left_out"], [])
         self.assertEqual(result.summary["suggested"], 2)
         answer = result.answer
         self.assertIn(f"**Statement:** “{STATEMENT}”", answer)
-        self.assertIn("**2 of the 3 papers checked could be cited", answer)
+        self.assertIn("**2 of the 4 papers checked could be cited", answer)
         self.assertIn("1. **Supported** · `review.md`", answer)
         self.assertIn("2. **Partly supported** · `repeat.md`", answer)
         self.assertLess(answer.index("review.md"), answer.index("repeat.md"))
@@ -182,26 +198,22 @@ class TestSuggestReferenceRun(unittest.TestCase):
         self.assertIn("States it (2).", answer)
         self.assertIn("citing (12)", answer)
         self.assertIn(
-            "Also checked: `other.md` (no matching passage).", answer
-        )
-        self.assertIn(
-            "Not checked, as they contain the statement word for word "
-            "(your draft, or the paper it comes from): `draft.md`.",
-            answer,
+            "Also checked: `draft.md` (no matching passage), "
+            "`other.md` (no matching passage).", answer
         )
         self.assertEqual(len(result.evidence), 1)
         self.assertEqual(result.evidence[0]["path"], Path("review.md"))
         context.confirm.assert_not_called()  # 3 papers: a small plan.
         events = [c.args[0] for c in context.trace.emit.call_args_list]
-        self.assertEqual(events.count("tool.suggest_reference.paper"), 3)
+        self.assertEqual(events.count("tool.suggest_reference.paper"), 4)
 
     def test_displayed_scores_match_summary_and_trace(self) -> None:
         result, context = self._run()
         ratings = result.summary["suitability"]
         self.assertEqual(ratings["review.md"], {"stars": 5, "score": 96})
-        self.assertEqual(ratings["repeat.md"], {"stars": 2, "score": 54})
+        self.assertEqual(ratings["repeat.md"], {"stars": 3.0, "score": 54})
         self.assertIn("\u2605\u2605\u2605\u2605\u2605 (96/100)", result.answer)
-        self.assertIn("\u2605\u2605\u2606\u2606\u2606 (54/100)", result.answer)
+        self.assertIn("\u2605\u2605\u2605\u2606\u2606 (54/100)", result.answer)
         for call in context.trace.emit.call_args_list:
             if call.args[0] != "tool.suggest_reference.paper":
                 continue
@@ -211,12 +223,34 @@ class TestSuggestReferenceRun(unittest.TestCase):
                     f"({item['suitability_score']}/100)", result.answer
                 )
         self.assertNotIn("(0/100)", result.answer)
-        self.assertEqual(context.ask_model.call_count, 3)
+        self.assertEqual(context.ask_model.call_count, 4)
+
+    def test_verbatim_independent_paper_is_not_excluded(self) -> None:
+        paper = chunk("v1", STATEMENT, path="published.md")
+        selected, excluded = tool.candidate_files(
+            STATEMENT, {paper.path: [paper]},
+            lambda _text: [SimpleNamespace(chunk=paper)], 5,
+        )
+        self.assertEqual(selected, [Path("published.md")])
+        self.assertEqual(excluded, [])
+
+    def test_explicitly_excluded_document(self) -> None:
+        paper = chunk("v1", STATEMENT, path="draft.md")
+        selected, excluded = tool.candidate_files(
+            STATEMENT, {paper.path: [paper]},
+            lambda _text: [SimpleNamespace(chunk=paper)], 5,
+            excluded=(Path("draft.md"),),
+        )
+        self.assertEqual(selected, [])
+        self.assertEqual(excluded, [Path("draft.md")])
 
     def test_no_supporting_paper(self) -> None:
         self.chunks = [chunk("o1", OTHER, path="other.md")]
         result, _ = self._run()
-        self.assertIn("None of the 1 papers most related", result.answer)
+        self.assertIn(
+            "No direct or partial support was established among the 1 "
+            "papers", result.answer,
+        )
         self.assertIn("add the paper you have in mind", result.answer)
         self.assertEqual(result.evidence, ())
 
@@ -226,7 +260,7 @@ class TestSuggestReferenceRun(unittest.TestCase):
         )
         context.confirm.assert_called_once()
         self.assertEqual(context.ask_model.call_count, 1)
-        self.assertIn("Only the 1 most related of 3 papers", result.answer)
+        self.assertIn("Only the 1 most related of 4 papers", result.answer)
         result, context = self._run(choice="cancel", confirmation="always")
         context.ask_model.assert_not_called()
         self.assertIn("Not checked (cancelled)", result.answer)

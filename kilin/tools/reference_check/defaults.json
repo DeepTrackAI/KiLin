@@ -4,7 +4,7 @@
     "VERIFY": true,
     "PASSAGES": 6,
     "PASSAGE_TOKENS": 5000,
-    "ANSWER_TOKENS": 250,
+    "ANSWER_TOKENS": null,
     "MAX_MODEL_CALLS": 100,
     "QUICK_CLAIMS": 5,
     "CONFIRMATION": "when_large",

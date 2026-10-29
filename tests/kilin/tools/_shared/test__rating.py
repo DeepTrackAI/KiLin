@@ -55,14 +55,14 @@ class TestSuitabilityRating(unittest.TestCase):
         result = citation_suitability(
             self._support("supported", quote=False)
         )
-        self.assertEqual(result.stars, 4)
+        self.assertEqual(result.stars, 4.5)
         self.assertLess(result.score, 85)
 
     def test_partial_and_background_have_separate_bands(self) -> None:
         partial = citation_suitability(self._support("partly supported"))
         background = citation_suitability(self._support("background"))
-        self.assertEqual(partial.stars, 3)
-        self.assertEqual(background.stars, 2)
+        self.assertEqual(partial.stars, 3.5)
+        self.assertEqual(background.stars, 2.0)
         self.assertGreater(partial.score, background.score)
 
     def test_overlap_cannot_override_support_verdict(self) -> None:
@@ -112,7 +112,7 @@ class TestSuitabilityRating(unittest.TestCase):
         result = citation_suitability(self._support(
             "supported", statement="Mitochondrial fission causes epilepsy."
         ))
-        self.assertEqual(result.stars, 4)
+        self.assertEqual(result.stars, 4.5)
 
     def test_tied_verdicts_are_ordered_by_suitability(self) -> None:
         weaker = self._support(
@@ -132,16 +132,24 @@ class TestSuitabilityRating(unittest.TestCase):
         self.assertEqual(len(evidence), 2)
 
     def test_formatter_prints_raw_score_not_star_fraction(self) -> None:
-        for score, stars in (
-            (10, 1), (24, 1), (25, 2), (40, 2), (54, 2), (55, 3),
-            (69, 3), (70, 4), (84, 4), (85, 5), (88, 5), (100, 5),
+        for score, stars, expected in (
+            (0, 0.5, "½☆☆☆☆"), (9, 0.5, "½☆☆☆☆"),
+            (10, 1.0, "★☆☆☆☆"), (19, 1.0, "★☆☆☆☆"),
+            (20, 1.5, "★½☆☆☆"), (29, 1.5, "★½☆☆☆"),
+            (30, 2.0, "★★☆☆☆"), (39, 2.0, "★★☆☆☆"),
+            (40, 2.5, "★★½☆☆"), (49, 2.5, "★★½☆☆"),
+            (50, 3.0, "★★★☆☆"), (59, 3.0, "★★★☆☆"),
+            (60, 3.5, "★★★½☆"), (69, 3.5, "★★★½☆"),
+            (70, 4.0, "★★★★☆"), (79, 4.0, "★★★★☆"),
+            (80, 4.5, "★★★★½"), (89, 4.5, "★★★★½"),
+            (90, 5.0, "★★★★★"), (100, 5.0, "★★★★★"),
         ):
-            with self.subTest(score=score, stars=stars):
+            with self.subTest(score=score):
                 rating = SuitabilityRating(score, stars)
-                expected = "\u2605" * stars + "\u2606" * (5 - stars)
                 self.assertEqual(
                     suitability_stars(rating), f"{expected} ({score}/100)"
                 )
+                self.assertEqual(len(expected), 5)
                 self.assertNotIn("/5", suitability_stars(rating))
         self.assertNotIn("/100", suitability_stars(None))
 
@@ -149,7 +157,7 @@ class TestSuitabilityRating(unittest.TestCase):
         result = citation_suitability(
             self._support("partly supported", quote=False, passages=False)
         )
-        self.assertEqual(result.stars, 2)
+        self.assertEqual(result.stars, 2.5)
         self.assertGreaterEqual(result.score, 40)
 
 

@@ -98,6 +98,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from functools import cache
 from pathlib import Path
 import re
 from typing import Final
@@ -169,6 +170,7 @@ from kilin.tools._shared.claims import (
     claim_passages,
     verdict_label,
     verify_claim,
+    quote_line_range,
 )
 
 __all__ = [
@@ -269,8 +271,9 @@ class ReferenceCheckSettings:
         Most passages of the cited work read per claim (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int
-        Longest verdict answer, in tokens (100-1000).
+    answer_tokens: int | None
+        Maximum verdict output tokens (100-131072), or ``None`` to
+        inherit the main interface's generation limit.
     max_model_calls: int
         Most claims checked (1-1000); later ones are reported unchecked.
     quick_claims: int
@@ -293,7 +296,7 @@ class ReferenceCheckSettings:
     verify: bool = _config.DEFAULT_VERIFY
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
+    answer_tokens: int | None = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     quick_claims: int = _config.DEFAULT_QUICK_CLAIMS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
@@ -411,8 +414,11 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
             where, data, "passage_tokens", defaults.passage_tokens, 300,
             16000,
         ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 1000
+        answer_tokens=(
+            None if data.get("answer_tokens") is None else check_int(
+                where, data, "answer_tokens", defaults.answer_tokens,
+                100, 131072,
+            )
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1,
@@ -637,7 +643,7 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
     """
 
     files = {
-        entry.number: match.path
+        entry.number: (match.path, match.status)
         for entry, match in zip(report.entries, report.matches)
         if match.status in (MATCH_FOUND, MATCH_PROBABLE)
         and match.path is not None
@@ -659,12 +665,13 @@ def report_claims(report: ReferenceReport) -> list[Claim]:
             if number in files:
                 claims.append(
                     Claim(
-                        number, sentence, files[number],
+                        number, sentence, files[number][0],
                         tuple(n for n in numbers if n != number),
                         report.before.get(sentence, ""),
                         marked,
                         _cited_for(sentence, markers[sentence], number),
                         report.after.get(sentence, ""),
+                        files[number][1],
                     )
                 )
     return claims
@@ -921,6 +928,8 @@ def run(
                     "reference": verdict.claim.number,
                     "line": verdict.claim.sentence.line,
                     "verdict": verdict.verdict,
+                    "evidence_status": verdict.evidence_status,
+                    "match_status": verdict.claim.match_status,
                     "stars": rating.stars if rating else None,
                     "score": rating.score if rating else None,
                 }
@@ -1149,6 +1158,7 @@ def _verify(
 
     to_check = claims[: quick if choice == PLAN_CHOICE_QUICK else limit]
     verdicts: list[Verdict] = []
+    rank = cache(context.rank)
     for index, claim in enumerate(to_check, start=1):
         context.progress(
             f"Checking claim {index} of {len(to_check)} "
@@ -1158,7 +1168,7 @@ def _verify(
         passages = claim_passages(
             queries,
             by_file.get(claim.cited, []),
-            context.rank,
+            rank,
             settings.passages,
             settings.passage_tokens,
         )
@@ -1175,6 +1185,11 @@ def _verify(
                 "line": claim.sentence.line,
                 "verdict": verdict.verdict,
                 "quote_found": verdict.quote_chunk is not None,
+                "evidence_status": verdict.evidence_status,
+                "match_status": claim.match_status,
+                "quote_lines": quote_line_range(
+                    verdict.quote, verdict.quote_chunk,
+                ),
                 "citation_sentence": claim.marked or claim.sentence.text,
                 "preceding_context": claim.before,
                 "following_context": claim.after,
@@ -1258,7 +1273,9 @@ def _claim_seconds(settings: ReferenceCheckSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    reply = settings.answer_tokens * _config.REPLY_SHARE
+    # The estimate uses a historical 250-token proxy when the actual
+    # output budget is inherited from the main session; it is not a cap.
+    reply = (settings.answer_tokens or 250) * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND
@@ -1526,6 +1543,20 @@ def _claim_block(
                 "", "*Evidence retrieval queries:*",
                 *[f"> {_escape(query)}" for query in queries],
             ]
+    if claim.match_status == MATCH_PROBABLE:
+        lines += [
+            "", "*Provisional: the cited file is only a probable "
+            "bibliography match; confirm its identity.*",
+        ]
+    if verdict.evidence_status in ("missing", "rejected"):
+        lines += [
+            "", f"*Evidence {verdict.evidence_status}: the model verdict "
+            "was not independently supported by a validated quotation.*",
+        ]
+    elif verdict.evidence_status == "approximate":
+        lines += [
+            "", "*Evidence: approximate text match; check source wording.*",
+        ]
     if verdict.comment:
         lines += ["", f"*Why:* {_comment(verdict.comment)}"]
     if verdict.quote:
@@ -1555,14 +1586,20 @@ def _judgement(verdict: Verdict) -> list[str]:
 
     stars = suitability_stars(citation_suitability(verdict))
     line = f"**Verdict:** {verdict_label(verdict.verdict)} · {stars}"
+    if verdict.claim.match_status == MATCH_PROBABLE:
+        line += " · provisional bibliography match"
+    if verdict.evidence_status in ("missing", "rejected", "approximate"):
+        line += f" · evidence {verdict.evidence_status}"
     if verdict.comment:
         line += f" — {_comment(verdict.comment)}"
     lines = [line]
     if verdict.quote and verdict.quote_chunk is not None:
         chunk = verdict.quote_chunk
+        line_range = quote_line_range(verdict.quote, chunk)
+        first, last = line_range or (chunk.start_line, chunk.end_line)
         place = (
-            f"{chunk.section}, lines {chunk.start_line}-{chunk.end_line}"
-            if chunk.section else f"lines {chunk.start_line}-{chunk.end_line}"
+            f"{chunk.section}, lines {first}-{last}"
+            if chunk.section else f"lines {first}-{last}"
         )
         lines += [
             "",

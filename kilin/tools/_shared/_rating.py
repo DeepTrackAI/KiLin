@@ -3,7 +3,7 @@
 A retrieval rank measures relative similarity among search hits, and is
 not a calibrated probability that a paper supports a statement. Both
 reference verification and citation suggestion use the same rubric. This
-module gives eligible citations a deterministic ordinal star rating. The
+module gives eligible citations a deterministic half-star rating. The
 existing support verdict sets the rating band; confirmed quotations
 and overlap of distinctive statement words with the cited passage
 provide evidence within that band.
@@ -35,8 +35,8 @@ Module Structure
 Examples
 --------
 >>> from kilin.tools._shared._rating import SuitabilityRating
->>> SuitabilityRating(78, 4).stars
-4
+>>> SuitabilityRating(78, 4.0).stars
+4.0
 
 """
 
@@ -70,25 +70,23 @@ _BASE: Final[dict[str, int]] = {
     VERDICT_PARTLY: 40,
     VERDICT_BACKGROUND: 10,
 }
-# Score thresholds deliberately preserve the ordering of verdict bands.
-_THRESHOLDS: Final[tuple[int, ...]] = (25, 55, 70, 85)
 
 
 @dataclass(frozen=True, slots=True)
 class SuitabilityRating:
-    """A heuristic score and an ordinal number of stars.
+    """A heuristic score and a half-star suitability rating.
 
     Attributes
     ----------
     score: int
         Uncalibrated 0-100 suitability indicator, not a probability.
-    stars: int
-        Ordinal rating from one to five.
+    stars: float
+        Rating from 0.5 to 5 in half-star increments.
 
     """
 
     score: int
-    stars: int
+    stars: float
 
 
 def citation_suitability(
@@ -135,7 +133,8 @@ def citation_suitability(
             VERDICT_BACKGROUND: 24,
         }
         score = min(score, limits[support.verdict])
-    stars = 1 + sum(score >= threshold for threshold in _THRESHOLDS)
+    # Ten score points correspond to one half-star; 90-100 earns five.
+    stars = min(5.0, (score // 10 + 1) / 2)
     return SuitabilityRating(score=score, stars=stars)
 
 
@@ -181,7 +180,9 @@ def suitability_stars(rating: SuitabilityRating | None) -> str:
 
     if rating is None:
         return "☆☆☆☆☆ (unrated)"
-    stars = "★" * rating.stars + "☆" * (5 - rating.stars)
+    full = int(rating.stars)
+    half = int(rating.stars % 1 == 0.5)
+    stars = "★" * full + "½" * half + "☆" * (5 - full - half)
     return f"{stars} ({rating.score}/100)"
 
 

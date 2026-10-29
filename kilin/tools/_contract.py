@@ -203,11 +203,13 @@ class ToolContext:
     ask_router: Callable[[str, str, int], str]
         Asks the router model ``(system, prompt, max_new_tokens)`` with
         thinking off and greedy decoding; the conversation is untouched.
-    ask_model: Callable[[str, str, int], str]
-        Same for the answering model of the selected effort level.
+    ask_model: Callable[[str, str, int | None], str]
+        Asks the selected answering model with inherited session thinking
+        and temperature. A ``None`` token argument inherits the session's
+        maximum; an explicit limit is capped by that maximum.
     write: Callable[[str, str, int], str]
-        Like ``ask_model``, but the reply streams to the user as the
-        answer; a tool that uses it returns ``streamed=True``.
+        Same generation policy as ``ask_model``, but streams to the user
+        as the answer; a tool using it returns ``streamed=True``.
     model_id: str
         The answering model's ID, for plans and summaries.
     progress: Callable[..., None]
@@ -242,7 +244,7 @@ class ToolContext:
     unsearchable: Callable[[list[Path]], list[Path]]
     source_files: Callable[[], dict[Path, int]]
     ask_router: Callable[[str, str, int], str]
-    ask_model: Callable[[str, str, int], str]
+    ask_model: Callable[[str, str, int | None], str]
     write: Callable[[str, str, int], str]
     model_id: str
     progress: Callable[..., None]

@@ -48,10 +48,10 @@ For "check the references of the Smith paper", the tool:
    reference is called contradicted only with a confirmed quote, otherwise
    not supported. The plan is traced, and the user can choose all
    claims, the first few, or none when confirmation is requested.
-6. Rates eligible verdicts with the same ordinal citation-suitability
-   rubric as `suggest_reference`: 1–5 stars beside supported, partly
-   supported or background verdicts, followed by the numerical score
-   in parentheses, such as `★★★★★ (88/100)`. The score is the same
+6. Rates eligible verdicts with the shared half-star citation-suitability
+   rubric: 0–9 gives `½☆☆☆☆`, 10–19 `★☆☆☆☆`, and each additional ten
+   points adds a half-star, with 90–100 giving `★★★★★`. The score is
+   shown in parentheses, for example `★★★★½ (88/100)`. The score is the same
    value already stored in structured results and traces, not a new
    calculation. Unsupported, contradicted, unclear,
    failed, no-text and no-matching-passage results show unfilled stars
@@ -61,7 +61,9 @@ For "check the references of the Smith paper", the tool:
    report shows the preceding and following context and exact retrieval
    query strings for each checked claim; trace records the context,
    selected passage identifiers and location, quote passage identifier,
-   and the rating. No extra model calls or network operations are used.
+   evidence status, bibliography match status, exact quote line range
+   when identifiable, and the rating. No extra model calls or network
+   operations are used.
 7. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
    chat with the counts, the found, probable and missing references, the
@@ -98,6 +100,23 @@ Links are rendered as clickable HTTPS links in the KíLín chat GUI. The
 system browser opens only when the user clicks one; generating a link
 never opens a website. No PDFs are downloaded or added to sources.
 
+
+For **probable** bibliography matches, verification results are explicitly
+provisional until the identity of the cited file has been checked. Quotations
+are labeled `exact`, `approximate`, `missing`, or `rejected` (and error states
+are retained), so an unquoted model verdict is not presented as verified
+source evidence. Quote validation rejects altered numbers, negations and
+common changes of direction, while accepting harmless PDF extraction
+artifacts. When the quote occurs verbatim, the reported source location is
+narrowed from the chunk to the matching line(s). Repeated claim queries use
+request-local ranking memoization, without changing the retrieved results.
+
+The **answering model** used for internal verification inherits the main
+interface's thinking, temperature and maximum output tokens. By default,
+`ANSWER_TOKENS` is `null` and imposes no extra tool-specific cap. An
+explicit non-null override can reduce the output budget. The router is
+unchanged and remains nonthinking and deterministic.
+
 Limits: author-year citations ("Smith et al., 2020") are not recognised;
 superscripts are recognised only in PDFs; an unusual layout can still split
 or join reference entries. A claim is judged from a few passages of the
@@ -124,8 +143,11 @@ are internal thresholds. All values are read and validated on import.
 - `PASSAGE_TOKENS` (default `5000`): Most estimated tokens of those
   passages (an indexed passage is often 700-1000); the best-ranked one is
   always read. Allowed range: 300–16000.
-- `ANSWER_TOKENS` (default `250`): Longest verdict answer, in tokens.
-  Allowed range: 100–1000.
+- `ANSWER_TOKENS` (default `null`): Optional per-call output-token cap.
+  With `null`, the answering model inherits the main interface's maximum
+  output tokens (or its available context if no maximum was configured).
+  An explicit override accepts 100–131072 and is capped by any session
+  maximum.
 - `MAX_MODEL_CALLS` (default `100`): Most claims checked; later ones are
   reported as not checked. Allowed range: 1–1000.
 - `QUICK_CLAIMS` (default `5`): Claims checked by the quick version, in

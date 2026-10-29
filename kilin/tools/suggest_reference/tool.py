@@ -6,17 +6,16 @@ is about one statement and the project's papers. The tool:
 1. Takes the statement from the question (``statement_of``): quoted text,
    the text after a colon, or what the router model copies out of the
    question, checked to be the user's own words.
-2. Ranks every passage of the project for the statement, and keeps the
-   few papers with the best-ranked passages (``candidate_files``). A file
-   that contains the statement word for word (the user's draft, or the
-   paper it was copied from) is not judged, and the answer names it.
+2. Ranks project passages and keeps the papers with the best-ranked
+   passages (``candidate_files``). Only a document explicitly identified
+   as a draft is excluded; verbatim similarity does not prove identity.
 3. Judges each paper with the answering model (``_shared.claims``): its
    passages most related to the statement, a verdict, the passage sentence
    it rests on (checked to be in the passages), and a critical comment.
    The plan is shown first when it is large.
-4. Rates suggested papers by verdict, confirmed quotation, and
-   textual overlap. Shows one-to-five-star citation suitability beside
-   each recommended paper, then lists the non-suggestions without stars.
+4. Rates direct or partial support using the shared half-star rubric.
+   Contextual background papers are shown separately, not as evidence
+   directly establishing a claim.
 
 Only the project's files are searched: a paper that is not in the folder
 cannot be suggested, and the answer says so when none supports the
@@ -36,9 +35,9 @@ Key Features
     The model is told that a paper repeating a claim with a citation is
     not its source, and to say so.
 
-- **The user's draft left out**
+- **No false draft identification**
 
-    A file containing the statement word for word is named, not judged.
+    A paper containing the exact statement can still be verified.
 
 Module Structure
 ----------------
@@ -113,6 +112,7 @@ from kilin.tools._shared.claims import (
     Support,
     claim_passages,
     judge_support,
+    quote_line_range,
     verdict_label,
 )
 from kilin.tools._shared.planning import (
@@ -146,7 +146,8 @@ _SUGGESTED: Final[tuple[str, ...]] = (
 _ORDER: Final[dict[str, int]] = {
     verdict: index
     for index, verdict in enumerate((
-        *_SUGGESTED, VERDICT_CONTRADICTED, VERDICT_NOT_SUPPORTED,
+        *_SUGGESTED, VERDICT_BACKGROUND, VERDICT_CONTRADICTED,
+        VERDICT_NOT_SUPPORTED,
         VERDICT_NOT_FOUND, VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
     ))
 }
@@ -154,8 +155,6 @@ _ORDER: Final[dict[str, int]] = {
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"[\"“«]([^\"”»]+)[\"”»]")
 # A word, for comparing the statement with texts.
 _WORD: Final[re.Pattern[str]] = re.compile(r"[^\W_]+")
-# A word hyphenated across lines in extracted text ("perfor- mance").
-_HYPHENATED: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])-\s+(?=[a-z])")
 # A bracketed number, which the chat would read as a link to evidence.
 _BRACKETED: Final[re.Pattern[str]] = re.compile(
     r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
@@ -174,8 +173,9 @@ class SuggestReferenceSettings:
         Most passages of each paper read (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int
-        Longest verdict answer, in tokens (100-1000).
+    answer_tokens: int | None
+        Maximum verdict output tokens (100-131072), or ``None`` to
+        inherit the main interface's generation limit.
     quick_files: int
         Papers judged by the quick version (1-20).
     confirmation: ConfirmationPolicy
@@ -189,7 +189,7 @@ class SuggestReferenceSettings:
     files: int = _config.DEFAULT_FILES
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
+    answer_tokens: int | None = _config.DEFAULT_ANSWER_TOKENS
     quick_files: int = _config.DEFAULT_QUICK_FILES
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -233,8 +233,11 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
             where, data, "passage_tokens", defaults.passage_tokens, 300,
             16000,
         ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 1000
+        answer_tokens=(
+            None if data.get("answer_tokens") is None else check_int(
+                where, data, "answer_tokens", defaults.answer_tokens,
+                100, 131072,
+            )
         ),
         quick_files=check_int(
             where, data, "quick_files", defaults.quick_files, 1, 20
@@ -315,6 +318,7 @@ def candidate_files(
     by_file: dict[Path, list[Chunk]],
     rank: Callable[[str], list],
     count: int,
+    excluded: Sequence[Path] = (),
 ) -> tuple[list[Path], list[Path]]:
     """Return the papers most related to a statement.
 
@@ -329,23 +333,18 @@ def candidate_files(
         ``chunk``.
     count: int
         Most papers.
+    excluded: Sequence[pathlib.Path], optional
+        Explicitly identified draft paths to leave out. A verbatim
+        sentence match is not a reliable draft-identity check.
 
     Returns
     -------
     tuple[list[pathlib.Path], list[pathlib.Path]]
-        The papers in order of their best-ranked passage, and the files
-        left out because they contain the statement itself.
+        Ranked papers and explicitly excluded document paths.
 
     """
 
-    wanted = " ".join(_words(statement))
-    holding = [
-        path for path, chunks in by_file.items()
-        if wanted and wanted in " ".join(
-            word for chunk in chunks
-            for word in _words(_HYPHENATED.sub("", chunk.text))
-        )
-    ]
+    holding = [path for path in excluded if path in by_file]
     picked: list[Path] = []
     for result in rank(statement):
         path = result.chunk.path
@@ -389,7 +388,11 @@ def chat_answer(
         ),
     )
     suggested = [s for s in ordered if s.verdict in _SUGGESTED]
-    others = [s for s in ordered if s.verdict not in _SUGGESTED]
+    background = [s for s in ordered if s.verdict == VERDICT_BACKGROUND]
+    others = [
+        s for s in ordered
+        if s.verdict not in _SUGGESTED and s.verdict != VERDICT_BACKGROUND
+    ]
     lines = [f"**Statement:** “{_escape(statement)}”", ""]
     evidence: list[Chunk] = []
 
@@ -413,6 +416,13 @@ def chat_answer(
                     f"   *It says:* “{_escape(support.quote)}” "
                     f"[{len(evidence)}]"
                 )
+            if support.evidence_status in ("missing", "rejected"):
+                lines.append(
+                    "   *Provisional: no independently verified quotation "
+                    f"(evidence {support.evidence_status}).*"
+                )
+            elif support.evidence_status == "approximate":
+                lines.append("   *Evidence: approximate quotation match.*")
             if support.comment:
                 lines.append(f"   {_escape(support.comment)}")
         lines += [
@@ -424,11 +434,33 @@ def chat_answer(
         ]
     else:
         lines.append(
-            f"None of the {len(ordered)} papers most related to it in the "
-            "project supports it. Only the project's files are searched: "
-            "add the paper you have in mind to the folder to check it."
+            "No direct or partial support was established among the "
+            f"{len(ordered)} papers checked. This does not establish "
+            "that none supports the statement. Only the project's files "
+            "are searched: add the paper you have in mind to the folder "
+            "to check it."
         )
 
+    if background:
+        listed = ", ".join(
+            f"`{s.cited.as_posix()}` ({suitability_stars(ratings[s.cited])})"
+            for s in background
+        )
+        lines += [
+            "", "**Contextual or methodological references, not direct "
+            f"claim support:** {listed}.",
+        ]
+    inconclusive = sum(
+        s.verdict in (VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
+                      VERDICT_NOT_FOUND)
+        for s in ordered
+    )
+    if inconclusive:
+        label = "assessment was" if inconclusive == 1 else "assessments were"
+        lines += [
+            "", f"*{inconclusive} {label} inconclusive "
+            "(unclear, failed, no text, or no matching passage).*",
+        ]
     if others:
         listed = ", ".join(
             f"`{s.cited.as_posix()}` ({verdict_label(s.verdict)})"
@@ -544,6 +576,14 @@ def run(
                 "paper": path.as_posix(),
                 "verdict": support.verdict,
                 "quote_found": support.quote_chunk is not None,
+                "evidence_status": support.evidence_status,
+                "quote_passage_id": (
+                    support.quote_chunk.identifier
+                    if support.quote_chunk is not None else None
+                ),
+                "quote_lines": quote_line_range(
+                    support.quote, support.quote_chunk,
+                ),
                 "suitability_stars": rating.stars if rating else None,
                 "suitability_score": rating.score if rating else None,
             },
@@ -559,14 +599,21 @@ def run(
     if holding:
         left_out = ", ".join(f"`{path.as_posix()}`" for path in holding)
         notes.append(
-            f"Not checked, as they contain the statement word for word "
-            f"(your draft, or the paper it comes from): {left_out}."
+            f"Explicitly excluded draft document(s): {left_out}."
         )
     answer, quoted = chat_answer(statement, supports, " ".join(notes))
     verdicts = Counter(support.verdict for support in supports)
     summary.update(
         {
             "papers_checked": len(supports),
+            "background": verdicts[VERDICT_BACKGROUND],
+            "inconclusive": sum(verdicts[v] for v in (
+                VERDICT_UNCLEAR, VERDICT_FAILED, VERDICT_NO_TEXT,
+                VERDICT_NOT_FOUND,
+            )),
+            "evidence_statuses": dict(Counter(
+                support.evidence_status for support in supports
+            )),
             "suggested": sum(verdicts[v] for v in _SUGGESTED),
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
             "suitability": {
@@ -613,7 +660,9 @@ def _paper_seconds(settings: SuggestReferenceSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    reply = settings.answer_tokens * _config.REPLY_SHARE
+    # The estimate uses a historical 250-token proxy when the actual
+    # output budget is inherited from the main session; it is not a cap.
+    reply = (settings.answer_tokens or 250) * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND

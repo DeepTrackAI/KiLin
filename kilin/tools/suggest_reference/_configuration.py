@@ -99,8 +99,10 @@ DEFAULT_PASSAGES: Final[int] = require_int(
 DEFAULT_PASSAGE_TOKENS: Final[int] = require_int(
     _SETTINGS, "PASSAGE_TOKENS", _WHERE, 300, 16000
 )
-DEFAULT_ANSWER_TOKENS: Final[int] = require_int(
-    _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 1000
+DEFAULT_ANSWER_TOKENS: Final[int | None] = (
+    None if _SETTINGS["ANSWER_TOKENS"] is None else require_int(
+        _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 131072
+    )
 )
 DEFAULT_QUICK_FILES: Final[int] = require_int(
     _SETTINGS, "QUICK_FILES", _WHERE, 1, 20
