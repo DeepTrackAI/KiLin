@@ -569,6 +569,11 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-body pre code { padding: 0; background: transparent; }
 .answer-body blockquote { margin: 0 0 0.75em; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
 .answer-body hr { margin: 1em 0; border: 0; border-top: 1px solid var(--line); }
+.answer-table { margin: 0 0 0.75em; overflow-x: auto; }
+.answer-body table { border-collapse: collapse; font-size: 0.94em; line-height: 1.45; }
+/* Cells break only between words; a table too wide scrolls sideways. */
+.answer-body th, .answer-body td { padding: 6px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; white-space: normal; overflow-wrap: break-word; }
+.answer-body th { background: var(--surface-soft); font-weight: 650; }
 /* One effort name, centred above both sliders. */
 .effort-title { display: block; margin: 0 0 8px; color: var(--text); font-size: 15px; font-weight: 600; text-align: center; }
 .effort-heading { display: flex; justify-content: space-between; align-items: baseline; }

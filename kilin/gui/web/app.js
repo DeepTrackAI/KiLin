@@ -2759,6 +2759,38 @@ const MARKDOWN_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
+// The line under a table's header: dashes per column, colons for alignment.
+const MARKDOWN_TABLE_DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Split one Markdown table row into its cell texts.
+ *
+ * Outer pipes are optional; an escaped pipe (\|) stays inside its cell.
+ *
+ * @param line Table row source line.
+ * @returns Trimmed cell texts, left to right.
+ */
+function markdownTableCells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  return row.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+/**
+ * Detect a Markdown table: a header row, then a divider row with the same
+ * number of columns.
+ *
+ * @param lines All source lines.
+ * @param index Index of the candidate header row.
+ * @returns Whether a table starts at this line.
+ */
+function isMarkdownTableStart(lines, index) {
+  const header = lines[index];
+  const divider = lines[index + 1];
+  if (!header?.includes("|") || !divider?.includes("|") || !MARKDOWN_TABLE_DIVIDER.test(divider)) return false;
+  return markdownTableCells(header).length === markdownTableCells(divider).length;
+}
 
 /**
  * Detect Markdown lines that begin a block-level structure.
@@ -2775,8 +2807,8 @@ function isMarkdownBlockStart(line) {
  * Render model text as Markdown using DOM nodes only, never HTML parsing.
  *
  * Supports headings, paragraphs, bullet and numbered lists, block quotes,
- * fenced code, rules, and inline bold, italics, and code. Plain text simply
- * becomes paragraphs.
+ * fenced code, rules, tables, and inline bold, italics, and code. Plain
+ * text simply becomes paragraphs.
  *
  * @param host Element that receives the blocks.
  * @param text Model output without thinking text.
@@ -2799,6 +2831,40 @@ function renderMarkdown(host, text, linkCitation = null) {
       element.textContent = code.join("\n");
       pre.append(element);
       host.append(pre);
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const header = markdownTableCells(line);
+      // Alignment per column comes from the colons in the divider row.
+      const align = markdownTableCells(lines[index + 1]).map((cell) => (
+        cell.startsWith(":") && cell.endsWith(":") ? "center"
+          : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : ""));
+      index += 2;
+      const table = document.createElement("table");
+      const row = (cells, tag) => {
+        const element = document.createElement("tr");
+        header.forEach((_, column) => {
+          // Short rows get empty cells; extra cells are dropped.
+          const cell = document.createElement(tag);
+          if (align[column]) cell.style.textAlign = align[column];
+          appendInlineMarkdown(cell, cells[column] || "", linkCitation);
+          element.append(cell);
+        });
+        return element;
+      };
+      const head = document.createElement("thead");
+      head.append(row(header, "th"));
+      const body = document.createElement("tbody");
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")
+        && !isMarkdownBlockStart(lines[index])) {
+        body.append(row(markdownTableCells(lines[index++]), "td"));
+      }
+      table.append(head, body);
+      // A wide table scrolls sideways instead of widening the chat.
+      const frame = document.createElement("div");
+      frame.className = "answer-table";
+      frame.append(table);
+      host.append(frame);
       continue;
     }
     const heading = line.match(MARKDOWN_HEADING);
@@ -2845,7 +2911,8 @@ function renderMarkdown(host, text, linkCitation = null) {
       continue;
     }
     const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])
+      && !isMarkdownTableStart(lines, index)) {
       paragraph.push(lines[index++]);
     }
     const element = document.createElement("p");
