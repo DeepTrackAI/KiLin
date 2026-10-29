@@ -116,6 +116,7 @@ from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
     PLAN_CHOICE_CANCEL,
     PLAN_CHOICE_QUICK,
+    CONFIRMATION_ALWAYS,
     ConfirmationPolicy,
     ToolPlan,
     confirm_plan,
@@ -127,6 +128,13 @@ from kilin.tools._shared.references import (
 )
 from kilin.tools._shared.sentences import Sentence, split_sentences
 from kilin.tools.reference_check import _configuration as _config
+from kilin.tools.reference_check._resolution import (
+    LookupPermission,
+    ReferenceLink,
+    offline_link,
+    linkable_entry,
+    resolve_links,
+)
 from kilin.tools.reference_check._citations import (
     STYLE_BRACKETS,
     STYLE_NONE,
@@ -208,6 +216,13 @@ _UNMARKED: Final[re.Pattern[str]] = re.compile(r"\s?\[[\d,–\- ]+\]")
 _NUMBERED: Final[re.Pattern[str]] = re.compile(
     r"\[(\d{1,3}(?:\s*[,–-]\s*\d{1,3})*)\]"
 )
+# A request for bibliographic links must not run the expensive claim audit.
+_LINK_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:links?|urls?|dois?|online|web)\b",
+    flags=re.I,
+)
+# A link-search request only consults the missing bibliography entries.
+_QUICK_LOOKUPS: Final[int] = 5
 # A word broken across lines by extraction ("eConnec- tome").
 _BROKEN_WORD: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])- (?=[a-z])")
 
@@ -238,6 +253,12 @@ class ReferenceCheckSettings:
     large_batches: int
         With ``when_large``, plans with more claims than this ask first
         (0-1000).
+    online_lookup: bool
+        Offer online reference resolution even without a link request.
+        Never grants network permission by itself.
+    max_online: int
+        Most missing entries offered for resolution in one operation
+        (1-1000).
 
     """
 
@@ -250,6 +271,8 @@ class ReferenceCheckSettings:
     quick_claims: int = _config.DEFAULT_QUICK_CLAIMS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    online_lookup: bool = _config.DEFAULT_ONLINE_LOOKUP
+    max_online: int = _config.DEFAULT_MAX_ONLINE
 
 
 @dataclass(frozen=True, slots=True)
@@ -276,6 +299,11 @@ class ReferenceReport:
         The checked claims, in reading order.
     verification: str
         Why claims were not checked, or not all of them; empty otherwise.
+    links: dict[int, ReferenceLink]
+        Preferred offline or resolved links for missing entries and short
+        entries with usable journal coordinates or a DOI.
+    lookup_note: str
+        Whether optional online resolution was authorized or declined.
 
     """
 
@@ -287,6 +315,8 @@ class ReferenceReport:
     before: dict[Sentence, str] = field(default_factory=dict)
     verdicts: tuple[Verdict, ...] = ()
     verification: str = ""
+    links: dict[int, ReferenceLink] = field(default_factory=dict)
+    lookup_note: str = ""
 
     def count(self, status: str) -> int:
         """Return how many entries have a match status.
@@ -334,7 +364,8 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         (
             "max_listed", "verify", "passages", "passage_tokens",
             "answer_tokens", "max_model_calls", "quick_claims",
-            "confirmation", "large_batches",
+            "confirmation", "large_batches", "online_lookup",
+            "max_online",
         ),
     )
     defaults = ReferenceCheckSettings()
@@ -364,6 +395,12 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        online_lookup=check_bool(
+            where, data, "online_lookup", defaults.online_lookup
+        ),
+        max_online=check_int(
+            where, data, "max_online", defaults.max_online, 1, 1000
         ),
     )
 
@@ -400,7 +437,10 @@ def check_references(
     """
 
     entries = tuple(
-        numbered_reference_entries(passages, _config.REFERENCE_LAYOUT, file)
+        numbered_reference_entries(
+            passages, _config.REFERENCE_LAYOUT, file,
+            accept_short=linkable_entry,
+        )
     )
     matches = settle_duplicates(
         [
@@ -439,6 +479,14 @@ def check_references(
         if sentence in markers
     }
 
+    links = {
+        entry.number: offline_link(entry.number, entry.text)
+        for entry, match in zip(entries, matches)
+        if match.status == MATCH_MISSING or (
+            match.status == MATCH_UNREADABLE
+            and linkable_entry(entry.text)
+        )
+    }
     return ReferenceReport(
         paper=paper,
         entries=entries,
@@ -446,6 +494,7 @@ def check_references(
         scan=scan,
         cited_by={number: tuple(found) for number, found in cited_by.items()},
         before=before,
+        links=links,
     )
 
 
@@ -526,12 +575,14 @@ def report_markdown(report: ReferenceReport) -> str:
         (MATCH_FOUND, "In the project"),
         (MATCH_PROBABLE, "Probably in the project"),
         (MATCH_MISSING, "Missing from the project"),
-        (MATCH_UNREADABLE, "Entries too short to identify"),
+        (MATCH_UNREADABLE, "Entries too short for reliable matching"),
     ):
         listed = _listed(report, status, None)
         if listed:
             lines += [f"## {heading}", "", *listed, ""]
 
+    if report.lookup_note:
+        lines += [f"*{report.lookup_note}*", ""]
     problems = _problems(report)
     if problems:
         lines += ["## Citation problems", "", *problems, ""]
@@ -550,6 +601,9 @@ def report_markdown(report: ReferenceReport) -> str:
     for entry, match in zip(report.entries, report.matches):
         number = "" if entry.printed else " (number inferred)"
         lines += [f"### {entry.number}.{number} {_escape(entry.text)}", ""]
+        link = report.links.get(entry.number)
+        if link is not None:
+            lines.append(f"**Link:** {_link_markdown(link)}")
         if match.path is not None:
             lines.append(
                 f"**File:** `{match.path.as_posix()}` ({match.status}: "
@@ -612,6 +666,7 @@ def chat_answer(
         (MATCH_FOUND, "In the project"),
         (MATCH_PROBABLE, "Probably in the project, please check"),
         (MATCH_MISSING, "Missing from the project"),
+        (MATCH_UNREADABLE, "Too short for local matching; search possible"),
     ):
         listed = _listed(report, status, max_listed)
         if listed:
@@ -638,6 +693,8 @@ def chat_answer(
             claims = "claim" if hidden == 1 else "claims"
             lines += ["", f"*… and {hidden} more {claims} in the report.*"]
 
+    if report.lookup_note:
+        lines += ["", f"*{report.lookup_note}*"]
     if saved is not None:
         lines += [
             "",
@@ -706,7 +763,10 @@ def run(
     report = check_references(
         path, by_file.get(path, []), _source_file(path, context), others
     )
-    if settings.verify:
+    link_request = bool(_LINK_REQUEST.search(request.question))
+    if settings.online_lookup or link_request:
+        report = _lookup(report, settings, context)
+    if settings.verify and not link_request:
         report = _verify(report, by_file, settings, context)
 
     saved = (
@@ -735,6 +795,15 @@ def run(
             "claims_checked": len(report.verdicts),
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
             "verification": report.verification,
+            "links": {
+                str(number): {
+                    "url": link.url, "kind": link.kind,
+                    "doi": link.doi, "pdf_url": link.pdf_url,
+                    "license": link.license, "version": link.version,
+                }
+                for number, link in report.links.items()
+            },
+            "lookup_note": report.lookup_note,
             "report": saved.as_posix() if saved else None,
         }
     )
@@ -762,6 +831,123 @@ def run(
         for number, chunk in enumerate(quoted, start=1)
     )
     return ToolResult(answer, evidence, summary)
+
+
+
+def _lookup(
+    report: ReferenceReport,
+    settings: ReferenceCheckSettings,
+    context: ToolContext,
+) -> ReferenceReport:
+    """Offer online lookup for missing entries, never silently granting it.
+
+    Parameters
+    ----------
+    report: ReferenceReport
+        Local reference check, including offline links.
+    settings: ReferenceCheckSettings
+        Limits for a single optional lookup operation.
+    context: ToolContext
+        Provides the interactive approval callback and tracing.
+
+    Returns
+    -------
+    ReferenceReport
+        With resolved links when approved, otherwise offline links.
+
+    """
+
+    missing = [
+        entry for entry in report.entries
+        if entry.number in report.links
+    ][:settings.max_online]
+    if not missing:
+        return report
+    if context.confirm is None:
+        return replace(
+            report, lookup_note=(
+                "Online lookup was not performed: explicit interactive "
+                "approval was unavailable. Search links work offline."
+            ),
+        )
+
+    quick = min(_QUICK_LOOKUPS, len(missing))
+    plan = ToolPlan(
+        tool="reference_check",
+        summary=(
+            f"Look up {len(missing)} locally unavailable references "
+            "online? "
+            "This sends their bibliography entries to Crossref and "
+            "their verified DOIs to OpenAlex. No PDFs are downloaded."
+        ),
+        scope=(
+            "Only locally unavailable references of " + report.paper.name +
+            "; services: api.crossref.org and api.openalex.org. "
+            "Approval applies to this operation only."
+        ),
+        items=len(missing), batches=len(missing),
+        batches_to_run=len(missing), estimated_seconds=0,
+        quick_items=quick, quick_seconds=0,
+        quick_label=f"Look up first {quick}",
+        operation="network",
+    )
+    choice, asked = confirm_plan(
+        plan, CONFIRMATION_ALWAYS, 0, context
+    )
+    if not asked or choice == PLAN_CHOICE_CANCEL:
+        return replace(
+            report, lookup_note="Online lookup declined; offline links shown."
+        )
+    chosen = missing[:quick] if choice == PLAN_CHOICE_QUICK else missing
+    records = {entry.number: entry.text for entry in chosen}
+    permission = LookupPermission(tuple(records))
+    context.progress(f"Resolving {len(records)} references online")
+    resolved = resolve_links(records, permission)
+    context.trace.emit(
+        "tool.reference_check.lookup",
+        component="tool",
+        data={
+            "approved": True, "services": list(permission.services),
+            "references": len(records),
+            "verified": sum(
+                link.kind == "verified_doi" for link in resolved.values()
+            ),
+        },
+        turn_id=context.trace_turn_id,
+    )
+    note = (
+        f"Online lookup approved for {len(records)} references; "
+        "links are not proof of download permission."
+    )
+    remaining = len(report.links) - len(chosen)
+    if remaining:
+        note += f" {remaining} references retain offline links."
+    return replace(
+        report, links={**report.links, **resolved}, lookup_note=note
+    )
+
+
+def _link_markdown(link: ReferenceLink) -> str:
+    """Show the preferred publication or search link without ambiguity.
+
+    Parameters
+    ----------
+    link: ReferenceLink
+        Publication or search location for a reference.
+
+    Returns
+    -------
+    str
+        Markdown link with a label identifying its confidence.
+
+    """
+
+    label = {
+        "search": "Search Google Scholar",
+        "printed_doi": "DOI (as printed; unverified)",
+        "verified_doi": "Crossref-matched publication",
+    }.get(link.kind, "Search publication")
+    return f"[{label}]({link.url})"
 
 
 def _verify(
@@ -970,7 +1156,10 @@ def _listed(
     items = [
         (entry, match)
         for entry, match in zip(report.entries, report.matches)
-        if match.status == status
+        if match.status == status and (
+            status != MATCH_UNREADABLE
+            or limit is None or entry.number in report.links
+        )
     ]
     shown = items if limit is None else items[:limit]
     lines = []
@@ -980,6 +1169,8 @@ def _listed(
             line += f" → `{match.path.as_posix()}`"
         elif status == MATCH_PROBABLE and match.path is not None:
             line += f" → `{match.path.as_posix()}` ({match.reason})"
+        if entry.number in report.links:
+            line += f" — {_link_markdown(report.links[entry.number])}"
         lines.append(line)
     if len(items) > len(shown):
         lines.append(f"- … and {len(items) - len(shown)} more")

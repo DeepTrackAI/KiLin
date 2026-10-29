@@ -46,7 +46,34 @@ For "check the references of the Smith paper", the tool:
    quoted passages as evidence. Citing sentences are shown with their
    markers as superscripts and the checked reference in bold; reference
    numbers are never written "[12]", which the chat would read as a link
-   to evidence.
+   to evidence. Missing references have offline Google Scholar searches:
+   by article title when recognizable, or by author, journal, year,
+   volume, and first page/article number for title-less references.
+   References with a printed DOI link directly to that identifier,
+   labeled as unverified. An explicitly numbered, very short reference
+   with a DOI or journal coordinates is retained by the extractor,
+   even when below its normal minimum word count. An entry classified
+   as too short for local matching still receives a search link when it
+   contains journal coordinates.
+   Links appear in the chat and beside every linkable entry in the report.
+7. When the user requests online links, or enables `ONLINE_LOOKUP`,
+   explicitly asks permission **before** any request to Crossref or
+   OpenAlex. Refusal or absence of a confirmation interface leaves the
+   existing offline links intact. An approved request sends only the
+   missing entries and verified identifiers, never the manuscript body.
+   A web-link request skips model-based claim checking. Lookup and
+   claim-verification permissions are distinct, and approval does not
+   authorize downloading PDFs. Search hits become verified DOI links
+   only after corroborating the author, year and article title, or for
+   title-less entries the journal, volume, first page/article number,
+   year, and author when printed. Short entries with these fields remain
+   eligible for optional lookup even if local file matching is uncertain.
+   Ambiguous coordinate-only matches are
+   not verified. Failed or uncertain lookups retain offline links.
+
+Links are rendered as clickable HTTPS links in the KíLín chat GUI. The
+system browser opens only when the user clicks one; generating a link
+never opens a website. No PDFs are downloaded or added to sources.
 
 Limits: author-year citations ("Smith et al., 2020") are not recognised;
 superscripts are recognised only in PDFs; an unusual layout can still split
@@ -84,6 +111,13 @@ are internal thresholds. All values are read and validated on import.
   claims. Allowed values: always, when_large, never.
 - `LARGE_BATCHES` (default `10`): With `when_large`, plans with more claims
   than this ask first. Allowed range: 0–1000.
+- `ONLINE_LOOKUP` (default `false`): Offer online lookup during an
+  ordinary reference check (without a link request). This is **not**
+  authorization: an actual confirmation callback and affirmative user
+  choice are required for each operation. Allowed values: true, false.
+- `MAX_ONLINE` (default `100`): Maximum number of missing entries offered
+  for one online lookup. Other missing references keep offline search
+  links. Allowed range: 1–1000.
 
 ### `REFERENCES`
 

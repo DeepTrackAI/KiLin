@@ -89,7 +89,7 @@ Examples
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -335,6 +335,8 @@ def numbered_reference_entries(
     passages: Sequence[Chunk],
     layout: ReferenceLayout,
     file: Path | None = None,
+    *,
+    accept_short: Callable[[str], bool] | None = None,
 ) -> list[ReferenceEntry]:
     """Split the paper's reference list into numbered entries.
 
@@ -347,6 +349,10 @@ def numbered_reference_entries(
     file: pathlib.Path | None, optional
         The paper on disk, for a PDF's column order (``reference_list``).
         Defaults to ``None``.
+    accept_short: Callable[[str], bool] | None, optional
+        Optional rule retaining an explicitly numbered short citation
+        that carries enough bibliographic information for the caller.
+        The default preserves the original minimum-word filtering.
 
     Returns
     -------
@@ -362,8 +368,10 @@ def numbered_reference_entries(
         that start without one. Page numbers, running heads and footers
         (short lines repeated ``layout.running_line_repeats`` or more times
         in the paper), and entries of fewer than ``layout.entry_min_words``
-        words are dropped; the list stops at a following heading such as
-        "Acknowledgements". An entry without a printed number takes the
+        words are dropped unless an explicitly numbered short entry
+        passes ``accept_short``. The list stops at a following heading
+        such as "Acknowledgements". An entry without a printed number
+        takes the
         number after the previous entry's (``printed`` is then False).
         Empty when the paper has no reference list.
 
@@ -430,7 +438,13 @@ def numbered_reference_entries(
             continue
         joined = re.sub(r"-\s+(?=[a-z])", "", " ".join(item[1]))
         joined = " ".join(joined.split())
-        if len(joined.split()) >= layout.entry_min_words:
+        if (
+            len(joined.split()) >= layout.entry_min_words
+            or (
+                item[0] is not None
+                and accept_short is not None and accept_short(joined)
+            )
+        ):
             kept.append((item[0], joined))
 
     numbers: dict[int, int] = {}

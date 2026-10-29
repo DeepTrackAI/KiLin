@@ -892,6 +892,30 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "close"})
 
+    @Slot(str)
+    def openExternalLink(self, url: str) -> None:
+        """Open an approved HTTPS link only after the user clicks it.
+
+        Parameters
+        ----------
+        url: str
+            HTTPS publication or bibliographic search URL from a report.
+
+        Notes
+        -----
+        No link is fetched by the embedded web view or by the backend.
+        Explicit clicks open the system browser, outside KíLín.
+
+        """
+
+        target = QUrl(url)
+        if (
+            target.isValid() and target.scheme() == "https"
+            and target.host() and not target.userName()
+            and not target.password()
+        ):
+            QDesktopServices.openUrl(target)
+
     @Slot()
     def stopOperation(self) -> None:
         """Terminate the active backend process immediately.

@@ -24,6 +24,7 @@ from kilin.tools import reference_check as tool
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_REFERENCE_CHECK, TOOL_REGISTRY
 from kilin.tools.reference_check import _configuration as config
+from kilin.tools.reference_check._resolution import offline_link
 from kilin.tools._shared.sentences import Sentence
 from kilin.tools.reference_check._citations import Citation
 from kilin.tools.reference_check.tool import _cited_for
@@ -127,7 +128,9 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.folder.cleanup()
 
     def _run(
-        self, chosen: object, choice: str = "continue", **settings: object
+        self, chosen: object, choice: str = "continue",
+        question: str = "check the references of paper.md",
+        interactive: bool = True, **settings: object
     ) -> tuple[object, SimpleNamespace]:
         def ask_model(system: str, prompt: str, tokens: int) -> str:
             # Reference [2] is quoted from its file; [3] is called
@@ -147,10 +150,9 @@ class TestReferenceCheckRun(unittest.TestCase):
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
         )
-        request = ToolRequest(
-            "check the references of paper.md",
-            "check the references of paper.md",
-        )
+        request = ToolRequest(question, question)
+        if not interactive:
+            context.confirm = None
         values = {"max_listed": 1, "confirmation": "always", **settings}
         with patch(
             "kilin.tools.reference_check.tool.choose_document",
@@ -219,6 +221,91 @@ class TestReferenceCheckRun(unittest.TestCase):
         )
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_titleless_missing_reference_links_in_report(self) -> None:
+        original = (
+            "Sporns, O. The human connectome: a structural description. "
+            "PLoS\nComput. Biol. 1, e42 (2005)."
+        )
+        replacement = (
+            "Smith J, Jones A, Brown B. Phys. Rev. Lett. "
+            "1998;80(2):1234-1237."
+        )
+        self.chunks[0] = chunk(
+            "p1", PAPER.replace(original, replacement), path="paper.md"
+        )
+        with patch(
+            "kilin.tools.reference_check._resolution._json_request"
+        ) as request:
+            result, context = self._run(
+                (Path("paper.md"), "named", False),
+                question="Get web links for missing references of paper.md",
+                interactive=False, verify=False, max_listed=20,
+            )
+        request.assert_not_called()
+        context.ask_model.assert_not_called()
+        self.assertEqual(result.summary["links"]["1"]["kind"], "search")
+        url = result.summary["links"]["1"]["url"]
+        self.assertIn("Smith%20Phys.%20Rev.%20Lett", url)
+        self.assertIn("1998%2080%201234", url)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(report.count(url), 2)
+        self.assertIn(url, result.answer)
+
+    def test_short_journal_citation_still_receives_links(self) -> None:
+        original = (
+            "Sporns, O. The human connectome: a structural description. "
+            "PLoS\nComput. Biol. 1, e42 (2005)."
+        )
+        self.chunks[0] = chunk(
+            "p1", PAPER.replace(
+                original, "Smith J. Phys Rev Lett 1998;80:1234."
+            ), path="paper.md",
+        )
+        with patch(
+            "kilin.tools.reference_check._resolution._json_request"
+        ) as request:
+            result, context = self._run(
+                (Path("paper.md"), "named", False),
+                question="Get links for missing references in paper.md",
+                interactive=False, verify=False, max_listed=20,
+            )
+        request.assert_not_called()
+        context.ask_model.assert_not_called()
+        self.assertEqual(result.summary["unreadable"], 1)
+        url = result.summary["links"]["1"]["url"]
+        self.assertIn("Smith%20Phys%20Rev%20Lett%201998%2080%201234", url)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(report.count(url), 2)
+        self.assertIn(url, result.answer)
+
+    def test_very_compact_numbered_citation_is_not_discarded(self) -> None:
+        original = (
+            "Sporns, O. The human connectome: a structural description. "
+            "PLoS\nComput. Biol. 1, e42 (2005)."
+        )
+        self.chunks[0] = chunk(
+            "p1", PAPER.replace(original, "Nature 2020;12:22."),
+            path="paper.md",
+        )
+        result, context = self._run(
+            (Path("paper.md"), "named", False), verify=False,
+            max_listed=20,
+        )
+        self.assertEqual(result.summary["references"], 5)
+        self.assertEqual(result.summary["unreadable"], 1)
+        url = result.summary["links"]["1"]["url"]
+        self.assertIn("Nature%202020%2012%2022", url)
+        self.assertIn(url, result.answer)
+        context.ask_model.assert_not_called()
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(report.count(url), 2)
 
     def test_written_only_citations_are_reported(self) -> None:
         paper = (
@@ -317,6 +404,80 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertEqual(result.answer, "Name the paper to check.")
         self.assertEqual(result.summary, {"name": "reference_check"})
         context.done.assert_called_once()
+
+    def test_missing_links_are_in_chat_and_report_without_network(
+        self,
+    ) -> None:
+        with patch(
+            "kilin.tools.reference_check._resolution._json_request"
+        ) as network:
+            result, context = self._run(
+                (Path("paper.md"), "named", False), verify=False,
+                max_listed=5,
+            )
+        network.assert_not_called()
+        context.confirm.assert_not_called()
+        self.assertEqual(len(result.summary["links"]), 3)
+        self.assertIn("[Search Google Scholar](https://", result.answer)
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
+        self.assertEqual(report.count("**Link:** [Search Google Scholar]"), 3)
+        self.assertIn("## Missing from the project", report)
+
+    def test_link_request_does_not_invoke_claim_verification(self) -> None:
+        question = "get web links for the missing references in paper.md"
+        with patch(
+            "kilin.tools.reference_check.tool.resolve_links",
+        ) as resolver:
+            resolver.side_effect = lambda entries, permission: {
+                number: offline_link(number, entry)
+                for number, entry in entries.items()
+            }
+            result, context = self._run(
+                (Path("paper.md"), "named", False), question=question,
+                choice="continue", max_listed=5,
+            )
+        context.confirm.assert_called_once()
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.operation, "network")
+        self.assertIn("Crossref", plan.summary)
+        self.assertEqual(len(resolver.call_args.args[0]), 3)
+        context.ask_model.assert_not_called()
+        self.assertEqual(result.summary["claims_checked"], 0)
+        self.assertIn("Online lookup approved", result.answer)
+
+    def test_denied_and_unavailable_approval_stay_offline(self) -> None:
+        question = "give me web links for missing references in paper.md"
+        for choice, interactive in (
+            ("cancel", True), ("continue", False), ("invalid", True)
+        ):
+            with self.subTest(choice=choice, interactive=interactive):
+                with patch(
+                    "kilin.tools.reference_check._resolution._json_request"
+                ) as network:
+                    result, context = self._run(
+                        (Path("paper.md"), "named", False),
+                        choice=choice, question=question,
+                        interactive=interactive,
+                    )
+                network.assert_not_called()
+                context.ask_model.assert_not_called()
+                self.assertTrue(result.summary["links"])
+                self.assertIn("Search Google Scholar", result.answer)
+                self.assertIn("Online lookup", result.answer)
+
+    def test_online_lookup_setting_still_asks_permission(self) -> None:
+        with patch(
+            "kilin.tools.reference_check._resolution._json_request"
+        ) as network:
+            result, context = self._run(
+                (Path("paper.md"), "named", False), choice="cancel",
+                online_lookup=True, verify=False,
+            )
+        network.assert_not_called()
+        self.assertEqual(context.confirm.call_count, 1)
+        self.assertIn("declined", result.summary["lookup_note"])
 
     def test_paper_without_reference_list(self) -> None:
         self.chunks[0] = chunk("p1", "Just text [1] here.\n", path="paper.md")

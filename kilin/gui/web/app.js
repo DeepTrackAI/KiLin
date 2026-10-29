@@ -2478,7 +2478,7 @@ function renderMarkdown(host, text, linkCitation = null) {
 
 // Inline code, bold, italics (not inside words such as snake_case), and
 // citation markers such as [1] or [2, 3].
-const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])/g;
+const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[[^\]\n]{1,100}\]\(https:\/\/[^\s)\n]+\))|(\[\d+(?:\s*,\s*\d+)*\])/g;
 
 /**
  * Render escaped inline Markdown and optionally link evidence citations.
@@ -2502,11 +2502,35 @@ function appendInlineMarkdown(element, text, linkCitation) {
       const node = document.createElement(match[2] ? "strong" : "em");
       appendInlineMarkdown(node, match[0].slice(match[2] ? 2 : 1, match[2] ? -2 : -1), linkCitation);
       element.append(node);
+    } else if (match[4]) {
+      element.append(before);
+      const parts = match[4].match(/^\[([^\]]+)\]\((https:\/\/[^)]+)\)$/);
+      let url = null;
+      try { url = parts ? new URL(parts[2]) : null; }
+      catch (_) { /* Invalid external links stay plain text. */ }
+      if (url && url.protocol === "https:" && url.hostname &&
+          !url.username && !url.password) {
+        // No href: WebEngine cannot speculatively fetch a link it only
+        // displays. A deliberate click delegates opening to the browser.
+        const link = document.createElement("button");
+        link.type = "button";
+        link.className = "external-link";
+        link.textContent = parts[1];
+        link.title = url.href;
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          bridge?.openExternalLink(url.href);
+        });
+        element.append(link);
+      } else {
+        element.append(match[4]);
+      }
     } else {
-      const link = linkCitation ? linkCitation(match[4]) : null;
+      const link = linkCitation ? linkCitation(match[5]) : null;
       // A linked citation sits right after its claim.
       if (link) before = before.replace(/[ \t]+$/, "");
-      element.append(before, link || match[4]);
+      element.append(before, link || match[5]);
     }
   }
   element.append(text.slice(last));
@@ -3131,13 +3155,17 @@ function showToolPlan(plan) {
   facts.className = "tool-plan-facts";
   facts.textContent = [plan.scope, ...(plan.details || [])].join(" · ");
   const duration = (seconds) => (seconds < 1 ? "instant" : `about ${formatDuration(seconds * 1000)}`);
-  const calls = plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
+  const network = plan.operation === "network";
+  const calls = network ? `${plan.batches_to_run} reference lookups`
+    : plan.batches_to_run === 1 ? "1 model call" : `${plan.batches_to_run} model calls`;
   const actions = document.createElement("div");
   actions.className = "tool-plan-actions";
   const choices = [
-    [PLAN_CHOICE_CONTINUE, "primary", "Read everything", `${calls} · ${duration(plan.estimated_seconds)}`],
+    [PLAN_CHOICE_CONTINUE, "primary", network ? "Authorize lookup" : "Read everything",
+      network ? calls : `${calls} · ${duration(plan.estimated_seconds)}`],
     [PLAN_CHOICE_QUICK, "secondary", plan.quick_label || "Quick sample",
-      `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
+      network ? `Authorize ${plan.quick_items} reference lookups`
+        : `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
   ];
   const choose = (choice) => {
     card.remove();
@@ -3161,7 +3189,7 @@ function showToolPlan(plan) {
   const cancel = document.createElement("button");
   cancel.type = "button";
   cancel.className = "tool-plan-cancel";
-  cancel.textContent = "Cancel";
+  cancel.textContent = network ? "Stay offline" : "Cancel";
   cancel.addEventListener("click", () => choose(PLAN_CHOICE_CANCEL));
   actions.append(cancel);
   card.append(summary, facts, actions);
@@ -3199,7 +3227,7 @@ function showToolChoice(choice) {
   const cancel = document.createElement("button");
   cancel.type = "button";
   cancel.className = "secondary tool-choice-cancel";
-  cancel.textContent = "Cancel";
+  cancel.textContent = network ? "Stay offline" : "Cancel";
   cancel.addEventListener("click", () => answer("cancel", ""));
   actions.append(cancel);
   card.append(question, actions);
