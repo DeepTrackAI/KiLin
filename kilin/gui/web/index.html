@@ -11,18 +11,29 @@
   <body>
     <div class="app-shell">
       <aside id="conversations-panel" class="conversations-panel hidden" aria-label="Conversations">
-        <button id="new-chat" type="button" class="new-chat-button">＋ New chat</button>
-        <p class="conversation-list-heading">Conversations</p>
-        <nav id="conversation-list" class="conversation-list" aria-label="Saved conversations"></nav>
-        <div class="conversation-panel-actions">
-          <button id="change-project" type="button" class="sidebar-toggle">New project</button>
-        </div>
+        <button id="home-logo" type="button" class="sidebar-logo" aria-label="Back to the start screen" title="Back to the start screen"><span class="sidebar-logo-mark" aria-hidden="true"></span></button>
+        <section class="sidebar-section" data-section="projects">
+          <div class="sidebar-section-head">
+            <button type="button" class="sidebar-section-toggle" aria-expanded="true" aria-controls="project-list">Projects<svg class="sidebar-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            <button id="sort-projects" type="button" class="sidebar-section-action" aria-label="Sort projects" title="Sort projects"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg></button>
+            <button id="new-project" type="button" class="sidebar-section-action" aria-label="New project" title="New project"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <nav id="project-list" class="project-list" aria-label="Saved projects"></nav>
+        </section>
+        <section class="sidebar-section" data-section="conversations">
+          <div class="sidebar-section-head">
+            <button type="button" class="sidebar-section-toggle" aria-expanded="true" aria-controls="conversation-list">Conversations<svg class="sidebar-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
+            <button id="sort-conversations" type="button" class="sidebar-section-action" aria-label="Sort conversations" title="Sort conversations"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="18" cy="12" r="1.3"/></svg></button>
+            <button id="new-chat" type="button" class="sidebar-section-action" aria-label="New chat" title="New chat"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+          </div>
+          <nav id="conversation-list" class="conversation-list" aria-label="Saved conversations"></nav>
+        </section>
       </aside>
       <main class="workspace">
       <header class="topbar">
         <button id="toggle-conversations" class="panel-toggle left-panel-toggle hidden" type="button" aria-label="Hide conversations" title="Hide conversations"><span></span></button>
-        <div id="topbar-project" class="topbar-project hidden" aria-live="polite">
-          <strong id="topbar-project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false"></strong>
+        <div id="topbar-chat" class="topbar-project hidden" aria-live="polite">
+          <strong id="topbar-chat-name"></strong>
           <span id="topbar-turn-count">0 turns</span>
         </div>
         <button id="open-models" class="sidebar-toggle" type="button">Settings</button>
@@ -53,12 +64,10 @@
         <div id="conversation-scroll" class="conversation-scroll">
           <div class="chat-heading">
             <div>
-              <p class="eyebrow">OPEN PROJECT</p>
-              <h1 id="project-name" contenteditable="true" role="textbox" aria-label="Project name" spellcheck="false">Project chat</h1>
-              <p id="project-detail" class="hint"></p>
+              <h1 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h1>
+              <p id="conversation-detail" class="hint"></p>
             </div>
           </div>
-          <h2 id="conversation-name" class="conversation-name" contenteditable="true" role="textbox" aria-label="Conversation name" spellcheck="false"></h2>
           <div id="conversation" class="conversation" aria-live="polite"></div>
         </div>
         <p class="ai-disclaimer">AI-generated answers can be wrong. Always verify them.</p>
@@ -227,6 +236,14 @@
       <div class="sync-actions">
         <button id="source-add-cancel" type="button" class="secondary">Cancel</button>
         <button id="source-add-confirm" type="button" class="primary">Add</button>
+      </div>
+    </dialog>
+    <dialog id="leave-project" class="sync-dialog" aria-labelledby="leave-project-title">
+      <h2 id="leave-project-title">Back to the start screen?</h2>
+      <p>KíLín will close this project. Its chats and sources are saved, so you can resume it from the start screen.</p>
+      <div class="sync-actions">
+        <button id="leave-project-cancel" type="button" class="secondary">Cancel</button>
+        <button id="leave-project-confirm" type="button" class="primary">Close project</button>
       </div>
     </dialog>
   </body>

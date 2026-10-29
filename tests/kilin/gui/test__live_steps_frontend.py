@@ -31,12 +31,12 @@ class TestLiveStepsFrontend(unittest.TestCase):
     """Follow the route of an answer while it is made."""
 
     def test_pending_answer_lists_steps_live(self):
-        """An open list from the start, refreshed by the ticker."""
+        """A folded list from the start, refreshed by the ticker."""
 
         source = _APP.read_text(encoding="utf-8")
         pending = _function(source, "addPendingTurn")
         self.assertIn('document.createElement("details")', pending)
-        self.assertIn("durationLine.open = true;", pending)
+        self.assertNotIn("durationLine.open = true;", pending)
         self.assertIn(
             "item.append(questionNode, durationLine, answer);", pending
         )
