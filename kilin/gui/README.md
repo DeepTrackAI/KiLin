@@ -250,6 +250,12 @@ write and register a new tool.
 
 ## Models and generation settings
 
+KíLín setup sits at the top of Settings. Below it, settings are grouped in
+tabs: **General** (Appearance), **Models** (effort levels with their search
+depth, embedding and intent models), **Answers** (temperature, answer length,
+thinking), and **Project** (workspace folder, backend, file types,
+chunking). Messages from Close show below the tabs, whichever tab is open.
+
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.

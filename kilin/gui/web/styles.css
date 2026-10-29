@@ -307,9 +307,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .source-line-number { padding: 0 6px 0 2px; color: #839189; text-align: right; user-select: none; }
 .source-line-text { padding-right: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace-panel .hint { overflow-wrap: anywhere; }
-.chat-setting { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--control); font-size: 12px; }
-.chat-setting input { width: 72px; padding: 5px; }
-.conversation-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding-top: 8px; }
+.chat-setting { display: grid; gap: 7px; }
+.conversation-fields { display: grid; gap: 16px; }
 button { min-height: 43px; padding: 0 16px; border-radius: 9px; font-weight: 650; cursor: pointer; }
 button:disabled { opacity: .62; cursor: default; }
 .primary { border: 0; color: white; background: var(--primary); }
@@ -413,9 +412,33 @@ button:disabled { opacity: .62; cursor: default; }
 .models-heading, .model-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .models-heading h2 { margin: 0; font-size: 22px; }
 .settings-section { margin: 22px 0; padding-top: 4px; border-top: 1px solid var(--line); }
+/* Settings tabs: one row of categories; only the chosen one's sections show. */
+/* Paper tabs: each tab is outlined on top and sides; the open one is the
+   page's colour and covers the line below it, so it joins the page. */
+.settings-tabs { display: flex; gap: 3px; margin: 16px 0 0; padding: 0 6px; border-bottom: 1px solid var(--line); }
+.settings-tab { position: relative; flex: 0 1 auto; min-width: 0; min-height: 32px; margin-bottom: -1px; padding: 6px 14px 5px; border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: var(--surface-soft); color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active { z-index: 1; padding-top: 8px; margin-top: -2px; border-bottom-color: var(--surface); background: var(--surface); color: var(--text); }
+.settings-section.tab-hidden { display: none; }
+/* One field style on every tab: the label above, a full-width box of the
+   Models rows' size, and the same gap before the next setting. */
+#models-panel .settings-section label:not(.check-row):not(.depth-step) { font-size: 13px; font-weight: 650; color: var(--text); }
+#models-panel input:not([type="checkbox"]), #models-panel select { width: 100%; min-height: 36px; padding: 6px 10px; font-size: 13px; }
+#models-panel select { padding-right: 34px; background-position: right 10px center; }
+#models-panel .folder-row button { min-height: 36px; font-size: 13px; }
+#models-panel .advanced-fields { gap: 7px; padding-top: 0; }
+#models-panel .advanced-fields > label:not(:first-child), #models-panel .settings-grid { margin-top: 9px; }
+#models-panel .check-row { font-size: 13px; }
+/* The three chunk sizes are one set, like the search depth steps. */
+#settings-project .settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* One height for every tab, so the card does not jump when switching. */
+#models-panel .models-card { height: min(84vh, 720px); }
+/* The tab row already draws the line above each tab's sections. */
+.settings-tabs ~ .settings-section:not(.readiness-card) { margin: 16px 0; padding-top: 0; border-top: 0; }
 .settings-section h3 { margin: 14px 0 0; font-size: 14px; }
 .settings-section h3 + select { margin-top: 10px; }
 .settings-section > select { width: 100%; margin-top: 8px; }
+.settings-section > label + select { margin-top: 7px; }
 .models-card .hint { margin: 10px 0; }
 .model-group { margin: 22px 0; }
 .model-group h3 { margin: 0; font-size: 14px; }

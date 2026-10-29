@@ -170,11 +170,17 @@
             <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
           </div>
         </details>
-        <section class="settings-section">
-          <h3>Appearance</h3>
-          <select id="appearance" aria-label="Appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+        <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+          <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="project">Project</button>
+        </div>
+        <section class="settings-section" data-settings-tab="general">
+          <label for="appearance">Appearance</label>
+          <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
         </section>
-        <section class="settings-section models-section">
+        <section class="settings-section models-section" data-settings-tab="models">
             <!-- Kept hidden: the rows below edit these values. -->
             <div class="hidden" aria-hidden="true">
               <label for="chat-model">Default language model</label>
@@ -187,19 +193,15 @@
 
         <p id="models-backend" class="hint hidden"></p>
         <div id="model-list"></div>
-        <p id="model-download-status" class="hint" role="status"></p>
-        <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
         </section>
-        <section id="settings-answers" class="settings-section">
-          <h3>Answers</h3>
+        <section id="settings-answers" class="settings-section" data-settings-tab="answers">
           <div class="conversation-fields">
             <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
             <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
             <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
           </div>
         </section>
-        <section id="settings-project" class="settings-section">
-          <h3>Project</h3>
+        <section id="settings-project" class="settings-section" data-settings-tab="project">
           <div class="advanced-fields">
             <label for="workspace-path">Workspace folder</label>
             <div class="folder-row"><input id="workspace-path" type="text" placeholder="Required without sources"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
@@ -210,6 +212,9 @@
             <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
           </div>
         </section>
+        <!-- Below the tabs, so messages from Close show on every tab. -->
+        <p id="model-download-status" class="hint" role="status"></p>
+        <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>
       </div>
     </section>
     <dialog id="source-sync" class="sync-dialog" aria-labelledby="source-sync-title">

@@ -57,6 +57,8 @@ const collapsedWorkspaceFolders = new Set();
 let workspacePaths = new Set();
 // The user's last show/hide choice for the side panels; null before any.
 let sidePanelChoice = null;
+// The Settings tab shown when Settings open; kept while KíLín runs.
+let settingsTab = "general";
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -1185,6 +1187,25 @@ function restoreDefaultModels(role) {
   }
   refreshModelStatus();
   renderModelsPanel();
+}
+
+/**
+ * Show one Settings tab and hide the sections of the others.
+ *
+ * @param name Tab name: general, models, answers, or project.
+ */
+function showSettingsTab(name) {
+  settingsTab = name;
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const selected = tab.dataset.tab === name;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    // Arrow keys move between tabs; Tab moves into the shown one.
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const section of document.querySelectorAll("#models-panel [data-settings-tab]")) {
+    section.classList.toggle("tab-hidden", section.dataset.settingsTab !== name);
+  }
 }
 
 /**
@@ -4316,6 +4337,20 @@ byId("send").addEventListener("click", (event) => {
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", closeModels);
+for (const tab of document.querySelectorAll(".settings-tab")) {
+  tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll(".settings-tab")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    showSettingsTab(tabs[next].dataset.tab);
+    tabs[next].focus();
+  });
+}
+showSettingsTab(settingsTab);
 byId("models-panel").addEventListener("click", (event) => {
   if (event.target === byId("models-panel")) closeModels();
 });
