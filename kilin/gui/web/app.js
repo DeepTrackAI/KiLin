@@ -1472,12 +1472,15 @@ function collectSettings() {
  * Tell whether the workspace tree shows a file.
  *
  * The core keeps a lock file next to each open conversation, so that only
- * one window writes it. The lock is not the user's file, so it is hidden.
+ * one window writes it, and macOS adds .DS_Store files to folders it shows
+ * in Finder. Neither is the user's file, so both are hidden.
  *
  * @param path Workspace-relative file path reported by the backend.
- * @returns False for a conversation lock under logs/, true otherwise.
+ * @returns False for a conversation lock under logs/ or a .DS_Store file,
+ *   true otherwise.
  */
 function shownInWorkspace(path) {
+  if (path.split("/").pop() === ".DS_Store") return false;
   return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
 }
 
