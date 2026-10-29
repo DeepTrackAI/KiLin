@@ -87,6 +87,9 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         )
         for text in ("RootOfAllLight", "CC BY-SA 4.0", "kilin-qilin-dark"):
             self.assertIn(text, credit)
+        # The credit is installed with the images.
+        project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('"icons/README.md",', project)
 
     def test_sections_have_fold_sort_and_new(self):
         """Logo, Projects, then Conversations, each with ⋯ and ＋."""
