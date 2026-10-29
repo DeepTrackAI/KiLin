@@ -50,7 +50,10 @@ For "check the references of the Smith paper", the tool:
    claims, the first few, or none when confirmation is requested.
 6. Rates eligible verdicts with the same ordinal citation-suitability
    rubric as `suggest_reference`: 1–5 stars beside supported, partly
-   supported or background verdicts. Unsupported, contradicted, unclear,
+   supported or background verdicts, followed by the numerical score
+   in parentheses, such as `★★★★★ (88/100)`. The score is the same
+   value already stored in structured results and traces, not a new
+   calculation. Unsupported, contradicted, unclear,
    failed, no-text and no-matching-passage results show unfilled stars
    marked **unrated**, not a fabricated zero-confidence score. Ratings
    reflect verified quotations and textual overlap within verdict bands,

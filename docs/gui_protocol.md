@@ -125,10 +125,22 @@ calls the same stdin iterator **during** that answer and accepts the next
   cancel the plan.
 - Option questions accept `option:<zero-based index>` or `cancel`. An
   invalid/out-of-range value or EOF cancels the question.
-- Other commands received while waiting emit an `error` asking the user to
-  answer the pending decision; they are consumed rather than queued for
-  execution afterward.
+- Other commands received while waiting emit an `error` with
+  `pending_choice: true`, asking the user to answer the pending decision;
+  they are consumed rather than queued for execution afterward. This
+  rejects the unrelated command, not the running answer. The page
+  displays the notice but retains the prompt and busy state. Ordinary
+  errors without this flag still terminate the pending answer.
 - An idle `plan_choice` that reaches the ordinary dispatcher is ignored.
+
+The page attaches a complete plan or choice card before showing the
+waiting status, replaces any earlier prompt, and focuses the first
+button. It clears queued progress labels both when asking and when
+answering, so old waiting labels do not outlive the controls. A card
+can submit only once; detached or superseded cards cannot send choices.
+Document-selection questions always offer Cancel. Network plans retain
+their separate Authorize lookup and Stay offline controls; rendering
+or focusing a prompt never authorizes it.
 
 This path is why the child must keep *one shared iterator* over stdin.
 
@@ -150,7 +162,7 @@ can accompany an event.
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
-| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`); `backend_failed` (`message`) |
+| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`); `backend_failed` (`message`) |
 | Process recovery | `stopped` (no required extra fields); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
 The engine also emits `startup` and `saved_project`, but the current

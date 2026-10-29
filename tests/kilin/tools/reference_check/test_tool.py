@@ -223,10 +223,10 @@ class TestReferenceCheckRun(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("## Claims checked against the cited papers", report)
         self.assertIn(
-            "**Verdict:** partly supported · ★★☆☆☆ (2/5 suitability) "
+            "**Verdict:** partly supported · ★★☆☆☆ (50/100) "
             "— Names the authors.", report
         )
-        self.assertIn("★★☆☆☆ (2/5 suitability)", report)
+        self.assertIn("★★☆☆☆ (50/100)", report)
         self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
         self.assertEqual(len(result.summary["suitability"]), 3)
         self.assertEqual(
@@ -255,9 +255,34 @@ class TestReferenceCheckRun(unittest.TestCase):
         result, _ = self._run(
             (Path("paper.md"), "named", False), max_listed=5,
         )
-        self.assertIn("★★☆☆☆ (2/5 suitability)", result.answer)
+        self.assertIn("★★☆☆☆ (50/100)", result.answer)
         self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
         self.assertIn("heuristic", result.answer)
+
+    def test_displayed_scores_match_summary_and_trace(self) -> None:
+        result, context = self._run(
+            (Path("paper.md"), "named", False), max_listed=5,
+        )
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        scores = result.summary["suitability"]
+        self.assertEqual([item["score"] for item in scores], [50, None, 50])
+        claims = [
+            call.kwargs["data"] for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+        ]
+        for item, record in zip(scores, claims):
+            if item["score"] is None:
+                self.assertIsNone(record["suitability"])
+                continue
+            self.assertEqual(item["score"], record["suitability"]["score"])
+            suffix = f"({item['score']}/100)"
+            self.assertIn(suffix, result.answer)
+            self.assertIn(suffix, report)
+        self.assertNotIn("(0/100)", result.answer)
+        self.assertNotIn("(0/100)", report)
+        self.assertEqual(context.ask_model.call_count, 3)
 
     def test_two_preceding_sentences_resolve_this_study(self) -> None:
         original = (

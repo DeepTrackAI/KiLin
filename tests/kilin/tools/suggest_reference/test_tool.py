@@ -173,16 +173,6 @@ class TestSuggestReferenceRun(unittest.TestCase):
         self.assertIn("1. **Supported** · `review.md`", answer)
         self.assertIn("2. **Partly supported** · `repeat.md`", answer)
         self.assertLess(answer.index("review.md"), answer.index("repeat.md"))
-        self.assertIn("★★★★★ (5/5 suitability)", answer)
-        self.assertIn("☆☆", answer)
-        self.assertIn("not probabilities or paper-quality", answer)
-        self.assertEqual(
-            result.summary["suitability"]["review.md"]["stars"], 5
-        )
-        self.assertEqual(
-            result.summary["suitability"]["repeat.md"]["stars"], 2
-        )
-        self.assertNotIn("other.md", result.summary["suitability"])
         self.assertIn(
             "*It says:* “Anomalous diffusion has been observed in the "
             "cytoplasm of many living cells” [1]",
@@ -204,6 +194,24 @@ class TestSuggestReferenceRun(unittest.TestCase):
         context.confirm.assert_not_called()  # 3 papers: a small plan.
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.suggest_reference.paper"), 3)
+
+    def test_displayed_scores_match_summary_and_trace(self) -> None:
+        result, context = self._run()
+        ratings = result.summary["suitability"]
+        self.assertEqual(ratings["review.md"], {"stars": 5, "score": 96})
+        self.assertEqual(ratings["repeat.md"], {"stars": 2, "score": 54})
+        self.assertIn("\u2605\u2605\u2605\u2605\u2605 (96/100)", result.answer)
+        self.assertIn("\u2605\u2605\u2606\u2606\u2606 (54/100)", result.answer)
+        for call in context.trace.emit.call_args_list:
+            if call.args[0] != "tool.suggest_reference.paper":
+                continue
+            item = call.kwargs["data"]
+            if item["suitability_score"] is not None:
+                self.assertIn(
+                    f"({item['suitability_score']}/100)", result.answer
+                )
+        self.assertNotIn("(0/100)", result.answer)
+        self.assertEqual(context.ask_model.call_count, 3)
 
     def test_no_supporting_paper(self) -> None:
         self.chunks = [chunk("o1", OTHER, path="other.md")]

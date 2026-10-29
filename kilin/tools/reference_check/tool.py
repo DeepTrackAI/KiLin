@@ -1426,8 +1426,9 @@ def _verdict_table(report: ReferenceReport) -> list[str]:
         claims = "claim" if len(report.verdicts) == 1 else "claims"
         lines.append(f"**{len(report.verdicts)} {claims} checked:** {listed}")
         lines += [
-            "", "*Stars indicate heuristic citation suitability, not "
-            "a probability or journal-quality score. Unfilled stars "
+            "", "*Stars and scores in parentheses (out of 100) indicate "
+            "heuristic citation suitability, not a probability or "
+            "journal-quality score. Unfilled stars "
             "marked 'unrated' mean the verdict does not justify a "
             "suitability rating; they do not prove that the cited paper "
             "offers no support.*",

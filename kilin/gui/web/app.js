@@ -3139,6 +3139,45 @@ function addPendingTurn(question) {
 }
 
 /**
+ * Present one actionable prompt before displaying a waiting status.
+ *
+ * @param card Fully built tool plan or option question.
+ */
+function showToolPrompt(card) {
+  if (!pendingTurn) return;
+  pendingTurn.prompt?.remove();
+  pendingTurn.prompt = card;
+  pendingTurn.answer.append(card);
+  resetAnswerStages();
+  markTimelineStep("Waiting for your choice");
+  showTurnPhase("Waiting", "Waiting for your choice");
+  byId("activity-text").textContent = "Waiting for your choice";
+  byId("activity-detail").textContent = "";
+  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.querySelector("button")?.focus({ preventScroll: true });
+}
+
+/**
+ * Submit a prompt once and immediately leave its waiting display.
+ *
+ * @param card The currently active prompt, not an earlier detached card.
+ * @param value Engine plan-choice value or option index.
+ * @param message Progress label after the explicit user decision.
+ */
+function submitToolPrompt(card, value, message) {
+  if (!bridge || !pendingTurn || pendingTurn.prompt !== card) return;
+  card.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  pendingTurn.prompt = null;
+  card.remove();
+  error.classList.add("hidden");
+  resetAnswerStages();
+  queueAnswerStage(`choice:${value}`, message);
+  byId("activity-text").textContent = message;
+  byId("activity-detail").textContent = "";
+  bridge.choosePlan(value);
+}
+
+/**
  * Show a tool plan with Continue, Quick, and Cancel under the pending
  * answer. The backend waits for the choice; one click answers it.
  *
@@ -3167,11 +3206,9 @@ function showToolPlan(plan) {
       network ? `Authorize ${plan.quick_items} reference lookups`
         : `${plan.quick_note || `A sample of ${plan.quick_items}`} · ${duration(plan.quick_seconds)}`],
   ];
-  const choose = (choice) => {
-    card.remove();
-    queueAnswerStage(`choice:${choice}`, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting");
-    bridge.choosePlan(choice);
-  };
+  const choose = (choice) => submitToolPrompt(
+    card, choice, choice === PLAN_CHOICE_CANCEL ? "Cancelling" : "Starting",
+  );
   for (const [choice, style, label, note] of choices) {
     const button = document.createElement("button");
     button.type = "button";
@@ -3193,8 +3230,9 @@ function showToolPlan(plan) {
   cancel.addEventListener("click", () => choose(PLAN_CHOICE_CANCEL));
   actions.append(cancel);
   card.append(summary, facts, actions);
-  pendingTurn.answer.append(card);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", plan.summary);
+  showToolPrompt(card);
 }
 
 /**
@@ -3211,11 +3249,9 @@ function showToolChoice(choice) {
   question.textContent = choice.question;
   const actions = document.createElement("div");
   actions.className = "tool-choice-options";
-  const answer = (value, label) => {
-    card.remove();
-    queueAnswerStage(`choice:${value}`, value === "cancel" ? "Cancelling" : `Using ${label}`);
-    bridge.choosePlan(value);
-  };
+  const answer = (value, label) => submitToolPrompt(
+    card, value, value === "cancel" ? "Cancelling" : `Using ${label}`,
+  );
   (choice.options || []).forEach((label, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -3227,12 +3263,13 @@ function showToolChoice(choice) {
   const cancel = document.createElement("button");
   cancel.type = "button";
   cancel.className = "secondary tool-choice-cancel";
-  cancel.textContent = network ? "Stay offline" : "Cancel";
+  cancel.textContent = "Cancel";
   cancel.addEventListener("click", () => answer("cancel", ""));
   actions.append(cancel);
   card.append(question, actions);
-  pendingTurn.answer.append(card);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", choice.question);
+  showToolPrompt(card);
 }
 
 /**
@@ -3596,16 +3633,10 @@ function onEvent(raw) {
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
       // A tool asks which option the user means, such as which paper.
-      queueAnswerStage("choice", "Waiting for your choice");
       showToolChoice(data.choice);
-      byId("activity-text").textContent = "Waiting for your choice";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
       // An expensive tool run waits for Continue, Quick, or Cancel.
-      queueAnswerStage("plan", "Waiting for your choice");
       showToolPlan(data.plan);
-      byId("activity-text").textContent = "Waiting for your choice";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING) {
       queueAnswerStage(`processing:${data.current ?? ""}`, data.message || "Working");
       byId("activity-text").textContent = data.message || "Working";
@@ -3887,7 +3918,15 @@ function onEvent(raw) {
       byId("workspace-path").focus();
     }
   } else if (data.event === "error") {
-    showError(data.message, data.trace_path || activeTracePath);
+    if (data.pending_choice === true) {
+      // The engine rejected an unrelated command, not this answer.
+      // It is still waiting; preserve the controls and busy state.
+      error.textContent = data.message;
+      error.classList.remove("hidden");
+      pendingTurn?.prompt?.querySelector("button")?.focus({ preventScroll: true });
+    } else {
+      showError(data.message, data.trace_path || activeTracePath);
+    }
   }
 }
 

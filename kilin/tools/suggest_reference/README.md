@@ -43,7 +43,10 @@ cells", the tool:
    quality. They require no extra model, embedding, or network call.
 5. Answers with the papers that could be cited (supported, partly
    supported, background), best first, each with its rating, comment,
-   and any confirmed quotation as evidence. Within a verdict group,
+   and any confirmed quotation as evidence. Each star display includes
+   its numerical suitability score in parentheses, for example
+   `★★★★★ (88/100)`, using the unchanged score in the structured
+   result and trace. Within a verdict group,
    more suitable papers appear first. Other checked papers are listed
    without stars, rather than recommended.
 

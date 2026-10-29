@@ -173,14 +173,16 @@ def suitability_stars(rating: SuitabilityRating | None) -> str:
     Returns
     -------
     str
-        Stars and an ordinal label, or unfilled stars marked unrated.
+        Stars and the numerical score in parentheses, or unfilled
+        stars marked unrated. The score is suitability out of 100,
+        not a calibrated probability.
 
     """
 
     if rating is None:
         return "☆☆☆☆☆ (unrated)"
     stars = "★" * rating.stars + "☆" * (5 - rating.stars)
-    return f"{stars} ({rating.stars}/5 suitability)"
+    return f"{stars} ({rating.score}/100)"
 
 
 def _statement(support: Support | Verdict) -> str:

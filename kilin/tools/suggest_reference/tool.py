@@ -417,9 +417,10 @@ def chat_answer(
                 lines.append(f"   {_escape(support.comment)}")
         lines += [
             "",
-            "*Stars indicate heuristic citation suitability, based on "
-            "the support verdict, confirmed evidence, and textual "
-            "overlap; they are not probabilities or paper-quality ratings.*",
+            "*Stars and scores in parentheses (out of 100) indicate "
+            "heuristic citation suitability, based on the support "
+            "verdict, confirmed evidence, and textual overlap; "
+            "they are not probabilities or paper-quality ratings.*",
         ]
     else:
         lines.append(
@@ -544,6 +545,7 @@ def run(
                 "verdict": support.verdict,
                 "quote_found": support.quote_chunk is not None,
                 "suitability_stars": rating.stars if rating else None,
+                "suitability_score": rating.score if rating else None,
             },
             turn_id=context.trace_turn_id,
         )

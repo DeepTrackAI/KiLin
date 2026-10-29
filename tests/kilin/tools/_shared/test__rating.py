@@ -17,6 +17,7 @@ import unittest
 from kilin.tools._shared.claims import Claim, Support, Verdict
 from kilin.tools._shared.sentences import Sentence
 from kilin.tools._shared._rating import (
+    SuitabilityRating,
     citation_suitability,
     suitability_stars,
 )
@@ -98,7 +99,9 @@ class TestSuitabilityRating(unittest.TestCase):
         rating = citation_suitability(verdict)
         self.assertIsNotNone(rating)
         self.assertGreaterEqual(rating.stars, 4)
-        self.assertIn("suitability", suitability_stars(rating))
+        self.assertTrue(
+            suitability_stars(rating).endswith(f"({rating.score}/100)")
+        )
 
     def test_unrated_uses_empty_stars_not_a_false_zero_score(self) -> None:
         self.assertEqual(suitability_stars(None), "☆☆☆☆☆ (unrated)")
@@ -127,6 +130,20 @@ class TestSuitabilityRating(unittest.TestCase):
         )
         self.assertLess(answer.index("cited.md"), answer.index("weak.md"))
         self.assertEqual(len(evidence), 2)
+
+    def test_formatter_prints_raw_score_not_star_fraction(self) -> None:
+        for score, stars in (
+            (10, 1), (24, 1), (25, 2), (40, 2), (54, 2), (55, 3),
+            (69, 3), (70, 4), (84, 4), (85, 5), (88, 5), (100, 5),
+        ):
+            with self.subTest(score=score, stars=stars):
+                rating = SuitabilityRating(score, stars)
+                expected = "\u2605" * stars + "\u2606" * (5 - stars)
+                self.assertEqual(
+                    suitability_stars(rating), f"{expected} ({score}/100)"
+                )
+                self.assertNotIn("/5", suitability_stars(rating))
+        self.assertNotIn("/100", suitability_stars(None))
 
     def test_no_passages_or_quote_stays_in_verdict_band(self) -> None:
         result = citation_suitability(
