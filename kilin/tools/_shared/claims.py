@@ -37,6 +37,12 @@ Key Features
     A sentence citing several works is judged once per work, and the
     model is told the work only needs to support its own part.
 
+- **Publication attribution**
+
+    When a citation identifies the publication reporting the preceding
+    study, the study description is compared with the cited work. A paper
+    need not contain a self-referential sentence saying it was published.
+
 - **Checked quotes**
 
     Quotes are confirmed against the passages and shown in the passage's
@@ -426,6 +432,13 @@ def verification_prompt(
 The surrounding sentences identify what expressions such as "this study"
 refer to. Judge only what the cited sentence attributes to [{number}];
 do not require the cited paper to restate the citing paper's own wording.
+When the citing sentence says that "the results of this study were
+published" in [{number}], treat this as attribution to the publication:
+use the preceding description to identify the study. If the cited work
+reports those specific results, it supports the attribution, even if it
+does not say "these results were published". If it merely discusses a
+related study, use partly supported or not supported as appropriate. Do
+not infer a match just from a shared topic; require specific evidence.
 Passages of the cited work [{number}] ({claim.cited.name}), the parts most
 related to the sentence:
 

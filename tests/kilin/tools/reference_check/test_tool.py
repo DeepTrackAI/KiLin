@@ -223,10 +223,41 @@ class TestReferenceCheckRun(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("## Claims checked against the cited papers", report)
         self.assertIn(
-            "**Verdict:** partly supported — Names the authors.", report
+            "**Verdict:** partly supported · ★★☆☆☆ (2/5 suitability) "
+            "— Names the authors.", report
         )
+        self.assertIn("★★☆☆☆ (2/5 suitability)", report)
+        self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
+        self.assertEqual(len(result.summary["suitability"]), 3)
+        self.assertEqual(
+            [rating["stars"] for rating in result.summary["suitability"]],
+            [2, None, 2],
+        )
+        record = next(
+            call.kwargs["data"]
+            for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+            and call.kwargs["data"]["reference"] == 2
+        )
+        self.assertIn("citation_sentence", record)
+        self.assertIn("preceding_context", record)
+        self.assertIn("following_context", record)
+        self.assertIn("retrieval_queries", record)
+        self.assertEqual(record["passages"][0]["id"], "b1")
+        self.assertIn("quote_passage_id", record)
+        self.assertEqual(record["suitability"]["stars"], 2)
+        self.assertIn("*Preceding context used:*", report)
+        self.assertIn("*Evidence retrieval queries:*", report)
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_all_checked_stars_appear_when_chat_limit_allows(self) -> None:
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), max_listed=5,
+        )
+        self.assertIn("★★☆☆☆ (2/5 suitability)", result.answer)
+        self.assertIn("☆☆☆☆☆ (unrated)", result.answer)
+        self.assertIn("heuristic", result.answer)
 
     def test_two_preceding_sentences_resolve_this_study(self) -> None:
         original = (
@@ -258,9 +289,35 @@ class TestReferenceCheckRun(unittest.TestCase):
         queries = [call.args[0] for call in context.rank.call_args_list]
         self.assertTrue(any(
             "schizophrenia classification" in query
-            and "results of this study were published" in query
+            and "results of this study were published" not in query
             for query in queries
         ))
+        report = (
+            self.root / result.summary["report"]
+        ).read_text(encoding="utf-8")
+        self.assertIn("*Preceding context used:*", report)
+        self.assertIn("*Following context used:*", report)
+        self.assertIn("*Evidence retrieval queries:*", report)
+        self.assertIn("schizophrenia classification", report)
+        traced = [
+            call.kwargs["data"]
+            for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+        ]
+        publication = next(
+            item for item in traced
+            if "The results of this study" in item["citation_sentence"]
+        )
+        self.assertIn(
+            "schizophrenia classification",
+            publication["preceding_context"],
+        )
+        self.assertEqual(len(publication["retrieval_queries"]), 1)
+        self.assertTrue(all(
+            "published" not in query
+            for query in publication["retrieval_queries"]
+        ))
+        self.assertIn("passages", publication)
 
     def test_context_respects_paragraphs_and_word_budget(self) -> None:
         text = (

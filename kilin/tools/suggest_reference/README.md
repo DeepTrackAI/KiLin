@@ -33,7 +33,7 @@ cells", the tool:
    quote. The plan is shown first when it has more than `LARGE_BATCHES`
    papers.
 4. Assigns each suggested paper an ordinal one-to-five-star citation
-   suitability rating (`_rating.py`). The support verdict determines
+   suitability rating (`kilin/tools/_shared/_rating.py`). The support verdict determines
    the rating band: supported usually gets 4–5 stars, partly supported
    2–3, and background 1–2. A checked quotation and the coverage of
    distinctive statement words in that quote (or the best available

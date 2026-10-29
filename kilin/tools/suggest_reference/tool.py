@@ -124,7 +124,10 @@ from kilin.tools._shared.planning import (
     confirm_plan,
 )
 from kilin.tools.suggest_reference import _configuration as _config
-from kilin.tools.suggest_reference._rating import citation_suitability
+from kilin.tools._shared._rating import (
+    citation_suitability,
+    suitability_stars,
+)
 
 __all__ = [
     "SuggestReferenceSettings",
@@ -399,11 +402,10 @@ def chat_answer(
             label = verdict_label(support.verdict).capitalize()
             rating = ratings[support.cited]
             assert rating is not None  # Each suggested verdict is rated.
-            stars = "★" * rating.stars + "☆" * (5 - rating.stars)
+            stars = suitability_stars(rating)
             lines += [
                 "", f"{index}. **{label}** · "
-                f"`{support.cited.as_posix()}` · {stars} "
-                f"({rating.stars}/5 suitability)"
+                f"`{support.cited.as_posix()}` · {stars}"
             ]
             if support.quote and support.quote_chunk is not None:
                 evidence.append(support.quote_chunk)

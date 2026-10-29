@@ -16,10 +16,11 @@ paper) and the other files of the project (the cited works). The tool:
 5. Checks each *claim* (a citing sentence and one cited work that is in
    the project) with the answering model (``_shared.claims``): the cited
    file's most related passages, a verdict, the passage sentence it rests
-   on (checked to be in the passages), and a critical comment. The plan is
+   on (checked to be in the passages), a heuristic suitability rating,
+   and a critical comment. The plan is
    shown first, and the user can run all claims, a few, or none.
 6. Saves the full report, with every reference, the sentences citing it
-   and their verdicts, to ``outputs/<paper>_reference_check.md``, and
+   and their verdicts, context, and ratings to the project report, and
    answers in the chat with the counts, the references, the problems, and
    the claims that are not fully supported, citing the quoted passages.
 
@@ -48,12 +49,13 @@ Key Features
 
 - **Checked claims**
 
-    Each claim gets a verdict, a quote found in the cited work, and a
-    comment; the user confirms the model calls first.
+    Each claim gets a verdict, a quote found in the cited work, a
+    suitability rating where justified, and a comment.
 
 - **Full report saved**
 
-    Every reference with its file, citing sentences and verdicts.
+    Every reference with its file, citing sentences, verdicts,
+    ratings and the context used by the model.
 
 Module Structure
 ----------------
@@ -111,6 +113,10 @@ from kilin.tools._contract import (
     reject_unknown,
 )
 from kilin.tools._shared.choose_document import choose_document
+from kilin.tools._shared._rating import (
+    citation_suitability,
+    suitability_stars,
+)
 from kilin.tools._shared.outputs import save_output_file
 from kilin.tools._shared.planning import (
     CONFIRMATION_CHOICES,
@@ -217,6 +223,17 @@ _ANAPHORA: Final[re.Pattern[str]] = re.compile(
     r"\b(?:this|these|those|such|its|their|it|they)\b",
     flags=re.I,
 )
+# Source-attribution sentences must be matched to the actual study, not
+# to a passage containing the otherwise uninformative word "published".
+_PUBLICATION_ATTRIBUTION: Final[re.Pattern[str]] = re.compile(
+    r"^(?:the\s+)?(?:"
+    r"(?:results|findings)\s+of\s+(?:this|the)\s+"
+    r"(?:study|analysis|work)\s+(?:were|was|have been|has been)|"
+    r"(?:this|the)\s+(?:study|analysis|work)\s+"
+    r"(?:was|were|has been|have been)"
+    r")\s+published\b",
+    flags=re.I,
+)
 # Longest citing sentence shown whole; longer ones (often a table read as
 # one sentence) are shown around the marker, in characters.
 _SHOWN_CHARACTERS: Final[int] = 320
@@ -309,7 +326,8 @@ class ReferenceReport:
         Up to one following sentence of the same paragraph, within
         the shared context word budget.
     verdicts: tuple[Verdict, ...]
-        The checked claims, in reading order.
+        The checked claims, in reading order; ratings are derived
+        from their checked evidence, not stored independently.
     verification: str
         Why claims were not checked, or not all of them; empty otherwise.
     links: dict[int, ReferenceLink]
@@ -692,7 +710,11 @@ def report_markdown(report: ReferenceReport) -> str:
         lines += ["## Claims checked against the cited papers", ""]
         lines += [*_verdict_table(report), ""]
         for index, verdict in enumerate(_attention(report, None), start=1):
-            lines += [*_claim_block(report, index, verdict, None), ""]
+            lines += [
+                *_claim_block(
+                    report, index, verdict, None, show_context=True
+                ), "",
+            ]
 
     verdicts = {
         (verdict.claim.number, verdict.claim.sentence): verdict
@@ -894,6 +916,17 @@ def run(
             "uncited": list(report.scan.uncited),
             "beyond_list": list(report.scan.beyond_list),
             "claims_checked": len(report.verdicts),
+            "suitability": [
+                {
+                    "reference": verdict.claim.number,
+                    "line": verdict.claim.sentence.line,
+                    "verdict": verdict.verdict,
+                    "stars": rating.stars if rating else None,
+                    "score": rating.score if rating else None,
+                }
+                for verdict in report.verdicts
+                for rating in (citation_suitability(verdict),)
+            ],
             "verdicts": {v: verdicts[v] for v in VERDICTS if verdicts[v]},
             "verification": report.verification,
             "links": {
@@ -1121,12 +1154,9 @@ def _verify(
             f"Checking claim {index} of {len(to_check)} "
             f"(reference [{claim.number}])"
         )
-        plain = _UNMARKED.sub("", claim.marked or claim.sentence.text)
-        query = plain
-        if claim.before and _ANAPHORA.search(plain):
-            query = f"{_UNMARKED.sub('', claim.before)} {plain}"
+        queries = _claim_queries(claim)
         passages = claim_passages(
-            (query, claim.cited_for),
+            queries,
             by_file.get(claim.cited, []),
             context.rank,
             settings.passages,
@@ -1145,6 +1175,29 @@ def _verify(
                 "line": claim.sentence.line,
                 "verdict": verdict.verdict,
                 "quote_found": verdict.quote_chunk is not None,
+                "citation_sentence": claim.marked or claim.sentence.text,
+                "preceding_context": claim.before,
+                "following_context": claim.after,
+                "cited_for": claim.cited_for,
+                "retrieval_queries": list(queries),
+                "passages": [
+                    {
+                        "id": passage.identifier,
+                        "path": passage.path.as_posix(),
+                        "start_line": passage.start_line,
+                        "end_line": passage.end_line,
+                    }
+                    for passage in passages
+                ],
+                "quote_passage_id": (
+                    verdict.quote_chunk.identifier
+                    if verdict.quote_chunk is not None else None
+                ),
+                "suitability": (
+                    {"stars": rating.stars, "score": rating.score}
+                    if (rating := citation_suitability(verdict))
+                    else None
+                ),
             },
             turn_id=context.trace_turn_id,
         )
@@ -1158,6 +1211,35 @@ def _verify(
         )
         note = f"{unchecked} of {len(claims)} claims were not checked ({why})."
     return replace(report, verdicts=tuple(verdicts), verification=note)
+
+
+def _claim_queries(claim: Claim) -> tuple[str, ...]:
+    """Form the two existing retrieval queries for one citing sentence.
+
+    Parameters
+    ----------
+    claim: Claim
+        A citation and its bounded paragraph context.
+
+    Returns
+    -------
+    tuple[str, ...]
+        The substantive context takes priority for a publication
+        attribution; otherwise anaphora adds the preceding sentences.
+        The independent cited-for phrase remains the second query.
+
+    """
+
+    sentence = _UNMARKED.sub("", claim.marked or claim.sentence.text)
+    if claim.before and _PUBLICATION_ATTRIBUTION.match(sentence.strip()):
+        # Cited-for text such as "the study was published" contains no
+        # distinctive evidence; it must not dilute the antecedent rank.
+        return (_UNMARKED.sub("", claim.before),)
+    if claim.before and _ANAPHORA.search(sentence):
+        query = f"{_UNMARKED.sub('', claim.before)} {sentence}"
+    else:
+        query = sentence
+    return (query, claim.cited_for)
 
 
 def _claim_seconds(settings: ReferenceCheckSettings) -> float:
@@ -1343,6 +1425,13 @@ def _verdict_table(report: ReferenceReport) -> list[str]:
         )
         claims = "claim" if len(report.verdicts) == 1 else "claims"
         lines.append(f"**{len(report.verdicts)} {claims} checked:** {listed}")
+        lines += [
+            "", "*Stars indicate heuristic citation suitability, not "
+            "a probability or journal-quality score. Unfilled stars "
+            "marked 'unrated' mean the verdict does not justify a "
+            "suitability rating; they do not prove that the cited paper "
+            "offers no support.*",
+        ]
     if report.verification:
         lines += ["", f"*{report.verification}*"] if lines else [
             f"*{report.verification}*"
@@ -1383,6 +1472,8 @@ def _claim_block(
     index: int,
     verdict: Verdict,
     citation: int | None,
+    *,
+    show_context: bool = False,
 ) -> list[str]:
     """Return one claim needing attention as a Markdown block.
 
@@ -1396,24 +1487,44 @@ def _claim_block(
         The judged claim.
     citation: int | None
         The evidence number of its quote in the chat; None in the report.
+    show_context: bool
+        Include surrounding context and retrieval inputs in the full report.
 
     Returns
     -------
     list[str]
-        A heading line (number, verdict, reference and cited file), the
+        A heading line (number, verdict, reference, stars and file), the
         citing sentence as a quotation with the cited marker in bold and
         its place, the comment, and the cited paper's sentence.
 
     """
 
     claim = verdict.claim
+    stars = suitability_stars(citation_suitability(verdict))
     lines = [
         f"**{index}. {verdict_label(verdict.verdict).capitalize()}** · "
         "reference "
-        f"{claim.number} → `{claim.cited.name}`",
+        f"{claim.number} → `{claim.cited.name}` · {stars}",
         f"> {_display(report, claim.sentence, claim.number)}",
         f"> — {report.paper.name}, {_where(claim.sentence)}",
     ]
+    if show_context:
+        if claim.before:
+            lines += [
+                "", "*Preceding context used:*",
+                f"> {_escape(claim.before)}",
+            ]
+        if claim.after:
+            lines += [
+                "", "*Following context used:*",
+                f"> {_escape(claim.after)}",
+            ]
+        queries = tuple(query for query in _claim_queries(claim) if query)
+        if queries:
+            lines += [
+                "", "*Evidence retrieval queries:*",
+                *[f"> {_escape(query)}" for query in queries],
+            ]
     if verdict.comment:
         lines += ["", f"*Why:* {_comment(verdict.comment)}"]
     if verdict.quote:
@@ -1436,12 +1547,13 @@ def _judgement(verdict: Verdict) -> list[str]:
     Returns
     -------
     list[str]
-        "**Verdict:** supported — comment", then the cited paper's
+        "**Verdict:** supported · stars — comment", then the paper's
         sentence with its file and place.
 
     """
 
-    line = f"**Verdict:** {verdict_label(verdict.verdict)}"
+    stars = suitability_stars(citation_suitability(verdict))
+    line = f"**Verdict:** {verdict_label(verdict.verdict)} · {stars}"
     if verdict.comment:
         line += f" — {_comment(verdict.comment)}"
     lines = [line]

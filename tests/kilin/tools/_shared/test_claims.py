@@ -234,6 +234,45 @@ class TestVerifyClaim(unittest.TestCase):
         self.assertIn("Judge only what the cited sentence", prompt)
         self.assertIn("Passage 2:\nMethods were standard.", prompt)
 
+    def test_publication_attribution_requires_matching_study(self) -> None:
+        paper = chunk(
+            "p", "The results of this study were published [22].",
+            path="article.md",
+        )
+        citing = Sentence(Path("article.md"), 12, paper.text, paper)
+        claim = Claim(
+            22, citing, Path("yao25connecting.pdf"),
+            before=(
+                "The second case study implements recursive feature "
+                "elimination for schizophrenia classification. "
+                "Most building blocks are reused."
+            ),
+        )
+        source = chunk(
+            "yao", (
+                "In each data set we applied a deep neural network "
+                "classifier to prioritize brain networks that distinguish "
+                "cases from controls. We performed five folds of "
+                "parallel recursive feature elimination."
+            ), path="yao25connecting.pdf",
+        )
+        _, prompt = verification_prompt(claim, [source])
+        self.assertIn("schizophrenia classification", prompt)
+        self.assertIn("treat this as attribution", prompt)
+        self.assertIn("require specific evidence", prompt)
+        self.assertIn("does not say", prompt)
+        verified = verify_claim(
+            claim, (source,),
+            lambda system, user, tokens: (
+                "VERDICT: supported\nQUOTE: In each data set we applied "
+                "a deep neural network classifier to prioritize brain "
+                "networks that distinguish cases from controls.\n"
+                "COMMENT: The cited study uses the described classifier."
+            ), 250,
+        )
+        self.assertEqual(verified.verdict, "supported")
+        self.assertIs(verified.quote_chunk, source)
+
     def test_prompt_rules_for_sources_and_descriptions(self) -> None:
         claim = Claim(
             40, SENTENCE, Path("cited.md"),

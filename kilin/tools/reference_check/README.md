@@ -35,7 +35,11 @@ For "check the references of the Smith paper", the tool:
    same paragraph are supplied as context, within 140 words including
    the cited sentence. For anaphoric claims, the preceding context also
    augments the existing retrieval query, without another model call.
-   The model answers
+   Publication-attribution sentences (such as "The results of this
+   study were published [22]") retrieve using the specific preceding
+   study description, rather than requiring the cited work to say that
+   it was published. The model must still find evidence that the cited
+   paper actually reports the described study. The model answers
    with a verdict (supported, partly supported, not supported,
    contradicted, background, or no matching passage), the passage
    sentence it rests on, and a critical comment. A cited file without
@@ -44,7 +48,18 @@ For "check the references of the Smith paper", the tool:
    reference is called contradicted only with a confirmed quote, otherwise
    not supported. The plan is traced, and the user can choose all
    claims, the first few, or none when confirmation is requested.
-6. Saves `outputs/<paper>_reference_check.md` with every reference, its
+6. Rates eligible verdicts with the same ordinal citation-suitability
+   rubric as `suggest_reference`: 1–5 stars beside supported, partly
+   supported or background verdicts. Unsupported, contradicted, unclear,
+   failed, no-text and no-matching-passage results show unfilled stars
+   marked **unrated**, not a fabricated zero-confidence score. Ratings
+   reflect verified quotations and textual overlap within verdict bands,
+   never scientific quality or a calibrated probability. The detailed
+   report shows the preceding and following context and exact retrieval
+   query strings for each checked claim; trace records the context,
+   selected passage identifiers and location, quote passage identifier,
+   and the rating. No extra model calls or network operations are used.
+7. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
    chat with the counts, the found, probable and missing references, the
    problems, and the claims that are not fully supported, citing the
@@ -61,7 +76,7 @@ For "check the references of the Smith paper", the tool:
    as too short for local matching still receives a search link when it
    contains journal coordinates.
    Links appear in the chat and beside every linkable entry in the report.
-7. When the user requests online links, or enables `ONLINE_LOOKUP`,
+8. When the user requests online links, or enables `ONLINE_LOOKUP`,
    explicitly asks permission **before** any request to Crossref or
    OpenAlex. Refusal or absence of a confirmation interface leaves the
    existing offline links intact. An approved request sends only the
