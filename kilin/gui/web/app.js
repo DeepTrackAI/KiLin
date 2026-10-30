@@ -57,6 +57,8 @@ const collapsedWorkspaceFolders = new Set();
 let workspacePaths = new Set();
 // The user's last show/hide choice for the side panels; null before any.
 let sidePanelChoice = null;
+// The Settings tab shown when Settings open; kept while KíLín runs.
+let settingsTab = "general";
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -121,6 +123,8 @@ let currentTurnCount = 0;
 let projectTypes = Object.create(null);
 // Saved projects last listed, shown again once the types' names arrive.
 let savedProjects = [];
+// Folder of the open project, highlighted in the left panel's Projects.
+let openProjectPath = "";
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
   welcome_prompts: ["What would you like to work on?"],
@@ -136,6 +140,7 @@ function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
+  if (openProjectPath) renderSidebarProjects(savedProjects, openProjectPath);
   const select = byId("type-id");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
@@ -160,25 +165,24 @@ function turnCountLabel(count) {
 }
 
 /**
- * Refresh the header and project summary from the saved turn count.
+ * Refresh the chat's name and turn count in its heading and the top bar.
  *
  * @param count Latest saved count; defaults to the current count.
  */
-function updateProjectSummary(count = currentTurnCount) {
+function updateChatSummary(count = currentTurnCount) {
   currentTurnCount = Number(count) || 0;
-  const projectName = byId("project-name").textContent.trim();
-  byId("topbar-project-name").textContent = projectName;
+  byId("topbar-chat-name").textContent = byId("conversation-name").textContent.trim() || "New chat";
   byId("topbar-turn-count").textContent = turnCountLabel(currentTurnCount);
-  byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
+  byId("conversation-detail").textContent = currentTurnCount ? turnCountLabel(currentTurnCount) : "";
 }
 
 /**
- * Keep the compact project header visible after scrolling the conversation.
+ * Keep the compact chat header visible after scrolling the conversation.
  */
 function updateFloatingHeader() {
   const scrolled = ready && conversationScroll.scrollTop > 96;
   document.querySelector(".topbar").classList.toggle("floating", scrolled);
-  byId("topbar-project").classList.toggle("hidden", !scrolled);
+  byId("topbar-chat").classList.toggle("hidden", !scrolled);
 }
 
 /**
@@ -296,6 +300,286 @@ function renderSavedProjects(projects) {
     host.append(group);
   }
   host.classList.toggle("hidden", !host.children.length);
+}
+
+// The left panel shows this many projects until the user asks for more.
+const SIDEBAR_PROJECTS = 5;
+let sidebarProjectsExpanded = false;
+
+/**
+ * Read a left-panel choice remembered on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param fallback Value when nothing is saved or storage is unavailable.
+ * @returns The saved value, or ``fallback``.
+ */
+function sidebarPref(key, fallback) {
+  try {
+    const saved = localStorage.getItem(`kilin-sidebar-${key}`);
+    return saved == null ? fallback : JSON.parse(saved);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Remember a left-panel choice on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param value JSON-serializable value.
+ */
+function setSidebarPref(key, value) {
+  try { localStorage.setItem(`kilin-sidebar-${key}`, JSON.stringify(value)); } catch {}
+}
+
+/**
+ * Put items in the user's dragged order; items not yet placed come first,
+ * in their given order.
+ *
+ * @param items Items in their default order.
+ * @param idOf Returns an item's identifier.
+ * @param saved Identifiers in the user's order.
+ * @returns New list of the same items.
+ */
+function manualOrder(items, idOf, saved) {
+  const rank = new Map((saved || []).map((id, index) => [id, index]));
+  const fresh = items.filter((item) => !rank.has(idOf(item)));
+  const placed = items.filter((item) => rank.has(idOf(item)))
+    .sort((a, b) => rank.get(idOf(a)) - rank.get(idOf(b)));
+  return [...fresh, ...placed];
+}
+
+/**
+ * Move one identifier to the place of another, as a dropped row does.
+ *
+ * @param ids Identifiers in their shown order.
+ * @param moved The dragged row's identifier.
+ * @param target The identifier of the row it was dropped on.
+ * @returns New list of identifiers.
+ */
+function moveInOrder(ids, moved, target) {
+  const index = ids.indexOf(target);
+  const rest = ids.filter((id) => id !== moved);
+  rest.splice(index, 0, moved);
+  return rest;
+}
+
+/**
+ * Let a row be dragged onto another row of the same list.
+ *
+ * @param row Row element.
+ * @param id The row's identifier.
+ * @param ids Identifiers of the whole list, in shown order.
+ * @param save Receives the new order after a drop.
+ */
+function makeReorderable(row, id, ids, save) {
+  const type = "application/x-kilin-order";
+  row.draggable = true;
+  row.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData(type, id);
+    event.dataTransfer.effectAllowed = "move";
+    row.classList.add("dragging");
+  });
+  row.addEventListener("dragend", () => row.classList.remove("dragging"));
+  // Stop here, so the page-wide guard against file drops does not refuse it.
+  row.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer.types.includes(type)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  });
+  row.addEventListener("drop", (event) => {
+    const moved = event.dataTransfer.getData(type);
+    if (!moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (moved !== id && ids.includes(moved)) save(moveInOrder(ids, moved, id));
+  });
+}
+
+/**
+ * Order the projects for the left panel.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project, listed first when it is not
+ *   among the saved projects.
+ * @param currentType Project type of the open project.
+ * @param mode "updated" keeps recent use; "manual" uses ``saved``.
+ * @param saved Project folders in the user's dragged order.
+ * @returns New list of projects to show.
+ */
+function sidebarProjectOrder(projects, current, currentType = "", mode = "updated", saved = []) {
+  const listed = !current || projects.some((project) => project.project === current)
+    ? [...projects]
+    : [{ project: current, name: current.split(/[\\/]/).pop(), type_id: currentType }, ...projects];
+  return mode === "manual" ? manualOrder(listed, (project) => project.project, saved) : listed;
+}
+
+/**
+ * Order the conversations for the left panel.
+ *
+ * @param items Conversation records with ``updated_at_utc``.
+ * @param mode "updated" puts the latest change first; "manual" uses
+ *   ``saved``.
+ * @param saved Conversation identifiers in the user's dragged order.
+ * @returns New list of conversations.
+ */
+function sidebarConversationOrder(items, mode = "updated", saved = []) {
+  const recent = [...items].sort((a, b) =>
+    (Date.parse(b.updated_at_utc) || 0) - (Date.parse(a.updated_at_utc) || 0));
+  return mode === "manual" ? manualOrder(recent, (item) => item.conversation_id, saved) : recent;
+}
+
+/**
+ * List the most recent projects in the left panel, each with its type, the
+ * open one highlighted; clicking another one switches to it, and More shows
+ * the rest.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project.
+ */
+function renderSidebarProjects(projects, current) {
+  const list = byId("project-list");
+  list.replaceChildren();
+  const mode = sidebarPref("projects-sort", "updated");
+  const ordered = sidebarProjectOrder(
+    projects, current, activeProjectTypeId, mode, sidebarPref("projects-order", []));
+  const ids = ordered.map((project) => project.project);
+  const shown = sidebarProjectsExpanded ? ordered : ordered.slice(0, SIDEBAR_PROJECTS);
+  for (const project of shown) {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "project-item";
+    const name = document.createElement("span");
+    name.className = "project-item-name";
+    name.textContent = project.name;
+    const type = document.createElement("span");
+    type.className = "project-item-type";
+    type.textContent = projectTypes[project.type_id]?.label || project.type_id || "";
+    button.append(name, type);
+    button.title = project.project;
+    const active = project.project === current;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "true");
+    button.disabled = busy;
+    const open = () => {
+      if (busy || active) return;
+      setBusy(true, `Opening ${project.name}…`);
+      bridge.resumeProject(project.project);
+    };
+    button.addEventListener("click", () => open());
+    // Settings save into the open project, so only its row has the icon.
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.className = "project-settings";
+    settings.setAttribute("aria-label", `Settings for ${project.name}`);
+    settings.title = "Project settings";
+    settings.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    settings.disabled = busy;
+    settings.addEventListener("click", () => openModels());
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showWorkspaceMenu(event.clientX, event.clientY, active
+        ? [["Rename", () => renameProjectInSidebar(button, project)], ["Settings", openModels]]
+        : [["Open", open]]);
+    });
+    row.append(button);
+    if (active) row.append(settings);
+    if (mode === "manual") {
+      makeReorderable(row, project.project, ids, (order) => {
+        setSidebarPref("projects-order", order);
+        renderSidebarProjects(projects, current);
+      });
+    }
+    list.append(row);
+  }
+  if (ordered.length > SIDEBAR_PROJECTS) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "project-more";
+    more.textContent = sidebarProjectsExpanded ? "Fewer" : `More (${ordered.length - SIDEBAR_PROJECTS})`;
+    more.addEventListener("click", () => {
+      sidebarProjectsExpanded = !sidebarProjectsExpanded;
+      renderSidebarProjects(projects, current);
+    });
+    list.append(more);
+  }
+}
+
+/**
+ * Rename the open project in place: Enter or leaving the field saves,
+ * Escape cancels.
+ *
+ * @param button The project's row button, replaced while editing.
+ * @param project The open project.
+ */
+function renameProjectInSidebar(button, project) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "conversation-rename";
+  input.value = project.name;
+  input.setAttribute("aria-label", `Rename ${project.name}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.replaceWith(button);
+    if (save && name && name !== project.name && !busy && ready) {
+      setBusy(true, "Renaming project…");
+      bridge.renameProject(name);
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  button.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/**
+ * Show the ⋯ menu of a left-panel section: sort by last update, or in the
+ * user's own dragged order.
+ *
+ * @param anchor The ⋯ button.
+ * @param section "projects" or "conversations".
+ * @param refresh Redraws the section's list.
+ */
+function showSidebarSortMenu(anchor, section, refresh) {
+  const mode = sidebarPref(`${section}-sort`, "updated");
+  const heading = document.createElement("div");
+  heading.className = "menu-heading";
+  heading.textContent = "Sort by";
+  const options = [["updated", "Last updated"], ["manual", "Manual order"]].map(([value, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === mode));
+    button.textContent = label;
+    if (value === mode) {
+      const check = document.createElement("span");
+      check.className = "menu-check";
+      check.textContent = "✓";
+      button.append(check);
+    }
+    button.addEventListener("click", () => {
+      hideSourceMenu();
+      setSidebarPref(`${section}-sort`, value);
+      refresh();
+    });
+    return button;
+  });
+  sourceMenu.replaceChildren(heading, ...options);
+  sourceMenu.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const { width } = sourceMenu.getBoundingClientRect();
+  sourceMenu.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+  sourceMenu.style.top = `${box.bottom + 4}px`;
 }
 
 /**
@@ -906,6 +1190,25 @@ function restoreDefaultModels(role) {
 }
 
 /**
+ * Show one Settings tab and hide the sections of the others.
+ *
+ * @param name Tab name: general, models, answers, or project.
+ */
+function showSettingsTab(name) {
+  settingsTab = name;
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const selected = tab.dataset.tab === name;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    // Arrow keys move between tabs; Tab moves into the shown one.
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const section of document.querySelectorAll("#models-panel [data-settings-tab]")) {
+    section.classList.toggle("tab-hidden", section.dataset.settingsTab !== name);
+  }
+}
+
+/**
  * Render and open the models panel, then focus its close control.
  */
 function openModels() {
@@ -980,7 +1283,7 @@ function levelProblem(levels, depth) {
  * @param closeAfter Whether to close Settings after applying the changes.
  * @param explicitDownload Model ID to download, or null for ordinary edits.
  */
-function applyModelEdits(closeAfter = false, explicitDownload = null) {
+async function applyModelEdits(closeAfter = false, explicitDownload = null) {
   if (busy || !bridge) return;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
@@ -1004,9 +1307,9 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const reindex = ready && (settings.embedding_model !== before.embedding_model
     || settings.query_format !== before.query_format);
   const warnings = [];
-  if (missing.some((id) => id !== explicitDownload)) warnings.push(`These models need to download, which may take a while:\n${missing.join("\n")}`);
-  if (reindex) warnings.push("Changing the embedding model or query format will rebuild this project's index. Your saved chats will be kept.");
-  if (warnings.length && !confirm(`${warnings.join("\n\n")}\n\nProceed?`)) return;
+  if (missing.some((id) => id !== explicitDownload)) warnings.push(`KíLín downloads ${missing.join(", ")}, which may take a while.`);
+  if (reindex) warnings.push("KíLín rebuilds this project's index; saved chats are kept.");
+  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return;
   applyingModels = true;
   closeAfterModelsApply = closeAfter;
   error.classList.add("hidden");
@@ -1190,12 +1493,15 @@ function collectSettings() {
  * Tell whether the workspace tree shows a file.
  *
  * The core keeps a lock file next to each open conversation, so that only
- * one window writes it. The lock is not the user's file, so it is hidden.
+ * one window writes it, and macOS adds .DS_Store files to folders it shows
+ * in Finder. Neither is the user's file, so both are hidden.
  *
  * @param path Workspace-relative file path reported by the backend.
- * @returns False for a conversation lock under logs/, true otherwise.
+ * @returns False for a conversation lock under logs/ or a .DS_Store file,
+ *   true otherwise.
  */
 function shownInWorkspace(path) {
+  if (path.split("/").pop() === ".DS_Store") return false;
   return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
 }
 
@@ -1509,9 +1815,10 @@ function showFolderMenu(x, y, folder, path, isFile) {
  * @param path Workspace-relative target path.
  * @param isFile Whether the target is a file.
  */
-function deleteFromFolder(folder, path, isFile) {
+async function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nKíLín deletes it permanently; it does not go to the Trash.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "It is deleted permanently, not moved to the Trash.", "Delete")) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1545,10 +1852,11 @@ function editFolder(request, message) {
  * @param purpose "add", or the workspace path to replace.
  * @param paths Local files chosen in the native dialog.
  */
-function folderFilesChosen(folder, purpose, paths) {
+async function folderFilesChosen(folder, purpose, paths) {
   if (purpose !== "add") {
     const name = purpose.split("/").pop();
-    if (!confirm(`Replace "${name}" with the content of ${paths[0].split(/[\\/]/).pop()}?\n\nThe name stays ${name}.`)) return;
+    const source = paths[0].split(/[\\/]/).pop();
+    if (!await askKilin(`Replace “${name}”?`, `KíLín puts the content of ${source} in it; the name stays.`, "Replace")) return;
     editFolder({ folder, operation: "replace", path: purpose, source: paths[0] }, `Replacing a file in ${folder}…`);
     return;
   }
@@ -1556,7 +1864,11 @@ function folderFilesChosen(folder, purpose, paths) {
   const taken = names.filter((name) => workspacePaths.has(`${folder}/${name}`));
   let replace = false;
   if (taken.length) {
-    replace = confirm(`These names are already in ${folder}:\n\n${taken.join("\n")}\n\nOK replaces them; Cancel keeps both (the new copies get a number).`);
+    const what = taken.length === 1 ? `“${taken[0]}” is` : `${taken.map((name) => `“${name}”`).join(", ")} are`;
+    const answer = await askKilin(`${what} already in ${folder}`,
+      "Keep both gives the new copies a number.", "Replace", "Keep both");
+    if (!answer) return;
+    replace = answer === true;
   }
   editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
@@ -1574,11 +1886,11 @@ function hideSourceMenu() {
  * @param path Workspace-relative path beginning with sources/.
  * @param isFile Whether the path is a file rather than a folder.
  */
-function removeSource(path, isFile) {
+async function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
-  const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from sources?\n\n${path}\n\nKíLín deletes only the project's copy; your original stays.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "", "Delete") || busy) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
@@ -1598,8 +1910,9 @@ document.addEventListener("scroll", hideSourceMenu, true);
  *
  * @param path Workspace-relative path to the selected file.
  */
-function openWorkspaceFile(path) {
-  if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
+async function openWorkspaceFile(path) {
+  if (!path || !bridge) return;
+  if (!await askKilin(`Open “${path.split("/").pop()}” in its default app?`, "", "Open")) return;
   bridge.openWorkspaceFile(path);
 }
 
@@ -1614,10 +1927,6 @@ function showError(message, tracePath = "") {
   applyingModels = false;
   closeAfterModelsApply = false;
   byId("model-download-status").textContent = message;
-  if (ready) {
-    byId("project-name").textContent = byId("workspace-path").value.split(/[\\/]/).pop();
-    updateProjectSummary();
-  }
   stopPhaseAnimation();
   resetAnswerStages();
   if (pendingTurn) {
@@ -2033,8 +2342,6 @@ byId("source-add-confirm").addEventListener("click", () => {
  */
 function setBusy(value, message = "") {
   busy = value;
-  byId("project-name").contentEditable = String(!value);
-  byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
   // Settings can close while KíLín works; only unsaved edits must wait.
@@ -2065,8 +2372,9 @@ function setBusy(value, message = "") {
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
   byId("branch-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
-  byId("change-project").disabled = value;
+  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings").forEach((item) => { item.disabled = value || !ready; });
+  byId("home-logo").disabled = value;
+  byId("new-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
   byId("activity-text").textContent = message;
@@ -2264,12 +2572,17 @@ function selectTurn(item, turn, citation = null) {
   selectedTurn = item;
   item.classList.add("selected");
   clearSourcePreview();
-  byId("references-for").textContent = turn.evidence?.length
-    ? `Sources for: ${turn.question}`
-    : "No sources saved for this answer.";
+  const evidence = turn.evidence || [];
+  const { labels, cited } = labelsForTurn(turn);
+  const sources = referencedSources(evidence, labels, cited);
+  byId("references-for").textContent = !evidence.length
+    ? "No sources saved for this answer."
+    : cited && cited < evidence.length
+      ? `Sources for: ${turn.question} · ${cited} cited of ${evidence.length} passages read`
+      : `Sources for: ${turn.question}`;
   const list = byId("references-list");
   list.replaceChildren();
-  for (const source of turn.evidence || []) {
+  for (const source of sources) {
     const holder = document.createElement("div");
     holder.className = "reference-entry";
     const button = document.createElement("button");
@@ -2278,7 +2591,7 @@ function selectTurn(item, turn, citation = null) {
     button.dataset.citation = String(source.citation);
     const number = document.createElement("span");
     number.className = "reference-number";
-    number.textContent = String(source.citation);
+    number.textContent = String(labels.get(Number(source.citation)));
     const path = document.createElement("span");
     path.className = "reference-path";
     path.textContent = `${source.path}:${source.start_line}-${source.end_line}`;
@@ -2326,6 +2639,64 @@ function renderSourcePreview(data) {
 
 
 /**
+ * Number the cited sources 1, 2, 3… in the order the answer cites them.
+ *
+ * Evidence numbers count all retrieved passages, so they can be large
+ * (143, 286…). Only the labels the user sees change; links still use the
+ * evidence numbers.
+ *
+ * @param markers Evidence numbers of each linked citation marker, in
+ *   reading order, such as [[143], [286, 288]].
+ * @param evidence The turn's evidence records.
+ * @returns Map from evidence number to shown label. Evidence the answer
+ *   does not cite follows, in its saved order.
+ */
+function citationLabels(markers, evidence) {
+  const labels = new Map();
+  const label = (number) => {
+    if (!labels.has(number)) labels.set(number, labels.size + 1);
+  };
+  markers.flat().forEach(label);
+  evidence.forEach((source) => label(Number(source.citation)));
+  return labels;
+}
+
+// Shown labels of each rendered turn and how many sources its answer
+// cites, shared by its answer and references.
+const turnCitationLabels = new WeakMap();
+
+/**
+ * Choose and order the sources the References panel lists.
+ *
+ * An answer may read many passages but cite only a few: list those, in
+ * their label order, unless the answer cites none.
+ *
+ * @param evidence The turn's evidence records.
+ * @param labels Map from evidence number to shown label.
+ * @param cited Number of distinct sources the answer cites.
+ * @returns The evidence records to list.
+ */
+function referencedSources(evidence, labels, cited) {
+  return evidence
+    .filter((source) => !cited || labels.get(Number(source.citation)) <= cited)
+    .sort((a, b) => labels.get(Number(a.citation)) - labels.get(Number(b.citation)));
+}
+
+/**
+ * Return the shown citation labels of a turn, numbering its evidence in
+ * order when its answer has not been rendered.
+ *
+ * @param turn Saved question, answer, and evidence data.
+ * @returns ``labels`` (evidence number to shown label) and ``cited``, the
+ *   number of distinct sources the answer cites; those have labels 1 to
+ *   ``cited``.
+ */
+function labelsForTurn(turn) {
+  return turnCitationLabels.get(turn)
+    || { labels: citationLabels([], turn.evidence || []), cited: 0 };
+}
+
+/**
  * Render answer text with links only for recognized numeric citations.
  *
  * @param answer Destination DOM element.
@@ -2342,19 +2713,33 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
   }
   // Markdown and citations are both recognized; only evidence numbers that
   // belong to this answer become links.
+  const markerNumbers = (marker) => {
+    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
+    return numbers.every((number) => citations.has(number)) ? numbers : null;
+  };
+  // A first, unseen pass finds the linked markers in reading order, so
+  // they can be shown as 1, 2, 3… instead of evidence numbers.
+  const markers = [];
+  renderMarkdown(document.createElement("div"), parts.answer, (marker) => {
+    const numbers = markerNumbers(marker);
+    if (numbers) markers.push(numbers);
+    return null;
+  });
+  const labels = citationLabels(markers, turn.evidence || []);
+  turnCitationLabels.set(turn, { labels, cited: new Set(markers.flat()).size });
   const body = document.createElement("div");
   body.className = "answer-body";
   renderMarkdown(body, parts.answer, (marker) => {
-    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
-    if (!numbers.every((number) => citations.has(number))) return null;
+    const numbers = markerNumbers(marker);
+    if (!numbers) return null;
     const superscript = document.createElement("sup");
     superscript.className = "answer-citation";
     numbers.forEach((number, index) => {
       if (index) superscript.append(document.createTextNode(","));
       const link = document.createElement("button");
       link.type = "button";
-      link.textContent = String(number);
-      link.setAttribute("aria-label", `Show reference ${number}`);
+      link.textContent = String(labels.get(number));
+      link.setAttribute("aria-label", `Show reference ${labels.get(number)}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
         chooseSidePanels(true);
@@ -2381,6 +2766,38 @@ const MARKDOWN_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
+// The line under a table's header: dashes per column, colons for alignment.
+const MARKDOWN_TABLE_DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Split one Markdown table row into its cell texts.
+ *
+ * Outer pipes are optional; an escaped pipe (\|) stays inside its cell.
+ *
+ * @param line Table row source line.
+ * @returns Trimmed cell texts, left to right.
+ */
+function markdownTableCells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  return row.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+/**
+ * Detect a Markdown table: a header row, then a divider row with the same
+ * number of columns.
+ *
+ * @param lines All source lines.
+ * @param index Index of the candidate header row.
+ * @returns Whether a table starts at this line.
+ */
+function isMarkdownTableStart(lines, index) {
+  const header = lines[index];
+  const divider = lines[index + 1];
+  if (!header?.includes("|") || !divider?.includes("|") || !MARKDOWN_TABLE_DIVIDER.test(divider)) return false;
+  return markdownTableCells(header).length === markdownTableCells(divider).length;
+}
 
 /**
  * Detect Markdown lines that begin a block-level structure.
@@ -2397,8 +2814,8 @@ function isMarkdownBlockStart(line) {
  * Render model text as Markdown using DOM nodes only, never HTML parsing.
  *
  * Supports headings, paragraphs, bullet and numbered lists, block quotes,
- * fenced code, rules, and inline bold, italics, and code. Plain text simply
- * becomes paragraphs.
+ * fenced code, rules, tables, and inline bold, italics, and code. Plain
+ * text simply becomes paragraphs.
  *
  * @param host Element that receives the blocks.
  * @param text Model output without thinking text.
@@ -2421,6 +2838,40 @@ function renderMarkdown(host, text, linkCitation = null) {
       element.textContent = code.join("\n");
       pre.append(element);
       host.append(pre);
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const header = markdownTableCells(line);
+      // Alignment per column comes from the colons in the divider row.
+      const align = markdownTableCells(lines[index + 1]).map((cell) => (
+        cell.startsWith(":") && cell.endsWith(":") ? "center"
+          : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : ""));
+      index += 2;
+      const table = document.createElement("table");
+      const row = (cells, tag) => {
+        const element = document.createElement("tr");
+        header.forEach((_, column) => {
+          // Short rows get empty cells; extra cells are dropped.
+          const cell = document.createElement(tag);
+          if (align[column]) cell.style.textAlign = align[column];
+          appendInlineMarkdown(cell, cells[column] || "", linkCitation);
+          element.append(cell);
+        });
+        return element;
+      };
+      const head = document.createElement("thead");
+      head.append(row(header, "th"));
+      const body = document.createElement("tbody");
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")
+        && !isMarkdownBlockStart(lines[index])) {
+        body.append(row(markdownTableCells(lines[index++]), "td"));
+      }
+      table.append(head, body);
+      // A wide table scrolls sideways instead of widening the chat.
+      const frame = document.createElement("div");
+      frame.className = "answer-table";
+      frame.append(table);
+      host.append(frame);
       continue;
     }
     const heading = line.match(MARKDOWN_HEADING);
@@ -2467,7 +2918,8 @@ function renderMarkdown(host, text, linkCitation = null) {
       continue;
     }
     const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])
+      && !isMarkdownTableStart(lines, index)) {
       paragraph.push(lines[index++]);
     }
     const element = document.createElement("p");
@@ -2512,6 +2964,129 @@ function appendInlineMarkdown(element, text, linkCitation) {
   element.append(text.slice(last));
 }
 
+const MESSAGE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Format a turn's saved time for the actions under its messages.
+ *
+ * @param timestamp ISO 8601 time the turn was saved.
+ * @param now Current time, so today's messages show only the time.
+ * @returns "14:05" today, "28 Oct 14:05" this year, "28 Oct 2025 14:05"
+ *   before, or "" if the time is missing or invalid.
+ */
+function messageTime(timestamp, now = new Date()) {
+  const date = new Date(timestamp || "");
+  if (!timestamp || Number.isNaN(date.getTime())) return "";
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = `${date.getDate()} ${MESSAGE_MONTHS[date.getMonth()]}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${day} ${time}` : `${day} ${date.getFullYear()} ${time}`;
+}
+
+/**
+ * Return an answer as the user sees it, for copying: no thinking, and
+ * citations with their shown numbers.
+ *
+ * @param turn Saved answer and its evidence.
+ * @returns Answer Markdown with linked markers such as "[143, 7]" shown as
+ *   "[1, 2]".
+ */
+function answerCopyText(turn) {
+  const { labels } = labelsForTurn(turn);
+  return splitThinking(turn.answer).answer.trim().replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (marker, inner) => {
+    const numbers = inner.split(",").map((value) => Number(value.trim()));
+    if (!numbers.every((number) => labels.has(number))) return marker;
+    return `[${numbers.map((number) => labels.get(number)).join(", ")}]`;
+  });
+}
+
+/**
+ * Put text on the clipboard. In the app Qt copies it, since the page may
+ * not; in a plain browser use the clipboard API, falling back to a hidden
+ * text box.
+ *
+ * @param text Text to copy.
+ */
+async function copyToClipboard(text) {
+  if (bridge) {
+    bridge.copyText(text);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // Fall back below.
+  }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.position = "fixed";
+  box.style.opacity = "0";
+  document.body.append(box);
+  box.select();
+  document.execCommand("copy");
+  box.remove();
+}
+
+/**
+ * Build the row shown under a message on hover or focus: Copy and the
+ * message's time.
+ *
+ * @param text Text the Copy button puts on the clipboard.
+ * @param timestamp The turn's saved time, or "" while it is not saved.
+ * @param label What is copied, for the button's accessible name.
+ * @returns New element placed right after the message.
+ */
+function messageActions(text, timestamp, label) {
+  const row = document.createElement("div");
+  row.className = "message-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "message-action";
+  copy.title = "Copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+  copy.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await copyToClipboard(text);
+    copy.title = "Copied";
+    copy.classList.add("copied");
+    setTimeout(() => {
+      copy.title = "Copy";
+      copy.classList.remove("copied");
+    }, 1500);
+  });
+  row.append(copy);
+  const shown = messageTime(timestamp);
+  if (shown) {
+    const time = document.createElement("time");
+    time.dateTime = timestamp;
+    time.title = new Date(timestamp).toLocaleString();
+    time.textContent = shown;
+    row.append(time);
+  }
+  return row;
+}
+
+/**
+ * Add Copy and time rows under a turn's question and answer.
+ *
+ * @param item Conversation article holding the two messages.
+ * @param turn Saved question and answer.
+ */
+function addMessageActions(item, turn) {
+  const question = item.querySelector(".user-message");
+  const answer = item.querySelector(".answer-message");
+  if (question) {
+    const row = messageActions(turn.question || "", turn.timestamp, "question");
+    row.classList.add("user-actions");
+    question.after(row);
+  }
+  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer"));
+}
+
 /**
  * Append a completed turn, enable answer selection, and show its
  * references.
@@ -2544,6 +3119,7 @@ function addTurn(turn) {
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
   item.append(...[question, timeline, answer].filter(Boolean));
+  addMessageActions(item, turn);
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
@@ -2562,7 +3138,11 @@ function renderConversations(data) {
   list.replaceChildren();
   let activeName = "";
   let activeEmpty = false;
-  for (const item of data.conversations || []) {
+  const mode = sidebarPref("conversations-sort", "updated");
+  const orderKey = `conversations-order:${openProjectPath}`;
+  const ordered = sidebarConversationOrder(data.conversations || [], mode, sidebarPref(orderKey, []));
+  const rows = [];
+  for (const item of ordered) {
     if (item.conversation_id === activeConversationId) {
       activeName = item.name;
       activeEmpty = Boolean(item.empty);
@@ -2595,23 +3175,75 @@ function renderConversations(data) {
       clearTimeout(opening);
       if (!busy && !provisional) renameInSidebar(row, button, item);
     });
-    button.title = `${name}\nDouble-click to rename`;
+    button.title = `${name}\nDouble-click or right-click to rename`;
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (provisional) return;
+      showWorkspaceMenu(event.clientX, event.clientY, [
+        ["Rename", () => renameInSidebar(row, button, item)],
+        ["Delete…", () => remove.click()],
+      ]);
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "conversation-delete";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Delete ${item.name}`);
     remove.title = "Delete conversation";
-    remove.addEventListener("click", () => {
-      if (busy || !confirm(`Delete “${item.name}”?`)) return;
+    remove.addEventListener("click", async () => {
+      if (busy) return;
+      const deleting = await askKilin(`Delete “${item.name}”?`, "", "Delete");
+      if (!deleting || busy) return;
       setBusy(true, "Deleting conversation…");
       bridge.deleteConversation(item.conversation_id);
     });
     row.append(button, remove);
     list.append(row);
+    rows.push([row, item.conversation_id]);
+  }
+  if (mode === "manual") {
+    const ids = rows.map(([, id]) => id);
+    for (const [row, id] of rows) {
+      makeReorderable(row, id, ids, (order) => {
+        setSidebarPref(orderKey, order);
+        renderConversations(lastConversationData);
+      });
+    }
   }
   byId("conversation-name").textContent = activeEmpty ? "" : activeName;
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
+  updateChatSummary();
+}
+
+/**
+ * Ask a yes/no question in a KíLín dialog instead of the system pop-up.
+ *
+ * Cancel has focus first, so Enter does not confirm by accident; Escape
+ * also cancels.
+ *
+ * @param title Short question, such as "Delete “Notes”?".
+ * @param message One sentence on what KíLín will do; empty hides it.
+ * @param action Label of the confirming button, such as "Delete".
+ * @param other Label of an optional third button, such as "Keep both".
+ * @returns Promise of true when the user confirms, "other" for the third
+ *   button, false otherwise.
+ */
+function askKilin(title, message, action, other = "") {
+  const dialog = byId("kilin-ask");
+  byId("kilin-ask-title").textContent = title;
+  byId("kilin-ask-message").textContent = message;
+  byId("kilin-ask-message").classList.toggle("hidden", !message);
+  byId("kilin-ask-confirm").textContent = action;
+  byId("kilin-ask-other").textContent = other;
+  byId("kilin-ask-other").classList.toggle("hidden", !other);
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(
+      dialog.returnValue === "confirm" || (dialog.returnValue === "other" && "other")),
+    { once: true });
+    dialog.returnValue = "";
+    dialog.showModal();
+    byId("kilin-ask-cancel").focus();
+  });
 }
 
 /**
@@ -2633,7 +3265,11 @@ function keepStoppedTurn(current) {
   current.item.classList.remove("pending");
   current.item.classList.add("stopped");
   current.answer.classList.remove("answer-phase", "streaming");
-  current.durationLine.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  const line = document.createElement("div");
+  line.className = "answer-duration";
+  line.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  current.durationLine.replaceWith(line);
+  current.durationLine = line;
   stoppedTurn = { item: current.item, conversationId: activeConversationId };
 }
 
@@ -2906,18 +3542,56 @@ function markTimelineStep(label) {
  * @returns The total time and each step's label and duration.
  */
 function timelineRecord(current, turn, totalMs) {
-  const end = current.started + totalMs;
-  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
   const query = turn.parameters?.retrieval_query;
   return {
     elapsed_ms: Math.round(totalMs),
-    steps: steps.map((step, index) => ({
+    steps: timelineSteps(current.timeline || [], current.started + totalMs).map((step) => ({
       label: query && /semantic search/i.test(step.label)
         ? `${step.label} for “${query}”`
         : step.label,
-      ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+      ms: step.ms,
     })),
   };
+}
+
+/**
+ * Turn the recorded step start times into labels and durations.
+ *
+ * @param timeline Steps with ``label`` and start time ``at``, in order.
+ * @param end Time the last step ended, or now for a step still running.
+ * @returns Each step's label and duration in milliseconds, without the
+ *   initial "Starting" step.
+ */
+function timelineSteps(timeline, end) {
+  const steps = timeline.filter((step) => step.label !== "Starting");
+  return steps.map((step, index) => ({
+    label: step.label,
+    ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+  }));
+}
+
+/**
+ * Add one row per step, with its duration, to a timeline list.
+ *
+ * Used both while an answer is made and for the saved "Took …" list, so
+ * they look the same.
+ *
+ * @param list The ``answer-timeline`` list to fill.
+ * @param steps Step labels and durations in milliseconds.
+ * @param running Whether the last step is still going on.
+ */
+function appendTimelineRows(list, steps, running = false) {
+  steps.forEach((step, index) => {
+    const row = document.createElement("li");
+    if (running && index === steps.length - 1) row.className = "timeline-running";
+    const label = document.createElement("span");
+    label.textContent = step.label;
+    const time = document.createElement("span");
+    time.className = "timeline-time";
+    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
+    row.append(label, time);
+    list.append(row);
+  });
 }
 
 /**
@@ -2945,16 +3619,7 @@ function renderTimeline(record, turn) {
   }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
-  for (const step of record?.steps || []) {
-    const row = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = step.label;
-    const time = document.createElement("span");
-    time.className = "timeline-time";
-    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
-    row.append(label, time);
-    list.append(row);
-  }
+  appendTimelineRows(list, record?.steps || []);
   if (tokens) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
@@ -3069,7 +3734,12 @@ function paintPendingTurn() {
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
+  // The steps so far, with the running one's time still counting.
+  const list = pendingTurn.steps;
+  if (list && pendingTurn.durationLine.open) {
+    list.replaceChildren();
+    appendTimelineRows(list, timelineSteps(pendingTurn.timeline, performance.now()), true);
+  }
 }
 
 /**
@@ -3093,16 +3763,22 @@ function addPendingTurn(question) {
   phaseHeader.className = "answer-phase-header";
   const phaseLabel = document.createElement("span");
   phaseLabel.className = "answer-phase-label";
-  const phaseTimerLabel = document.createElement("span");
-  phaseTimerLabel.className = "answer-phase-timer";
-  phaseHeader.append(phaseLabel, phaseTimerLabel);
+  phaseHeader.append(phaseLabel);
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
   answer.append(phaseHeader, phaseDetail);
-  item.append(questionNode, answer);
+  // The steps are listed as they happen, folded like the "Took …" summary
+  // it becomes when the answer arrives; expanding it follows the route live.
+  const durationLine = document.createElement("details");
+  durationLine.className = "answer-duration";
+  const timer = document.createElement("summary");
+  const steps = document.createElement("ol");
+  steps.className = "answer-timeline";
+  durationLine.append(timer, steps);
+  item.append(questionNode, durationLine, answer);
   conversation.append(item);
   pendingTurn = {
-    item, answer, label: phaseLabel, timer: phaseTimerLabel, detail: phaseDetail,
+    item, answer, label: phaseLabel, timer, steps, durationLine, detail: phaseDetail,
     phase: "Generating", started: performance.now(), elapsedMs: null,
     timeline: [],
   };
@@ -3239,7 +3915,7 @@ function bindAnswerSelection(answer, item, turn) {
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   resetAnswerStages();
-  updateProjectSummary(currentTurnCount + 1);
+  updateChatSummary(currentTurnCount + 1);
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -3262,6 +3938,7 @@ function completePendingTurn(turn) {
   current.answer.replaceChildren();
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
+  addMessageActions(current.item, turn);
   selectTurn(current.item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
   setBusy(false);
@@ -3371,10 +4048,6 @@ function appendAnswerText(text) {
     current.streaming = true;
     resetAnswerStages();
     markTimelineStep("Generating the answer");
-    // Live elapsed time above the answer; it becomes "Took …" at the end.
-    current.durationLine = document.createElement("div");
-    current.durationLine.className = "answer-duration";
-    current.item.insertBefore(current.durationLine, current.answer);
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
@@ -3510,6 +4183,7 @@ function onEvent(raw) {
     showSettings(data);
   } else if (data.event === "projects") {
     renderSavedProjects(data.projects || []);
+    renderSidebarProjects(savedProjects, openProjectPath);
   } else if (data.event === "conversation_delete_started") {
     const button = [...document.querySelectorAll(".conversation-item")]
       .find((item) => item.dataset.conversationId === data.conversation_id);
@@ -3690,6 +4364,8 @@ function onEvent(raw) {
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
+    // Set before the lists are drawn: chats keep their order per project.
+    openProjectPath = data.project;
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -3710,14 +4386,15 @@ function onEvent(raw) {
     if (!data.turns.length) renderConversationEmpty();
     byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
+    renderSidebarProjects(savedProjects, openProjectPath);
+    if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
     showWorkspace(sidePanelChoice ?? true);
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    byId("project-name").textContent = data.project.split(/[\\/]/).pop();
-    updateProjectSummary(data.turns.length);
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversation_opened") {
@@ -3742,7 +4419,7 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    updateProjectSummary(data.turns.length);
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversations") {
@@ -3772,7 +4449,7 @@ function onEvent(raw) {
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
-    updateProjectSummary(0);
+    updateChatSummary(0);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
@@ -3848,16 +4525,20 @@ function onEvent(raw) {
     setBusy(false);
     error.textContent = data.message;
     error.classList.remove("hidden");
-    const resume = data.existing_project && confirm(
-      `A project already exists at ${data.workspace}.\n\nOpen that project instead? Selected sources and new-project settings will not be applied.\n\nCancel to choose another destination.`,
-    );
-    if (resume) {
-      setBusy(true, "Opening the existing project...");
-      bridge.resumeProject(data.workspace);
-    } else {
-      openModels();
-      byId("workspace-path").focus();
-    }
+    const asking = data.existing_project
+      ? askKilin("Open the existing project?",
+        `A project already exists at ${data.workspace}. KíLín opens it without the new sources and settings; Cancel to choose another place.`,
+        "Open project")
+      : Promise.resolve(false);
+    asking.then((resume) => {
+      if (resume) {
+        setBusy(true, "Opening the existing project...");
+        bridge.resumeProject(data.workspace);
+      } else {
+        openModels();
+        byId("workspace-path").focus();
+      }
+    });
   } else if (data.event === "error") {
     showError(data.message, data.trace_path || activeTracePath);
   }
@@ -3892,6 +4573,20 @@ byId("send").addEventListener("click", (event) => {
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", closeModels);
+for (const tab of document.querySelectorAll(".settings-tab")) {
+  tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll(".settings-tab")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    showSettingsTab(tabs[next].dataset.tab);
+    tabs[next].focus();
+  });
+}
+showSettingsTab(settingsTab);
 byId("models-panel").addEventListener("click", (event) => {
   if (event.target === byId("models-panel")) closeModels();
 });
@@ -3985,9 +4680,7 @@ byId("question").addEventListener("keydown", (event) => {
   }
 });
 conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
-byId("project-name").addEventListener("input", () => {
-  byId("topbar-project-name").textContent = byId("project-name").textContent.trim();
-});
+byId("conversation-name").addEventListener("input", () => updateChatSummary());
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
   setBusy(true, "Starting a new conversation…");
@@ -4005,29 +4698,19 @@ function commitConversationName() {
   const name = byId("conversation-name").textContent.trim();
   if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
 }
-/**
- * Rename the current project when the edited title differs.
- */
-function commitProjectName() {
-  const name = byId("project-name").textContent.trim();
-  const current = byId("workspace-path").value.split(/[\\/]/).pop();
-  if (!busy && ready && name && name !== current) {
-    setBusy(true, "Renaming project…");
-    bridge.renameProject(name);
-  }
-}
-byId("topbar-project-name").addEventListener("input", () => {
-  byId("project-name").textContent = byId("topbar-project-name").textContent;
-});
-for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName], ["topbar-project-name", commitProjectName]]) {
+for (const [id, commit] of [["conversation-name", commitConversationName]]) {
   byId(id).addEventListener("blur", commit);
   byId(id).addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
   });
 }
-byId("change-project").addEventListener("click", () => {
-  if (busy) return;
+/**
+ * Close the open project and show the start screen, where a project can be
+ * resumed or created.
+ */
+function returnToLaunch() {
   bridge.closeProject();
+  openProjectPath = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");
@@ -4046,6 +4729,50 @@ byId("change-project").addEventListener("click", () => {
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
+}
+
+// The logo and the Projects ＋ lead back to the start screen, where new
+// projects are made; both are disabled while busy.
+for (const id of ["home-logo", "new-project"]) {
+  byId(id).addEventListener("click", () => {
+    if (busy) return;
+    byId("leave-project").showModal();
+  });
+}
+// Each left-panel section folds, and sorts from its ⋯ menu; both choices
+// are remembered on this computer.
+for (const section of document.querySelectorAll(".sidebar-section")) {
+  const name = section.dataset.section;
+  const toggle = section.querySelector(".sidebar-section-toggle");
+  const fold = (collapsed) => {
+    section.classList.toggle("collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  };
+  fold(sidebarPref(`${name}-collapsed`, false));
+  toggle.addEventListener("click", () => {
+    const collapsed = !section.classList.contains("collapsed");
+    fold(collapsed);
+    setSidebarPref(`${name}-collapsed`, collapsed);
+  });
+}
+byId("sort-projects").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "projects",
+    () => renderSidebarProjects(savedProjects, openProjectPath));
+});
+byId("sort-conversations").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "conversations",
+    () => lastConversationData && renderConversations(lastConversationData));
+});
+byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
+byId("kilin-ask-cancel").addEventListener("click", () => byId("kilin-ask").close("cancel"));
+byId("kilin-ask-other").addEventListener("click", () => byId("kilin-ask").close("other"));
+byId("kilin-ask-confirm").addEventListener("click", () => byId("kilin-ask").close("confirm"));
+byId("leave-project-confirm").addEventListener("click", () => {
+  byId("leave-project").close();
+  if (busy) return;
+  returnToLaunch();
 });
 byId("toggle-workspace").addEventListener("click", () => {
   chooseSidePanels(!shell.classList.contains("sidebar-open"));

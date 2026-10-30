@@ -64,9 +64,9 @@ state changes and bridge calls.
 The page's local-content access to remote URLs is disabled in the Qt view.
 That setting does not prevent the Python engine from downloading models.
 Answers and source excerpts are inserted as text rather than executed as
-HTML. Answers are rendered as Markdown (headings, lists, quotes, code, bold,
-italics) by building DOM nodes, never by parsing HTML, so model output cannot
-inject markup; plain answers simply become paragraphs. Markdown is rendered
+HTML. Answers are rendered as Markdown (headings, lists, quotes, code,
+tables, bold, italics) by building DOM nodes, never by parsing HTML, so model
+output cannot inject markup; plain answers simply become paragraphs. Markdown is rendered
 while the answer streams, and citation links are added when it completes. Numeric citations are made clickable only when they refer to evidence
 records supplied with that answer.
 
@@ -250,9 +250,18 @@ write and register a new tool.
 
 ## Models and generation settings
 
+KíLín setup sits at the top of Settings. Below it, settings are grouped in
+tabs: **General** (Appearance), **Models** (effort levels with their search
+depth, embedding and intent models), **Answers** (temperature, answer length,
+thinking), and **Project** (workspace folder, backend, file types,
+chunking). Messages from Close show below the tabs, whichever tab is open.
+
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
+The left-panel qilin logo is gold in light mode and blue-black in dark
+mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
+installed with the images.
 
 Settings are ordered Appearance, Effort levels, Search depth, Embedding
 model, Intent model, Answers, then Project. Clicking
@@ -380,7 +389,11 @@ New chat creates a separate conversation record while retaining earlier
 conversations in the picker. It does not archive and delete the previous GUI
 conversation. Branch copies resumable parent state and records parent and
 checkpoint identifiers; it does not copy the entire parent event history.
-Renaming a conversation updates display metadata. The project name can be edited in the heading or floating top bar.
+Renaming a conversation updates display metadata. The chat heading and the
+floating top bar show only the open chat's name and turn count. The left
+panel lists projects; right-click the open project to rename it, and its
+settings icon opens its Settings. Other projects have no settings icon,
+because Settings save into the open project.
 Renaming a project moves
 its workspace folder, reloads the conversation registry, and restores the
 selected chat. If reopening fails, KíLín attempts to restore the old folder. Changing conversation retains already loaded

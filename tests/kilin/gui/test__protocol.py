@@ -694,5 +694,17 @@ class TestGUIProtocolBridge(unittest.TestCase):
         ])
 
 
+    def test_copy_text_goes_to_the_system_clipboard(self) -> None:
+        """Copy through Qt, since the page may not write the clipboard."""
+
+        clipboard = MagicMock()
+        with patch(
+            "kilin.gui.window.QGuiApplication.clipboard",
+            return_value=clipboard,
+        ):
+            self.bridge.copyText("Answer [1].")
+        clipboard.setText.assert_called_once_with("Answer [1].")
+        self.assertEqual(self.commands, [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -77,6 +77,7 @@ include = ["kilin*"]
     "web/*.css",
     "web/*.js",
     "icons/*.png",
+    "icons/README.md",
 ]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.
