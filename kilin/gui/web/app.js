@@ -118,6 +118,9 @@ let resumeAfterStop = false;
 let activeProjectTypeId = "";
 const lastEmptyPrompt = Object.create(null);
 let messageAttachments = [];
+// A question whose attached files are being added to sources; it is asked
+// once the index is refreshed.
+let attachedAsk = null;
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = Object.create(null);
@@ -2578,8 +2581,8 @@ function selectTurn(item, turn, citation = null) {
   byId("references-for").textContent = !evidence.length
     ? "No sources saved for this answer."
     : cited && cited < evidence.length
-      ? `Sources for: ${turn.question} · ${cited} cited of ${evidence.length} passages read`
-      : `Sources for: ${turn.question}`;
+      ? `Sources for: ${splitAttached(turn.question).question} · ${cited} cited of ${evidence.length} passages read`
+      : `Sources for: ${splitAttached(turn.question).question}`;
   const list = byId("references-list");
   list.replaceChildren();
   for (const source of sources) {
@@ -3133,11 +3136,89 @@ function addMessageActions(item, turn) {
   const question = item.querySelector(".user-message");
   const answer = item.querySelector(".answer-message");
   if (question) {
-    const row = messageActions(turn.question || "", turn.timestamp, "question");
+    const row = messageActions(splitAttached(turn.question).question, turn.timestamp, "question");
     row.classList.add("user-actions");
     question.after(row);
   }
   if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer"));
+}
+
+// The list KíLín adds under a question with attached files; older chats
+// listed the original paths under "Attached paths to consider".
+const ATTACHED_LIST = /\n\nAttached (?:files|paths to consider):\n((?:- [^\n]+(?:\n|$))+)$/;
+
+/**
+ * Split a saved question into the user's text and its attached files.
+ *
+ * @param text Question as sent to the engine.
+ * @returns ``question`` (the user's text) and ``files`` (attached paths).
+ */
+function splitAttached(text) {
+  const value = String(text || "");
+  const match = value.match(ATTACHED_LIST);
+  if (!match) return { question: value, files: [] };
+  return {
+    question: value.slice(0, match.index),
+    files: match[1].trim().split("\n").map((line) => line.slice(2).trim()),
+  };
+}
+
+/**
+ * Show a question with its attached files as chips under the text.
+ *
+ * A file in sources opens its place in the workspace tree; a path from an
+ * older chat, never copied, is shown by name only.
+ *
+ * @param element The question bubble.
+ * @param text Question as sent to the engine.
+ */
+function fillQuestion(element, text) {
+  const { question, files } = splitAttached(text);
+  element.textContent = question;
+  if (!files.length) return;
+  const row = document.createElement("div");
+  row.className = "question-attachments";
+  for (const path of files) {
+    const inSources = path.startsWith("sources/");
+    const chip = document.createElement(inSources ? "button" : "span");
+    chip.className = "question-attachment";
+    chip.textContent = path.replace(/\/$/, "").split(/[\\/]/).pop() || path;
+    chip.title = inSources ? `Show ${path} in the workspace` : path;
+    if (inSources) {
+      chip.type = "button";
+      chip.addEventListener("click", () => revealWorkspacePath(path));
+    }
+    row.append(chip);
+  }
+  element.append(row);
+}
+
+/**
+ * Open the Workspace panel at a file or folder and briefly highlight it.
+ *
+ * @param path Workspace-relative path; a folder ends with "/".
+ */
+function revealWorkspacePath(path) {
+  showWorkspace(true);
+  const target = path.replace(/\/$/, "");
+  const tree = byId("workspace-tree");
+  const row = [...tree.querySelectorAll(".tree-file")].find((line) => line.dataset.path === target)
+    || [...tree.querySelectorAll(".tree-folder")].find((folder) => folder.dataset.path === target)?.querySelector("summary");
+  if (!row) {
+    // Only a notice: an answer may be on its way.
+    error.textContent = `${target} is no longer in the workspace.`;
+    error.classList.remove("hidden");
+    return;
+  }
+  // Unfold every folder above it.
+  for (let node = row.parentElement; node && node !== tree; node = node.parentElement) {
+    if (node.tagName === "DETAILS") node.open = true;
+  }
+  row.scrollIntoView({ block: "center" });
+  row.focus({ preventScroll: true });
+  row.classList.remove("revealed");
+  void row.offsetWidth;
+  row.classList.add("revealed");
 }
 
 /**
@@ -3152,7 +3233,7 @@ function addTurn(turn) {
   item.dataset.turnIndex = String(conversation.children.length);
   const question = document.createElement("div");
   question.className = "user-message";
-  question.textContent = turn.question;
+  fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
   answer.tabIndex = 0;
@@ -3809,7 +3890,7 @@ function addPendingTurn(question) {
   item.dataset.turnIndex = String(conversation.children.length);
   const questionNode = document.createElement("div");
   questionNode.className = "user-message";
-  questionNode.textContent = question;
+  fillQuestion(questionNode, question);
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
   const phaseHeader = document.createElement("div");
@@ -4450,6 +4531,12 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    // The attached files are now in sources and indexed.
+    if (attachedAsk) {
+      const ask = attachedAsk;
+      attachedAsk = null;
+      sendQuestion(ask);
+    }
   } else if (data.event === "conversation_opened") {
     // An error from an earlier attempt no longer applies to this conversation.
     clearError();
@@ -4489,6 +4576,7 @@ function onEvent(raw) {
   } else if (data.event === "source_changes") {
     showSourceSync(data);
   } else if (data.event === "sources_checked") {
+    if (attachedAsk) return addAttachedSources(data);
     setBusy(false);
     showSourceAdd(data);
   } else if (data.event === "folder_changed") {
@@ -4593,6 +4681,13 @@ function onEvent(raw) {
       }
     });
   } else if (data.event === "error") {
+    if (attachedAsk) {
+      // Adding the attached files failed: give the question back.
+      byId("question").value = attachedAsk.question;
+      messageAttachments = attachedAsk.attachments;
+      attachedAsk = null;
+      renderAttachments();
+    }
     showError(data.message, data.trace_path || activeTracePath);
   }
 }
@@ -4712,20 +4807,59 @@ byId("question-form").addEventListener("submit", (event) => {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
   byId("question").value = "";
-  addPendingTurn(question);
-  showAskingConversation(question);
-  setBusy(true, "Finding evidence and answering…");
-  const attachedContext = messageAttachments.length
-    ? `\n\nAttached paths to consider:\n${messageAttachments.map((path) => `- ${path}`).join("\n")}`
-    : "";
+  const ask = {
+    question, attachments: messageAttachments, files: [], leftOut: [],
+    effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
+    settings: { temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens },
+  };
   messageAttachments = [];
   renderAttachments();
-  const effort = JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep });
-  bridge.askQuestion(`${question}${attachedContext}`, effort, JSON.stringify({
-    temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
-    _title_question: question,
-  }));
+  if (!ask.attachments.length) return sendQuestion(ask);
+  // Copy attached files into sources first, so the answer can search them.
+  attachedAsk = ask;
+  setBusy(true, "Adding the attached files to sources…");
+  bridge.checkProjectSources(JSON.stringify(ask.attachments));
 });
+
+/**
+ * Ask a question; attached files, already in sources, are listed under it.
+ *
+ * @param ask Question, its attached ``sources/`` paths (``files``), names
+ *   that could not be added (``leftOut``), and the answer settings.
+ */
+function sendQuestion(ask) {
+  const listed = ask.files.map((path) => `- ${path}`).join("\n");
+  const text = listed ? `${ask.question}\n\nAttached files:\n${listed}` : ask.question;
+  addPendingTurn(text);
+  showAskingConversation(ask.question);
+  setBusy(true, "Finding evidence and answering…");
+  bridge.askQuestion(text, ask.effort, JSON.stringify({ ...ask.settings, _title_question: ask.question }));
+  if (ask.leftOut.length) {
+    error.textContent = `KíLín could not add ${ask.leftOut.join(", ")}, so the answer does not use ${ask.leftOut.length === 1 ? "it" : "them"}.`;
+    error.classList.remove("hidden");
+  }
+}
+
+/**
+ * Add a question's attached files to sources without the add dialog.
+ *
+ * Files already in sources are only referred to; the question is asked
+ * when the refreshed project arrives (``opened``), or now when nothing new
+ * has to be copied.
+ *
+ * @param check The ``sources_checked`` event for the attached paths.
+ */
+function addAttachedSources(check) {
+  const ask = attachedAsk;
+  ask.files = check.add.map((item) => `sources/${item.name}${item.kind === "folder" ? "/" : ""}`);
+  ask.leftOut = [...check.files.map((file) => file.path), ...check.skipped_folders];
+  if (!check.add.some((item) => item.state !== "existing")) {
+    attachedAsk = null;
+    return sendQuestion(ask);
+  }
+  setBusy(true, "Adding the attached files and updating the index…");
+  bridge.addProjectSources(JSON.stringify(check.sources), "{}");
+}
 byId("question").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
