@@ -357,6 +357,14 @@ button:disabled { opacity: .62; cursor: default; }
 .answer-message.typing::after, .answer-message.streaming::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--control); animation: typing-caret .8s steps(1) infinite; }
 .turn.failed .answer-message { color: #9c3936; }
 @keyframes typing-caret { 50% { opacity: 0; } }
+.message-actions { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-top: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .12s; }
+.message-actions.user-actions { justify-content: flex-end; }
+.answer-message + .message-actions { margin-top: -4px; }
+.user-message:hover + .message-actions, .answer-message:hover + .message-actions, .message-actions:hover, .message-actions:focus-within { opacity: 1; }
+.message-action { display: grid; width: 26px; min-width: 26px; min-height: 26px; padding: 0; place-items: center; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
+.message-action:hover, .message-action:focus-visible { color: var(--text); background: var(--hover); }
+.message-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.message-action.copied { color: var(--citation); }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }
 .answer-citation { margin-left: 1px; vertical-align: super; font-size: .75em; line-height: 0; }
 .answer-citation button { min-height: 0; padding: 0 1px; border: 0; border-radius: 0; color: var(--citation); background: none; font: inherit; font-weight: 650; text-decoration: underline; }

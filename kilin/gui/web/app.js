@@ -2964,6 +2964,129 @@ function appendInlineMarkdown(element, text, linkCitation) {
   element.append(text.slice(last));
 }
 
+const MESSAGE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Format a turn's saved time for the actions under its messages.
+ *
+ * @param timestamp ISO 8601 time the turn was saved.
+ * @param now Current time, so today's messages show only the time.
+ * @returns "14:05" today, "28 Oct 14:05" this year, "28 Oct 2025 14:05"
+ *   before, or "" if the time is missing or invalid.
+ */
+function messageTime(timestamp, now = new Date()) {
+  const date = new Date(timestamp || "");
+  if (!timestamp || Number.isNaN(date.getTime())) return "";
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = `${date.getDate()} ${MESSAGE_MONTHS[date.getMonth()]}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${day} ${time}` : `${day} ${date.getFullYear()} ${time}`;
+}
+
+/**
+ * Return an answer as the user sees it, for copying: no thinking, and
+ * citations with their shown numbers.
+ *
+ * @param turn Saved answer and its evidence.
+ * @returns Answer Markdown with linked markers such as "[143, 7]" shown as
+ *   "[1, 2]".
+ */
+function answerCopyText(turn) {
+  const { labels } = labelsForTurn(turn);
+  return splitThinking(turn.answer).answer.trim().replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (marker, inner) => {
+    const numbers = inner.split(",").map((value) => Number(value.trim()));
+    if (!numbers.every((number) => labels.has(number))) return marker;
+    return `[${numbers.map((number) => labels.get(number)).join(", ")}]`;
+  });
+}
+
+/**
+ * Put text on the clipboard. In the app Qt copies it, since the page may
+ * not; in a plain browser use the clipboard API, falling back to a hidden
+ * text box.
+ *
+ * @param text Text to copy.
+ */
+async function copyToClipboard(text) {
+  if (bridge) {
+    bridge.copyText(text);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // Fall back below.
+  }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.position = "fixed";
+  box.style.opacity = "0";
+  document.body.append(box);
+  box.select();
+  document.execCommand("copy");
+  box.remove();
+}
+
+/**
+ * Build the row shown under a message on hover or focus: Copy and the
+ * message's time.
+ *
+ * @param text Text the Copy button puts on the clipboard.
+ * @param timestamp The turn's saved time, or "" while it is not saved.
+ * @param label What is copied, for the button's accessible name.
+ * @returns New element placed right after the message.
+ */
+function messageActions(text, timestamp, label) {
+  const row = document.createElement("div");
+  row.className = "message-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "message-action";
+  copy.title = "Copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+  copy.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await copyToClipboard(text);
+    copy.title = "Copied";
+    copy.classList.add("copied");
+    setTimeout(() => {
+      copy.title = "Copy";
+      copy.classList.remove("copied");
+    }, 1500);
+  });
+  row.append(copy);
+  const shown = messageTime(timestamp);
+  if (shown) {
+    const time = document.createElement("time");
+    time.dateTime = timestamp;
+    time.title = new Date(timestamp).toLocaleString();
+    time.textContent = shown;
+    row.append(time);
+  }
+  return row;
+}
+
+/**
+ * Add Copy and time rows under a turn's question and answer.
+ *
+ * @param item Conversation article holding the two messages.
+ * @param turn Saved question and answer.
+ */
+function addMessageActions(item, turn) {
+  const question = item.querySelector(".user-message");
+  const answer = item.querySelector(".answer-message");
+  if (question) {
+    const row = messageActions(turn.question || "", turn.timestamp, "question");
+    row.classList.add("user-actions");
+    question.after(row);
+  }
+  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer"));
+}
+
 /**
  * Append a completed turn, enable answer selection, and show its
  * references.
@@ -2996,6 +3119,7 @@ function addTurn(turn) {
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
   item.append(...[question, timeline, answer].filter(Boolean));
+  addMessageActions(item, turn);
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
@@ -3814,6 +3938,7 @@ function completePendingTurn(turn) {
   current.answer.replaceChildren();
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
+  addMessageActions(current.item, turn);
   selectTurn(current.item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
   setBusy(false);

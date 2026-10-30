@@ -811,6 +811,21 @@ class ChatBridge(QObject):
                 )
             )
 
+    @Slot(str)
+    def copyText(self, text: str) -> None:
+        """Put text on the system clipboard for the page's Copy buttons.
+
+        Qt WebEngine does not let the page write to the clipboard itself.
+
+        Parameters
+        ----------
+        text: str
+            Text to copy.
+
+        """
+
+        QGuiApplication.clipboard().setText(text)
+
     @Slot(str, str)
     def findSavedProject(self, type_id: str, workspace: str) -> None:
         """Refresh Resume for the selected project type and workspace.
