@@ -366,6 +366,11 @@ button:disabled { opacity: .62; cursor: default; }
 .message-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .message-action.copied { color: var(--citation); }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }
+/* Fonts with maths tables (macOS, Windows), so big operators and fractions
+   draw at full size; "math" is the system fallback. */
+.answer-math math { font-family: "STIX Two Math", "Cambria Math", math; font-size: 1.08em; }
+.answer-math.display { overflow-x: auto; margin: 12px 0; padding: 2px 0; text-align: center; }
+.answer-math.display math { display: block math; }
 .answer-citation { margin-left: 1px; vertical-align: super; font-size: .75em; line-height: 0; }
 .answer-citation button { min-height: 0; padding: 0 1px; border: 0; border-radius: 0; color: var(--citation); background: none; font: inherit; font-weight: 650; text-decoration: underline; }
 .answer-citation button:hover, .answer-citation button:focus-visible { color: var(--citation-hover); }

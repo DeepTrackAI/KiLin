@@ -65,10 +65,13 @@ The page's local-content access to remote URLs is disabled in the Qt view.
 That setting does not prevent the Python engine from downloading models.
 Answers and source excerpts are inserted as text rather than executed as
 HTML. Answers are rendered as Markdown (headings, lists, quotes, code,
-tables, bold, italics) by building DOM nodes, never by parsing HTML, so model
+tables, bold, italics, LaTeX maths) by building DOM nodes, never by parsing HTML, so model
 output cannot inject markup; plain answers simply become paragraphs. Markdown is rendered
 while the answer streams, and citation links are added when it completes. Numeric citations are made clickable only when they refer to evidence
 records supplied with that answer.
+LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
+KaTeX (`web/vendor/`, MIT) as MathML, without fonts or network access;
+LaTeX it cannot read stays as text.
 
 ## Source selection and workspace preparation
 

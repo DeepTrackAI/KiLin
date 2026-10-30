@@ -62,6 +62,7 @@ const find = (node, tag) => node.children.filter(
 """
         for name in (
             "MARKDOWN_FENCE",
+            "MARKDOWN_MATH",
             "MARKDOWN_HEADING",
             "MARKDOWN_RULE",
             "MARKDOWN_QUOTE",
