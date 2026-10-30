@@ -93,9 +93,7 @@ class TestGUIPreferences(unittest.TestCase):
                 "router_models": {"mlx": "Qwen/Qwen3-8B"},
             },
         )
-        self.assertEqual(
-            default_project_profile("code"), original_profile
-        )
+        self.assertEqual(default_project_profile("code"), original_profile)
 
     def test_restoring_defaults_removes_only_matching_overrides(self) -> None:
         """Do not erase unrelated changes when a default is restored."""
@@ -109,9 +107,7 @@ class TestGUIPreferences(unittest.TestCase):
             {"query_format": "plain"},
         )
         preferences.write_defaults({"query_format": "qwen3"})
-        self.assertEqual(
-            json.loads(self.path.read_text(encoding="utf-8")), {}
-        )
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")), {})
 
     def test_preferences_can_override_one_backend(self) -> None:
         """Retain other backend models while changing one preference."""
@@ -122,9 +118,7 @@ class TestGUIPreferences(unittest.TestCase):
             encoding="utf-8",
         )
         effective = preferences.app_defaults()
-        self.assertEqual(
-            effective["embedding_models"]["mlx"], "Qwen/Qwen3-4B"
-        )
+        self.assertEqual(effective["embedding_models"]["mlx"], "Qwen/Qwen3-4B")
         self.assertEqual(
             effective["embedding_models"]["torch"],
             preferences.built_in_defaults()["embedding_models"]["torch"],
@@ -226,6 +220,27 @@ class TestGUIPreferences(unittest.TestCase):
         after = open_project(project_root)
         self.assertEqual(after.profile, original.profile)
         self.assertEqual(profile_path.read_bytes(), before)
+
+    def test_projects_folder_is_absolute_or_default(self) -> None:
+        """Save an absolute folder; "" goes back to the standard one."""
+
+        check = preferences.validate_workspace_folder
+        self.assertEqual(check(""), "")
+        self.assertEqual(check("  /Users/me/Projects "), "/Users/me/Projects")
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            check("Projects")
+        with self.assertRaises(TypeError):
+            check(None)
+        self.assertEqual(preferences.app_defaults()["workspace_folder"], "")
+        preferences.write_defaults({"workspace_folder": "/Users/me/Projects"})
+        self.assertEqual(
+            preferences.app_defaults()["workspace_folder"],
+            "/Users/me/Projects",
+        )
+        # Use default removes the saved choice from the file.
+        preferences.write_defaults({"workspace_folder": ""})
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("workspace_folder", saved)
 
     def test_empty_update_does_not_write(self) -> None:
         """Do not create a preference file for a no-op update."""

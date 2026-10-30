@@ -82,6 +82,7 @@ __all__ = [
     "validate_effort_levels",
     "validate_model_id",
     "validate_search_depth",
+    "validate_workspace_folder",
     "write_defaults",
 ]
 
@@ -286,6 +287,41 @@ def _choice(options: tuple[str, ...]) -> Callable:
     return checked
 
 
+def validate_workspace_folder(value: object) -> str:
+    """Return the chosen projects folder, or "" for the default one.
+
+    Parameters
+    ----------
+    value: object
+        Folder the user chose in Settings, or an empty string.
+
+    Returns
+    -------
+    str
+        The trimmed absolute path, or an empty string.
+
+    Raises
+    ------
+    TypeError
+        If the value is not a string.
+    ValueError
+        If the path is not absolute.
+
+    Notes
+    -----
+    The folder is not required to exist here: a removed or unmounted folder
+    is ignored when KíLín starts (see ``kilin.gui._paths``).
+
+    """
+
+    if not isinstance(value, str):
+        raise TypeError("The workspace folder must be text.")
+    folder = value.strip()
+    if folder and not Path(folder).expanduser().is_absolute():
+        raise ValueError("Choose an absolute workspace folder.")
+    return folder
+
+
 # Validated complete packaged defaults, cached by modification time and size.
 _CACHE: dict[Path, tuple[int, int, dict[str, object]]] = {}
 
@@ -334,6 +370,7 @@ def _checks() -> dict[str, Callable[[object], object]]:
         "router_models": _per_backend(validate_model_id),
         "embedding_models": _per_backend(validate_model_id),
         "query_format": _choice(_QUERY_FORMATS),
+        "workspace_folder": validate_workspace_folder,
     }
 
 
