@@ -192,6 +192,35 @@ class TestEngineWorkflow(unittest.TestCase):
             "Question", retrieval_count=6, generation_settings=settings
         )
 
+    def test_answer_settings_are_saved_without_a_question(self) -> None:
+        """Thinking switched in the menu is saved and used at once."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        thinking = session.project.profile.thinking
+
+        engine.save_answer_settings({"thinking": not thinking})
+
+        self.assertEqual(session.project.profile.thinking, not thinking)
+        saved = (session.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"thinking = {not thinking}", saved)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": session.project.profile.temperature,
+            "thinking": not thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        })
+        session.ask.assert_not_called()
+        self.assertEqual(events, [])
+
+        engine.session = None
+        engine.save_answer_settings({"thinking": True})
+        self.assertEqual(events[-1]["event"], "error")
+        self.assertIn("Open a project first", events[-1]["message"])
+
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.open_project")
     def test_resume_does_not_copy_sources(

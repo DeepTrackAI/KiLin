@@ -400,7 +400,8 @@ button:disabled { opacity: .62; cursor: default; }
 .attachment-chip button { min-height: 0; padding: 0; border: 0; color: inherit; background: transparent; }
 .question-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
 .question-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--user-bubble-text); background: var(--surface); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.question-attachment::before { content: ""; flex: none; width: 9px; height: 11px; border: 1.5px solid currentColor; border-radius: 2px; opacity: .6; }
+/* A page with a folded corner, drawn in the text color through a mask. */
+.question-attachment::before { content: ""; flex: none; width: 12px; height: 14px; background: currentColor; opacity: .7; -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 2v6h6M8 13h8M8 17h5'/%3E%3C/svg%3E") center / contain no-repeat; mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z'/%3E%3Cpath d='M14 2v6h6M8 13h8M8 17h5'/%3E%3C/svg%3E") center / contain no-repeat; }
 button.question-attachment:hover, button.question-attachment:focus-visible { border-color: var(--citation); color: var(--citation); }
 .revealed { animation: revealed 1.6s ease-out; }
 @keyframes revealed { from { background: var(--highlight); outline: 2px solid var(--citation); } to { background: transparent; outline: 2px solid transparent; } }
@@ -599,6 +600,13 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-body th { background: var(--surface-soft); font-weight: 650; }
 /* One effort name, centred above both sliders. */
 .effort-title { display: block; margin: 0 0 8px; color: var(--text); font-size: 15px; font-weight: 600; text-align: center; }
+/* "Lagom ›" opens the Thinking switch; the chevron turns down while open. */
+button.effort-title { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 0; padding: 2px 0; border: 0; background: transparent; }
+.effort-chevron { color: var(--muted); font-size: 17px; line-height: 1; transition: transform .15s; }
+.effort-title[aria-expanded="true"] .effort-chevron { transform: rotate(90deg); }
+.effort-thinking .effort-heading { align-items: center; }
+.effort-heading .segmented span { color: var(--control); font-size: 12px; letter-spacing: 0; text-transform: none; }
+.effort-thinking .segmented:has(input:disabled) { opacity: .5; }
 .effort-heading { display: flex; justify-content: space-between; align-items: baseline; }
 .effort-heading + .effort-detail { margin-top: -15px; }
 

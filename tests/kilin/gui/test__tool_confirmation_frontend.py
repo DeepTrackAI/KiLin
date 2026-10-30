@@ -107,6 +107,8 @@ let answerStageQueue = [];
 const commands = [];
 const bridge = {choosePlan: value => commands.push(value)};
 let pendingTurn = null;
+// No attached files are being added to sources in these tests.
+let attachedAsk = null;
 function begin() {
   resetAnswerStages(); commands.length = 0; errors.length = 0;
   error.classList.add('hidden'); busy = true;

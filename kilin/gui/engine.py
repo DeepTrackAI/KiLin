@@ -1890,6 +1890,34 @@ class ChatEngine:
             trace=self.active_trace,
         )
 
+    def save_answer_settings(self, settings: object) -> None:
+        """Save answer settings changed outside a question, e.g. Thinking.
+
+        The open project's chat uses them at once, so the next answer and
+        every other chat follow the saved profile.
+
+        Parameters
+        ----------
+        settings: object
+            Mapping with any of ``temperature``, ``thinking``, and
+            ``max_new_tokens``; other keys are ignored.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if not isinstance(settings, dict):
+                raise ValueError("Answer settings must be an object.")
+            self._save_answer_settings(settings)
+            self._use_project_answer_settings()
+        except Exception as error:
+            self._report_error(
+                "gui.answer_settings.failed",
+                error,
+                f"Could not save the answer settings: {error}",
+            )
+
     def check_sources(self, sources: list[str]) -> None:
         """Tell the user what adding these sources would copy.
 
@@ -3945,6 +3973,8 @@ def main() -> None:
                         )
                     elif action == "rename_project":
                         engine.rename_project(command["name"])
+                    elif action == "save_answer_settings":
+                        engine.save_answer_settings(command.get("settings"))
                     elif action == "save_answer_timeline":
                         engine.save_answer_timeline(
                             str(command.get("timestamp", "")),

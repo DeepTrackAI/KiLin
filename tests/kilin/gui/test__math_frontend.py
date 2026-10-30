@@ -41,22 +41,22 @@ class TestMathFrontend(unittest.TestCase):
     def test_katex_ships_with_the_gui(self):
         """Bundled, loaded before app.js, licensed, and packaged."""
 
-        vendor = _WEB / "vendor"
-        self.assertTrue((vendor / "katex.min.js").is_file())
+        bundle = _WEB / "katex"
+        self.assertTrue((bundle / "katex.min.js").is_file())
         self.assertIn(
             "MIT License",
-            (vendor / "KATEX-LICENSE").read_text(encoding="utf-8"),
+            (bundle / "LICENSE").read_text(encoding="utf-8"),
         )
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         self.assertLess(
-            page.index('<script src="vendor/katex.min.js" defer>'),
+            page.index('<script src="katex/katex.min.js" defer>'),
             page.index('<script src="app.js" defer>'),
         )
         project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         for pattern in (
-            '"web/vendor/*.js",',
-            '"web/vendor/KATEX-LICENSE",',
-            '"web/vendor/README.md",',
+            '"web/katex/katex.min.js",',
+            '"web/katex/LICENSE",',
+            '"web/katex/README.md",',
         ):
             self.assertIn(pattern, project)
 
@@ -96,7 +96,7 @@ const render = (text) => {
   return host;
 };
 const inline = (text) => nodes(render(text).children[0]);
-""" % str(_WEB / "vendor/katex.min.js")
+""" % str(_WEB / "katex/katex.min.js")
         for name in (
             "MARKDOWN_FENCE",
             "MARKDOWN_MATH",

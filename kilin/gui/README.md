@@ -70,7 +70,7 @@ output cannot inject markup; plain answers simply become paragraphs. Markdown is
 while the answer streams, and citation links are added when it completes. Numeric citations are made clickable only when they refer to evidence
 records supplied with that answer.
 LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
-KaTeX (`web/vendor/`, MIT) as MathML, without fonts or network access;
+KaTeX (`web/katex/`, MIT) as MathML, without fonts or network access;
 LaTeX it cannot read stays as text.
 Files attached to a message are first added to the project's sources and
 indexed, without the add dialog; the question then lists their `sources/`

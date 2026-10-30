@@ -759,6 +759,25 @@ class ChatBridge(QObject):
             }
         )
 
+    @Slot(str)
+    def saveAnswerSettings(self, settings_json: str) -> None:
+        """Save answer settings to the open project right away.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON object with any of temperature, thinking, and
+            max_new_tokens.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "save_answer_settings",
+                "settings": json.loads(settings_json),
+            }
+        )
+
     @Slot(str, str)
     def addProjectSources(
         self, sources_json: str, decisions_json: str
