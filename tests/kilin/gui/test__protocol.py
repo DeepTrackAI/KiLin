@@ -545,6 +545,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["event"], "error")
         self.assertIn("Continue, Quick, or Cancel", events[0]["message"])
+        self.assertIs(events[0]["pending_choice"], True)
 
     def test_pending_tool_option_accepts_only_valid_indices(self) -> None:
         """Convert option choice strings only within their valid range."""
@@ -569,6 +570,32 @@ class TestGUIProtocolEvents(unittest.TestCase):
             finally:
                 worker.close()
         self.assertEqual(events, [])
+
+    def test_pending_option_rejection_is_not_an_answer_failure(self):
+        """Keep waiting after rejecting an unrelated command or at EOF."""
+
+        with TemporaryDirectory() as temporary:
+            for last, expected in (
+                ({"action": "plan_choice", "choice": "option:0"}, 0),
+                ({"action": "plan_choice", "choice": "cancel"}, None),
+                (None, None),
+            ):
+                with self.subTest(last=last):
+                    commands = iter([{"action": "readiness"}, last])
+                    events = []
+                    worker = engine.ChatEngine(
+                        Path(temporary), events.append,
+                        read_command=lambda: next(commands),
+                    )
+                    try:
+                        result = worker._choose_option("Choose", ("one",))
+                    finally:
+                        worker.close()
+                    self.assertEqual(result, expected)
+                    self.assertEqual(len(events), 1)
+                    self.assertEqual(events[0]["event"], "error")
+                    self.assertIs(events[0]["pending_choice"], True)
+                    self.assertIn("Answer the question", events[0]["message"])
 
     def test_python_and_browser_answer_phases_match(self) -> None:
         """Keep JavaScript's duplicated phase names in sync with Python."""

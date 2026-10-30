@@ -2636,7 +2636,8 @@ class ChatEngine:
         Notes
         -----
         Commands are sequential, so other commands cannot run meanwhile;
-        each is answered with an error event and the wait continues.
+        each is answered with an error event marked ``pending_choice``
+        and the wait continues. The page must retain the controls.
 
         """
 
@@ -2653,6 +2654,7 @@ class ChatEngine:
                 "error",
                 message="Choose Continue, Quick, or Cancel for the plan "
                 "first.",
+                pending_choice=True,
             )
 
     def _choose_option(
@@ -2662,7 +2664,9 @@ class ChatEngine:
 
         The page shows the options from the ``processing`` answer phase
         that precedes this call and answers with a ``plan_choice`` command
-        whose choice is ``option:<index>`` or ``cancel``.
+        whose choice is ``option:<index>`` or ``cancel``. Rejected
+        unrelated commands emit errors marked ``pending_choice``;
+        they must not dismiss the question or abort the answer.
 
         Parameters
         ----------
@@ -2693,6 +2697,7 @@ class ChatEngine:
             self._send(
                 "error",
                 message=f"Answer the question first: {question}",
+                pending_choice=True,
             )
 
     def preview_reference(self, turn_index: int, citation: int) -> None:

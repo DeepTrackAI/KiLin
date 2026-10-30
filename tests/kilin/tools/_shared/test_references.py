@@ -195,6 +195,31 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertEqual(len(entries), 3)
         self.assertTrue(entries[1].startswith("Liu Y"))
 
+    def test_explicit_short_references_use_opt_in_filter(self) -> None:
+        text = (
+            "References\n"
+            "1. Nature 2020;12:22.\n"
+            "2. Garcia L. A full reference about tissue dynamics. "
+            "Science 2021;13:33.\n"
+        )
+        passages = (chunk("a", text),)
+        standard = numbered_reference_entries(passages, LAYOUT)
+        self.assertEqual([entry.number for entry in standard], [2])
+        seen = []
+
+        def accept_short(entry: str) -> bool:
+            seen.append(entry)
+            return entry.startswith("Nature 2020;")
+
+        extended = numbered_reference_entries(
+            passages, LAYOUT, accept_short=accept_short
+        )
+        self.assertEqual(
+            [entry.number for entry in extended], [1, 2]
+        )
+        self.assertTrue(extended[0].printed)
+        self.assertEqual(seen, ["Nature 2020;12:22."])
+
     def test_lone_numbers_go_to_unnumbered_entries(self) -> None:
         # PLOS prints some numbers apart from their entries ("6.", "7."),
         # others inline ("8. Baggio"); a DOI broken after "2013." must not

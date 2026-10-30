@@ -581,6 +581,9 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-body h4 { font-size: 1.08em; }
 .answer-body h5, .answer-body h6 { font-size: 1em; }
 .answer-body ul, .answer-body ol { margin: 0 0 0.75em; padding-left: 1.4em; }
+/* Publication links are buttons: the embedded page has no remote href. */
+.answer-body .external-link { display: inline; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; color: var(--citation); font: inherit; text-decoration: underline; cursor: pointer; text-align: left; }
+.answer-body .external-link:hover, .answer-body .external-link:focus-visible { color: var(--citation-hover); }
 /* Room for two- and three-digit numbers ("18.", "120."). */
 .answer-body ol { padding-left: 2.4em; }
 .answer-body li { margin: 0.2em 0; white-space: pre-wrap; }

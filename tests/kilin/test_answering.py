@@ -320,6 +320,72 @@ class TestSideReply(unittest.TestCase):
             ],
         )
 
+    def test_tool_side_reply_inherits_generation_settings(self) -> None:
+        """Inherit thinking/temperature and cap the tool output budget."""
+
+        chat = _FakeChat()
+        chat.max_new_tokens = 64
+        original = [dict(message) for message in chat.messages]
+        result = answering.side_reply(
+            chat, "Tool system", "Tool question", max_new_tokens=250,
+            inherit_settings=True,
+        )
+        self.assertEqual(result, "Final reply.")
+        self.assertEqual(chat.messages, original)
+        observation = chat.observations[0]
+        self.assertTrue(observation["thinking"])
+        self.assertEqual(observation["temperature"], 0.6)
+        self.assertEqual(observation["max_new_tokens"], 64)
+        # Router calls retain their existing deterministic behavior.
+        answering.side_reply(
+            chat, "Router", "Choose", max_new_tokens=30,
+        )
+        self.assertFalse(chat.observations[1]["thinking"])
+        self.assertEqual(chat.observations[1]["temperature"], 0.0)
+
+    def test_tool_side_reply_inherits_token_budget_by_default(self) -> None:
+        """No tool cap: ChatSession.reply gets its own budget (None)."""
+
+        chat = _FakeChat()
+        chat.max_new_tokens = 4096
+        original = [dict(message) for message in chat.messages]
+        result = answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=None, inherit_settings=True,
+        )
+        self.assertEqual(result, "Final reply.")
+        self.assertEqual(chat.messages, original)
+        observation = chat.observations[0]
+        self.assertIsNone(observation["max_new_tokens"])
+        self.assertTrue(observation["thinking"])
+        self.assertEqual(observation["temperature"], 0.6)
+
+        # An explicit tool override still respects the session maximum.
+        answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=2048, inherit_settings=True,
+        )
+        self.assertEqual(chat.observations[1]["max_new_tokens"], 2048)
+        answering.side_reply(
+            chat, "Tool system", "Check the quotation",
+            max_new_tokens=8192, inherit_settings=True,
+        )
+        self.assertEqual(chat.observations[2]["max_new_tokens"], 4096)
+
+    def test_tool_side_reply_restores_history_after_failure(self) -> None:
+        """An inherited tool reply cannot corrupt the conversation."""
+
+        chat = _FakeChat(reply_error=RuntimeError("model failed"))
+        original = [dict(message) for message in chat.messages]
+        with self.assertRaisesRegex(RuntimeError, "model failed"):
+            answering.side_reply(
+                chat, "Tool", "Question", max_new_tokens=120,
+                inherit_settings=True,
+            )
+        self.assertEqual(chat.messages, original)
+        self.assertTrue(chat.thinking)
+        self.assertEqual(chat.temperature, 0.6)
+
     def test_side_reply_passes_token_callback(self) -> None:
         """Forward streaming output without retaining side messages."""
 

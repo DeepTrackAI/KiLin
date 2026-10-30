@@ -14,11 +14,10 @@ cells", the tool:
    colon; otherwise the router model copies it out of the question, and
    its copy is used only when most of its words are the question's. A
    statement shorter than `MIN_WORDS` words gets a request to write it.
-2. Ranks every passage of the project for the statement (KíLín's hybrid
-   ranking) and keeps the `FILES` papers with the best-ranked passages. A
-   file that contains the statement word for word is not judged, and the
-   answer names it: it is the user's draft, or the paper the sentence was
-   copied from.
+2. Ranks project passages with KíLín's hybrid ranking and keeps the
+   `FILES` papers with the best-ranked passages. An independent paper is
+   **not** excluded merely because it contains the requested sentence
+   verbatim; only a positively identified draft should be excluded.
 3. Judges each paper with the answering model (`_shared/claims.py`): its
    `PASSAGES` passages most related to the statement, and a verdict
    (supported, partly supported, background, not supported, contradicted,
@@ -32,16 +31,38 @@ cells", the tool:
    is dropped, and a paper is called contradicted only with a confirmed
    quote. The plan is shown first when it has more than `LARGE_BATCHES`
    papers.
-4. Answers with the papers that could be cited (supported, partly
-   supported, background), best first, each with its comment and any
-   confirmed quotation as evidence, then lists the other papers checked.
+4. Assigns each directly/partly supporting paper a half-star citation
+   suitability rating (`kilin/tools/_shared/_rating.py`). The support
+   verdict determines the score band: supported 70–100, partly supported
+   40–70, and background 10–40. A checked quotation and the coverage of
+   distinctive statement words in that quote (or the best available
+   passage) refine the rating within its band. Unconfirmed quotations
+   are subject to a lower score cap within each verdict band. Ratings are
+   heuristic, **not** calibrated probabilities or measures of scientific
+   quality. They require no extra model, embedding, or network call.
+5. Answers with directly or partly supporting papers first, best within
+   each verdict, each with its rating, comment,
+   and any confirmed quotation as evidence. Background (context-only)
+   papers are listed separately, without claiming direct support. Each
+   star display includes
+   its numerical suitability score in parentheses, for example
+   `★★★★½ (88/100)`, using the unchanged score in the structured
+   result and trace. Within a verdict group,
+   more suitable papers appear first. Other checked papers are listed
+   without stars, rather than recommended.
 
 Limits: only the project's files are searched, so a paper that is not in
 the folder cannot be suggested (the answer says so when none supports the
 statement); each paper is judged from a few passages, not all of it; and
 the model's verdicts can be wrong, so they are pointers for the reader to
-check. A positive verdict may have no confirmed quotation; the
-comment and any available quotation help the reader assess it.
+check. A positive verdict may have no confirmed quotation and is then marked
+provisional. Quote validation rejects changed numbers, negations and
+common direction-of-effect substitutions. Evidence status is also recorded
+in traces. An exact quote's source location is retained with its passage.
+Answering-model calls inherit main-interface thinking, temperature and
+maximum output tokens by default (`ANSWER_TOKENS` is `null`). An explicit
+`ANSWER_TOKENS` value imposes a per-call cap. Router calls remain
+deterministic.
 
 Its `defaults.json` is independent of `kilin_defaults.json`.
 Project-type tool settings override the keys in `SETTINGS`. Other sections
@@ -57,8 +78,11 @@ are internal thresholds. All values are read and validated on import.
   range: 1–20.
 - `PASSAGE_TOKENS` (default `4000`): Most estimated tokens of those
   passages; the best-ranked one is always read. Allowed range: 300–16000.
-- `ANSWER_TOKENS` (default `250`): Longest verdict answer, in tokens.
-  Allowed range: 100–1000.
+- `ANSWER_TOKENS` (default `null`): Optional per-call output-token cap.
+  With `null`, the answering model inherits the main interface's maximum
+  output tokens (or its available context if no maximum was configured).
+  An explicit override accepts 100–131072 and is capped by any session
+  maximum.
 - `QUICK_FILES` (default `2`): Papers judged by the quick version, the most
   related first. Allowed range: 1–20.
 - `CONFIRMATION` (default `"when_large"`): When to ask before judging the

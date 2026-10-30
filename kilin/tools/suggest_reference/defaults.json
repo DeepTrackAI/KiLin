@@ -3,7 +3,7 @@
     "FILES": 5,
     "PASSAGES": 4,
     "PASSAGE_TOKENS": 4000,
-    "ANSWER_TOKENS": 250,
+    "ANSWER_TOKENS": null,
     "QUICK_FILES": 2,
     "CONFIRMATION": "when_large",
     "LARGE_BATCHES": 5

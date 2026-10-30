@@ -3462,7 +3462,7 @@ class RAGSession:
             question,
         )
 
-        def ask(chat: object) -> Callable[[str, str, int], str]:
+        def ask(chat: object) -> Callable[[str, str, int | None], str]:
             """Adapt a chat session to the tools' side-question callback.
 
             Parameters
@@ -3472,16 +3472,16 @@ class RAGSession:
 
             Returns
             -------
-            Callable[[str, str, int], str]
-                Callback accepting a system instruction, prompt, and token
-                budget. Calls delegate to ``side_reply`` on the supplied
-                chat session.
+            Callable[[str, str, int | None], str]
+                Callback accepting system instructions, a prompt, and an
+                optional token limit. ``None`` inherits the session maximum.
+                Calls delegate to ``side_reply`` on the chat session.
 
             """
 
             return lambda system, prompt, tokens: side_reply(
                 chat, system, prompt, max_new_tokens=tokens,
-                language_context=language_context,
+                language_context=language_context, inherit_settings=True,
             )
 
         # ``ask_model`` answers silently; ``write`` streams a tool's final
@@ -3503,6 +3503,7 @@ class RAGSession:
                 max_new_tokens=tokens,
                 token_callback=token_callback,
                 language_context=language_context,
+                inherit_settings=True,
             ),
             model_id=str(getattr(self.chat_session, "model_id", "")),
             progress=lambda message, **details: report_phase(

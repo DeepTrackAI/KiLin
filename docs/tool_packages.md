@@ -110,3 +110,18 @@ Tests for shared services belong in `tests/kilin/tools/_shared/`. They
 can be exercised independently from every registered tool. Full KíLín
 regression tests must pass after changes to shared services. KíLín's coding
 and DeepTrack-style documentation conventions apply to all Python modules.
+
+## Generation settings for tools
+
+The tool context's `ask_model` and `write` adapters inherit the active
+answering session's selected model, thinking mode and temperature. The
+smaller of the tool's requested `max_new_tokens` and the active session's
+configured output-token maximum governs the call. Tools requiring lengthy
+thinking responses should set an appropriate tool-specific output budget;
+a small structured-answer budget can otherwise truncate a thinking reply.
+Internal and user-facing answering-model calls follow the same policy.
+
+The `ask_router` adapter is unaffected: router side questions remain
+nonthinking, deterministic, and isolated from the conversation. All tool
+side calls restore the original conversation history after success or
+failure.

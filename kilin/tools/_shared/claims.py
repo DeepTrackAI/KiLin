@@ -19,7 +19,8 @@ verdict, the passage sentence it rests on, and a short critical comment:
 
 The model can be wrong, so its answer is checked in Python: the quote must
 be found in the passages it was given (its words in order; citation
-numbers, spacing and a mended word aside), and is then shown in the
+numbers and whitespace aside, with key scientific values and
+qualifiers preserved), and is then shown in the
 passage's own words, or it is dropped and the comment says what the model
 quoted; and a reference is called **contradicted** only with a confirmed
 quote, otherwise **not supported**.
@@ -37,11 +38,17 @@ Key Features
     A sentence citing several works is judged once per work, and the
     model is told the work only needs to support its own part.
 
+- **Publication attribution**
+
+    When a citation identifies the publication reporting the preceding
+    study, the study description is compared with the cited work. A paper
+    need not contain a self-referential sentence saying it was published.
+
 - **Checked quotes**
 
     Quotes are confirmed against the passages and shown in the passage's
-    own words; quotes in no passage are dropped, and their absence
-    weakens the verdict.
+    own words, preserving critical numbers and effect direction; rejected
+    or absent quotations are marked separately from the model verdict.
 
 Module Structure
 ----------------
@@ -108,6 +115,7 @@ __all__ = [
     "Verdict",
     "claim_passages",
     "judge_support",
+    "quote_line_range",
     "parse_verdict",
     "support_prompt",
     "verdict_label",
@@ -195,8 +203,9 @@ class Claim:
     also_cited: tuple[int, ...]
         Other reference numbers the same sentence cites.
     before: str
-        The sentence before it, for context ("The results of this study
-        were published [22]." needs it); empty when none.
+        Up to two preceding sentences in the same paragraph, for
+        disambiguating "this study" and similar references; empty when
+        no safe context is available.
     marked: str
         The sentence with every citation marker written in brackets where
         it stands ("a tracking method [5,40,88–91] and then"), so the model
@@ -205,6 +214,11 @@ class Claim:
         The words the reference is cited for: usually the phrase just
         before its marker ("a previously established tracking method");
         empty when unknown.
+    after: str
+        A following sentence from the same paragraph, if available.
+        Used only to disambiguate the citing sentence.
+    match_status: str
+        ``found`` or ``probable`` for the cited paper identity.
 
     """
 
@@ -215,6 +229,8 @@ class Claim:
     before: str = ""
     marked: str = ""
     cited_for: str = ""
+    after: str = ""
+    match_status: str = "found"
 
 
 @dataclass(frozen=True, slots=True)
@@ -236,6 +252,9 @@ class Verdict:
         The model's comment, with any note Python added.
     passages: tuple[Chunk, ...]
         The passages the model read.
+    evidence_status: str
+        ``exact``, ``approximate``, ``missing``, ``rejected``,
+        ``not required``, or ``not checked`` for a constructed result.
 
     """
 
@@ -245,6 +264,7 @@ class Verdict:
     quote_chunk: Chunk | None
     comment: str
     passages: tuple[Chunk, ...] = ()
+    evidence_status: str = "not checked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,6 +288,9 @@ class Support:
         The model's comment, with any note Python added.
     passages: tuple[Chunk, ...]
         The passages the model read.
+    evidence_status: str
+        ``exact``, ``approximate``, ``missing``, ``rejected``,
+        ``not required``, or ``not checked`` for a constructed result.
 
     """
 
@@ -278,6 +301,7 @@ class Support:
     quote_chunk: Chunk | None
     comment: str
     passages: tuple[Chunk, ...] = ()
+    evidence_status: str = "not checked"
 
 
 def verdict_label(verdict: str) -> str:
@@ -406,13 +430,28 @@ def verification_prompt(
         f"Passage {index}:\n{chunk.text.strip()}"
         for index, chunk in enumerate(passages, start=1)
     )
-    before = (
-        f'It follows this sentence: "{claim.before}"\n' if claim.before else ""
+    preceding = (
+        f'Preceding context: "{claim.before}"\n'
+        if claim.before else ""
+    )
+    following = (
+        f'Following context: "{claim.after}"\n'
+        if claim.after else ""
     )
     user = f"""A paper writes this sentence, citing reference [{number}]:
 
 "{claim.marked or claim.sentence.text}"
-{before}{cited_for}{others}
+{preceding}{following}{cited_for}{others}
+The surrounding sentences identify what expressions such as "this study"
+refer to. Judge only what the cited sentence attributes to [{number}];
+do not require the cited paper to restate the citing paper's own wording.
+When the citing sentence says that "the results of this study were
+published" in [{number}], treat this as attribution to the publication:
+use the preceding description to identify the study. If the cited work
+reports those specific results, it supports the attribution, even if it
+does not say "these results were published". If it merely discusses a
+related study, use partly supported or not supported as appropriate. Do
+not infer a match just from a shared topic; require specific evidence.
 Passages of the cited work [{number}] ({claim.cited.name}), the parts most
 related to the sentence:
 
@@ -512,6 +551,32 @@ COMMENT: <one or two sentences explaining the verdict critically>"""
     return system, user
 
 
+def _reply_fields(reply: str) -> dict[str, str]:
+    """Read model fields, including wrapped quotation lines.
+
+    Parameters
+    ----------
+    reply: str
+        Model answer with VERDICT, QUOTE, and COMMENT headings.
+
+    Returns
+    -------
+    dict[str, str]
+        Fields with continuation lines retained until the next heading.
+
+    """
+
+    matches = list(_LINE.finditer(reply))
+    fields: dict[str, str] = {}
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) \
+            else len(reply)
+        fields[match.group(1).upper()] = (
+            match.group(2) + reply[match.end():end]
+        ).strip()
+    return fields
+
+
 def parse_verdict(
     reply: str, passages: Sequence[Chunk]
 ) -> tuple[str, str, Chunk | None, str]:
@@ -539,10 +604,7 @@ def parse_verdict(
 
     """
 
-    fields = {
-        match.group(1).upper(): match.group(2).strip()
-        for match in _LINE.finditer(reply)
-    }
+    fields = _reply_fields(reply)
     said = fields.get("VERDICT", "").casefold().strip(" .*\"'")
     verdict = next(
         (name for name in _MODEL_VERDICTS if said.startswith(name)), None
@@ -578,11 +640,57 @@ def parse_verdict(
     return verdict, quote, chunk, comment
 
 
+def _checked_verdict(
+    reply: str, passages: Sequence[Chunk]
+) -> tuple[str, str, Chunk | None, str, str]:
+    """Parse a verdict and expose independently checked quote status.
+
+    Parameters
+    ----------
+    reply: str
+        Model-generated assessment.
+    passages: Sequence[Chunk]
+        Retrieved evidence passages.
+
+    Returns
+    -------
+    tuple[str, str, Chunk | None, str, str]
+        The public parser's fields plus exact, approximate, missing,
+        rejected or not-required quotation status. Negative verdicts with
+        ``QUOTE: NONE`` need no confirming positive-evidence quote.
+        A quote's presence does not verify
+        the scientific correctness of the model's interpretation.
+
+    """
+
+    verdict, quote, chunk, comment = parse_verdict(reply, passages)
+    fields = _reply_fields(reply)
+    claimed = fields.get("QUOTE", "").strip().strip("\"“”'")
+    if chunk is not None:
+        original = _HYPHENATED.sub("", chunk.text)
+        normalized = lambda text: " ".join(text.casefold().split())
+        status = (
+            "exact" if normalized(claimed) in normalized(original)
+            else "approximate"
+        )
+    elif claimed and claimed.upper() != "NONE":
+        status = "rejected"
+    elif verdict in (
+        VERDICT_NOT_SUPPORTED, VERDICT_NOT_FOUND, VERDICT_UNCLEAR,
+    ):
+        # An unsupported, off-topic or unparsable assessment need not
+        # supply a positive-evidence quote. QUOTE: NONE is expected.
+        status = "not required"
+    else:
+        status = "missing"
+    return verdict, quote, chunk, comment, status
+
+
 def verify_claim(
     claim: Claim,
     passages: Sequence[Chunk],
-    ask_model: Callable[[str, str, int], str],
-    answer_tokens: int,
+    ask_model: Callable[[str, str, int | None], str],
+    answer_tokens: int | None,
 ) -> Verdict:
     """Judge one claim with the answering model.
 
@@ -592,10 +700,11 @@ def verify_claim(
         The citing sentence and the cited file.
     passages: Sequence[Chunk]
         The cited file's passages to judge it from.
-    ask_model: Callable[[str, str, int], str]
+    ask_model: Callable[[str, str, int | None], str]
         The answering model (``ToolContext.ask_model``).
-    answer_tokens: int
-        Longest answer, in tokens.
+    answer_tokens: int | None
+        Optional per-call output limit; ``None`` inherits the session
+        maximum output tokens.
 
     Returns
     -------
@@ -605,19 +714,21 @@ def verify_claim(
 
     """
 
-    verdict, quote, chunk, comment = _judge(
+    verdict, quote, chunk, comment, status = _judge(
         verification_prompt(claim, passages) if passages else ("", ""),
         passages, ask_model, answer_tokens,
     )
-    return Verdict(claim, verdict, quote, chunk, comment, tuple(passages))
+    return Verdict(
+        claim, verdict, quote, chunk, comment, tuple(passages), status
+    )
 
 
 def judge_support(
     statement: str,
     cited: Path,
     passages: Sequence[Chunk],
-    ask_model: Callable[[str, str, int], str],
-    answer_tokens: int,
+    ask_model: Callable[[str, str, int | None], str],
+    answer_tokens: int | None,
 ) -> Support:
     """Judge whether one work supports a statement, with the model.
 
@@ -629,10 +740,11 @@ def judge_support(
         The candidate work's file.
     passages: Sequence[Chunk]
         The work's passages to judge it from.
-    ask_model: Callable[[str, str, int], str]
+    ask_model: Callable[[str, str, int | None], str]
         The answering model (``ToolContext.ask_model``).
-    answer_tokens: int
-        Longest answer, in tokens.
+    answer_tokens: int | None
+        Optional per-call output limit; ``None`` inherits the session
+        maximum output tokens.
 
     Returns
     -------
@@ -643,21 +755,22 @@ def judge_support(
 
     """
 
-    verdict, quote, chunk, comment = _judge(
+    verdict, quote, chunk, comment, status = _judge(
         support_prompt(statement, cited, passages) if passages else ("", ""),
         passages, ask_model, answer_tokens,
     )
     return Support(
-        statement, cited, verdict, quote, chunk, comment, tuple(passages)
+        statement, cited, verdict, quote, chunk, comment,
+        tuple(passages), status,
     )
 
 
 def _judge(
     prompts: tuple[str, str],
     passages: Sequence[Chunk],
-    ask_model: Callable[[str, str, int], str],
-    answer_tokens: int,
-) -> tuple[str, str, Chunk | None, str]:
+    ask_model: Callable[[str, str, int | None], str],
+    answer_tokens: int | None,
+) -> tuple[str, str, Chunk | None, str, str]:
     """Ask the model for a verdict and check its answer.
 
     Parameters
@@ -666,29 +779,30 @@ def _judge(
         System prompt and user prompt.
     passages: Sequence[Chunk]
         The passages the prompt shows; none means no model call.
-    ask_model: Callable[[str, str, int], str]
+    ask_model: Callable[[str, str, int | None], str]
         The answering model.
-    answer_tokens: int
-        Longest answer, in tokens.
+    answer_tokens: int | None
+        Optional per-call output limit; ``None`` inherits the session
+        maximum output tokens.
 
     Returns
     -------
-    tuple[str, str, Chunk | None, str]
-        Verdict, quote, the passage holding it, and comment, as
-        ``parse_verdict`` returns them; ``no text`` without passages and
-        ``failed`` when the model call raises.
+    tuple[str, str, Chunk | None, str, str]
+        Verdict, quote, the passage holding it, comment and evidence
+        status; ``no text`` without passages and ``failed`` on errors.
 
     """
 
     if not passages:
         return (
-            VERDICT_NO_TEXT, "", None, "The file has no searchable text."
+            VERDICT_NO_TEXT, "", None, "The file has no searchable text.",
+            "no text",
         )
     try:
         reply = ask_model(prompts[0], prompts[1], answer_tokens)
     except Exception as error:  # A failed call is reported, not fatal.
-        return VERDICT_FAILED, "", None, f"Model error: {error}"
-    return parse_verdict(reply, passages)
+        return VERDICT_FAILED, "", None, f"Model error: {error}", "failed"
+    return _checked_verdict(reply, passages)
 
 
 def _passage_with(
@@ -771,6 +885,12 @@ def _passage_with(
                 " ".join(text[spans[start][1]:spans[end][2]].split())
                 for start, end in stretches
             )
+            # Compare even the skipped stretch: a negation or changed
+            # numerical result in interleaved PDF text must not be hidden
+            # by an ellipsis used only for display.
+            full_stretch = text[spans[first][1]:spans[last][2]]
+            if not _consistent_quote(quote, full_stretch):
+                continue
             best = (share, chunk, shown)
             if share == 1.0:
                 break
@@ -795,3 +915,109 @@ def _words(text: str) -> list[str]:
     """
 
     return [word.casefold() for word in _WORD.findall(text)]
+
+
+# Terms for which a one-word difference may reverse the scientific
+# interpretation even if the remainder of a quotation matches closely.
+_CRITICAL_WORDS: Final[frozenset[str]] = frozenset((
+    "not", "no", "none", "never", "without", "absent", "absence",
+    "present", "presence", "increased", "increases", "increase",
+    "decreased", "decreases", "decrease", "reduced", "reduces",
+    "reduce", "raised", "raises", "lowered", "lowers", "higher",
+    "lower", "greater", "less", "more", "positive", "negative",
+    "significant", "insignificant", "significantly", "nonsignificant",
+    "before", "after", "above", "below", "equal", "unequal",
+    "improved", "worsened", "improves", "worsens", "faster", "slower",
+    "only", "all", "every", "some", "most", "least", "at", "up", "down",
+))
+_CRITICAL_UNITS: Final[frozenset[str]] = frozenset((
+    "mg", "kg", "g", "ug", "μg", "ml", "l", "mm", "nm", "um", "μm",
+    "ms", "ns", "hz", "khz", "mhz", "kda", "da", "kb", "mb",
+))
+_NUMERICAL: Final[re.Pattern[str]] = re.compile(
+    r"(?<![\w.])[-+−]?\d+(?:[.,]\d+)?(?:\s*[%‰])?(?![\w])"
+)
+
+
+def _consistent_quote(model_quote: str, source_quote: str) -> bool:
+    """Reject numeric, negation and directional changes in fuzzy quotes.
+
+    Parameters
+    ----------
+    model_quote: str
+        Sentence claimed to be copied by the model.
+    source_quote: str
+        Located stretch in the paper's own words.
+
+    Returns
+    -------
+    bool
+        Whether critical values and semantic qualifiers are preserved.
+        This is a conservative text-integrity check, not a proof that a
+        passage entails the model's verdict.
+
+    """
+
+    model_nums = [
+        value.replace(" ", "") for value in _NUMERICAL.findall(model_quote)
+    ]
+    source_nums = [
+        value.replace(" ", "") for value in _NUMERICAL.findall(source_quote)
+    ]
+    # Source-only citation numbers are allowed; every model-claimed
+    # number must nonetheless occur in the located source text.
+    remaining = list(source_nums)
+    for number in model_nums:
+        if number not in remaining:
+            return False
+        remaining.remove(number)
+    claimed = [
+        word for word in _words(model_quote) if word in _CRITICAL_WORDS
+    ]
+    actual = [
+        word for word in _words(source_quote) if word in _CRITICAL_WORDS
+    ]
+    if claimed != actual:
+        return False
+    units_model = [
+        word for word in _words(model_quote) if word in _CRITICAL_UNITS
+    ]
+    units_source = [
+        word for word in _words(source_quote) if word in _CRITICAL_UNITS
+    ]
+    return units_model == units_source
+
+
+def quote_line_range(
+    quote: str, chunk: Chunk | None,
+) -> tuple[int, int] | None:
+    """Return exact source lines for a verbatim located quotation.
+
+    Parameters
+    ----------
+    quote: str
+        The validated quotation in its source wording.
+    chunk: Chunk | None
+        The indexed passage containing the quotation.
+
+    Returns
+    -------
+    tuple[int, int] | None
+        First and last source lines for an exact whitespace-tolerant
+        match. None for a fuzzy/interleaved quote, for which callers
+        should cite the original chunk's broader line range.
+
+    """
+
+    if chunk is None or not quote:
+        return None
+    tokens = quote.split()
+    if not tokens or "…" in tokens:
+        return None
+    pattern = r"\s+".join(re.escape(token) for token in tokens)
+    matched = re.search(pattern, chunk.text, flags=re.I)
+    if matched is None:
+        return None
+    first = chunk.start_line + chunk.text.count("\n", 0, matched.start())
+    last = chunk.start_line + chunk.text.count("\n", 0, matched.end())
+    return first, last

@@ -2218,15 +2218,22 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                 token_callback=tokens,
             )
             context = runner.call_args.args[2]
+            self.assertEqual(context.ask_model("s", "q", None), "reply")
             self.assertEqual(context.ask_model("s", "q", 5), "reply")
             self.assertEqual(context.write("s", "q", 6), "reply")
         self.assertEqual(side.call_args_list[0].kwargs,
-                         {"max_new_tokens": 5,
-                          "language_context": ("Question",)})
+                         {"max_new_tokens": None,
+                          "language_context": ("Question",),
+                          "inherit_settings": True})
         self.assertEqual(side.call_args_list[1].kwargs,
+                         {"max_new_tokens": 5,
+                          "language_context": ("Question",),
+                          "inherit_settings": True})
+        self.assertEqual(side.call_args_list[2].kwargs,
                          {"max_new_tokens": 6,
                           "token_callback": tokens,
-                          "language_context": ("Question",)})
+                          "language_context": ("Question",),
+                          "inherit_settings": True})
 
 
 class TestRAGConversationPersistence(unittest.TestCase):

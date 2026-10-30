@@ -276,8 +276,9 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
     TOOL_REFERENCE_CHECK: Tool(
         TOOL_REFERENCE_CHECK,
         "Check one paper's reference list against the project's files, "
-        "find where each reference is cited, and judge each claim against "
-        "the cited paper; save the full report to outputs/.",
+        "find where each reference is cited, optionally check claims, "
+        "and give offline or explicitly authorized online links for "
+        "missing works; save the report to outputs/.",
         reference_check.parse_settings,
         reference_check.run,
     ),

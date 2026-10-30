@@ -464,9 +464,10 @@ def side_reply(
     system: str,
     prompt: str,
     *,
-    max_new_tokens: int,
+    max_new_tokens: int | None,
     token_callback: Callable[[str], None] | None = None,
     language_context: Sequence[str] = (),
+    inherit_settings: bool = False,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -478,14 +479,20 @@ def side_reply(
         System instruction for the side question only.
     prompt: str
         The side question.
-    max_new_tokens: int
-        Maximum length of the reply.
+    max_new_tokens: int | None
+        Explicit per-call output limit, or ``None`` to inherit the chat
+        session's configured maximum. The router supplies its own limit.
     token_callback: Callable[[str], None] | None, optional
         Receives the reply as it is generated, for a side answer shown to
         the user. Defaults to ``None``.
     language_context: Sequence[str], optional
         Original user messages authorizing CJK output, oldest first. The
         generated side prompt cannot authorize scripts. Defaults to ``()``.
+    inherit_settings: bool, optional
+        Keep the session thinking and temperature. With no explicit token
+        override, inherit the session's maximum output tokens. An explicit
+        override remains capped by the session maximum when one is set.
+        False retains deterministic router behavior.
 
     Returns
     -------
@@ -494,7 +501,8 @@ def side_reply(
 
     Notes
     -----
-    Thinking is off and sampling is greedy for the side question.
+    Router questions use greedy, nonthinking generation by default.
+    Tool questions can inherit the answering session generation settings.
 
     """
 
@@ -504,9 +512,21 @@ def side_reply(
     # Restore the conversation and settings even when the reply fails.
     try:
         chat.restore_history([{"role": SYSTEM_ROLE, "content": system}])
-        chat.configure_generation({"thinking": False, "temperature": 0.0})
+        if not inherit_settings:
+            chat.configure_generation({
+                "thinking": False, "temperature": 0.0,
+            })
+        session_limit = getattr(chat, "max_new_tokens", None)
+        token_limit = (
+            min(max_new_tokens, session_limit)
+            if (
+                inherit_settings and max_new_tokens is not None
+                and session_limit is not None
+            )
+            else max_new_tokens
+        )
         options: dict[str, object] = {
-            "max_new_tokens": max_new_tokens,
+            "max_new_tokens": token_limit,
             "language_context": language_context,
         }
         if token_callback is not None:
@@ -514,7 +534,8 @@ def side_reply(
         reply = chat.reply(prompt, **options)
     finally:
         chat.restore_history(history)
-        chat.configure_generation(previous)
+        if not inherit_settings:
+            chat.configure_generation(previous)
 
     return strip_thinking(reply)
 
