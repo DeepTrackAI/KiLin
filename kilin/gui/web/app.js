@@ -3061,9 +3061,7 @@ function renderConversations(data) {
     remove.title = "Delete conversation";
     remove.addEventListener("click", async () => {
       if (busy) return;
-      const deleting = await askKilin(`Delete “${item.name}”?`,
-        "KíLín moves this chat to logs/traces/deleted in the workspace, so it is not lost.",
-        "Delete");
+      const deleting = await askKilin(`Delete “${item.name}”?`, "", "Delete");
       if (!deleting || busy) return;
       setBusy(true, "Deleting conversation…");
       bridge.deleteConversation(item.conversation_id);
@@ -3093,7 +3091,7 @@ function renderConversations(data) {
  * also cancels.
  *
  * @param title Short question, such as "Delete “Notes”?".
- * @param message One sentence on what KíLín will do.
+ * @param message One sentence on what KíLín will do; empty hides it.
  * @param action Label of the confirming button, such as "Delete".
  * @returns Promise of true when the user confirms, false otherwise.
  */
@@ -3101,6 +3099,7 @@ function askKilin(title, message, action) {
   const dialog = byId("kilin-ask");
   byId("kilin-ask-title").textContent = title;
   byId("kilin-ask-message").textContent = message;
+  byId("kilin-ask-message").classList.toggle("hidden", !message);
   byId("kilin-ask-confirm").textContent = action;
   return new Promise((resolve) => {
     dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });

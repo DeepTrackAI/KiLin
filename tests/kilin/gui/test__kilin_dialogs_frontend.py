@@ -34,8 +34,12 @@ class TestKilinDialogsFrontend(unittest.TestCase):
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         start = page.index('<dialog id="kilin-ask"')
         dialog = page[start : page.index("</dialog>", start)]
-        for part in ("kilin-ask-title", "kilin-ask-message",
-                     "kilin-ask-cancel", "kilin-ask-confirm"):
+        for part in (
+            "kilin-ask-title",
+            "kilin-ask-message",
+            "kilin-ask-cancel",
+            "kilin-ask-confirm",
+        ):
             self.assertIn(f'id="{part}"', dialog)
 
     def test_delete_conversation_asks_in_the_kilin_dialog(self):
@@ -44,8 +48,8 @@ class TestKilinDialogsFrontend(unittest.TestCase):
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         render = _function(source, "renderConversations")
         self.assertNotIn("confirm(", render)
-        self.assertIn("await askKilin(`Delete “${item.name}”?`", render)
-        self.assertIn('"KíLín moves this chat', render)
+        ask = 'await askKilin(`Delete “${item.name}”?`, "", "Delete")'
+        self.assertIn(ask, render)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_answer_follows_the_button_pressed(self):
@@ -56,7 +60,16 @@ class TestKilinDialogsFrontend(unittest.TestCase):
 const assert = require("node:assert/strict");
 const focused = [];
 function element(id) {
-  return { id, textContent: "", focus() { focused.push(id); } };
+  const classes = new Set();
+  return {
+    id, textContent: "", focus() { focused.push(id); },
+    classList: {
+      toggle(name, on) {
+        if (on) classes.add(name); else classes.delete(name);
+      },
+      contains(name) { return classes.has(name); },
+    },
+  };
 }
 const dialog = {
   returnValue: "x", open: false, listeners: [],
@@ -80,13 +93,17 @@ const byId = (id) => id === "kilin-ask" ? dialog
   let answer = askKilin("Delete “Notes”?", "KíLín moves it.", "Delete");
   assert.equal(dialog.open, true);
   assert.equal(parts["kilin-ask-title"].textContent, "Delete “Notes”?");
-  assert.equal(parts["kilin-ask-message"].textContent, "KíLín moves it.");
+  const message = parts["kilin-ask-message"];
+  assert.equal(message.textContent, "KíLín moves it.");
+  assert.equal(message.classList.contains("hidden"), false);
   assert.equal(parts["kilin-ask-confirm"].textContent, "Delete");
   // Cancel has focus first, so Enter does not confirm by accident.
   assert.deepEqual(focused, ["kilin-ask-cancel"]);
   dialog.close("confirm");
   assert.equal(await answer, true);
-  answer = askKilin("Again?", "KíLín asks again.", "Delete");
+  // No message: only the question shows.
+  answer = askKilin("Again?", "", "Delete");
+  assert.equal(message.classList.contains("hidden"), true);
   dialog.close("cancel");
   assert.equal(await answer, false);
   // Escape closes without a value; a stale "confirm" must not count.
