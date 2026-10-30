@@ -1,6 +1,7 @@
 :root {
   --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%233f5149' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --page: #f4f5f2;
+  --logo-image: url("../icons/kilin-qilin.png");
   --surface: #fff;
   --surface-soft: #f8faf7;
   --text: #17202a;
@@ -41,6 +42,7 @@
 :root[data-appearance="dark"] {
   --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+  --logo-image: url("../icons/kilin-qilin-dark.png");
   --text: #f0f0f0; --muted: #ababab; --line: #444;
   --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
   --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
@@ -59,6 +61,7 @@
   :root[data-appearance="system"] {
     --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+    --logo-image: url("../icons/kilin-qilin-dark.png");
     --text: #f0f0f0; --muted: #ababab; --line: #444;
     --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
     --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
@@ -117,6 +120,10 @@ button, input, select, textarea { font: inherit; }
 .panel-toggle span::after { content: ""; display: block; width: 5px; height: 100%; margin-left: auto; border-left: 1.5px solid var(--control); }
 .panel-toggle.panels-hidden span::after { margin-left: 0; border-right: 1.5px solid var(--control); border-left: 0; }
 .left-panel-toggle span { transform: scaleX(-1); }
+/* One toggle on each edge, with the chat name centred between them. */
+.topbar #toggle-conversations { margin-right: auto; }
+.topbar #toggle-workspace { margin-left: auto; }
+.chat-open .topbar-project { position: absolute; left: 50%; max-width: calc(100% - 96px); transform: translateX(-50%); }
 .brand { color: var(--muted); font-size: 13px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; }
 .top-status, .hint { color: var(--muted); font-size: 13px; line-height: 1.5; }
 .readiness-card { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--surface-soft); }
@@ -139,6 +146,8 @@ h1 { margin: 10px 0 12px; color: var(--text); font-size: clamp(35px, 6vw, 56px);
 .models-hint button { min-height: 0; padding: 0; border: 0; background: none; color: var(--control-strong); font-size: inherit; text-decoration: underline; }
 .saved-projects { display: grid; gap: 16px; margin: -10px 0 20px; }
 .saved-project-group { display: grid; align-content: start; gap: 3px; }
+/* Five 26px rows and their gaps; more projects scroll. */
+.saved-project-list { display: grid; gap: 3px; max-height: calc(5 * 26px + 4 * 3px); overflow-y: auto; }
 .saved-project-group strong { margin-bottom: 3px; color: var(--eyebrow); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .saved-project-group button { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; min-height: 26px; padding: 2px 0; border: 0; background: transparent; color: var(--control-strong); font-size: 12px; font-weight: 500; text-align: left; }
 .saved-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -201,22 +210,59 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .source-remove { flex: none; white-space: nowrap; min-height: 24px; padding: 0 5px; border: 0; background: transparent; color: var(--control); font-size: 12px; font-weight: 400; }
 .side-panels { display: none; min-width: 0; max-height: 100vh; overflow: auto; border-left: 1px solid var(--line); background: var(--surface-soft); }
 .sidebar-open .side-panels { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-.conversations-panel { position: sticky; top: 0; min-width: 0; height: 100vh; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--surface-soft); }
-.new-chat-button { width: 100%; min-height: 38px; border: 0; background: transparent; text-align: left; }
-.new-chat-button:hover:not(:disabled) { background: var(--hover); }
-.conversation-list-heading { margin: 22px 10px 8px; color: var(--disabled-text); font-size: 12px; }
-.conversation-list { display: grid; gap: 3px; max-height: calc(100vh - 170px); overflow-y: auto; }
-.conversation-row { display: grid; grid-template-columns: minmax(0, 1fr) 28px; align-items: center; border-radius: 8px; }
-.conversation-item { width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conversation-item:hover:not(:disabled), .conversation-item.active { background: var(--selected); }
+.conversations-panel { position: sticky; top: 0; display: flex; flex-direction: column; min-width: 0; height: 100vh; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--surface-soft); }
+.sidebar-logo { display: block; width: 100%; max-width: 190px; margin: 0 auto 14px; padding: 10px; border: 0; border-radius: 14px; background: transparent; }
+.sidebar-logo:hover:not(:disabled) { background: var(--hover); }
+.sidebar-logo:disabled { opacity: .55; }
+/* The qilin image is about 1.37 times wider than tall. */
+.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.37; background: var(--logo-image) center / contain no-repeat; }
+.sidebar-section { display: flex; flex-direction: column; min-height: 0; }
+.sidebar-section[data-section="conversations"] { flex: 1 1 auto; }
+.sidebar-section-head { display: flex; align-items: center; gap: 2px; margin: 10px 0 4px; }
+.sidebar-section-toggle { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; margin-right: auto; padding: 2px 6px 2px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; }
+.sidebar-section-toggle:hover { color: var(--text); }
+.sidebar-chevron { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; transition: transform .15s; }
+.sidebar-section.collapsed .sidebar-chevron { transform: rotate(-90deg); }
+.sidebar-section.collapsed nav { display: none; }
+/* ⋯ and ＋ appear when the header is hovered or focused. */
+.sidebar-section-action { display: grid; width: 26px; min-width: 26px; min-height: 26px; padding: 0; place-items: center; border: 0; border-radius: 6px; color: var(--muted); background: transparent; opacity: 0; transition: opacity .12s; }
+/* Keyboard focus only: a clicked button keeps focus and would stay shown. */
+.sidebar-section-head:hover .sidebar-section-action, .sidebar-section-head:has(:focus-visible) .sidebar-section-action { opacity: 1; }
+.sidebar-section-action:hover:not(:disabled) { color: var(--text); background: var(--hover); }
+.sidebar-section-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.sidebar-section-action circle { fill: currentColor; stroke: none; }
+.context-menu .menu-heading { padding: 5px 9px 3px; color: var(--muted); font-size: 12px; }
+.context-menu .menu-check { float: right; margin-left: 16px; }
+.conversation-list { display: grid; align-content: start; gap: 3px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* Five 34px rows and their gaps; more projects scroll. */
+.project-list { display: grid; gap: 3px; flex: none; max-height: calc(5 * 34px + 4 * 3px); overflow-y: auto; }
+.project-list [draggable="true"], .conversation-list [draggable="true"] { cursor: grab; }
+.dragging { opacity: .4; }
+/* A row's highlight spans the panel, like a project's; on hover it shortens
+   to make room for ×. */
+.conversation-row { display: grid; grid-template-columns: minmax(0, 1fr) 0; align-items: center; border-radius: 8px; }
+.project-row { display: grid; grid-template-columns: minmax(0, 1fr) 0; align-items: center; border-radius: 8px; }
+.conversation-row:hover, .conversation-row:has(:focus-visible), .project-row:hover, .project-row:has(:focus-visible) { grid-template-columns: minmax(0, 1fr) 32px; }
+.conversation-item, .project-item { width: 100%; min-height: 34px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; font-size: 13px; font-weight: 400; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-item:hover:not(:disabled), .conversation-item.active, .project-item:hover:not(:disabled), .project-item.active { background: var(--selected); }
+.project-item { display: flex; align-items: baseline; gap: 8px; }
+/* The name keeps priority; a long type is cut first. */
+.project-item-name { flex: 0 1 auto; min-width: 4em; overflow: hidden; text-overflow: ellipsis; }
+.project-item-type { flex: 0 4 auto; min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted); font-size: 12px; font-weight: 400; text-overflow: ellipsis; }
+.project-item.active .project-item-name { font-weight: 600; }
 .conversation-rename { width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--surface); font-size: 13px; }
 .tree-count { color: var(--muted); font-size: 12px; font-weight: 400; }
-.conversation-delete { width: 28px; min-width: 28px; min-height: 28px; padding: 0; border: 0; color: var(--muted); background: transparent; opacity: 0; }
+.conversation-delete, .project-settings { width: 100%; max-width: 28px; min-width: 0; min-height: 28px; justify-self: end; padding: 0; overflow: hidden; border: 0; color: var(--muted); background: transparent; opacity: 0; }
 .conversation-row:hover .conversation-delete,
 .conversation-delete:focus-visible,
-.conversation-row:has(.conversation-item.active) .conversation-delete { opacity: 1; }
+.project-row:hover .project-settings,
+.project-settings:focus-visible { opacity: 1; }
+.project-settings { display: grid; place-items: center; }
+/* Only the open project has a settings icon, so the others keep full width. */
+.project-row:not(:has(.project-settings)) { grid-template-columns: minmax(0, 1fr); }
+.project-settings svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.project-settings:hover:not(:disabled) { color: var(--text); background: var(--hover); }
 .conversation-delete:hover:not(:disabled) { color: #a4473d; background: rgb(164 71 61 / 10%); }
-.conversation-panel-actions { position: absolute; right: 12px; bottom: 18px; left: 12px; display: flex; justify-content: space-between; gap: 4px; }
 .workspace-panel, .references-panel { min-width: 0; padding: 24px 16px; }
 .workspace-panel { border-bottom: 1px solid var(--line); }
 /* The divider splits the column; each panel scrolls on its own. */
@@ -240,8 +286,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 /* Siblings share one indent: folders and files start at the same edge. */
 .workspace-panel .tree-folder, .workspace-panel .source-drop-target { margin: 5px 0; }
 .workspace-panel .tree-folder summary { padding: 1px 3px; }
-.context-menu { position: fixed; z-index: 1001; min-width: 190px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 12px 30px rgb(25 36 44 / 18%); }
-.context-menu button { display: block; width: 100%; min-height: 32px; padding: 6px 9px; border: 0; color: var(--text); background: transparent; text-align: left; font-weight: 400; }
+.context-menu { position: fixed; z-index: 1001; min-width: 170px; padding: 5px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); box-shadow: 0 12px 30px rgb(25 36 44 / 18%); }
+.context-menu button { display: block; width: 100%; min-height: 30px; padding: 5px 9px; border: 0; border-radius: 6px; color: var(--text); background: transparent; font-size: 13px; font-weight: 400; text-align: left; }
 .context-menu button:hover, .context-menu button:focus-visible { background: var(--highlight); }
 .references-panel .hint { margin: 12px 0 18px; overflow-wrap: anywhere; }
 .reference-entry { margin: 0 0 10px; }
@@ -262,9 +308,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .source-line-number { padding: 0 6px 0 2px; color: #839189; text-align: right; user-select: none; }
 .source-line-text { padding-right: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace-panel .hint { overflow-wrap: anywhere; }
-.chat-setting { display: flex; align-items: center; gap: 10px; margin: 6px 0; color: var(--control); font-size: 12px; }
-.chat-setting input { width: 72px; padding: 5px; }
-.conversation-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; padding-top: 8px; }
+.chat-setting { display: grid; gap: 7px; }
+.conversation-fields { display: grid; gap: 16px; }
 button { min-height: 43px; padding: 0 16px; border-radius: 9px; font-weight: 650; cursor: pointer; }
 button:disabled { opacity: .62; cursor: default; }
 .primary { border: 0; color: white; background: var(--primary); }
@@ -274,7 +319,10 @@ button:disabled { opacity: .62; cursor: default; }
 
 .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .chat-heading { justify-content: space-between; align-items: flex-start; padding: 24px 0 12px; }
-.chat-heading h1 { margin: 3px 0; font-size: 32px; }
+.chat-heading h1 { margin: 3px 0; font-size: 26px; }
+/* In a chat, Settings belongs to the project row and progress shows by the
+   composer, so the top bar keeps only the chat. */
+.chat-open #open-models, .chat-open #connection { display: none; }
 .chat-heading h1[contenteditable="true"], .conversation-name[contenteditable="true"] { border-radius: 5px; outline: none; }
 .chat-heading h1[contenteditable="true"]:focus, .conversation-name[contenteditable="true"]:focus { box-shadow: 0 0 0 3px rgb(82 111 99 / 13%); }
 .chat-heading .hint { margin: 0; }
@@ -301,15 +349,29 @@ button:disabled { opacity: .62; cursor: default; }
 .tool-plan-option-note { font-size: 12px; opacity: .75; }
 .tool-plan-cancel { justify-self: start; min-height: 0; margin-top: 2px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font: inherit; font-size: 13px; cursor: pointer; }
 .tool-plan-cancel:hover { color: var(--text); background: var(--surface); }
-.answer-phase-timer, .answer-duration { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.answer-duration { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .answer-duration { margin: 0 0 4px; }
+.user-message + .answer-duration { margin-top: 12px; }
 .answer-phase-detail { width: fit-content; margin-top: 8px; color: transparent; background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 42%, color-mix(in srgb, var(--muted) 55%, white) 50%, var(--muted) 58%, var(--muted) 100%); background-size: 300% 100%; background-clip: text; -webkit-background-clip: text; font-size: 13px; animation: stage-shimmer 1.6s linear infinite; }
 @keyframes stage-shimmer { from { background-position: 80% 0; } to { background-position: 20% 0; } }
 @media (prefers-reduced-motion: reduce) { .answer-phase-detail { color: var(--muted); background: none; animation: none; } }
 .answer-message.typing::after, .answer-message.streaming::after { content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; background: var(--control); animation: typing-caret .8s steps(1) infinite; }
 .turn.failed .answer-message { color: #9c3936; }
 @keyframes typing-caret { 50% { opacity: 0; } }
+.message-actions { display: flex; align-items: center; gap: 6px; min-height: 26px; margin-top: 4px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0; transition: opacity .12s; }
+.message-actions.user-actions { justify-content: flex-end; }
+.answer-message + .message-actions { margin-top: -4px; }
+.user-message:hover + .message-actions, .answer-message:hover + .message-actions, .message-actions:hover, .message-actions:focus-within { opacity: 1; }
+.message-action { display: grid; width: 26px; min-width: 26px; min-height: 26px; padding: 0; place-items: center; border: 0; border-radius: 6px; color: var(--muted); background: transparent; }
+.message-action:hover, .message-action:focus-visible { color: var(--text); background: var(--hover); }
+.message-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.message-action.copied { color: var(--citation); }
 .answer-message:focus-visible, .turn.selected .answer-message { outline: 2px solid var(--answer-outline); outline-offset: 5px; border-radius: 2px; }
+/* Fonts with maths tables (macOS, Windows), so big operators and fractions
+   draw at full size; "math" is the system fallback. */
+.answer-math math { font-family: "STIX Two Math", "Cambria Math", math; font-size: 1.08em; }
+.answer-math.display { overflow-x: auto; margin: 12px 0; padding: 2px 0; text-align: center; }
+.answer-math.display math { display: block math; }
 .answer-citation { margin-left: 1px; vertical-align: super; font-size: .75em; line-height: 0; }
 .answer-citation button { min-height: 0; padding: 0 1px; border: 0; border-radius: 0; color: var(--citation); background: none; font: inherit; font-weight: 650; text-decoration: underline; }
 .answer-citation button:hover, .answer-citation button:focus-visible { color: var(--citation-hover); }
@@ -336,6 +398,12 @@ button:disabled { opacity: .62; cursor: default; }
 .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 9px; }
 .attachment-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface-soft); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-chip button { min-height: 0; padding: 0; border: 0; color: inherit; background: transparent; }
+.question-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
+.question-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--user-bubble-text); background: var(--surface); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.question-attachment::before { content: ""; flex: none; width: 9px; height: 11px; border: 1.5px solid currentColor; border-radius: 2px; opacity: .6; }
+button.question-attachment:hover, button.question-attachment:focus-visible { border-color: var(--citation); color: var(--citation); }
+.revealed { animation: revealed 1.6s ease-out; }
+@keyframes revealed { from { background: var(--highlight); outline: 2px solid var(--citation); } to { background: transparent; outline: 2px solid transparent; } }
 .effort-picker { position: relative; }
 .effort-button { min-width: 58px; min-height: 32px; padding: 0 6px; border: 0; color: var(--muted); background: transparent; font-size: 12px; font-weight: 400; }
 .effort-button:hover { color: var(--muted); background: rgb(120 130 124 / 9%); }
@@ -364,9 +432,33 @@ button:disabled { opacity: .62; cursor: default; }
 .models-heading, .model-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .models-heading h2 { margin: 0; font-size: 22px; }
 .settings-section { margin: 22px 0; padding-top: 4px; border-top: 1px solid var(--line); }
+/* Settings tabs: one row of categories; only the chosen one's sections show. */
+/* Paper tabs: each tab is outlined on top and sides; the open one is the
+   page's colour and covers the line below it, so it joins the page. */
+.settings-tabs { display: flex; gap: 3px; margin: 16px 0 0; padding: 0 6px; border-bottom: 1px solid var(--line); }
+.settings-tab { position: relative; flex: 0 1 auto; min-width: 0; min-height: 32px; margin-bottom: -1px; padding: 6px 14px 5px; border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: var(--surface-soft); color: var(--muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.settings-tab:hover { color: var(--text); }
+.settings-tab.active { z-index: 1; padding-top: 8px; margin-top: -2px; border-bottom-color: var(--surface); background: var(--surface); color: var(--text); }
+.settings-section.tab-hidden { display: none; }
+/* One field style on every tab: the label above, a full-width box of the
+   Models rows' size, and the same gap before the next setting. */
+#models-panel .settings-section label:not(.check-row):not(.depth-step) { font-size: 13px; font-weight: 650; color: var(--text); }
+#models-panel input:not([type="checkbox"]), #models-panel select { width: 100%; min-height: 36px; padding: 6px 10px; font-size: 13px; }
+#models-panel select { padding-right: 34px; background-position: right 10px center; }
+#models-panel .folder-row button { min-height: 36px; font-size: 13px; }
+#models-panel .advanced-fields { gap: 7px; padding-top: 0; }
+#models-panel .advanced-fields > label:not(:first-child), #models-panel .settings-grid { margin-top: 9px; }
+#models-panel .check-row { font-size: 13px; }
+/* The three chunk sizes are one set, like the search depth steps. */
+#settings-project .settings-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* One height for every tab, so the card does not jump when switching. */
+#models-panel .models-card { height: min(84vh, 720px); }
+/* The tab row already draws the line above each tab's sections. */
+.settings-tabs ~ .settings-section:not(.readiness-card) { margin: 16px 0; padding-top: 0; border-top: 0; }
 .settings-section h3 { margin: 14px 0 0; font-size: 14px; }
 .settings-section h3 + select { margin-top: 10px; }
 .settings-section > select { width: 100%; margin-top: 8px; }
+.settings-section > label + select { margin-top: 7px; }
 .models-card .hint { margin: 10px 0; }
 .model-group { margin: 22px 0; }
 .model-group h3 { margin: 0; font-size: 14px; }
@@ -420,7 +512,9 @@ button:disabled { opacity: .62; cursor: default; }
   .conversations-panel { position: static; width: 100%; height: auto; padding: 10px 18px; border-right: 0; border-bottom: 1px solid var(--line); }
   .conversation-list { display: flex; max-height: none; overflow-x: auto; }
   .conversation-item { width: auto; max-width: 190px; flex: 0 0 auto; }
-  .conversation-list-heading, .conversation-panel-actions { display: none; }
+  .sidebar-section[data-section="projects"] { display: none; }
+  .sidebar-section-action { opacity: 1; }
+  .sidebar-logo { width: 64px; margin: 0 0 6px; padding: 4px; }
   .side-panels { max-height: none; border-left: 0; border-top: 1px solid var(--line); }
   .sidebar-open .side-panels { display: block; height: auto; overflow: visible; }
   .side-divider { display: none; }
@@ -446,8 +540,6 @@ button:disabled { opacity: .62; cursor: default; }
 .model-id-input { width: 100%; min-width: 0; padding: 4px 0; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--text); }
 .model-id-input:focus { border-color: var(--control); background: var(--surface-soft); padding-left: 5px; }
 .model-row > div { flex: 1; min-width: 0; }
-#topbar-project-name[contenteditable="true"] { cursor: text; border-radius: 4px; }
-#topbar-project-name:focus { outline: 2px solid var(--answer-outline); outline-offset: 3px; }
 /* A first question's chat, listed before its generated title arrives. */
 .conversation-item.provisional { color: var(--muted); font-style: italic; }
 /* Drag handles on the panel borders; positioned by JavaScript. */
@@ -478,6 +570,7 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-timeline { margin: 6px 0 4px; padding: 0 0 0 14px; list-style: none; border-left: 2px solid var(--line); }
 .answer-timeline li { display: flex; justify-content: space-between; gap: 16px; max-width: 560px; padding: 1px 0; }
 .timeline-time { flex: none; font-variant-numeric: tabular-nums; }
+.timeline-running { color: var(--text); }
 /* Markdown inside answers. */
 .answer-body { white-space: normal; }
 .answer-body > :first-child { margin-top: 0; }
@@ -499,6 +592,11 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-body pre code { padding: 0; background: transparent; }
 .answer-body blockquote { margin: 0 0 0.75em; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
 .answer-body hr { margin: 1em 0; border: 0; border-top: 1px solid var(--line); }
+.answer-table { margin: 0 0 0.75em; overflow-x: auto; }
+.answer-body table { border-collapse: collapse; font-size: 0.94em; line-height: 1.45; }
+/* Cells break only between words; a table too wide scrolls sideways. */
+.answer-body th, .answer-body td { padding: 6px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; white-space: normal; overflow-wrap: break-word; }
+.answer-body th { background: var(--surface-soft); font-weight: 650; }
 /* One effort name, centred above both sliders. */
 .effort-title { display: block; margin: 0 0 8px; color: var(--text); font-size: 15px; font-weight: 600; text-align: center; }
 .effort-heading { display: flex; justify-content: space-between; align-items: baseline; }

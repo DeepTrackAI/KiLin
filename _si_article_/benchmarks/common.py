@@ -1,47 +1,60 @@
-"""Shared helpers for the CodeRAG-Bench evaluation notebooks.
+"""Provide task definitions and scoring helpers for KíLín benchmarks.
 
-Only the pieces that are genuinely benchmark-specific live here --
-BEIR-shaped task data, query formatting for the benchmark's retrieval
-instruction, and BEIR/pytrec_eval-style scoring. Chunking, index
-building, and searching all go through ``qachat`` directly from each
-notebook now (real ``scan_repository``/``chunk_source_units``,
-``build_semantic_index`` batching, ``semantic_search``'s numpy path),
-not a benchmark-only stand-in.
+The benchmark notebooks exercise KíLín's real scanning, extraction,
+chunking, indexing and retrieval paths. This module only owns evaluation
+records, benchmark-specific query formatting and deterministic scoring.
+The optional ``pytrec_eval`` dependency is loaded when retrieval scores
+are calculated; the dogfooding helpers can run without that package.
 
-Classes
--------
-BenchmarkTask
-    One CodeRAG-Bench retrieval task in BEIR format.
-GenerationTask
-    One hand-authored dogfooding question against QAChat's own repo.
+Key Features
+------------
 
-Functions
----------
-format_query
-    Format one benchmark query for the Qwen3 embedding model.
-evaluate_retrieval
-    Score ranked results the same way CodeRAG-Bench and BEIR do.
-corpus_already_written
-    Check whether a project's corpus folder already holds files, so a
-    notebook can skip rewriting a corpus already on disk.
-local_run_timestamp
-    Current time in Europe/Rome, for a result record and its filename.
-load_generation_tasks
-    Load a hand-authored gold question set from its JSON file.
-extract_cited_indices
-    Return every one-based [n] citation index referenced in an answer.
-citation_validity
-    Check that every citation in an answer refers to real, supplied evidence.
-gold_evidence_indices
-    Which of a turn's real evidence citation numbers cover a question's gold
-    citation(s).
-citation_coverage
-    Fraction of a question's gold-relevant evidence that actually got cited.
-abstains
-    Heuristic check for whether an answer says the evidence is insufficient.
-verbatim_overlap_chars
-    Longest run of characters an answer shares verbatim with any one piece
-    of supplied evidence.
+- **Retrieval tasks**
+
+    Represent CodeRAG-Bench and BEIR corpora as query, document and
+    relevance dictionaries and compute standard ranking metrics.
+
+- **Answer assessment**
+
+    Compare KíLín-generated citations with supplied evidence and source
+    locations, while keeping heuristic checks distinct from human review.
+
+- **Reproducibility**
+
+    Load hand-annotated gold records and produce local result timestamps.
+
+Module Structure
+----------------
+
+- ``BenchmarkTask`` and ``GenerationTask``
+
+    Frozen records for retrieval and answer-quality evaluations.
+
+- ``format_query`` and ``evaluate_retrieval``
+
+    Prepare CodeRAG-Bench queries and score retrieval results.
+
+- ``corpus_already_written`` and ``local_run_timestamp``
+
+    Utilities for creating and recording benchmark runs.
+
+- ``load_generation_tasks``, ``extract_cited_indices``,
+  ``citation_validity``, ``gold_evidence_indices`` and
+  ``citation_coverage``
+
+    Parse ground truth and calculate mechanistic citation checks.
+
+- ``abstains`` and ``verbatim_overlap_chars``
+
+    Heuristic answer checks that require human interpretation.
+
+Examples
+--------
+>>> from benchmarks.common import citation_validity, format_query
+>>> citation_validity("Supported [1, 2]", evidence_count=2)
+(True, [])
+>>> format_query("How is a file scanned?").startswith("Instruct:")
+True
 
 """
 
@@ -53,11 +66,10 @@ from difflib import SequenceMatcher
 import json
 from pathlib import Path
 import re
+import shutil
 from zoneinfo import ZoneInfo
 
-import pytrec_eval
-
-from qachat.query_formats import format_qwen3_query
+from kilin.query_formats import format_qwen3_query
 
 
 __all__ = [
@@ -66,8 +78,10 @@ __all__ = [
     "format_query",
     "evaluate_retrieval",
     "corpus_already_written",
+    "open_or_initialize",
     "local_run_timestamp",
     "load_generation_tasks",
+    "final_answer",
     "extract_cited_indices",
     "citation_validity",
     "gold_evidence_indices",
@@ -86,7 +100,24 @@ CODE_RETRIEVAL_INSTRUCTION = (
 
 
 def format_query(question: str) -> str:
-    """Format one benchmark query for the Qwen3 embedding model."""
+    """Format a coding question using the benchmark retrieval instruction.
+
+    Parameters
+    ----------
+    question: str
+        Coding task or natural-language retrieval query.
+
+    Returns
+    -------
+    str
+        Validated Qwen3 query with separate instruction and question lines.
+
+    Raises
+    ------
+    ValueError
+        If question is empty or not text.
+
+    """
 
     return format_qwen3_query(
         question=question,
@@ -122,7 +153,30 @@ def evaluate_retrieval(
     results: dict[str, dict[str, float]],
     k_values: list[int] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Score ranked results the same way CodeRAG-Bench and BEIR do."""
+    """Compute BEIR-style information retrieval scores for ranked results.
+
+    Parameters
+    ----------
+    qrels: dict[str, dict[str, int]]
+        Relevance grades keyed by query and corpus document identifier.
+    results: dict[str, dict[str, float]]
+        Retrieved document scores keyed by query and document identifier.
+    k_values: list[int] | None, optional
+        Ranking cutoffs, or the standard 1, 3, 5, 10 and 100.
+
+    Returns
+    -------
+    dict[str, dict[str, float]]
+        Mean NDCG, MAP, recall, precision and MRR at each cutoff.
+
+    Notes
+    -----
+    ``pytrec_eval`` is required only when scoring retrieval tasks;
+    citation and dogfooding helpers can be imported without it.
+
+    """
+
+    import pytrec_eval
 
     if k_values is None:
         k_values = [1, 3, 5, 10, 100]
@@ -207,6 +261,41 @@ def corpus_already_written(directory: Path) -> bool:
     return directory.exists() and any(directory.iterdir())
 
 
+def open_or_initialize(project_root: Path, type_id: str):
+    """Open a benchmark project, or create it in an empty folder.
+
+    Parameters
+    ----------
+    project_root: pathlib.Path
+        Benchmark project folder under ``sandbox/``.
+    type_id: str
+        Project type used when the project is created, such as ``"code"``
+        or ``"literature"``.
+
+    Returns
+    -------
+    kilin.project.QAProject
+        The existing project when ``profile.ini`` is present; otherwise a
+        new project.
+
+    Notes
+    -----
+    ``initialize_project`` only creates a project in a nonexistent or
+    empty folder, so a project from an earlier run is reopened. A folder
+    without ``profile.ini`` is left over from an interrupted run and is
+    deleted and created again.
+
+    """
+
+    from kilin.project import initialize_project, open_project
+
+    if (project_root / "profile.ini").is_file():
+        return open_project(project_root)
+    if project_root.exists():
+        shutil.rmtree(project_root)
+    return initialize_project(project_root, type_id)
+
+
 def local_run_timestamp() -> tuple[str, str]:
     """Return the current time in Europe/Rome, for a saved result.
 
@@ -227,7 +316,7 @@ def local_run_timestamp() -> tuple[str, str]:
 
 @dataclass(frozen=True, slots=True)
 class GenerationTask:
-    """One hand-authored dogfooding question against QAChat's own repo.
+    """One hand-annotated code-question and answer-quality task.
 
     Unlike ``BenchmarkTask``, there's no published table to check these
     against -- credibility comes from the citations and fact checklist
@@ -238,14 +327,14 @@ class GenerationTask:
     task_id: str
         Short id used in result tables (e.g. ``"A1"``).
     question: str
-        The question asked of QAChat's real ``RAGSession``.
+        The question asked of a real KíLín ``RAGSession``.
     gold_citations: tuple[str, ...]
         ``"path:start-end"`` or ``"path:line"`` strings identifying the
         source location(s) a correct, well-cited answer should draw on.
         Empty for a deliberate abstention question. For a notebook cell,
         include the one-based cell number as ``"path#cell:start-end"`` --
         every cell's line numbers start at 1 (see ``Chunk`` in
-        ``qachat/chunking.py``), so two different cells can share the same
+        ``kilin/chunking.py``), so two different cells can share the same
         line range and a plain ``"path:start-end"`` citation would then
         match every chunk in that notebook rather than the one intended.
     fact_checklist: tuple[str, ...]
@@ -256,7 +345,7 @@ class GenerationTask:
         guessing.
     reference_answer: str
         A reference answer written from the fact checklist, for a human
-        grader to compare QAChat's actual answer against during Tier 2
+        grader to compare KíLín's actual answer against during Tier 2
         grading. Not used by any Tier 1 mechanical check.
 
     """
@@ -275,8 +364,8 @@ def load_generation_tasks(path: Path) -> list[GenerationTask]:
     Parameters
     ----------
     path: pathlib.Path
-        A ``_si_article_/benchmarks/gold/*.json`` file containing
-        ``{"tasks": [...]}`` entries matching ``GenerationTask``'s fields.
+        A ``benchmarks/gold/*.json`` file: ``{"tasks": [...]}``, each item
+        matching ``GenerationTask``'s fields.
 
     Returns
     -------
@@ -299,11 +388,41 @@ def load_generation_tasks(path: Path) -> list[GenerationTask]:
     ]
 
 
-_CITATION_PATTERN = re.compile(r"\[(\d+)\]")
+# KíLín accepts both [1] and grouped [1, 2] citations.
+_CITATION_PATTERN = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def final_answer(answer: str) -> str:
+    """Return the part of a model reply that is shown as the answer.
+
+    Parameters
+    ----------
+    answer: str
+        A chat-model reply, possibly with reasoning in ``<think>`` tags.
+
+    Returns
+    -------
+    str
+        The reply without its reasoning, stripped of surrounding space.
+
+    Notes
+    -----
+    Reasoning is the model's working draft: citations, list literals and
+    quoted evidence there are not claims made to the reader, so the
+    citation, abstention and overlap checks read only the final answer.
+    This mirrors ``kilin.answering.strip_thinking``.
+
+    """
+
+    text = re.sub(r"<think>.*?</think>", "", str(answer), flags=re.S)
+    # A chat template that opens <think> itself leaves only the closing tag.
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1]
+    return text.split("<think>", 1)[0].strip()
 
 
 def extract_cited_indices(answer: str) -> list[int]:
-    """Return every one-based ``[n]`` citation index referenced in an answer.
+    """Extract numeric citations from standalone and grouped references.
 
     Parameters
     ----------
@@ -313,12 +432,16 @@ def extract_cited_indices(answer: str) -> list[int]:
     Returns
     -------
     list[int]
-        Cited indices in order of appearance, duplicates included --
-        callers that need a set should dedupe themselves.
+        Cited indices from ``[1]`` or ``[1, 2]`` in the final answer
+        (``final_answer``), in appearance order and including duplicates.
+        Callers needing unique numbers must dedupe.
 
     """
 
-    return [int(match) for match in _CITATION_PATTERN.findall(answer)]
+    indices: list[int] = []
+    for group in _CITATION_PATTERN.findall(final_answer(answer)):
+        indices.extend(int(part.strip()) for part in group.split(","))
+    return indices
 
 
 def citation_validity(
@@ -348,11 +471,19 @@ def citation_validity(
 
 
 def _parse_gold_citation(spec: str) -> tuple[str, int | None, int, int]:
-    """Parse a ``"path:line"`` or ``"path:start-end"`` gold citation string.
+    """Parse source path, notebook cell and inclusive line bounds.
 
-    A path suffixed with ``#<cell>`` (e.g. ``"tutorial.ipynb#34:1-8"``) names
-    a specific one-based notebook cell -- required to disambiguate a
-    notebook citation, since every cell's line numbers start at 1.
+    Parameters
+    ----------
+    spec: str
+        ``path:line`` or ``path:start-end`` with optional ``#cell``
+        suffix before the colon. Notebook cell indices are one-based.
+
+    Returns
+    -------
+    tuple[str, int | None, int, int]
+        Source path, optional notebook cell, first line and last line.
+
     """
 
     path, _, span = spec.rpartition(":")
@@ -370,12 +501,12 @@ def _parse_gold_citation(spec: str) -> tuple[str, int | None, int, int]:
 def gold_evidence_indices(
     evidence, gold_citations: tuple[str, ...]
 ) -> list[int]:
-    """Find evidence citations overlapping the supplied gold citations.
+    """Find real evidence that overlaps the hand-annotated gold passages.
 
     Parameters
     ----------
-    evidence: Sequence[qachat.rag.Evidence]
-        The exact evidence QAChat retrieved and cited for one turn (e.g.
+    evidence: Sequence[kilin.rag.Evidence]
+        The exact evidence KíLín retrieved and cited for one turn (e.g.
         ``rag_session.turns[-1].evidence``).
     gold_citations: tuple[str, ...]
         This question's gold ``"path:start-end"`` citation(s), optionally
@@ -426,7 +557,7 @@ def citation_coverage(
     ----------
     answer: str
         A chat-model answer.
-    evidence: Sequence[qachat.rag.Evidence]
+    evidence: Sequence[kilin.rag.Evidence]
         The exact evidence supplied for this turn.
     gold_citations: tuple[str, ...]
         This question's gold citation(s).
@@ -453,101 +584,118 @@ _ABSTENTION_PATTERN = re.compile(
     r"insufficient evidence"
     r"|evidence is insufficient"
     r"|not enough evidence"
-    r"|cannot answer (?:this|that) from the (?:supplied|available) evidence",
+    r"|cannot answer"
+    r"|(?:evidence|code|documentation|sources?) (?:provided |supplied )?"
+    r"(?:does|do) not (?:directly )?"
+    r"(?:confirm|address|mention|state|show|indicate|describe|contain|specify)"
+    r"|\bno (?:explicit |direct )?(?:\w+[\s-]){0,4}(?:is|are) "
+    r"(?:stated|mentioned|present|described|specified|found)"
+    r"|\bnot (?:explicitly )?(?:stated|mentioned|specified|documented)\b"
+    r"|\bno (?:mention|evidence|indication) of\b",
     re.IGNORECASE,
 )
 
+# A contrast after the abstention phrase ("Insufficient evidence is provided
+# to confirm X, but ...") marks a hedge on an answer, not an abstention.
+_HEDGE_PATTERN = re.compile(
+    r"\b(?:but|however|although|though|yet)\b", re.IGNORECASE
+)
 
-_ABSTENTION_DOMINANCE_RATIO = 0.5
+# Quoted text, such as a quoted system prompt, is not the answer's own claim.
+_QUOTATION_PATTERN = re.compile(r'"[^"]*"|\u201c[^\u201d]*\u201d')
 
-_ABSTENTION_TRAILING_CHARS = re.compile(r"^[\s.:;,!\"'()\[\]]*$")
+_SENTENCE_BREAK = re.compile(r"(?<=[.!?])\s+")
 
 
-def abstains(answer: str) -> bool:
-    """Heuristic check for whether an answer says the evidence is insufficient.
+def _states_insufficient_evidence(sentence: str) -> bool:
+    """Return whether one sentence concludes that evidence is missing.
 
     Parameters
     ----------
-    answer: str
-        A chat-model answer.
+    sentence: str
+        One sentence of the final answer.
 
     Returns
     -------
     bool
-        Whether the answer, taken as a whole, *is* an abstention -- not
-        merely whether it contains the abstention wording ("insufficient
-        evidence" or a close paraphrase) somewhere inside it. QAChat's
-        default system prompt (``qachat/rag.py``'s ``_SYSTEM_PROMPT``) only
-        loosely asks the model to "say when evidence is insufficient";
-        some benchmark runs instead use a stronger, run-scoped override
-        (for example, in the ``60_qachat_dogfood_code.ipynb`` notebook,
-        under ``_si_article_/benchmarks/notebooks/``) that asks for an
-        exact "Insufficient evidence." reply when the evidence
-        *clearly* does not address the question -- but even that
-        instruction has a legitimate gap for a
-        compound question the evidence only partially answers: a model
-        that explains what it *does* know and then flags the unanswered
-        part with that same closing phrase is abstaining correctly on that
-        part, just not in the bare single-sentence form the instruction
-        describes for a clean non-match. So an answer counts as an
-        abstention if the matched phrase either (a) covers most of the
-        answer's length (``_ABSTENTION_DOMINANCE_RATIO``), which is what a
-        clean, terse abstention looks like, or (b) is the last substantive
-        thing in the answer -- nothing but whitespace or trailing
-        punctuation follows it -- which is what a hedged, partial-then-
-        abstain answer looks like. Either way, a match stuck in the middle
-        of a longer explanation (reciting the system prompt itself, or a
-        reasoning trace that mentions "insufficient evidence" only in
-        passing before answering anyway) is still not misclassified as an
-        abstention. This is still a mechanical proxy, not a semantic one: a
-        real abstention phrased some other way is missed here. Treat it as
-        a fast first pass; the human Tier-2 read is what actually settles
-        abstention correctness.
+        Whether an abstention phrase occurs with no contrast after it.
 
     """
 
-    stripped = answer.strip()
-    if not stripped:
-        return False
-
-    matches = list(_ABSTENTION_PATTERN.finditer(stripped))
-    if not matches:
-        return False
-
-    last_match = matches[-1]
-    matched_chars = last_match.end() - last_match.start()
-    dominates = matched_chars / len(stripped) >= _ABSTENTION_DOMINANCE_RATIO
-
-    trailing = stripped[last_match.end():]
-    anchored_at_end = bool(_ABSTENTION_TRAILING_CHARS.match(trailing))
-
-    return dominates or anchored_at_end
+    match = _ABSTENTION_PATTERN.search(sentence)
+    return match is not None and not _HEDGE_PATTERN.search(
+        sentence[match.end():]
+    )
 
 
-def verbatim_overlap_chars(answer: str, evidence) -> int:
-    """Longest run of characters an answer shares verbatim with any evidence.
+def abstains(answer: str) -> bool:
+    """Detect whether an answer concludes that the evidence is insufficient.
 
     Parameters
     ----------
     answer: str
-        A chat-model answer.
-    evidence: Sequence[qachat.rag.Evidence]
-        The exact evidence supplied for this turn.
+        Model-generated answer to inspect.
+
+    Returns
+    -------
+    bool
+        Whether the first or last sentence of the final answer states that
+        the evidence does not answer the question.
+
+    Notes
+    -----
+    Reasoning (``final_answer``) and quoted text are ignored.
+    The opening and closing sentences carry an answer's conclusion. Either
+    counts as an abstention when it uses the requested phrase
+    ``Insufficient evidence.`` or a common paraphrase ("the evidence does
+    not confirm", "no ... is stated", "not explicitly mentioned"), unless a
+    contrast follows ("..., but ..."), which marks a hedged answer. This
+    recognizer cannot judge whether the question was in fact answerable,
+    and unusual paraphrases may be missed. Interpret the result alongside
+    the human Tier-2 worksheet.
+
+    """
+
+    text = _QUOTATION_PATTERN.sub('""', final_answer(answer))
+    sentences = [
+        sentence
+        for sentence in _SENTENCE_BREAK.split(text)
+        if sentence.strip()
+    ]
+    if not sentences:
+        return False
+
+    return any(
+        _states_insufficient_evidence(sentence)
+        for sentence in (sentences[0], sentences[-1])
+    )
+
+
+def verbatim_overlap_chars(answer: str, evidence) -> int:
+    """Measure the longest substring shared with supplied source excerpts.
+
+    Parameters
+    ----------
+    answer: str
+        Generated answer to inspect.
+    evidence: Sequence[kilin.rag.Evidence]
+        Source excerpts supplied for the answer.
 
     Returns
     -------
     int
-        The largest single matching block length (characters), across all
-        evidence items, found via ``difflib.SequenceMatcher``. QAChat's
-        system prompt explicitly forbids copying source text verbatim
-        (``_SYSTEM_PROMPT`` in ``qachat/rag.py``) -- a long match here is a
-        checkable compliance signal, not a judgment call. (One question in
-        the gold set, A3, asks for the system prompt itself verbatim --
-        that's the one case where a long match is the correct answer, not
-        a violation.)
+        Length in characters of the longest exact substring shared by the
+        final answer (``final_answer``) and one excerpt.
+
+    Notes
+    -----
+    Long overlaps signal passages for human review, not automatically
+    improper copying. In the KíLín gold set question A3 explicitly asks
+    to quote the system prompt, so an overlap there is expected.
 
     """
 
+    answer = final_answer(answer)
     longest = 0
     matcher = SequenceMatcher(None, answer, "")
     for item in evidence:

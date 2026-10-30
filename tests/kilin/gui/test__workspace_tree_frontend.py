@@ -92,7 +92,7 @@ console.log("workspace tree passed");
         self.assertIn("workspace tree passed", result.stdout)
 
     def test_conversation_locks_are_hidden_from_the_tree(self):
-        """The tree leaves out conversation locks; other files stay."""
+        """The tree leaves out conversation locks and .DS_Store files."""
 
         source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
         start = source.index("function renderWorkspace(")
@@ -109,6 +109,10 @@ assert.equal(shownInWorkspace("logs/traces/conversation_a.json.lock"), false);
 assert.equal(shownInWorkspace("logs/traces/conversation_a.json"), true);
 assert.equal(shownInWorkspace("sources/notes.json.lock"), true);
 assert.equal(shownInWorkspace("outputs/report.md"), true);
+assert.equal(shownInWorkspace("logs/traces/.DS_Store"), false);
+assert.equal(shownInWorkspace(".DS_Store"), false);
+assert.equal(shownInWorkspace("sources/GAUDI/.DS_Store"), false);
+assert.equal(shownInWorkspace("sources/notes.DS_Store.md"), true);
 console.log("lock filter passed");
 """
         result = subprocess.run(

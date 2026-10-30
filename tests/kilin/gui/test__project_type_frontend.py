@@ -61,6 +61,7 @@ const conversationScroll = {};
 const updateFloatingHeader = () => {};
 const renderSavedProjects = () => {};
 let savedProjects = [];
+let openProjectPath = "";
 let ready = false;
 '''
         script += "\n".join([*state, *functions])

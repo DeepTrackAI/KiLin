@@ -1,0 +1,317 @@
+{
+  "corpus": "kilin-code",
+  "corpus_description": "KíLín kilin/ package and tutorials/ notebooks from KiLin_source(3).zip (2026-10-23). The source includes the packaged JSON defaults and project types. Citation positions must be rechecked when the KíLín source changes.",
+  "tasks": [
+    {
+      "task_id": "A1",
+      "question": "Why does chunk_source_units skip source units and chunks whose text is only whitespace?",
+      "gold_citations": [
+        "kilin/chunking.py:356",
+        "kilin/chunking.py:861"
+      ],
+      "fact_checklist": [
+        "The per-unit splitter rejects empty or whitespace-only text.",
+        "The line-based splitter also filters whitespace-only results.",
+        "This avoids useless chunks and empty retrieval evidence."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The per-unit splitter rejects empty or whitespace-only text. The line-based splitter also filters whitespace-only results. This avoids useless chunks and empty retrieval evidence."
+    },
+    {
+      "task_id": "A2",
+      "question": "How does code_search match named code entities and rank the corresponding chunks?",
+      "gold_citations": [
+        "kilin/retrievals/strategies/retrieval_code.py:227-335"
+      ],
+      "fact_checklist": [
+        "It resolves entities explicitly named in a nonblank query.",
+        "Graph distances are computed up to max_distance (currently 1).",
+        "Eligible chunks have a symbol and match entity path and symbol.",
+        "Scores use 1/(distance+1), followed by deterministic tie-breaks.",
+        "No matched entity means no code results."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "It resolves entities explicitly named in a nonblank query. Graph distances are computed up to max_distance (currently 1). Eligible chunks have a symbol and match entity path and symbol. Scores use 1/(distance+1), followed by deterministic tie-breaks. No matched entity means no code results."
+    },
+    {
+      "task_id": "A3",
+      "question": "What is KíLín's default RAG system prompt, word for word?",
+      "gold_citations": [
+        "kilin/rag.py:307-313"
+      ],
+      "fact_checklist": [
+        "It instructs grounding in supplied project evidence.",
+        "It asks for numbered source citations placed after claims.",
+        "It says not to repeat bibliographic text and to state when evidence is insufficient.",
+        "For this question only, quoting the prompt verbatim is appropriate."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "It instructs grounding in supplied project evidence. It asks for numbered source citations placed after claims. It says not to repeat bibliographic text and to state when evidence is insufficient. For this question only, quoting the prompt verbatim is appropriate."
+    },
+    {
+      "task_id": "A4",
+      "question": "How does RAGSession format numbered evidence for a chat answer?",
+      "gold_citations": [
+        "kilin/rag.py:4476-4530"
+      ],
+      "fact_checklist": [
+        "Each item starts with [n] and a path plus line range.",
+        "An optional symbol follows in parentheses.",
+        "The source text is placed on the next line.",
+        "Evidence is assembled by _answer_prompt."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Each item starts with [n] and a path plus line range. An optional symbol follows in parentheses. The source text is placed on the next line. Evidence is assembled by _answer_prompt."
+    },
+    {
+      "task_id": "A5",
+      "question": "Does hybrid_search use Reciprocal Rank Fusion, and what are its default rank constant and count?",
+      "gold_citations": [
+        "kilin/retrievals/strategies/retrieval_hybrid.py:106-178"
+      ],
+      "fact_checklist": [
+        "Hybrid search uses Reciprocal Rank Fusion (RRF).",
+        "Its rank_constant defaults to the packaged retrieval value 60.",
+        "Its count argument defaults to 5."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Hybrid search uses Reciprocal Rank Fusion (RRF). Its rank_constant defaults to the packaged retrieval value 60. Its count argument defaults to 5."
+    },
+    {
+      "task_id": "A6",
+      "question": "What happens when scan_repository encounters more than its max_entries limit?",
+      "gold_citations": [
+        "kilin/repository.py:437-480",
+        "kilin/repository.py:550-578"
+      ],
+      "fact_checklist": [
+        "The default max_entries limit is 10,000.",
+        "Exceeding the limit raises ValueError instead of truncating.",
+        "The message suggests a smaller source directory or a higher limit."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The default max_entries limit is 10,000. Exceeding the limit raises ValueError instead of truncating. The message suggests a smaller source directory or a higher limit."
+    },
+    {
+      "task_id": "A7",
+      "question": "Does EmbeddingSession configure embedding batch_size, or is that specified for build_semantic_index?",
+      "gold_citations": [
+        "kilin/retrievals/strategies/retrieval_semantic.py:133-193",
+        "kilin/embeddings.py:144-165"
+      ],
+      "fact_checklist": [
+        "EmbeddingSession does not take a batch_size constructor argument.",
+        "Batching is configured in build_semantic_index."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "EmbeddingSession does not take a batch_size constructor argument. Batching is configured in build_semantic_index."
+    },
+    {
+      "task_id": "A8",
+      "question": "What retrieval_count and max_new_tokens defaults does KíLín ship for a new project profile?",
+      "gold_citations": [
+        "kilin/kilin_defaults.json:184-193",
+        "kilin/project.py:214-241"
+      ],
+      "fact_checklist": [
+        "Project-profile retrieval_count defaults to 5.",
+        "Project-profile max_new_tokens defaults to 8192.",
+        "The defaults come from packaged kilin_defaults.json through project.py, not from literals in the profile constructor."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Project-profile retrieval_count defaults to 5. Project-profile max_new_tokens defaults to 8192. The defaults come from packaged kilin_defaults.json through project.py, not from literals in the profile constructor."
+    },
+    {
+      "task_id": "A9",
+      "question": "What distinguishes KíLín's built-in code and literature project types?",
+      "gold_citations": [
+        "kilin/project_type.py:1-45",
+        "kilin/project_types/code.json:1-15",
+        "kilin/project_types/literature.json:1-15"
+      ],
+      "fact_checklist": [
+        "Different project type JSON files select extension lists and source folder names.",
+        "They also provide retrieval instructions, intents, and behavior.",
+        "The type mechanism accepts registered types beyond the built-ins."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "Different project type JSON files select extension lists and source folder names. They also provide retrieval instructions, intents, and behavior. The type mechanism accepts registered types beyond the built-ins."
+    },
+    {
+      "task_id": "A10",
+      "question": "What data does indexes_are_current compare to determine whether a persisted index can be reused?",
+      "gold_citations": [
+        "kilin/retrievals/persistence.py:366-405",
+        "kilin/retrievals/persistence.py:473-498"
+      ],
+      "fact_checklist": [
+        "It compares a deterministic SHA-256 fingerprint of chunks and the code graph.",
+        "The source fingerprint covers ordered chunk/provenance data and graph structure, not numeric embeddings.",
+        "An optional embedding-model identity must also match."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "It compares a deterministic SHA-256 fingerprint of chunks and the code graph. The source fingerprint covers ordered chunk/provenance data and graph structure, not numeric embeddings. An optional embedding-model identity must also match."
+    },
+    {
+      "task_id": "A11",
+      "question": "What's the largest corpus size KíLín has been tested against in production use?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "This is a deliberately unanswered external/empirical claim.",
+        "Do not invent an answer from the source repository alone.",
+        "State that the available evidence is insufficient."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "The supplied project evidence is insufficient to establish this claim."
+    },
+    {
+      "task_id": "A12",
+      "question": "Does KíLín use a configurable registry of fourth-party retrieval channels inside RAGSession._retrieve, or explicit search calls?",
+      "gold_citations": [
+        "kilin/rag.py:2920-3160"
+      ],
+      "fact_checklist": [
+        "The reviewed retrieval path directly calls semantic_search, lexical_search, and code_search before hybrid fusion.",
+        "It does not use a registry of additional retrieval channels.",
+        "This is separate from KíLín's extensible built-in tool system."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The reviewed retrieval path directly calls semantic_search, lexical_search, and code_search before hybrid fusion. It does not use a registry of additional retrieval channels. This is separate from KíLín's extensible built-in tool system."
+    },
+    {
+      "task_id": "A13",
+      "question": "Does KíLín encrypt the retrieval indexes or conversation logs it saves to disk?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "This is a deliberately unanswered external/empirical claim.",
+        "Do not invent an answer from the source repository alone.",
+        "State that the available evidence is insufficient."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "The supplied project evidence is insufficient to establish this claim."
+    },
+    {
+      "task_id": "A14",
+      "question": "Does KíLín support undoing or deleting just the most recent conversation turn, short of clearing the whole conversation?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "This is a deliberately unanswered external/empirical claim.",
+        "Do not invent an answer from the source repository alone.",
+        "State that the available evidence is insufficient."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "The supplied project evidence is insufficient to establish this claim."
+    },
+    {
+      "task_id": "A15",
+      "question": "Does KíLín reuse or share retrieval indexes across two different projects that happen to contain identical files?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "This is a deliberately unanswered external/empirical claim.",
+        "Do not invent an answer from the source repository alone.",
+        "State that the available evidence is insufficient."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "The supplied project evidence is insufficient to establish this claim."
+    },
+    {
+      "task_id": "A16",
+      "question": "Does KíLín rate-limit or throttle how quickly a user can ask consecutive questions in the same session?",
+      "gold_citations": [],
+      "fact_checklist": [
+        "This is a deliberately unanswered external/empirical claim.",
+        "Do not invent an answer from the source repository alone.",
+        "State that the available evidence is insufficient."
+      ],
+      "requires_abstention": true,
+      "reference_answer": "The supplied project evidence is insufficient to establish this claim."
+    },
+    {
+      "task_id": "A17",
+      "question": "Does KíLín's deterministic context expansion replace or reorder the initial RRF ranking?",
+      "gold_citations": [
+        "kilin/retrievals/context_expansion.py:139-255"
+      ],
+      "fact_checklist": [
+        "plan_context_expansion identifies explicitly requested context.",
+        "expand_retrieval_context preserves initial RRF order and then appends exact-path, function, and related-function chunks.",
+        "Chunks are deduplicated without changing the initial ranking."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "plan_context_expansion identifies explicitly requested context. expand_retrieval_context preserves initial RRF order and then appends exact-path, function, and related-function chunks. Chunks are deduplicated without changing the initial ranking."
+    },
+    {
+      "task_id": "A18",
+      "question": "Which model presets does the KíLín GUI offer, and for which roles and backends?",
+      "gold_citations": [
+        "kilin/gui/model_catalog.py:90-166"
+      ],
+      "fact_checklist": [
+        "The catalog lists six presets in MODEL_CHOICES.",
+        "The MLX choices comprise three chat models and one embedding model.",
+        "The Torch choices comprise one chat and one embedding model.",
+        "The embedding models use the qwen3 query format."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The catalog lists six presets in MODEL_CHOICES. The MLX choices comprise three chat models and one embedding model. The Torch choices comprise one chat and one embedding model. The embedding models use the qwen3 query format."
+    },
+    {
+      "task_id": "A19",
+      "question": "How does choose_backend resolve auto, and what happens if MLX is explicitly selected off Apple Silicon?",
+      "gold_citations": [
+        "kilin/runtime.py:84-112"
+      ],
+      "fact_checklist": [
+        "auto chooses MLX on native Apple Silicon and Torch otherwise.",
+        "Explicit MLX off native Apple Silicon raises ValueError.",
+        "Backend selection checks operating system and CPU architecture."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "auto chooses MLX on native Apple Silicon and Torch otherwise. Explicit MLX off native Apple Silicon raises ValueError. Backend selection checks operating system and CPU architecture."
+    },
+    {
+      "task_id": "A20",
+      "question": "Does the GUI restrict model downloads to MODEL_CHOICES, or does it accept validated custom model identifiers?",
+      "gold_citations": [
+        "kilin/gui/engine.py:1157-1190",
+        "kilin/gui/model_catalog.py:136-155"
+      ],
+      "fact_checklist": [
+        "The GUI catalog lists suggested presets, not an allowlist.",
+        "The download route validates model IDs but also accepts custom Hugging Face identifiers and local paths.",
+        "MODEL_CHOICES is distinct from download validation."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The GUI catalog lists suggested presets, not an allowlist. The download route validates model IDs but also accepts custom Hugging Face identifiers and local paths. MODEL_CHOICES is distinct from download validation."
+    },
+    {
+      "task_id": "A21",
+      "question": "According to KíLín's context-expansion tutorial, what extra code relationships are included for a named function?",
+      "gold_citations": [
+        "tutorials/120_context_expansion.ipynb#37:1-8"
+      ],
+      "fact_checklist": [
+        "The exact function and direct graph neighbors can be included.",
+        "For calls this includes direct callers and direct callees.",
+        "The extra evidence follows rather than changes RRF results."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The exact function and direct graph neighbors can be included. For calls this includes direct callers and direct callees. The extra evidence follows rather than changes RRF results."
+    },
+    {
+      "task_id": "A22",
+      "question": "What query string layout does KíLín's Qwen3 embedding format use, and who applies it?",
+      "gold_citations": [
+        "kilin/query_formats.py:79-119",
+        "tutorials/60_embeddings.ipynb#25:1-12"
+      ],
+      "fact_checklist": [
+        "The formatter builds Instruct: ... followed by Query: ... .",
+        "It is model-specific, not a universal embedding format.",
+        "Callers apply format_qwen3_query; EmbeddingSession does not prefix the query automatically."
+      ],
+      "requires_abstention": false,
+      "reference_answer": "The formatter builds Instruct: ... followed by Query: ... . It is model-specific, not a universal embedding format. Callers apply format_qwen3_query; EmbeddingSession does not prefix the query automatically."
+    }
+  ]
+}

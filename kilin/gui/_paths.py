@@ -25,7 +25,12 @@ Module Structure
 
 - ``default_workspace_directory``
 
-    Resolve the parent for workspaces created without an explicit path.
+    Resolve the parent for workspaces created without an explicit path:
+    the folder chosen in Settings when it exists, else the standard one.
+
+- ``standard_workspace_directory``
+
+    Resolve the standard parent, ignoring the folder chosen in Settings.
 
 Examples
 --------
@@ -42,7 +47,12 @@ from pathlib import Path
 import sys
 from typing import Final
 
-__all__ = ["default_workspace_directory", "preferences_path"]
+__all__ = [
+    "default_workspace_directory",
+    "preferences_path",
+    "saved_workspace_folder",
+    "standard_workspace_directory",
+]
 
 PREFERENCES_ENVIRONMENT: Final[str] = "KILIN_DEFAULTS_FILE"
 WORKSPACES_ENVIRONMENT: Final[str] = "KILIN_WORKSPACES_DIR"
@@ -162,8 +172,8 @@ def default_workspace_directory() -> Path:
     Returns
     -------
     pathlib.Path
-        Explicit ``KILIN_WORKSPACES_DIR`` directory, checkout sandbox,
-        or user-owned installed-application workspace directory.
+        Explicit ``KILIN_WORKSPACES_DIR`` directory, else the folder chosen
+        in Settings when it still exists, else the standard folder.
 
     Raises
     ------
@@ -172,8 +182,35 @@ def default_workspace_directory() -> Path:
 
     Notes
     -----
-    An explicit workspace chosen in the GUI overrides this default. The
-    resolver does not create directories or change existing projects.
+    A chosen folder that was removed or is not mounted (e.g. a cloud drive)
+    is ignored, so KíLín still starts in the standard folder. An explicit
+    workspace for one project overrides this default. The resolver does not
+    create directories or change existing projects.
+
+    """
+
+    if not os.environ.get(WORKSPACES_ENVIRONMENT):
+        saved = saved_workspace_folder()
+        if saved:
+            path = Path(saved).expanduser()
+            if path.is_dir():
+                return path.resolve()
+    return standard_workspace_directory()
+
+
+def standard_workspace_directory() -> Path:
+    """Return the standard projects folder, ignoring the Settings choice.
+
+    Returns
+    -------
+    pathlib.Path
+        Explicit ``KILIN_WORKSPACES_DIR`` directory, checkout sandbox,
+        or user-owned installed-application workspace directory.
+
+    Raises
+    ------
+    ValueError
+        If an explicit override is relative to the working directory.
 
     """
 
@@ -189,3 +226,27 @@ def default_workspace_directory() -> Path:
     if checkout is not None:
         return checkout / "sandbox"
     return _user_data_directory() / "workspaces"
+
+
+def saved_workspace_folder() -> str:
+    """Return the projects folder chosen in Settings, or "" for none.
+
+    Returns
+    -------
+    str
+        Saved absolute folder path, possibly no longer present, or "".
+
+    Notes
+    -----
+    An unreadable or invalid preferences file counts as no choice, so a
+    broken file never stops KíLín from starting.
+
+    """
+
+    # Imported here: the preferences module imports this one.
+    from kilin.gui.preferences import app_defaults
+
+    try:
+        return str(app_defaults()["workspace_folder"])
+    except (OSError, ValueError, KeyError):
+        return ""

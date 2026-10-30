@@ -76,7 +76,11 @@ include = ["kilin*"]
     "web/*.html",
     "web/*.css",
     "web/*.js",
+    "web/vendor/*.js",
+    "web/vendor/KATEX-LICENSE",
+    "web/vendor/README.md",
     "icons/*.png",
+    "icons/README.md",
 ]
 
 # Development tools are installed by `uv sync` but are not runtime dependencies.

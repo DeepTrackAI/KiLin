@@ -634,7 +634,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "installation_started", "installed_models_used",
             "model_download_progress", "model_download_started",
             "model_downloaded", "models_applied", "opened", "preview",
-            "progress", "projects", "readiness", "reference_error",
+            "progress", "projects", "projects_folder", "readiness",
+            "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
             "sources_checked", "status", "stopped", "trace_ready",
             "usage_progress",
@@ -720,6 +721,43 @@ class TestGUIProtocolBridge(unittest.TestCase):
             {"action": "plan_choice", "choice": "continue"},
         ])
 
+
+    def test_projects_folder_is_reported_and_chosen(self) -> None:
+        """Report the folder in use; Use default asks Qt to save ""."""
+
+        chosen: list[str] = []
+        self.bridge.projectsFolderChosen.connect(chosen.append)
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(
+            window, "default_workspace_directory",
+            return_value=Path("/sandbox"),
+        ), patch.object(
+            window, "standard_workspace_directory",
+            return_value=Path("/sandbox"),
+        ), patch.object(
+            window, "saved_workspace_folder", return_value="/Gone/Projects",
+        ):
+            self.bridge.requestProjectsFolder()
+        self.assertEqual(json.loads(self.events[-1]), {
+            "event": "projects_folder", "folder": "/sandbox",
+            "standard": "/sandbox", "saved": "/Gone/Projects",
+            "missing": True,
+        })
+        self.bridge.useDefaultProjectsFolder()
+        self.assertEqual(chosen, [""])
+        self.assertEqual(self.commands, [])
+
+    def test_copy_text_goes_to_the_system_clipboard(self) -> None:
+        """Copy through Qt, since the page may not write the clipboard."""
+
+        clipboard = MagicMock()
+        with patch(
+            "kilin.gui.window.QGuiApplication.clipboard",
+            return_value=clipboard,
+        ):
+            self.bridge.copyText("Answer [1].")
+        clipboard.setText.assert_called_once_with("Answer [1].")
+        self.assertEqual(self.commands, [])
 
 if __name__ == "__main__":
     unittest.main()

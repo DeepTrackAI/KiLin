@@ -57,11 +57,16 @@ const collapsedWorkspaceFolders = new Set();
 let workspacePaths = new Set();
 // The user's last show/hide choice for the side panels; null before any.
 let sidePanelChoice = null;
+// The Settings tab shown when Settings open; kept while KíLín runs.
+let settingsTab = "general";
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
 const WORKSPACE_DRAG_TYPE = "application/x-kilin-workspace-path";
 let profile = null;
+// Answer settings changed on the start screen: kept until the project is
+// created, instead of being reset by the next settings event.
+let answerSettingsEdited = false;
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -92,7 +97,6 @@ let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
-let resumeRefreshTimer = null;
 let activeTracePath = "";
 let activeConversationId = "";
 // Last conversation registry, and the empty chat whose first question is
@@ -116,11 +120,18 @@ let resumeAfterStop = false;
 let activeProjectTypeId = "";
 const lastEmptyPrompt = Object.create(null);
 let messageAttachments = [];
+// A question whose attached files are being added to sources; it is asked
+// once the index is refreshed.
+let attachedAsk = null;
+// Set while Qt restarts the engine to use another projects folder.
+let switchingProjectsFolder = false;
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = Object.create(null);
 // Saved projects last listed, shown again once the types' names arrive.
 let savedProjects = [];
+// Folder of the open project, highlighted in the left panel's Projects.
+let openProjectPath = "";
 // Used only if a type lists no welcome prompts or suggestions.
 const genericEmptyChat = {
   welcome_prompts: ["What would you like to work on?"],
@@ -136,6 +147,7 @@ function renderProjectTypes(types) {
   if (!Array.isArray(types) || !types.length) return;
   projectTypes = Object.fromEntries(types.map((item) => [item.type_id, item]));
   if (savedProjects.length) renderSavedProjects(savedProjects);
+  if (openProjectPath) renderSidebarProjects(savedProjects, openProjectPath);
   const select = byId("type-id");
   const current = select.value;
   select.replaceChildren(...types.map((item) => {
@@ -160,25 +172,24 @@ function turnCountLabel(count) {
 }
 
 /**
- * Refresh the header and project summary from the saved turn count.
+ * Refresh the chat's name and turn count in its heading and the top bar.
  *
  * @param count Latest saved count; defaults to the current count.
  */
-function updateProjectSummary(count = currentTurnCount) {
+function updateChatSummary(count = currentTurnCount) {
   currentTurnCount = Number(count) || 0;
-  const projectName = byId("project-name").textContent.trim();
-  byId("topbar-project-name").textContent = projectName;
+  byId("topbar-chat-name").textContent = byId("conversation-name").textContent.trim() || "New chat";
   byId("topbar-turn-count").textContent = turnCountLabel(currentTurnCount);
-  byId("project-detail").textContent = `${currentTurnCount} saved ${currentTurnCount === 1 ? "turn" : "turns"}`;
+  byId("conversation-detail").textContent = currentTurnCount ? turnCountLabel(currentTurnCount) : "";
 }
 
 /**
- * Keep the compact project header visible after scrolling the conversation.
+ * Keep the compact chat header visible after scrolling the conversation.
  */
 function updateFloatingHeader() {
   const scrolled = ready && conversationScroll.scrollTop > 96;
   document.querySelector(".topbar").classList.toggle("floating", scrolled);
-  byId("topbar-project").classList.toggle("hidden", !scrolled);
+  byId("topbar-chat").classList.toggle("hidden", !scrolled);
 }
 
 /**
@@ -191,16 +202,7 @@ function hideResume() { byId("saved-projects").classList.add("hidden"); }
  */
 function refreshSavedProject() {
   if (!bridge || busy || ready) return;
-  bridge.listSavedProjects(byId("workspace-path").value.trim());
-}
-
-/**
- * Invalidate the resume shortcut and debounce the next lookup.
- */
-function queueSavedProjectRefresh() {
-  hideResume();
-  clearTimeout(resumeRefreshTimer);
-  resumeRefreshTimer = setTimeout(refreshSavedProject, 250);
+  bridge.listSavedProjects("");
 }
 
 /**
@@ -273,7 +275,10 @@ function renderSavedProjects(projects) {
     group.className = "saved-project-group";
     const heading = document.createElement("strong");
     heading.textContent = "Resume a previous project";
-    group.append(heading);
+    // Five projects show; the rest scroll, so the setup card stays in view.
+    const list = document.createElement("div");
+    list.className = "saved-project-list";
+    group.append(heading, list);
     for (const project of projects) {
       const button = document.createElement("button");
       button.type = "button";
@@ -291,11 +296,276 @@ function renderSavedProjects(projects) {
         setBusy(true, "Resuming project…");
         bridge.resumeProject(project.project);
       });
-      group.append(button);
+      list.append(button);
     }
     host.append(group);
   }
   host.classList.toggle("hidden", !host.children.length);
+}
+
+/**
+ * Read a left-panel choice remembered on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param fallback Value when nothing is saved or storage is unavailable.
+ * @returns The saved value, or ``fallback``.
+ */
+function sidebarPref(key, fallback) {
+  try {
+    const saved = localStorage.getItem(`kilin-sidebar-${key}`);
+    return saved == null ? fallback : JSON.parse(saved);
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * Remember a left-panel choice on this computer.
+ *
+ * @param key Choice name, such as "projects-sort".
+ * @param value JSON-serializable value.
+ */
+function setSidebarPref(key, value) {
+  try { localStorage.setItem(`kilin-sidebar-${key}`, JSON.stringify(value)); } catch {}
+}
+
+/**
+ * Put items in the user's dragged order; items not yet placed come first,
+ * in their given order.
+ *
+ * @param items Items in their default order.
+ * @param idOf Returns an item's identifier.
+ * @param saved Identifiers in the user's order.
+ * @returns New list of the same items.
+ */
+function manualOrder(items, idOf, saved) {
+  const rank = new Map((saved || []).map((id, index) => [id, index]));
+  const fresh = items.filter((item) => !rank.has(idOf(item)));
+  const placed = items.filter((item) => rank.has(idOf(item)))
+    .sort((a, b) => rank.get(idOf(a)) - rank.get(idOf(b)));
+  return [...fresh, ...placed];
+}
+
+/**
+ * Move one identifier to the place of another, as a dropped row does.
+ *
+ * @param ids Identifiers in their shown order.
+ * @param moved The dragged row's identifier.
+ * @param target The identifier of the row it was dropped on.
+ * @returns New list of identifiers.
+ */
+function moveInOrder(ids, moved, target) {
+  const index = ids.indexOf(target);
+  const rest = ids.filter((id) => id !== moved);
+  rest.splice(index, 0, moved);
+  return rest;
+}
+
+/**
+ * Let a row be dragged onto another row of the same list.
+ *
+ * @param row Row element.
+ * @param id The row's identifier.
+ * @param ids Identifiers of the whole list, in shown order.
+ * @param save Receives the new order after a drop.
+ */
+function makeReorderable(row, id, ids, save) {
+  const type = "application/x-kilin-order";
+  row.draggable = true;
+  row.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData(type, id);
+    event.dataTransfer.effectAllowed = "move";
+    row.classList.add("dragging");
+  });
+  row.addEventListener("dragend", () => row.classList.remove("dragging"));
+  // Stop here, so the page-wide guard against file drops does not refuse it.
+  row.addEventListener("dragover", (event) => {
+    if (!event.dataTransfer.types.includes(type)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.dataTransfer.dropEffect = "move";
+  });
+  row.addEventListener("drop", (event) => {
+    const moved = event.dataTransfer.getData(type);
+    if (!moved) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (moved !== id && ids.includes(moved)) save(moveInOrder(ids, moved, id));
+  });
+}
+
+/**
+ * Order the projects for the left panel.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project, listed first when it is not
+ *   among the saved projects.
+ * @param currentType Project type of the open project.
+ * @param mode "updated" keeps recent use; "manual" uses ``saved``.
+ * @param saved Project folders in the user's dragged order.
+ * @returns New list of projects to show.
+ */
+function sidebarProjectOrder(projects, current, currentType = "", mode = "updated", saved = []) {
+  const listed = !current || projects.some((project) => project.project === current)
+    ? [...projects]
+    : [{ project: current, name: current.split(/[\\/]/).pop(), type_id: currentType }, ...projects];
+  return mode === "manual" ? manualOrder(listed, (project) => project.project, saved) : listed;
+}
+
+/**
+ * Order the conversations for the left panel.
+ *
+ * @param items Conversation records with ``updated_at_utc``.
+ * @param mode "updated" puts the latest change first; "manual" uses
+ *   ``saved``.
+ * @param saved Conversation identifiers in the user's dragged order.
+ * @returns New list of conversations.
+ */
+function sidebarConversationOrder(items, mode = "updated", saved = []) {
+  const recent = [...items].sort((a, b) =>
+    (Date.parse(b.updated_at_utc) || 0) - (Date.parse(a.updated_at_utc) || 0));
+  return mode === "manual" ? manualOrder(recent, (item) => item.conversation_id, saved) : recent;
+}
+
+/**
+ * List the most recent projects in the left panel, each with its type, the
+ * open one highlighted; clicking another one switches to it, and More shows
+ * the rest.
+ *
+ * @param projects Saved projects ordered by recent use.
+ * @param current Folder of the open project.
+ */
+function renderSidebarProjects(projects, current) {
+  const list = byId("project-list");
+  list.replaceChildren();
+  const mode = sidebarPref("projects-sort", "updated");
+  const ordered = sidebarProjectOrder(
+    projects, current, activeProjectTypeId, mode, sidebarPref("projects-order", []));
+  const ids = ordered.map((project) => project.project);
+  // Five projects show; the list scrolls for the rest (see styles.css).
+  for (const project of ordered) {
+    const row = document.createElement("div");
+    row.className = "project-row";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "project-item";
+    const name = document.createElement("span");
+    name.className = "project-item-name";
+    name.textContent = project.name;
+    const type = document.createElement("span");
+    type.className = "project-item-type";
+    type.textContent = projectTypes[project.type_id]?.label || project.type_id || "";
+    button.append(name, type);
+    button.title = project.project;
+    const active = project.project === current;
+    button.classList.toggle("active", active);
+    if (active) button.setAttribute("aria-current", "true");
+    button.disabled = busy;
+    const open = () => {
+      if (busy || active) return;
+      setBusy(true, `Opening ${project.name}…`);
+      bridge.resumeProject(project.project);
+    };
+    button.addEventListener("click", () => open());
+    // Settings save into the open project, so only its row has the icon.
+    const settings = document.createElement("button");
+    settings.type = "button";
+    settings.className = "project-settings";
+    settings.setAttribute("aria-label", `Settings for ${project.name}`);
+    settings.title = "Project settings";
+    settings.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    settings.disabled = busy;
+    settings.addEventListener("click", () => openModels());
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      showWorkspaceMenu(event.clientX, event.clientY, active
+        ? [["Rename", () => renameProjectInSidebar(button, project)], ["Settings", openModels]]
+        : [["Open", open]]);
+    });
+    row.append(button);
+    if (active) row.append(settings);
+    if (mode === "manual") {
+      makeReorderable(row, project.project, ids, (order) => {
+        setSidebarPref("projects-order", order);
+        renderSidebarProjects(projects, current);
+      });
+    }
+    list.append(row);
+  }
+}
+
+/**
+ * Rename the open project in place: Enter or leaving the field saves,
+ * Escape cancels.
+ *
+ * @param button The project's row button, replaced while editing.
+ * @param project The open project.
+ */
+function renameProjectInSidebar(button, project) {
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "conversation-rename";
+  input.value = project.name;
+  input.setAttribute("aria-label", `Rename ${project.name}`);
+  let done = false;
+  const finish = (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.replaceWith(button);
+    if (save && name && name !== project.name && !busy && ready) {
+      setBusy(true, "Renaming project…");
+      bridge.renameProject(name);
+    }
+  };
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); finish(true); }
+    if (event.key === "Escape") { event.preventDefault(); finish(false); }
+  });
+  input.addEventListener("blur", () => finish(true));
+  button.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/**
+ * Show the ⋯ menu of a left-panel section: sort by last update, or in the
+ * user's own dragged order.
+ *
+ * @param anchor The ⋯ button.
+ * @param section "projects" or "conversations".
+ * @param refresh Redraws the section's list.
+ */
+function showSidebarSortMenu(anchor, section, refresh) {
+  const mode = sidebarPref(`${section}-sort`, "updated");
+  const heading = document.createElement("div");
+  heading.className = "menu-heading";
+  heading.textContent = "Sort by";
+  const options = [["updated", "Last updated"], ["manual", "Manual order"]].map(([value, label]) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("role", "menuitemradio");
+    button.setAttribute("aria-checked", String(value === mode));
+    button.textContent = label;
+    if (value === mode) {
+      const check = document.createElement("span");
+      check.className = "menu-check";
+      check.textContent = "✓";
+      button.append(check);
+    }
+    button.addEventListener("click", () => {
+      hideSourceMenu();
+      setSidebarPref(`${section}-sort`, value);
+      refresh();
+    });
+    return button;
+  });
+  sourceMenu.replaceChildren(heading, ...options);
+  sourceMenu.classList.remove("hidden");
+  const box = anchor.getBoundingClientRect();
+  const { width } = sourceMenu.getBoundingClientRect();
+  sourceMenu.style.left = `${Math.max(8, Math.min(box.left, window.innerWidth - width - 8))}px`;
+  sourceMenu.style.top = `${box.bottom + 4}px`;
 }
 
 /**
@@ -344,7 +614,7 @@ function previewSources() {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
       JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
-      Number(byId("max-file-bytes").value), byId("workspace-path").value.trim(),
+      Number(byId("max-file-bytes").value), "",
     );
   }
 }
@@ -644,20 +914,37 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
+ * @param markThinking Whether to add "· thinks" to models that can think.
  */
-function modelSelect(ids, value, label) {
+function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
   select.className = "model-select";
   select.setAttribute("aria-label", label);
   for (const id of ids) {
     const option = document.createElement("option");
     option.value = id;
-    option.textContent = cachedModels.has(id) ? id : `${id} (not downloaded)`;
+    const name = markThinking && modelCanThink(id) ? `${id} · thinks` : id;
+    option.textContent = cachedModels.has(id) ? name : `${name} (not downloaded)`;
     select.append(option);
   }
   select.value = value;
   select.disabled = busy;
   return select;
+}
+
+/**
+ * Tell whether a language model supports thinking, judged by its name.
+ *
+ * Qwen3 models switch thinking on or off per answer; the 2507 "Instruct"
+ * releases never think. KíLín has no other record of a model's template,
+ * so other models are not marked even if they can think.
+ *
+ * @param id Model identifier or local path.
+ * @returns Whether to mark the model as one that thinks.
+ */
+function modelCanThink(id) {
+  const name = String(id).split("/").pop().toLowerCase();
+  return name.startsWith("qwen3") && !/embedding|reranker|instruct-2507/.test(name);
 }
 
 /**
@@ -752,8 +1039,9 @@ function renderModelsPanel() {
       level.name = name.value;
       refreshRestoreButtons();
     });
+    // Answers think only with these models; routing never does.
     const select = modelSelect(roleModelIds("chat", level.model), level.model,
-      `Language model for ${level.name || `level ${index + 1}`}`);
+      `Language model for ${level.name || `level ${index + 1}`}`, true);
     select.dataset.focusKey = `model-${index}`;
     select.addEventListener("change", () => {
       // Other backends cannot switch models per level: one model for all.
@@ -906,6 +1194,25 @@ function restoreDefaultModels(role) {
 }
 
 /**
+ * Show one Settings tab and hide the sections of the others.
+ *
+ * @param name Tab name: general, models, answers, or project.
+ */
+function showSettingsTab(name) {
+  settingsTab = name;
+  for (const tab of document.querySelectorAll(".settings-tab")) {
+    const selected = tab.dataset.tab === name;
+    tab.classList.toggle("active", selected);
+    tab.setAttribute("aria-selected", String(selected));
+    // Arrow keys move between tabs; Tab moves into the shown one.
+    tab.tabIndex = selected ? 0 : -1;
+  }
+  for (const section of document.querySelectorAll("#models-panel [data-settings-tab]")) {
+    section.classList.toggle("tab-hidden", section.dataset.settingsTab !== name);
+  }
+}
+
+/**
  * Render and open the models panel, then focus its close control.
  */
 function openModels() {
@@ -980,7 +1287,7 @@ function levelProblem(levels, depth) {
  * @param closeAfter Whether to close Settings after applying the changes.
  * @param explicitDownload Model ID to download, or null for ordinary edits.
  */
-function applyModelEdits(closeAfter = false, explicitDownload = null) {
+async function applyModelEdits(closeAfter = false, explicitDownload = null) {
   if (busy || !bridge) return;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
@@ -1004,9 +1311,9 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const reindex = ready && (settings.embedding_model !== before.embedding_model
     || settings.query_format !== before.query_format);
   const warnings = [];
-  if (missing.some((id) => id !== explicitDownload)) warnings.push(`These models need to download, which may take a while:\n${missing.join("\n")}`);
-  if (reindex) warnings.push("Changing the embedding model or query format will rebuild this project's index. Your saved chats will be kept.");
-  if (warnings.length && !confirm(`${warnings.join("\n\n")}\n\nProceed?`)) return;
+  if (missing.some((id) => id !== explicitDownload)) warnings.push(`KíLín downloads ${missing.join(", ")}, which may take a while.`);
+  if (reindex) warnings.push("KíLín rebuilds this project's index; saved chats are kept.");
+  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return;
   applyingModels = true;
   closeAfterModelsApply = closeAfter;
   error.classList.add("hidden");
@@ -1148,11 +1455,12 @@ function showSettings(data) {
   byId("backend").value = profile.backend;
   byId("query-format").value = profile.query_format;
   byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
+  const keepAnswers = ready || answerSettingsEdited;
   for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens", "temperature", "max_new_tokens"]) {
-    if (ready && ["temperature", "max_new_tokens"].includes(key)) continue;
+    if (keepAnswers && ["temperature", "max_new_tokens"].includes(key)) continue;
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
-  if (!ready) byId("thinking").checked = profile.thinking;
+  if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
@@ -1167,9 +1475,9 @@ function showSettings(data) {
  */
 function collectSettings() {
   // Preparation settings may require a model reload or index rebuild.
-  // Answer-time controls are sent only with the question below.
   saveModelFields();
   return {
+    ...newProjectAnswerSettings(),
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
@@ -1187,15 +1495,38 @@ function collectSettings() {
 }
 
 /**
+ * Return the Answers settings for a new project, so its profile starts
+ * with them; later changes are saved when a question is asked.
+ *
+ * @returns ``thinking``, plus ``temperature`` and ``max_new_tokens`` when
+ *   valid ("none" for a blank token limit); invalid values are left out so
+ *   the project keeps its defaults.
+ */
+function newProjectAnswerSettings() {
+  const settings = { thinking: byId("thinking").checked };
+  const temperature = Number(byId("temperature").value);
+  if (byId("temperature").value.trim() && Number.isFinite(temperature) && temperature >= 0) {
+    settings.temperature = temperature;
+  }
+  const tokens = byId("max-new-tokens").value.trim();
+  if (!tokens) settings.max_new_tokens = "none";
+  else if (Number.isInteger(Number(tokens)) && Number(tokens) > 0) settings.max_new_tokens = Number(tokens);
+  return settings;
+}
+
+/**
  * Tell whether the workspace tree shows a file.
  *
  * The core keeps a lock file next to each open conversation, so that only
- * one window writes it. The lock is not the user's file, so it is hidden.
+ * one window writes it, and macOS adds .DS_Store files to folders it shows
+ * in Finder. Neither is the user's file, so both are hidden.
  *
  * @param path Workspace-relative file path reported by the backend.
- * @returns False for a conversation lock under logs/, true otherwise.
+ * @returns False for a conversation lock under logs/ or a .DS_Store file,
+ *   true otherwise.
  */
 function shownInWorkspace(path) {
+  if (path.split("/").pop() === ".DS_Store") return false;
   return !(path.startsWith("logs/") && path.endsWith(".json.lock"));
 }
 
@@ -1509,9 +1840,10 @@ function showFolderMenu(x, y, folder, path, isFile) {
  * @param path Workspace-relative target path.
  * @param isFile Whether the target is a file.
  */
-function deleteFromFolder(folder, path, isFile) {
+async function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nKíLín deletes it permanently; it does not go to the Trash.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "It is deleted permanently, not moved to the Trash.", "Delete")) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1521,7 +1853,7 @@ function deleteFromFolder(folder, path, isFile) {
  * @param path Workspace-relative path, such as outputs/summary.md.
  */
 function copyToSources(path) {
-  const root = byId("workspace-path").value.trim().replace(/[\\/]+$/, "");
+  const root = openProjectPath.replace(/[\\/]+$/, "");
   if (!root || !EDITABLE_FOLDERS.some((name) => path.startsWith(`${name}/`))) return;
   addSources([`${root}/${path}`]);
 }
@@ -1545,10 +1877,11 @@ function editFolder(request, message) {
  * @param purpose "add", or the workspace path to replace.
  * @param paths Local files chosen in the native dialog.
  */
-function folderFilesChosen(folder, purpose, paths) {
+async function folderFilesChosen(folder, purpose, paths) {
   if (purpose !== "add") {
     const name = purpose.split("/").pop();
-    if (!confirm(`Replace "${name}" with the content of ${paths[0].split(/[\\/]/).pop()}?\n\nThe name stays ${name}.`)) return;
+    const source = paths[0].split(/[\\/]/).pop();
+    if (!await askKilin(`Replace “${name}”?`, `KíLín puts the content of ${source} in it; the name stays.`, "Replace")) return;
     editFolder({ folder, operation: "replace", path: purpose, source: paths[0] }, `Replacing a file in ${folder}…`);
     return;
   }
@@ -1556,7 +1889,11 @@ function folderFilesChosen(folder, purpose, paths) {
   const taken = names.filter((name) => workspacePaths.has(`${folder}/${name}`));
   let replace = false;
   if (taken.length) {
-    replace = confirm(`These names are already in ${folder}:\n\n${taken.join("\n")}\n\nOK replaces them; Cancel keeps both (the new copies get a number).`);
+    const what = taken.length === 1 ? `“${taken[0]}” is` : `${taken.map((name) => `“${name}”`).join(", ")} are`;
+    const answer = await askKilin(`${what} already in ${folder}`,
+      "Keep both gives the new copies a number.", "Replace", "Keep both");
+    if (!answer) return;
+    replace = answer === true;
   }
   editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
@@ -1574,11 +1911,11 @@ function hideSourceMenu() {
  * @param path Workspace-relative path beginning with sources/.
  * @param isFile Whether the path is a file rather than a folder.
  */
-function removeSource(path, isFile) {
+async function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
-  const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from sources?\n\n${path}\n\nKíLín deletes only the project's copy; your original stays.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "", "Delete") || busy) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
@@ -1598,8 +1935,9 @@ document.addEventListener("scroll", hideSourceMenu, true);
  *
  * @param path Workspace-relative path to the selected file.
  */
-function openWorkspaceFile(path) {
-  if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
+async function openWorkspaceFile(path) {
+  if (!path || !bridge) return;
+  if (!await askKilin(`Open “${path.split("/").pop()}” in its default app?`, "", "Open")) return;
   bridge.openWorkspaceFile(path);
 }
 
@@ -1614,10 +1952,6 @@ function showError(message, tracePath = "") {
   applyingModels = false;
   closeAfterModelsApply = false;
   byId("model-download-status").textContent = message;
-  if (ready) {
-    byId("project-name").textContent = byId("workspace-path").value.split(/[\\/]/).pop();
-    updateProjectSummary();
-  }
   stopPhaseAnimation();
   resetAnswerStages();
   if (pendingTurn) {
@@ -2033,8 +2367,6 @@ byId("source-add-confirm").addEventListener("click", () => {
  */
 function setBusy(value, message = "") {
   busy = value;
-  byId("project-name").contentEditable = String(!value);
-  byId("topbar-project-name").contentEditable = String(!value);
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
   // Settings can close while KíLín works; only unsaved edits must wait.
@@ -2065,8 +2397,9 @@ function setBusy(value, message = "") {
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
   byId("branch-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete").forEach((item) => { item.disabled = value || !ready; });
-  byId("change-project").disabled = value;
+  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings").forEach((item) => { item.disabled = value || !ready; });
+  byId("home-logo").disabled = value;
+  byId("new-project").disabled = value;
   byId("stop").disabled = !value;
   activity.classList.toggle("hidden", !value);
   byId("activity-text").textContent = message;
@@ -2264,12 +2597,17 @@ function selectTurn(item, turn, citation = null) {
   selectedTurn = item;
   item.classList.add("selected");
   clearSourcePreview();
-  byId("references-for").textContent = turn.evidence?.length
-    ? `Sources for: ${turn.question}`
-    : "No sources saved for this answer.";
+  const evidence = turn.evidence || [];
+  const { labels, cited } = labelsForTurn(turn);
+  const sources = referencedSources(evidence, labels, cited);
+  byId("references-for").textContent = !evidence.length
+    ? "No sources saved for this answer."
+    : cited && cited < evidence.length
+      ? `Sources for: ${splitAttached(turn.question).question} · ${cited} cited of ${evidence.length} passages read`
+      : `Sources for: ${splitAttached(turn.question).question}`;
   const list = byId("references-list");
   list.replaceChildren();
-  for (const source of turn.evidence || []) {
+  for (const source of sources) {
     const holder = document.createElement("div");
     holder.className = "reference-entry";
     const button = document.createElement("button");
@@ -2278,7 +2616,7 @@ function selectTurn(item, turn, citation = null) {
     button.dataset.citation = String(source.citation);
     const number = document.createElement("span");
     number.className = "reference-number";
-    number.textContent = String(source.citation);
+    number.textContent = String(labels.get(Number(source.citation)));
     const path = document.createElement("span");
     path.className = "reference-path";
     path.textContent = `${source.path}:${source.start_line}-${source.end_line}`;
@@ -2326,6 +2664,64 @@ function renderSourcePreview(data) {
 
 
 /**
+ * Number the cited sources 1, 2, 3… in the order the answer cites them.
+ *
+ * Evidence numbers count all retrieved passages, so they can be large
+ * (143, 286…). Only the labels the user sees change; links still use the
+ * evidence numbers.
+ *
+ * @param markers Evidence numbers of each linked citation marker, in
+ *   reading order, such as [[143], [286, 288]].
+ * @param evidence The turn's evidence records.
+ * @returns Map from evidence number to shown label. Evidence the answer
+ *   does not cite follows, in its saved order.
+ */
+function citationLabels(markers, evidence) {
+  const labels = new Map();
+  const label = (number) => {
+    if (!labels.has(number)) labels.set(number, labels.size + 1);
+  };
+  markers.flat().forEach(label);
+  evidence.forEach((source) => label(Number(source.citation)));
+  return labels;
+}
+
+// Shown labels of each rendered turn and how many sources its answer
+// cites, shared by its answer and references.
+const turnCitationLabels = new WeakMap();
+
+/**
+ * Choose and order the sources the References panel lists.
+ *
+ * An answer may read many passages but cite only a few: list those, in
+ * their label order, unless the answer cites none.
+ *
+ * @param evidence The turn's evidence records.
+ * @param labels Map from evidence number to shown label.
+ * @param cited Number of distinct sources the answer cites.
+ * @returns The evidence records to list.
+ */
+function referencedSources(evidence, labels, cited) {
+  return evidence
+    .filter((source) => !cited || labels.get(Number(source.citation)) <= cited)
+    .sort((a, b) => labels.get(Number(a.citation)) - labels.get(Number(b.citation)));
+}
+
+/**
+ * Return the shown citation labels of a turn, numbering its evidence in
+ * order when its answer has not been rendered.
+ *
+ * @param turn Saved question, answer, and evidence data.
+ * @returns ``labels`` (evidence number to shown label) and ``cited``, the
+ *   number of distinct sources the answer cites; those have labels 1 to
+ *   ``cited``.
+ */
+function labelsForTurn(turn) {
+  return turnCitationLabels.get(turn)
+    || { labels: citationLabels([], turn.evidence || []), cited: 0 };
+}
+
+/**
  * Render answer text with links only for recognized numeric citations.
  *
  * @param answer Destination DOM element.
@@ -2342,19 +2738,33 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
   }
   // Markdown and citations are both recognized; only evidence numbers that
   // belong to this answer become links.
+  const markerNumbers = (marker) => {
+    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
+    return numbers.every((number) => citations.has(number)) ? numbers : null;
+  };
+  // A first, unseen pass finds the linked markers in reading order, so
+  // they can be shown as 1, 2, 3… instead of evidence numbers.
+  const markers = [];
+  renderMarkdown(document.createElement("div"), parts.answer, (marker) => {
+    const numbers = markerNumbers(marker);
+    if (numbers) markers.push(numbers);
+    return null;
+  });
+  const labels = citationLabels(markers, turn.evidence || []);
+  turnCitationLabels.set(turn, { labels, cited: new Set(markers.flat()).size });
   const body = document.createElement("div");
   body.className = "answer-body";
   renderMarkdown(body, parts.answer, (marker) => {
-    const numbers = marker.slice(1, -1).split(",").map((value) => Number(value.trim()));
-    if (!numbers.every((number) => citations.has(number))) return null;
+    const numbers = markerNumbers(marker);
+    if (!numbers) return null;
     const superscript = document.createElement("sup");
     superscript.className = "answer-citation";
     numbers.forEach((number, index) => {
       if (index) superscript.append(document.createTextNode(","));
       const link = document.createElement("button");
       link.type = "button";
-      link.textContent = String(number);
-      link.setAttribute("aria-label", `Show reference ${number}`);
+      link.textContent = String(labels.get(number));
+      link.setAttribute("aria-label", `Show reference ${labels.get(number)}`);
       link.addEventListener("click", (event) => {
         event.stopPropagation();
         chooseSidePanels(true);
@@ -2381,6 +2791,40 @@ const MARKDOWN_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
+// Display maths: a line starting with $$ or \[, up to the closing $$ or \].
+const MARKDOWN_MATH = /^\s*(\$\$|\\\[)/;
+// The line under a table's header: dashes per column, colons for alignment.
+const MARKDOWN_TABLE_DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+/**
+ * Split one Markdown table row into its cell texts.
+ *
+ * Outer pipes are optional; an escaped pipe (\|) stays inside its cell.
+ *
+ * @param line Table row source line.
+ * @returns Trimmed cell texts, left to right.
+ */
+function markdownTableCells(line) {
+  let row = line.trim();
+  if (row.startsWith("|")) row = row.slice(1);
+  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  return row.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+/**
+ * Detect a Markdown table: a header row, then a divider row with the same
+ * number of columns.
+ *
+ * @param lines All source lines.
+ * @param index Index of the candidate header row.
+ * @returns Whether a table starts at this line.
+ */
+function isMarkdownTableStart(lines, index) {
+  const header = lines[index];
+  const divider = lines[index + 1];
+  if (!header?.includes("|") || !divider?.includes("|") || !MARKDOWN_TABLE_DIVIDER.test(divider)) return false;
+  return markdownTableCells(header).length === markdownTableCells(divider).length;
+}
 
 /**
  * Detect Markdown lines that begin a block-level structure.
@@ -2389,16 +2833,39 @@ const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
  * @returns Whether the line starts a supported Markdown block.
  */
 function isMarkdownBlockStart(line) {
-  return [MARKDOWN_FENCE, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET, MARKDOWN_NUMBER]
-    .some((pattern) => pattern.test(line));
+  return [MARKDOWN_FENCE, MARKDOWN_MATH, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET,
+    MARKDOWN_NUMBER].some((pattern) => pattern.test(line));
+}
+
+/**
+ * Build LaTeX maths as MathML, which Qt WebEngine draws natively.
+ *
+ * KaTeX (``vendor/katex.min.js``) writes the markup itself and runs
+ * without ``trust``, so commands such as \href are refused. LaTeX it
+ * cannot read, or a missing KaTeX, shows the original text instead.
+ *
+ * @param tex LaTeX between the delimiters.
+ * @param source The original text, delimiters included.
+ * @param display Whether it is display maths on its own line.
+ * @returns New element holding the maths.
+ */
+function mathNode(tex, source, display) {
+  const node = document.createElement(display ? "div" : "span");
+  node.className = display ? "answer-math display" : "answer-math";
+  try {
+    katex.render(tex, node, { displayMode: display, output: "mathml", throwOnError: true });
+  } catch {
+    node.textContent = source;
+  }
+  return node;
 }
 
 /**
  * Render model text as Markdown using DOM nodes only, never HTML parsing.
  *
  * Supports headings, paragraphs, bullet and numbered lists, block quotes,
- * fenced code, rules, and inline bold, italics, and code. Plain text simply
- * becomes paragraphs.
+ * fenced code, rules, tables, and inline bold, italics, and code. Plain
+ * text simply becomes paragraphs.
  *
  * @param host Element that receives the blocks.
  * @param text Model output without thinking text.
@@ -2421,6 +2888,62 @@ function renderMarkdown(host, text, linkCitation = null) {
       element.textContent = code.join("\n");
       pre.append(element);
       host.append(pre);
+      continue;
+    }
+    if (MARKDOWN_MATH.test(line)) {
+      // Everything up to the matching $$ or \] is one display formula; it
+      // may also fit on one line, as in "$$ x^2 $$".
+      const first = line.trim();
+      const close = first.startsWith("$$") ? "$$" : "\\]";
+      let end = first.length > 2 && first.endsWith(close) ? index : -1;
+      for (let next = index + 1; end < 0 && next < lines.length; next += 1) {
+        if (lines[next].trim().endsWith(close)) end = next;
+      }
+      if (end < 0) {
+        // Never closed (or still streaming): keep the line as text.
+        const element = document.createElement("p");
+        element.textContent = line;
+        host.append(element);
+        index += 1;
+        continue;
+      }
+      const source = lines.slice(index, end + 1).map((part) => part.trim()).join("\n");
+      host.append(mathNode(source.slice(2, -2).trim(), source, true));
+      index = end + 1;
+      continue;
+    }
+    if (isMarkdownTableStart(lines, index)) {
+      const header = markdownTableCells(line);
+      // Alignment per column comes from the colons in the divider row.
+      const align = markdownTableCells(lines[index + 1]).map((cell) => (
+        cell.startsWith(":") && cell.endsWith(":") ? "center"
+          : cell.endsWith(":") ? "right" : cell.startsWith(":") ? "left" : ""));
+      index += 2;
+      const table = document.createElement("table");
+      const row = (cells, tag) => {
+        const element = document.createElement("tr");
+        header.forEach((_, column) => {
+          // Short rows get empty cells; extra cells are dropped.
+          const cell = document.createElement(tag);
+          if (align[column]) cell.style.textAlign = align[column];
+          appendInlineMarkdown(cell, cells[column] || "", linkCitation);
+          element.append(cell);
+        });
+        return element;
+      };
+      const head = document.createElement("thead");
+      head.append(row(header, "th"));
+      const body = document.createElement("tbody");
+      while (index < lines.length && lines[index].trim() && lines[index].includes("|")
+        && !isMarkdownBlockStart(lines[index])) {
+        body.append(row(markdownTableCells(lines[index++]), "td"));
+      }
+      table.append(head, body);
+      // A wide table scrolls sideways instead of widening the chat.
+      const frame = document.createElement("div");
+      frame.className = "answer-table";
+      frame.append(table);
+      host.append(frame);
       continue;
     }
     const heading = line.match(MARKDOWN_HEADING);
@@ -2467,7 +2990,8 @@ function renderMarkdown(host, text, linkCitation = null) {
       continue;
     }
     const paragraph = [];
-    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])) {
+    while (index < lines.length && lines[index].trim() && !isMarkdownBlockStart(lines[index])
+      && !isMarkdownTableStart(lines, index)) {
       paragraph.push(lines[index++]);
     }
     const element = document.createElement("p");
@@ -2476,9 +3000,10 @@ function renderMarkdown(host, text, linkCitation = null) {
   }
 }
 
-// Inline code, bold, italics (not inside words such as snake_case), and
-// citation markers such as [1] or [2, 3].
-const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[[^\]\n]{1,100}\]\(https:\/\/[^\s)\n]+\))|(\[\d+(?:\s*,\s*\d+)*\])/g;
+// Inline code, bold, italics (not inside words such as snake_case),
+// citation markers such as [1] or [2, 3], and maths: $$…$$, \(…\), or
+// $…$ with no space just inside, so prices such as "$5 and $10" stay text.
+const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])|(\$\$[^$]+?\$\$|\\\(.+?\\\)|(?<![\\\w$])\$(?![\s$])[^$\n]*?[^\s\\$]\$(?![\w$])|(?<![\\\w$])\$[^\s$\\]\$(?![\w$]))/g;
 
 /**
  * Render escaped inline Markdown and optionally link evidence citations.
@@ -2497,6 +3022,11 @@ function appendInlineMarkdown(element, text, linkCitation) {
       const code = document.createElement("code");
       code.textContent = match[1].slice(1, -1);
       element.append(code);
+    } else if (match[5]) {
+      element.append(before);
+      const source = match[5];
+      const wrap = source.startsWith("$$") ? 2 : source.startsWith("\\(") ? 2 : 1;
+      element.append(mathNode(source.slice(wrap, -wrap).trim(), source, false));
     } else if (match[2] || match[3]) {
       element.append(before);
       const node = document.createElement(match[2] ? "strong" : "em");
@@ -2536,6 +3066,207 @@ function appendInlineMarkdown(element, text, linkCitation) {
   element.append(text.slice(last));
 }
 
+const MESSAGE_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/**
+ * Format a turn's saved time for the actions under its messages.
+ *
+ * @param timestamp ISO 8601 time the turn was saved.
+ * @param now Current time, so today's messages show only the time.
+ * @returns "14:05" today, "28 Oct 14:05" this year, "28 Oct 2025 14:05"
+ *   before, or "" if the time is missing or invalid.
+ */
+function messageTime(timestamp, now = new Date()) {
+  const date = new Date(timestamp || "");
+  if (!timestamp || Number.isNaN(date.getTime())) return "";
+  const time = `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+  if (date.toDateString() === now.toDateString()) return time;
+  const day = `${date.getDate()} ${MESSAGE_MONTHS[date.getMonth()]}`;
+  return date.getFullYear() === now.getFullYear()
+    ? `${day} ${time}` : `${day} ${date.getFullYear()} ${time}`;
+}
+
+/**
+ * Return an answer as the user sees it, for copying: no thinking, and
+ * citations with their shown numbers.
+ *
+ * @param turn Saved answer and its evidence.
+ * @returns Answer Markdown with linked markers such as "[143, 7]" shown as
+ *   "[1, 2]".
+ */
+function answerCopyText(turn) {
+  const { labels } = labelsForTurn(turn);
+  return splitThinking(turn.answer).answer.trim().replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (marker, inner) => {
+    const numbers = inner.split(",").map((value) => Number(value.trim()));
+    if (!numbers.every((number) => labels.has(number))) return marker;
+    return `[${numbers.map((number) => labels.get(number)).join(", ")}]`;
+  });
+}
+
+/**
+ * Put text on the clipboard. In the app Qt copies it, since the page may
+ * not; in a plain browser use the clipboard API, falling back to a hidden
+ * text box.
+ *
+ * @param text Text to copy.
+ */
+async function copyToClipboard(text) {
+  if (bridge) {
+    bridge.copyText(text);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return;
+  } catch {
+    // Fall back below.
+  }
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.setAttribute("readonly", "");
+  box.style.position = "fixed";
+  box.style.opacity = "0";
+  document.body.append(box);
+  box.select();
+  document.execCommand("copy");
+  box.remove();
+}
+
+/**
+ * Build the row shown under a message on hover or focus: Copy and the
+ * message's time.
+ *
+ * @param text Text the Copy button puts on the clipboard.
+ * @param timestamp The turn's saved time, or "" while it is not saved.
+ * @param label What is copied, for the button's accessible name.
+ * @returns New element placed right after the message.
+ */
+function messageActions(text, timestamp, label) {
+  const row = document.createElement("div");
+  row.className = "message-actions";
+  const copy = document.createElement("button");
+  copy.type = "button";
+  copy.className = "message-action";
+  copy.title = "Copy";
+  copy.setAttribute("aria-label", `Copy ${label}`);
+  copy.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg>';
+  copy.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    await copyToClipboard(text);
+    copy.title = "Copied";
+    copy.classList.add("copied");
+    setTimeout(() => {
+      copy.title = "Copy";
+      copy.classList.remove("copied");
+    }, 1500);
+  });
+  row.append(copy);
+  const shown = messageTime(timestamp);
+  if (shown) {
+    const time = document.createElement("time");
+    time.dateTime = timestamp;
+    time.title = new Date(timestamp).toLocaleString();
+    time.textContent = shown;
+    row.append(time);
+  }
+  return row;
+}
+
+/**
+ * Add Copy and time rows under a turn's question and answer.
+ *
+ * @param item Conversation article holding the two messages.
+ * @param turn Saved question and answer.
+ */
+function addMessageActions(item, turn) {
+  const question = item.querySelector(".user-message");
+  const answer = item.querySelector(".answer-message");
+  if (question) {
+    const row = messageActions(splitAttached(turn.question).question, turn.timestamp, "question");
+    row.classList.add("user-actions");
+    question.after(row);
+  }
+  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer"));
+}
+
+// The list KíLín adds under a question with attached files; older chats
+// listed the original paths under "Attached paths to consider".
+const ATTACHED_LIST = /\n\nAttached (?:files|paths to consider):\n((?:- [^\n]+(?:\n|$))+)$/;
+
+/**
+ * Split a saved question into the user's text and its attached files.
+ *
+ * @param text Question as sent to the engine.
+ * @returns ``question`` (the user's text) and ``files`` (attached paths).
+ */
+function splitAttached(text) {
+  const value = String(text || "");
+  const match = value.match(ATTACHED_LIST);
+  if (!match) return { question: value, files: [] };
+  return {
+    question: value.slice(0, match.index),
+    files: match[1].trim().split("\n").map((line) => line.slice(2).trim()),
+  };
+}
+
+/**
+ * Show a question with its attached files as chips under the text.
+ *
+ * A file in sources opens its place in the workspace tree; a path from an
+ * older chat, never copied, is shown by name only.
+ *
+ * @param element The question bubble.
+ * @param text Question as sent to the engine.
+ */
+function fillQuestion(element, text) {
+  const { question, files } = splitAttached(text);
+  element.textContent = question;
+  if (!files.length) return;
+  const row = document.createElement("div");
+  row.className = "question-attachments";
+  for (const path of files) {
+    const inSources = path.startsWith("sources/");
+    const chip = document.createElement(inSources ? "button" : "span");
+    chip.className = "question-attachment";
+    chip.textContent = path.replace(/\/$/, "").split(/[\\/]/).pop() || path;
+    chip.title = inSources ? `Show ${path} in the workspace` : path;
+    if (inSources) {
+      chip.type = "button";
+      chip.addEventListener("click", () => revealWorkspacePath(path));
+    }
+    row.append(chip);
+  }
+  element.append(row);
+}
+
+/**
+ * Open the Workspace panel at a file or folder and briefly highlight it.
+ *
+ * @param path Workspace-relative path; a folder ends with "/".
+ */
+function revealWorkspacePath(path) {
+  showWorkspace(true);
+  const target = path.replace(/\/$/, "");
+  const tree = byId("workspace-tree");
+  const row = [...tree.querySelectorAll(".tree-file")].find((line) => line.dataset.path === target)
+    || [...tree.querySelectorAll(".tree-folder")].find((folder) => folder.dataset.path === target)?.querySelector("summary");
+  if (!row) {
+    // Only a notice: an answer may be on its way.
+    error.textContent = `${target} is no longer in the workspace.`;
+    error.classList.remove("hidden");
+    return;
+  }
+  // Unfold every folder above it.
+  for (let node = row.parentElement; node && node !== tree; node = node.parentElement) {
+    if (node.tagName === "DETAILS") node.open = true;
+  }
+  row.scrollIntoView({ block: "center" });
+  row.focus({ preventScroll: true });
+  row.classList.remove("revealed");
+  void row.offsetWidth;
+  row.classList.add("revealed");
+}
+
 /**
  * Append a completed turn, enable answer selection, and show its
  * references.
@@ -2548,7 +3279,7 @@ function addTurn(turn) {
   item.dataset.turnIndex = String(conversation.children.length);
   const question = document.createElement("div");
   question.className = "user-message";
-  question.textContent = turn.question;
+  fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
   answer.tabIndex = 0;
@@ -2568,6 +3299,7 @@ function addTurn(turn) {
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
   item.append(...[question, timeline, answer].filter(Boolean));
+  addMessageActions(item, turn);
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
@@ -2586,7 +3318,11 @@ function renderConversations(data) {
   list.replaceChildren();
   let activeName = "";
   let activeEmpty = false;
-  for (const item of data.conversations || []) {
+  const mode = sidebarPref("conversations-sort", "updated");
+  const orderKey = `conversations-order:${openProjectPath}`;
+  const ordered = sidebarConversationOrder(data.conversations || [], mode, sidebarPref(orderKey, []));
+  const rows = [];
+  for (const item of ordered) {
     if (item.conversation_id === activeConversationId) {
       activeName = item.name;
       activeEmpty = Boolean(item.empty);
@@ -2619,23 +3355,75 @@ function renderConversations(data) {
       clearTimeout(opening);
       if (!busy && !provisional) renameInSidebar(row, button, item);
     });
-    button.title = `${name}\nDouble-click to rename`;
+    button.title = `${name}\nDouble-click or right-click to rename`;
+    button.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      if (provisional) return;
+      showWorkspaceMenu(event.clientX, event.clientY, [
+        ["Rename", () => renameInSidebar(row, button, item)],
+        ["Delete…", () => remove.click()],
+      ]);
+    });
     const remove = document.createElement("button");
     remove.type = "button";
     remove.className = "conversation-delete";
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Delete ${item.name}`);
     remove.title = "Delete conversation";
-    remove.addEventListener("click", () => {
-      if (busy || !confirm(`Delete “${item.name}”?`)) return;
+    remove.addEventListener("click", async () => {
+      if (busy) return;
+      const deleting = await askKilin(`Delete “${item.name}”?`, "", "Delete");
+      if (!deleting || busy) return;
       setBusy(true, "Deleting conversation…");
       bridge.deleteConversation(item.conversation_id);
     });
     row.append(button, remove);
     list.append(row);
+    rows.push([row, item.conversation_id]);
+  }
+  if (mode === "manual") {
+    const ids = rows.map(([, id]) => id);
+    for (const [row, id] of rows) {
+      makeReorderable(row, id, ids, (order) => {
+        setSidebarPref(orderKey, order);
+        renderConversations(lastConversationData);
+      });
+    }
   }
   byId("conversation-name").textContent = activeEmpty ? "" : activeName;
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
+  updateChatSummary();
+}
+
+/**
+ * Ask a yes/no question in a KíLín dialog instead of the system pop-up.
+ *
+ * Cancel has focus first, so Enter does not confirm by accident; Escape
+ * also cancels.
+ *
+ * @param title Short question, such as "Delete “Notes”?".
+ * @param message One sentence on what KíLín will do; empty hides it.
+ * @param action Label of the confirming button, such as "Delete".
+ * @param other Label of an optional third button, such as "Keep both".
+ * @returns Promise of true when the user confirms, "other" for the third
+ *   button, false otherwise.
+ */
+function askKilin(title, message, action, other = "") {
+  const dialog = byId("kilin-ask");
+  byId("kilin-ask-title").textContent = title;
+  byId("kilin-ask-message").textContent = message;
+  byId("kilin-ask-message").classList.toggle("hidden", !message);
+  byId("kilin-ask-confirm").textContent = action;
+  byId("kilin-ask-other").textContent = other;
+  byId("kilin-ask-other").classList.toggle("hidden", !other);
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(
+      dialog.returnValue === "confirm" || (dialog.returnValue === "other" && "other")),
+    { once: true });
+    dialog.returnValue = "";
+    dialog.showModal();
+    byId("kilin-ask-cancel").focus();
+  });
 }
 
 /**
@@ -2657,7 +3445,11 @@ function keepStoppedTurn(current) {
   current.item.classList.remove("pending");
   current.item.classList.add("stopped");
   current.answer.classList.remove("answer-phase", "streaming");
-  current.durationLine.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  const line = document.createElement("div");
+  line.className = "answer-duration";
+  line.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  current.durationLine.replaceWith(line);
+  current.durationLine = line;
   stoppedTurn = { item: current.item, conversationId: activeConversationId };
 }
 
@@ -2930,18 +3722,56 @@ function markTimelineStep(label) {
  * @returns The total time and each step's label and duration.
  */
 function timelineRecord(current, turn, totalMs) {
-  const end = current.started + totalMs;
-  const steps = (current.timeline || []).filter((step) => step.label !== "Starting");
   const query = turn.parameters?.retrieval_query;
   return {
     elapsed_ms: Math.round(totalMs),
-    steps: steps.map((step, index) => ({
+    steps: timelineSteps(current.timeline || [], current.started + totalMs).map((step) => ({
       label: query && /semantic search/i.test(step.label)
         ? `${step.label} for “${query}”`
         : step.label,
-      ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+      ms: step.ms,
     })),
   };
+}
+
+/**
+ * Turn the recorded step start times into labels and durations.
+ *
+ * @param timeline Steps with ``label`` and start time ``at``, in order.
+ * @param end Time the last step ended, or now for a step still running.
+ * @returns Each step's label and duration in milliseconds, without the
+ *   initial "Starting" step.
+ */
+function timelineSteps(timeline, end) {
+  const steps = timeline.filter((step) => step.label !== "Starting");
+  return steps.map((step, index) => ({
+    label: step.label,
+    ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+  }));
+}
+
+/**
+ * Add one row per step, with its duration, to a timeline list.
+ *
+ * Used both while an answer is made and for the saved "Took …" list, so
+ * they look the same.
+ *
+ * @param list The ``answer-timeline`` list to fill.
+ * @param steps Step labels and durations in milliseconds.
+ * @param running Whether the last step is still going on.
+ */
+function appendTimelineRows(list, steps, running = false) {
+  steps.forEach((step, index) => {
+    const row = document.createElement("li");
+    if (running && index === steps.length - 1) row.className = "timeline-running";
+    const label = document.createElement("span");
+    label.textContent = step.label;
+    const time = document.createElement("span");
+    time.className = "timeline-time";
+    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
+    row.append(label, time);
+    list.append(row);
+  });
 }
 
 /**
@@ -2969,16 +3799,7 @@ function renderTimeline(record, turn) {
   }
   const list = document.createElement("ol");
   list.className = "answer-timeline";
-  for (const step of record?.steps || []) {
-    const row = document.createElement("li");
-    const label = document.createElement("span");
-    label.textContent = step.label;
-    const time = document.createElement("span");
-    time.className = "timeline-time";
-    time.textContent = step.ms < 100 ? "<0.1s" : `${(step.ms / 1000).toFixed(1)}s`;
-    row.append(label, time);
-    list.append(row);
-  }
+  appendTimelineRows(list, record?.steps || []);
   if (tokens) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
@@ -3093,7 +3914,12 @@ function paintPendingTurn() {
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  if (pendingTurn.durationLine) pendingTurn.durationLine.textContent = pendingTurn.timer.textContent;
+  // The steps so far, with the running one's time still counting.
+  const list = pendingTurn.steps;
+  if (list && pendingTurn.durationLine.open) {
+    list.replaceChildren();
+    appendTimelineRows(list, timelineSteps(pendingTurn.timeline, performance.now()), true);
+  }
 }
 
 /**
@@ -3110,23 +3936,29 @@ function addPendingTurn(question) {
   item.dataset.turnIndex = String(conversation.children.length);
   const questionNode = document.createElement("div");
   questionNode.className = "user-message";
-  questionNode.textContent = question;
+  fillQuestion(questionNode, question);
   const answer = document.createElement("div");
   answer.className = "answer-message answer-phase";
   const phaseHeader = document.createElement("div");
   phaseHeader.className = "answer-phase-header";
   const phaseLabel = document.createElement("span");
   phaseLabel.className = "answer-phase-label";
-  const phaseTimerLabel = document.createElement("span");
-  phaseTimerLabel.className = "answer-phase-timer";
-  phaseHeader.append(phaseLabel, phaseTimerLabel);
+  phaseHeader.append(phaseLabel);
   const phaseDetail = document.createElement("div");
   phaseDetail.className = "answer-phase-detail";
   answer.append(phaseHeader, phaseDetail);
-  item.append(questionNode, answer);
+  // The steps are listed as they happen, folded like the "Took …" summary
+  // it becomes when the answer arrives; expanding it follows the route live.
+  const durationLine = document.createElement("details");
+  durationLine.className = "answer-duration";
+  const timer = document.createElement("summary");
+  const steps = document.createElement("ol");
+  steps.className = "answer-timeline";
+  durationLine.append(timer, steps);
+  item.append(questionNode, durationLine, answer);
   conversation.append(item);
   pendingTurn = {
-    item, answer, label: phaseLabel, timer: phaseTimerLabel, detail: phaseDetail,
+    item, answer, label: phaseLabel, timer, steps, durationLine, detail: phaseDetail,
     phase: "Generating", started: performance.now(), elapsedMs: null,
     timeline: [],
   };
@@ -3304,7 +4136,7 @@ function bindAnswerSelection(answer, item, turn) {
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   resetAnswerStages();
-  updateProjectSummary(currentTurnCount + 1);
+  updateChatSummary(currentTurnCount + 1);
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -3327,6 +4159,7 @@ function completePendingTurn(turn) {
   current.answer.replaceChildren();
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
+  addMessageActions(current.item, turn);
   selectTurn(current.item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
   setBusy(false);
@@ -3436,10 +4269,6 @@ function appendAnswerText(text) {
     current.streaming = true;
     resetAnswerStages();
     markTimelineStep("Generating the answer");
-    // Live elapsed time above the answer; it becomes "Took …" at the end.
-    current.durationLine = document.createElement("div");
-    current.durationLine.className = "answer-duration";
-    current.item.insertBefore(current.durationLine, current.answer);
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
@@ -3575,6 +4404,7 @@ function onEvent(raw) {
     showSettings(data);
   } else if (data.event === "projects") {
     renderSavedProjects(data.projects || []);
+    renderSidebarProjects(savedProjects, openProjectPath);
   } else if (data.event === "conversation_delete_started") {
     const button = [...document.querySelectorAll(".conversation-item")]
       .find((item) => item.dataset.conversationId === data.conversation_id);
@@ -3749,6 +4579,8 @@ function onEvent(raw) {
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
+    // Set before the lists are drawn: chats keep their order per project.
+    openProjectPath = data.project;
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -3767,18 +4599,26 @@ function onEvent(raw) {
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
     if (!data.turns.length) renderConversationEmpty();
-    byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
+    renderSidebarProjects(savedProjects, openProjectPath);
+    if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
     showWorkspace(sidePanelChoice ?? true);
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    byId("project-name").textContent = data.project.split(/[\\/]/).pop();
-    updateProjectSummary(data.turns.length);
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    // The attached files are now in sources and indexed.
+    if (attachedAsk) {
+      const ask = attachedAsk;
+      attachedAsk = null;
+      sendQuestion(ask);
+    }
   } else if (data.event === "conversation_opened") {
     // An error from an earlier attempt no longer applies to this conversation.
     clearError();
@@ -3801,7 +4641,9 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
-    updateProjectSummary(data.turns.length);
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
+    updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "conversations") {
@@ -3817,7 +4659,10 @@ function onEvent(raw) {
     }
   } else if (data.event === "source_changes") {
     showSourceSync(data);
+  } else if (data.event === "projects_folder") {
+    showProjectsFolder(data);
   } else if (data.event === "sources_checked") {
+    if (attachedAsk) return addAttachedSources(data);
     setBusy(false);
     showSourceAdd(data);
   } else if (data.event === "folder_changed") {
@@ -3831,7 +4676,7 @@ function onEvent(raw) {
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
-    updateProjectSummary(0);
+    updateChatSummary(0);
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
@@ -3851,10 +4696,7 @@ function onEvent(raw) {
       pendingTurn = null;
       ready = false;
       setBusy(true, "Reopening project after interruption…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value,
-        activeConversationId,
-      );
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
       return;
     }
     ready = false;
@@ -3868,7 +4710,7 @@ function onEvent(raw) {
     clearReferences();
     byId("connection").textContent = "Stopped · reopen your project";
     setBusy(false);
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
   } else if (data.event === "backend_failed") {
     ready = false;
     updateFloatingHeader();
@@ -3881,9 +4723,7 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
-    const reopenProject = ready
-      && byId("workspace-path").value.trim()
-      && activeConversationId;
+    const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
     setupCompletionVisible = true;
     byId("readiness-time").textContent = data.message;
@@ -3893,45 +4733,46 @@ function onEvent(raw) {
     ready = false;
     setBusy(false);
     byId("connection").textContent = "Ready";
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
     bridge.requestReadiness();
     if (reopenProject) {
       setBusy(true, "Reopening the project after backend recovery…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value.trim(),
-        activeConversationId,
-      );
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
     }
   } else if (data.event === "workspace_conflict") {
     // Creation never reuses a project; opening one is a separate decision.
     setBusy(false);
     error.textContent = data.message;
     error.classList.remove("hidden");
-    const resume = data.existing_project && confirm(
-      `A project already exists at ${data.workspace}.\n\nOpen that project instead? Selected sources and new-project settings will not be applied.\n\nCancel to choose another destination.`,
-    );
-    if (resume) {
-      setBusy(true, "Opening the existing project...");
-      bridge.resumeProject(data.workspace);
-    } else {
-      openModels();
-      byId("workspace-path").focus();
-    }
+    const asking = data.existing_project
+      ? askKilin("Open the existing project?",
+        `A project already exists at ${data.workspace}. KíLín opens it without the new sources and settings; Cancel to choose another place.`,
+        "Open project")
+      : Promise.resolve(false);
+    asking.then((resume) => {
+      if (resume) {
+        setBusy(true, "Opening the existing project...");
+        bridge.resumeProject(data.workspace);
+      } else {
+        openModels();
+        byId("workspace-path").focus();
+      }
+    });
   } else if (data.event === "error") {
-    if (data.pending_choice === true) {
-      // The engine rejected an unrelated command, not this answer.
-      // It is still waiting; preserve the controls and busy state.
-      error.textContent = data.message;
-      error.classList.remove("hidden");
-      pendingTurn?.prompt?.querySelector("button")?.focus({ preventScroll: true });
-    } else {
-      showError(data.message, data.trace_path || activeTracePath);
+    if (attachedAsk) {
+      // Adding the attached files failed: give the question back.
+      byId("question").value = attachedAsk.question;
+      messageAttachments = attachedAsk.attachments;
+      attachedAsk = null;
+      renderAttachments();
     }
+    showError(data.message, data.trace_path || activeTracePath);
   }
 }
 
 // UI handlers validate user input before issuing bridge commands.
-byId("browse-workspace").addEventListener("click", () => bridge?.chooseWorkspace());
+byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
+byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
 dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -3959,6 +4800,20 @@ byId("send").addEventListener("click", (event) => {
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", closeModels);
+for (const tab of document.querySelectorAll(".settings-tab")) {
+  tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+  tab.addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...document.querySelectorAll(".settings-tab")];
+    const index = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1
+      : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    showSettingsTab(tabs[next].dataset.tab);
+    tabs[next].focus();
+  });
+}
+showSettingsTab(settingsTab);
 byId("models-panel").addEventListener("click", (event) => {
   if (event.target === byId("models-panel")) closeModels();
 });
@@ -4004,15 +4859,13 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  if (!included.length && !byId("workspace-path").value.trim()) {
-    openModels();
-    byId("workspace-path").focus();
-    return showError("Choose a workspace folder to create a project without sources.");
-  }
+  // With sources the engine names the project after the first one; an
+  // empty project gets a free "new-project" name in the workspace folder.
+  const destination = included.length ? "" : emptyProjectPath();
   setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
-    JSON.stringify(included), byId("type-id").value, byId("workspace-path").value.trim(),
+    JSON.stringify(included), byId("type-id").value, destination,
     JSON.stringify(selected), JSON.stringify(collectSettings()),
   );
 });
@@ -4031,20 +4884,117 @@ byId("question-form").addEventListener("submit", (event) => {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
   byId("question").value = "";
-  addPendingTurn(question);
-  showAskingConversation(question);
-  setBusy(true, "Finding evidence and answering…");
-  const attachedContext = messageAttachments.length
-    ? `\n\nAttached paths to consider:\n${messageAttachments.map((path) => `- ${path}`).join("\n")}`
-    : "";
+  const ask = {
+    question, attachments: messageAttachments, files: [], leftOut: [],
+    effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
+    settings: { temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens },
+  };
   messageAttachments = [];
   renderAttachments();
-  const effort = JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep });
-  bridge.askQuestion(`${question}${attachedContext}`, effort, JSON.stringify({
-    temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens,
-    _title_question: question,
-  }));
+  if (!ask.attachments.length) return sendQuestion(ask);
+  // Copy attached files into sources first, so the answer can search them.
+  attachedAsk = ask;
+  setBusy(true, "Adding the attached files to sources…");
+  bridge.checkProjectSources(JSON.stringify(ask.attachments));
 });
+
+/**
+ * Show the projects folder in Settings; after a switch, list its projects.
+ *
+ * @param data The ``projects_folder`` event: ``folder`` in use, ``saved``
+ *   choice ("" for the default), and whether that choice is ``missing``.
+ */
+function showProjectsFolder(data) {
+  byId("workspace-path").value = data.folder;
+  byId("workspace-path").title = data.folder;
+  byId("default-workspace").disabled = !data.saved;
+  byId("workspace-note").textContent = data.missing
+    ? `${data.saved} is not available, so KíLín uses the default folder.`
+    : "The folder that holds your projects; KíLín remembers it.";
+  if (!switchingProjectsFolder) return;
+  // The engine restarted with the new folder: list the projects there.
+  switchingProjectsFolder = false;
+  setBusy(false);
+  bridge.requestSettings(byId("type-id").value, "");
+  bridge.requestReadiness();
+  refreshSavedProject();
+}
+
+/**
+ * Pick a free folder for a project created without sources.
+ *
+ * @returns "<workspace folder>/new-project", numbered when that name is
+ *   taken by a listed project.
+ */
+function emptyProjectPath() {
+  const root = byId("workspace-path").value.replace(/[\\/]+$/, "");
+  const taken = new Set(savedProjects.map((project) => project.name));
+  let name = "new-project";
+  for (let number = 2; taken.has(name); number += 1) name = `new-project-${number}`;
+  return `${root}/${name}`;
+}
+
+/**
+ * Choose another projects folder, or go back to the default one.
+ *
+ * Qt saves the choice and restarts the engine, so this is offered only on
+ * the start screen while KíLín is idle.
+ *
+ * @param useDefault Whether to go back to the default folder.
+ */
+function changeProjectsFolder(useDefault) {
+  if (!bridge || busy) return;
+  if (ready) {
+    error.textContent = "Go back to the start screen to change the workspace folder.";
+    error.classList.remove("hidden");
+    return;
+  }
+  // Set before Browse: Qt answers only once a folder is chosen.
+  switchingProjectsFolder = true;
+  if (!useDefault) return bridge.chooseProjectsFolder();
+  setBusy(true, "Switching to the default workspace folder…");
+  bridge.useDefaultProjectsFolder();
+}
+
+/**
+ * Ask a question; attached files, already in sources, are listed under it.
+ *
+ * @param ask Question, its attached ``sources/`` paths (``files``), names
+ *   that could not be added (``leftOut``), and the answer settings.
+ */
+function sendQuestion(ask) {
+  const listed = ask.files.map((path) => `- ${path}`).join("\n");
+  const text = listed ? `${ask.question}\n\nAttached files:\n${listed}` : ask.question;
+  addPendingTurn(text);
+  showAskingConversation(ask.question);
+  setBusy(true, "Finding evidence and answering…");
+  bridge.askQuestion(text, ask.effort, JSON.stringify({ ...ask.settings, _title_question: ask.question }));
+  if (ask.leftOut.length) {
+    error.textContent = `KíLín could not add ${ask.leftOut.join(", ")}, so the answer does not use ${ask.leftOut.length === 1 ? "it" : "them"}.`;
+    error.classList.remove("hidden");
+  }
+}
+
+/**
+ * Add a question's attached files to sources without the add dialog.
+ *
+ * Files already in sources are only referred to; the question is asked
+ * when the refreshed project arrives (``opened``), or now when nothing new
+ * has to be copied.
+ *
+ * @param check The ``sources_checked`` event for the attached paths.
+ */
+function addAttachedSources(check) {
+  const ask = attachedAsk;
+  ask.files = check.add.map((item) => `sources/${item.name}${item.kind === "folder" ? "/" : ""}`);
+  ask.leftOut = [...check.files.map((file) => file.path), ...check.skipped_folders];
+  if (!check.add.some((item) => item.state !== "existing")) {
+    attachedAsk = null;
+    return sendQuestion(ask);
+  }
+  setBusy(true, "Adding the attached files and updating the index…");
+  bridge.addProjectSources(JSON.stringify(check.sources), "{}");
+}
 byId("question").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -4052,9 +5002,7 @@ byId("question").addEventListener("keydown", (event) => {
   }
 });
 conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
-byId("project-name").addEventListener("input", () => {
-  byId("topbar-project-name").textContent = byId("project-name").textContent.trim();
-});
+byId("conversation-name").addEventListener("input", () => updateChatSummary());
 byId("new-chat").addEventListener("click", () => {
   if (busy) return;
   setBusy(true, "Starting a new conversation…");
@@ -4072,29 +5020,19 @@ function commitConversationName() {
   const name = byId("conversation-name").textContent.trim();
   if (!busy && activeConversationId && name) bridge.renameConversation(activeConversationId, name);
 }
-/**
- * Rename the current project when the edited title differs.
- */
-function commitProjectName() {
-  const name = byId("project-name").textContent.trim();
-  const current = byId("workspace-path").value.split(/[\\/]/).pop();
-  if (!busy && ready && name && name !== current) {
-    setBusy(true, "Renaming project…");
-    bridge.renameProject(name);
-  }
-}
-byId("topbar-project-name").addEventListener("input", () => {
-  byId("project-name").textContent = byId("topbar-project-name").textContent;
-});
-for (const [id, commit] of [["conversation-name", commitConversationName], ["project-name", commitProjectName], ["topbar-project-name", commitProjectName]]) {
+for (const [id, commit] of [["conversation-name", commitConversationName]]) {
   byId(id).addEventListener("blur", commit);
   byId(id).addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
   });
 }
-byId("change-project").addEventListener("click", () => {
-  if (busy) return;
+/**
+ * Close the open project and show the start screen, where a project can be
+ * resumed or created.
+ */
+function returnToLaunch() {
   bridge.closeProject();
+  openProjectPath = "";
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");
@@ -4102,7 +5040,6 @@ byId("change-project").addEventListener("click", () => {
   byId("conversations-panel").classList.add("hidden");
   byId("toggle-conversations").classList.add("hidden");
   setup.classList.remove("hidden");
-  byId("workspace-path").value = "";
   selectedSources.length = 0;
   previewRoots.clear();
   previewSkipped.clear();
@@ -4113,6 +5050,50 @@ byId("change-project").addEventListener("click", () => {
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
+}
+
+// The logo and the Projects ＋ lead back to the start screen, where new
+// projects are made; both are disabled while busy.
+for (const id of ["home-logo", "new-project"]) {
+  byId(id).addEventListener("click", () => {
+    if (busy) return;
+    byId("leave-project").showModal();
+  });
+}
+// Each left-panel section folds, and sorts from its ⋯ menu; both choices
+// are remembered on this computer.
+for (const section of document.querySelectorAll(".sidebar-section")) {
+  const name = section.dataset.section;
+  const toggle = section.querySelector(".sidebar-section-toggle");
+  const fold = (collapsed) => {
+    section.classList.toggle("collapsed", collapsed);
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+  };
+  fold(sidebarPref(`${name}-collapsed`, false));
+  toggle.addEventListener("click", () => {
+    const collapsed = !section.classList.contains("collapsed");
+    fold(collapsed);
+    setSidebarPref(`${name}-collapsed`, collapsed);
+  });
+}
+byId("sort-projects").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "projects",
+    () => renderSidebarProjects(savedProjects, openProjectPath));
+});
+byId("sort-conversations").addEventListener("click", (event) => {
+  event.stopPropagation();
+  showSidebarSortMenu(event.currentTarget, "conversations",
+    () => lastConversationData && renderConversations(lastConversationData));
+});
+byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
+byId("kilin-ask-cancel").addEventListener("click", () => byId("kilin-ask").close("cancel"));
+byId("kilin-ask-other").addEventListener("click", () => byId("kilin-ask").close("other"));
+byId("kilin-ask-confirm").addEventListener("click", () => byId("kilin-ask").close("confirm"));
+byId("leave-project-confirm").addEventListener("click", () => {
+  byId("leave-project").close();
+  if (busy) return;
+  returnToLaunch();
 });
 byId("toggle-workspace").addEventListener("click", () => {
   chooseSidePanels(!shell.classList.contains("sidebar-open"));
@@ -4160,14 +5141,12 @@ byId("attach-folder").addEventListener("click", () => {
   bridge?.chooseAttachmentFolder();
 });
 byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
+for (const id of ["thinking", "temperature", "max-new-tokens"]) {
+  byId(id).addEventListener("change", () => { if (!ready) answerSettingsEdited = true; });
+}
 byId("type-id").addEventListener("change", () => {
   hideResume();
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
-  refreshSavedProject();
-});
-byId("workspace-path").addEventListener("input", queueSavedProjectRefresh);
-byId("workspace-path").addEventListener("change", () => {
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
 byId("backend").addEventListener("change", () => { saveModelFields(); showModelFields(); });
@@ -4210,13 +5189,9 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     }
     renderAttachments();
   });
-  bridge.workspaceSelected.connect((path) => {
-    byId("workspace-path").value = path;
-    bridge.requestSettings(byId("type-id").value, path);
-    refreshSavedProject();
-  });
-  bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
+  bridge.requestProjectsFolder();
   showWorkspace(false);
   renderEffortPicker();
   setBusy(false);

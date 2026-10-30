@@ -82,6 +82,11 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
+from kilin.gui._paths import (
+    default_workspace_directory,
+    saved_workspace_folder,
+    standard_workspace_directory,
+)
 from kilin.gui.preferences import default_appearance, write_defaults
 
 __all__ = [
@@ -106,8 +111,8 @@ class ChatBridge(QObject):
     folderFilesSelected: Signal(str, str, list)
         Editable folder (outputs or templates), purpose ("add" or the path
         to replace), and the chosen files.
-    workspaceSelected: Signal(str)
-        Selected workspace directory.
+    projectsFolderChosen: Signal(str)
+        Folder chosen to hold the projects, or "" for the standard one.
     commandRequested: Signal(dict)
         Backend command handed to the window process controller.
     stopRequested: Signal()
@@ -121,8 +126,11 @@ class ChatBridge(QObject):
         Show the native folder picker on the GUI thread.
     chooseFiles()
         Add one or more individual files.
-    chooseWorkspace()
-        Choose the folder in which KíLín stores its project.
+    chooseProjectsFolder(), useDefaultProjectsFolder()
+        Choose the workspace folder that holds the projects, or go back to
+        the standard one.
+    requestProjectsFolder()
+        Report the workspace folder in use.
     requestSettings(type_id, workspace)
         Read the existing profile or new-project defaults.
     downloadModel(model_id)
@@ -171,12 +179,12 @@ class ChatBridge(QObject):
     pathsSelected = Signal(list)
     attachmentsSelected = Signal(list)
     folderFilesSelected = Signal(str, str, list)
-    workspaceSelected = Signal(str)
     commandRequested = Signal(dict)
     stopRequested = Signal()
     sourceDropTargetChanged = Signal(str)
     sourceDragChanged = Signal(bool)
     appearanceChanged = Signal(str)
+    projectsFolderChosen = Signal(str)
 
     def __init__(self, parent: QObject | None = None) -> None:
         """Keep only the currently opened project path on the UI side.
@@ -290,14 +298,55 @@ class ChatBridge(QObject):
         self.commandRequested.emit({**request, "action": "edit_folder"})
 
     @Slot()
-    def chooseWorkspace(self) -> None:
-        """Choose the folder in which KíLín stores its project."""
+    def chooseProjectsFolder(self) -> None:
+        """Choose the folder where KíLín keeps its projects."""
 
         path = QFileDialog.getExistingDirectory(
-            None, "Choose KíLín workspace"
+            None, "Choose where KíLín keeps projects"
         )
         if path:
-            self.workspaceSelected.emit(path)
+            self.projectsFolderChosen.emit(path)
+
+    @Slot()
+    def useDefaultProjectsFolder(self) -> None:
+        """Go back to the standard projects folder."""
+
+        self.projectsFolderChosen.emit("")
+
+    @Slot()
+    def requestProjectsFolder(self) -> None:
+        """Report the projects folder in use and the one saved in Settings.
+
+        Notes
+        -----
+        Sends ``projects_folder`` with ``folder`` (in use), ``standard``
+        (used without a choice), ``saved`` (the choice, or ""), and
+        ``missing``: the saved folder is gone or not mounted, so the
+        standard one is used.
+
+        """
+
+        try:
+            folder = str(default_workspace_directory())
+            standard = str(standard_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({"event": "error", "message": str(error)})
+            )
+            return
+        saved = saved_workspace_folder()
+        self.event.emit(
+            json.dumps(
+                {
+                    "event": "projects_folder",
+                    "folder": folder,
+                    "standard": standard,
+                    "saved": saved,
+                    "missing": bool(saved)
+                    and not Path(saved).expanduser().is_dir(),
+                }
+            )
+        )
 
     @Slot(str, str)
     def requestSettings(self, type_id: str, workspace: str) -> None:
@@ -811,6 +860,21 @@ class ChatBridge(QObject):
                 )
             )
 
+    @Slot(str)
+    def copyText(self, text: str) -> None:
+        """Put text on the system clipboard for the page's Copy buttons.
+
+        Qt WebEngine does not let the page write to the clipboard itself.
+
+        Parameters
+        ----------
+        text: str
+            Text to copy.
+
+        """
+
+        QGuiApplication.clipboard().setText(text)
+
     @Slot(str, str)
     def findSavedProject(self, type_id: str, workspace: str) -> None:
         """Refresh Resume for the selected project type and workspace.
@@ -1156,6 +1220,8 @@ class ChatWindow(QMainWindow):
         self.setMinimumSize(760, 560)
         self._closing = False
         self._stopping = False
+        # Restarting the engine so that it uses a new projects folder.
+        self._switching_folder = False
         self._pending: list[dict[str, object]] = []
         self._stdout = bytearray()
         self._stderr = bytearray()
@@ -1169,6 +1235,7 @@ class ChatWindow(QMainWindow):
         # follows the OS.
         self._appearance = default_appearance()
         self.bridge.appearanceChanged.connect(self._set_appearance)
+        self.bridge.projectsFolderChosen.connect(self._set_projects_folder)
         QGuiApplication.styleHints().colorSchemeChanged.connect(
             lambda _scheme: self._update_icon()
         )
@@ -1222,6 +1289,41 @@ class ChatWindow(QMainWindow):
         except OSError:
             pass  # An unwritable preferences file keeps today's choice.
         self._update_icon()
+
+    def _set_projects_folder(self, folder: str) -> None:
+        """Save the projects folder and restart the engine to use it.
+
+        The engine reads the folder when it starts. The page offers this
+        only on the start screen while idle, so no project or answer is
+        interrupted.
+
+        Parameters
+        ----------
+        folder: str
+            Chosen absolute folder, or "" for the standard folder.
+
+        """
+
+        try:
+            write_defaults({"workspace_folder": folder})
+        except (OSError, ValueError) as error:
+            self.bridge.event.emit(
+                json.dumps(
+                    {
+                        "event": "error",
+                        "message": (
+                            f"Could not save the projects folder: {error}"
+                        ),
+                    }
+                )
+            )
+            return
+        self._switching_folder = True
+        self._pending.clear()
+        if self.process.state() == QProcess.ProcessState.NotRunning:
+            self._process_finished()
+        else:
+            self.process.kill()
 
     def _update_icon(self) -> None:
         """Show the light or dark logo in the window and Dock.
@@ -1357,6 +1459,11 @@ class ChatWindow(QMainWindow):
 
         if self._closing:
             return
+        if self._switching_folder:
+            self._switching_folder = False
+            self._start_engine()
+            self.bridge.requestProjectsFolder()
+            return
         if self._stopping:
             self._stopping = False
             self._start_engine()
@@ -1400,7 +1507,7 @@ class ChatWindow(QMainWindow):
 
         """
 
-        if not self._closing and not self._stopping:
+        if not (self._closing or self._stopping or self._switching_folder):
             self.bridge.event.emit(
                 json.dumps(
                     {"event": "error", "message": self.process.errorString()}

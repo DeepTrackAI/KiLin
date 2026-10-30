@@ -11,6 +11,7 @@ user locations without requiring Qt, GPU dependencies, or real user writes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -83,12 +84,15 @@ class TestGUIPaths(unittest.TestCase):
     def test_linux_xdg_directories_and_relative_fallback(self) -> None:
         """Use XDG absolute paths and ignore relative XDG locations."""
 
-        with patch.object(_paths.sys, "platform", "linux"), patch.dict(
-            "os.environ",
-            {
-                "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
-                "XDG_DATA_HOME": str(self.root / "xdg-data"),
-            },
+        with (
+            patch.object(_paths.sys, "platform", "linux"),
+            patch.dict(
+                "os.environ",
+                {
+                    "XDG_CONFIG_HOME": str(self.root / "xdg-config"),
+                    "XDG_DATA_HOME": str(self.root / "xdg-data"),
+                },
+            ),
         ):
             self.assertEqual(
                 _paths.preferences_path(),
@@ -98,9 +102,12 @@ class TestGUIPaths(unittest.TestCase):
                 _paths.default_workspace_directory(),
                 self.root / "xdg-data/kilin/workspaces",
             )
-        with patch.object(_paths.sys, "platform", "linux"), patch.dict(
-            "os.environ",
-            {"XDG_CONFIG_HOME": "relative", "XDG_DATA_HOME": "foo"},
+        with (
+            patch.object(_paths.sys, "platform", "linux"),
+            patch.dict(
+                "os.environ",
+                {"XDG_CONFIG_HOME": "relative", "XDG_DATA_HOME": "foo"},
+            ),
         ):
             self.assertEqual(
                 _paths.preferences_path(),
@@ -114,12 +121,15 @@ class TestGUIPaths(unittest.TestCase):
     def test_windows_config_and_data_use_distinct_locations(self) -> None:
         """Use roaming preferences and local workspace data on Windows."""
 
-        with patch.object(_paths.sys, "platform", "win32"), patch.dict(
-            "os.environ",
-            {
-                "APPDATA": str(self.root / "roaming"),
-                "LOCALAPPDATA": str(self.root / "local"),
-            },
+        with (
+            patch.object(_paths.sys, "platform", "win32"),
+            patch.dict(
+                "os.environ",
+                {
+                    "APPDATA": str(self.root / "roaming"),
+                    "LOCALAPPDATA": str(self.root / "local"),
+                },
+            ),
         ):
             self.assertEqual(
                 _paths.preferences_path(),
@@ -148,6 +158,41 @@ class TestGUIPaths(unittest.TestCase):
                 self.root / "workspaces",
             )
 
+    def test_projects_folder_from_settings_is_remembered(self) -> None:
+        """Use the chosen folder while it exists; otherwise the standard."""
+
+        preferences = self.root / "prefs.json"
+        chosen = self.root / "Desktop/KiLin projects"
+        chosen.mkdir(parents=True)
+        preferences.write_text(
+            json.dumps({"workspace_folder": str(chosen)}), encoding="utf-8"
+        )
+        standard = self.home / "Library/Application Support/kilin/workspaces"
+        environment = {"KILIN_DEFAULTS_FILE": str(preferences)}
+        with (
+            patch.dict("os.environ", environment),
+            patch.object(_paths.sys, "platform", "darwin"),
+        ):
+            self.assertEqual(_paths.saved_workspace_folder(), str(chosen))
+            self.assertEqual(_paths.default_workspace_directory(), chosen)
+            self.assertEqual(_paths.standard_workspace_directory(), standard)
+            # A removed or unmounted folder (e.g. a cloud drive) is skipped.
+            chosen.rmdir()
+            self.assertEqual(_paths.default_workspace_directory(), standard)
+            chosen.mkdir()
+            # An explicit environment folder still wins.
+            override = self.root / "workspaces"
+            with patch.dict(
+                "os.environ", {"KILIN_WORKSPACES_DIR": str(override)}
+            ):
+                self.assertEqual(
+                    _paths.default_workspace_directory(), override
+                )
+            # A broken preferences file never stops KíLín from starting.
+            preferences.write_text("{", encoding="utf-8")
+            self.assertEqual(_paths.saved_workspace_folder(), "")
+            self.assertEqual(_paths.default_workspace_directory(), standard)
+
     def test_relative_environment_paths_are_rejected(self) -> None:
         """Avoid silently writing relative paths under site-packages."""
 
@@ -156,9 +201,7 @@ class TestGUIPaths(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 _paths.preferences_path()
-        with patch.dict(
-            "os.environ", {"KILIN_WORKSPACES_DIR": "sandbox"}
-        ):
+        with patch.dict("os.environ", {"KILIN_WORKSPACES_DIR": "sandbox"}):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 _paths.default_workspace_directory()
 
@@ -180,11 +223,15 @@ class TestGUIPaths(unittest.TestCase):
                 """Allow engine shutdown without a real backend."""
 
         destination = self.root / "workspaces"
-        with patch.object(
-            gui_engine, "default_workspace_directory", return_value=destination
-        ), patch.object(
-            gui_engine, "ChatEngine", EngineStub
-        ), patch.object(gui_engine.sys, "stdin", []):
+        with (
+            patch.object(
+                gui_engine,
+                "default_workspace_directory",
+                return_value=destination,
+            ),
+            patch.object(gui_engine, "ChatEngine", EngineStub),
+            patch.object(gui_engine.sys, "stdin", []),
+        ):
             gui_engine.main()
         self.assertEqual(EngineStub.passed, destination)
         self.assertFalse(destination.exists())

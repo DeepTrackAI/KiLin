@@ -64,11 +64,17 @@ state changes and bridge calls.
 The page's local-content access to remote URLs is disabled in the Qt view.
 That setting does not prevent the Python engine from downloading models.
 Answers and source excerpts are inserted as text rather than executed as
-HTML. Answers are rendered as Markdown (headings, lists, quotes, code, bold,
-italics) by building DOM nodes, never by parsing HTML, so model output cannot
-inject markup; plain answers simply become paragraphs. Markdown is rendered
+HTML. Answers are rendered as Markdown (headings, lists, quotes, code,
+tables, bold, italics, LaTeX maths) by building DOM nodes, never by parsing HTML, so model
+output cannot inject markup; plain answers simply become paragraphs. Markdown is rendered
 while the answer streams, and citation links are added when it completes. Numeric citations are made clickable only when they refer to evidence
 records supplied with that answer.
+LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
+KaTeX (`web/vendor/`, MIT) as MathML, without fonts or network access;
+LaTeX it cannot read stays as text.
+Files attached to a message are first added to the project's sources and
+indexed, without the add dialog; the question then lists their `sources/`
+paths. The question shows them as chips that open the workspace tree there.
 
 ## Source selection and workspace preparation
 
@@ -135,16 +141,20 @@ package, it is a per-user application-data directory:
 - Windows: `%LOCALAPPDATA%/kilin/workspaces/` (with a home fallback)
 
 `KILIN_WORKSPACES_DIR` overrides this default in both cases and must
-be an absolute path (or a home-expanded `~/...` path). Explicit
-workspace paths entered through the interface take precedence. The engine
+be an absolute path (or a home-expanded `~/...` path). Otherwise the
+Workspace folder chosen in Settings → Project (Browse) is used: it is saved
+in the preferences file as `workspace_folder`, so it is kept after a
+restart, and Use default goes back to the standard folder. A chosen folder
+that is missing or not mounted is skipped with a note. Changing it restarts
+the engine, so it is offered only on the start screen. The engine
 does not create the default directory until a project needs it; existing
 projects are never moved. Repeated creation from the same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: choose an explicit
-workspace folder in Settings. Their managed `sources/` folder is initially
+A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: they get a free
+`new-project` folder in the workspace folder. Their managed `sources/` folder is initially
 empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.
@@ -250,9 +260,18 @@ write and register a new tool.
 
 ## Models and generation settings
 
+KíLín setup sits at the top of Settings. Below it, settings are grouped in
+tabs: **General** (Appearance), **Models** (effort levels with their search
+depth, embedding and intent models), **Answers** (temperature, answer length,
+thinking), and **Project** (workspace folder, backend, file types,
+chunking). Messages from Close show below the tabs, whichever tab is open.
+
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
+The left-panel qilin logo is gold in light mode and blue-black in dark
+mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
+installed with the images.
 
 Settings are ordered Appearance, Effort levels, Search depth, Embedding
 model, Intent model, Answers, then Project. Clicking
@@ -380,7 +399,11 @@ New chat creates a separate conversation record while retaining earlier
 conversations in the picker. It does not archive and delete the previous GUI
 conversation. Branch copies resumable parent state and records parent and
 checkpoint identifiers; it does not copy the entire parent event history.
-Renaming a conversation updates display metadata. The project name can be edited in the heading or floating top bar.
+Renaming a conversation updates display metadata. The chat heading and the
+floating top bar show only the open chat's name and turn count. The left
+panel lists projects; right-click the open project to rename it, and its
+settings icon opens its Settings. Other projects have no settings icon,
+because Settings save into the open project.
 Renaming a project moves
 its workspace folder, reloads the conversation registry, and restores the
 selected chat. If reopening fails, KíLín attempts to restore the old folder. Changing conversation retains already loaded
