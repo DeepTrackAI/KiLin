@@ -3059,8 +3059,12 @@ function renderConversations(data) {
     remove.textContent = "×";
     remove.setAttribute("aria-label", `Delete ${item.name}`);
     remove.title = "Delete conversation";
-    remove.addEventListener("click", () => {
-      if (busy || !confirm(`Delete “${item.name}”?`)) return;
+    remove.addEventListener("click", async () => {
+      if (busy) return;
+      const deleting = await askKilin(`Delete “${item.name}”?`,
+        "KíLín moves this chat to logs/traces/deleted in the workspace, so it is not lost.",
+        "Delete");
+      if (!deleting || busy) return;
       setBusy(true, "Deleting conversation…");
       bridge.deleteConversation(item.conversation_id);
     });
@@ -3080,6 +3084,30 @@ function renderConversations(data) {
   byId("conversation-name").textContent = activeEmpty ? "" : activeName;
   byId("conversation-name").classList.toggle("hidden", activeEmpty);
   updateChatSummary();
+}
+
+/**
+ * Ask a yes/no question in a KíLín dialog instead of the system pop-up.
+ *
+ * Cancel has focus first, so Enter does not confirm by accident; Escape
+ * also cancels.
+ *
+ * @param title Short question, such as "Delete “Notes”?".
+ * @param message One sentence on what KíLín will do.
+ * @param action Label of the confirming button, such as "Delete".
+ * @returns Promise of true when the user confirms, false otherwise.
+ */
+function askKilin(title, message, action) {
+  const dialog = byId("kilin-ask");
+  byId("kilin-ask-title").textContent = title;
+  byId("kilin-ask-message").textContent = message;
+  byId("kilin-ask-confirm").textContent = action;
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.returnValue = "";
+    dialog.showModal();
+    byId("kilin-ask-cancel").focus();
+  });
 }
 
 /**
@@ -4597,6 +4625,8 @@ byId("sort-conversations").addEventListener("click", (event) => {
     () => lastConversationData && renderConversations(lastConversationData));
 });
 byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
+byId("kilin-ask-cancel").addEventListener("click", () => byId("kilin-ask").close("cancel"));
+byId("kilin-ask-confirm").addEventListener("click", () => byId("kilin-ask").close("confirm"));
 byId("leave-project-confirm").addEventListener("click", () => {
   byId("leave-project").close();
   if (busy) return;
