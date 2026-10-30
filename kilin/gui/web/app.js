@@ -2766,6 +2766,8 @@ const MARKDOWN_RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 const MARKDOWN_QUOTE = /^\s{0,3}>\s?/;
 const MARKDOWN_BULLET = /^\s{0,3}[-*+]\s+/;
 const MARKDOWN_NUMBER = /^\s{0,3}\d{1,3}[.)]\s+/;
+// Display maths: a line starting with $$ or \[, up to the closing $$ or \].
+const MARKDOWN_MATH = /^\s*(\$\$|\\\[)/;
 // The line under a table's header: dashes per column, colons for alignment.
 const MARKDOWN_TABLE_DIVIDER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
 
@@ -2806,8 +2808,31 @@ function isMarkdownTableStart(lines, index) {
  * @returns Whether the line starts a supported Markdown block.
  */
 function isMarkdownBlockStart(line) {
-  return [MARKDOWN_FENCE, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET, MARKDOWN_NUMBER]
-    .some((pattern) => pattern.test(line));
+  return [MARKDOWN_FENCE, MARKDOWN_MATH, MARKDOWN_HEADING, MARKDOWN_RULE, MARKDOWN_QUOTE, MARKDOWN_BULLET,
+    MARKDOWN_NUMBER].some((pattern) => pattern.test(line));
+}
+
+/**
+ * Build LaTeX maths as MathML, which Qt WebEngine draws natively.
+ *
+ * KaTeX (``vendor/katex.min.js``) writes the markup itself and runs
+ * without ``trust``, so commands such as \href are refused. LaTeX it
+ * cannot read, or a missing KaTeX, shows the original text instead.
+ *
+ * @param tex LaTeX between the delimiters.
+ * @param source The original text, delimiters included.
+ * @param display Whether it is display maths on its own line.
+ * @returns New element holding the maths.
+ */
+function mathNode(tex, source, display) {
+  const node = document.createElement(display ? "div" : "span");
+  node.className = display ? "answer-math display" : "answer-math";
+  try {
+    katex.render(tex, node, { displayMode: display, output: "mathml", throwOnError: true });
+  } catch {
+    node.textContent = source;
+  }
+  return node;
 }
 
 /**
@@ -2838,6 +2863,28 @@ function renderMarkdown(host, text, linkCitation = null) {
       element.textContent = code.join("\n");
       pre.append(element);
       host.append(pre);
+      continue;
+    }
+    if (MARKDOWN_MATH.test(line)) {
+      // Everything up to the matching $$ or \] is one display formula; it
+      // may also fit on one line, as in "$$ x^2 $$".
+      const first = line.trim();
+      const close = first.startsWith("$$") ? "$$" : "\\]";
+      let end = first.length > 2 && first.endsWith(close) ? index : -1;
+      for (let next = index + 1; end < 0 && next < lines.length; next += 1) {
+        if (lines[next].trim().endsWith(close)) end = next;
+      }
+      if (end < 0) {
+        // Never closed (or still streaming): keep the line as text.
+        const element = document.createElement("p");
+        element.textContent = line;
+        host.append(element);
+        index += 1;
+        continue;
+      }
+      const source = lines.slice(index, end + 1).map((part) => part.trim()).join("\n");
+      host.append(mathNode(source.slice(2, -2).trim(), source, true));
+      index = end + 1;
       continue;
     }
     if (isMarkdownTableStart(lines, index)) {
@@ -2928,9 +2975,10 @@ function renderMarkdown(host, text, linkCitation = null) {
   }
 }
 
-// Inline code, bold, italics (not inside words such as snake_case), and
-// citation markers such as [1] or [2, 3].
-const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])/g;
+// Inline code, bold, italics (not inside words such as snake_case),
+// citation markers such as [1] or [2, 3], and maths: $$…$$, \(…\), or
+// $…$ with no space just inside, so prices such as "$5 and $10" stay text.
+const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])|(\$\$[^$]+?\$\$|\\\(.+?\\\)|(?<![\\\w$])\$(?![\s$])[^$\n]*?[^\s\\$]\$(?![\w$])|(?<![\\\w$])\$[^\s$\\]\$(?![\w$]))/g;
 
 /**
  * Render escaped inline Markdown and optionally link evidence citations.
@@ -2949,6 +2997,11 @@ function appendInlineMarkdown(element, text, linkCitation) {
       const code = document.createElement("code");
       code.textContent = match[1].slice(1, -1);
       element.append(code);
+    } else if (match[5]) {
+      element.append(before);
+      const source = match[5];
+      const wrap = source.startsWith("$$") ? 2 : source.startsWith("\\(") ? 2 : 1;
+      element.append(mathNode(source.slice(wrap, -wrap).trim(), source, false));
     } else if (match[2] || match[3]) {
       element.append(before);
       const node = document.createElement(match[2] ? "strong" : "em");
