@@ -146,6 +146,8 @@ h1 { margin: 10px 0 12px; color: var(--text); font-size: clamp(35px, 6vw, 56px);
 .models-hint button { min-height: 0; padding: 0; border: 0; background: none; color: var(--control-strong); font-size: inherit; text-decoration: underline; }
 .saved-projects { display: grid; gap: 16px; margin: -10px 0 20px; }
 .saved-project-group { display: grid; align-content: start; gap: 3px; }
+/* Five 26px rows and their gaps; more projects scroll. */
+.saved-project-list { display: grid; gap: 3px; max-height: calc(5 * 26px + 4 * 3px); overflow-y: auto; }
 .saved-project-group strong { margin-bottom: 3px; color: var(--eyebrow); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .saved-project-group button { display: flex; align-items: baseline; gap: 8px; min-width: 0; max-width: 100%; min-height: 26px; padding: 2px 0; border: 0; background: transparent; color: var(--control-strong); font-size: 12px; font-weight: 500; text-align: left; }
 .saved-project-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -232,7 +234,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .context-menu .menu-heading { padding: 5px 9px 3px; color: var(--muted); font-size: 12px; }
 .context-menu .menu-check { float: right; margin-left: 16px; }
 .conversation-list { display: grid; align-content: start; gap: 3px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.project-list { display: grid; gap: 3px; flex: none; max-height: 30vh; overflow-y: auto; }
+/* Five 34px rows and their gaps; more projects scroll. */
+.project-list { display: grid; gap: 3px; flex: none; max-height: calc(5 * 34px + 4 * 3px); overflow-y: auto; }
 .project-list [draggable="true"], .conversation-list [draggable="true"] { cursor: grab; }
 .dragging { opacity: .4; }
 /* A row's highlight spans the panel, like a project's; on hover it shortens
@@ -247,8 +250,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .project-item-name { flex: 0 1 auto; min-width: 4em; overflow: hidden; text-overflow: ellipsis; }
 .project-item-type { flex: 0 4 auto; min-width: 0; margin-left: auto; overflow: hidden; color: var(--muted); font-size: 12px; font-weight: 400; text-overflow: ellipsis; }
 .project-item.active .project-item-name { font-weight: 600; }
-.project-more { justify-self: start; min-height: 0; padding: 4px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 500; }
-.project-more:hover { color: var(--text); background: var(--hover); }
 .conversation-rename { width: 100%; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: inherit; background: var(--surface); font-size: 13px; }
 .tree-count { color: var(--muted); font-size: 12px; font-weight: 400; }
 .conversation-delete, .project-settings { width: 100%; max-width: 28px; min-width: 0; min-height: 28px; justify-self: end; padding: 0; overflow: hidden; border: 0; color: var(--muted); background: transparent; opacity: 0; }

@@ -64,6 +64,9 @@ const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
 const WORKSPACE_DRAG_TYPE = "application/x-kilin-workspace-path";
 let profile = null;
+// Answer settings changed on the start screen: kept until the project is
+// created, instead of being reset by the next settings event.
+let answerSettingsEdited = false;
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -272,7 +275,10 @@ function renderSavedProjects(projects) {
     group.className = "saved-project-group";
     const heading = document.createElement("strong");
     heading.textContent = "Resume a previous project";
-    group.append(heading);
+    // Five projects show; the rest scroll, so the setup card stays in view.
+    const list = document.createElement("div");
+    list.className = "saved-project-list";
+    group.append(heading, list);
     for (const project of projects) {
       const button = document.createElement("button");
       button.type = "button";
@@ -290,16 +296,12 @@ function renderSavedProjects(projects) {
         setBusy(true, "Resuming project…");
         bridge.resumeProject(project.project);
       });
-      group.append(button);
+      list.append(button);
     }
     host.append(group);
   }
   host.classList.toggle("hidden", !host.children.length);
 }
-
-// The left panel shows this many projects until the user asks for more.
-const SIDEBAR_PROJECTS = 5;
-let sidebarProjectsExpanded = false;
 
 /**
  * Read a left-panel choice remembered on this computer.
@@ -440,8 +442,8 @@ function renderSidebarProjects(projects, current) {
   const ordered = sidebarProjectOrder(
     projects, current, activeProjectTypeId, mode, sidebarPref("projects-order", []));
   const ids = ordered.map((project) => project.project);
-  const shown = sidebarProjectsExpanded ? ordered : ordered.slice(0, SIDEBAR_PROJECTS);
-  for (const project of shown) {
+  // Five projects show; the list scrolls for the rest (see styles.css).
+  for (const project of ordered) {
     const row = document.createElement("div");
     row.className = "project-row";
     const button = document.createElement("button");
@@ -489,17 +491,6 @@ function renderSidebarProjects(projects, current) {
       });
     }
     list.append(row);
-  }
-  if (ordered.length > SIDEBAR_PROJECTS) {
-    const more = document.createElement("button");
-    more.type = "button";
-    more.className = "project-more";
-    more.textContent = sidebarProjectsExpanded ? "Fewer" : `More (${ordered.length - SIDEBAR_PROJECTS})`;
-    more.addEventListener("click", () => {
-      sidebarProjectsExpanded = !sidebarProjectsExpanded;
-      renderSidebarProjects(projects, current);
-    });
-    list.append(more);
   }
 }
 
@@ -923,20 +914,37 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
+ * @param markThinking Whether to add "· thinks" to models that can think.
  */
-function modelSelect(ids, value, label) {
+function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
   select.className = "model-select";
   select.setAttribute("aria-label", label);
   for (const id of ids) {
     const option = document.createElement("option");
     option.value = id;
-    option.textContent = cachedModels.has(id) ? id : `${id} (not downloaded)`;
+    const name = markThinking && modelCanThink(id) ? `${id} · thinks` : id;
+    option.textContent = cachedModels.has(id) ? name : `${name} (not downloaded)`;
     select.append(option);
   }
   select.value = value;
   select.disabled = busy;
   return select;
+}
+
+/**
+ * Tell whether a language model supports thinking, judged by its name.
+ *
+ * Qwen3 models switch thinking on or off per answer; the 2507 "Instruct"
+ * releases never think. KíLín has no other record of a model's template,
+ * so other models are not marked even if they can think.
+ *
+ * @param id Model identifier or local path.
+ * @returns Whether to mark the model as one that thinks.
+ */
+function modelCanThink(id) {
+  const name = String(id).split("/").pop().toLowerCase();
+  return name.startsWith("qwen3") && !/embedding|reranker|instruct-2507/.test(name);
 }
 
 /**
@@ -1031,8 +1039,9 @@ function renderModelsPanel() {
       level.name = name.value;
       refreshRestoreButtons();
     });
+    // Answers think only with these models; routing never does.
     const select = modelSelect(roleModelIds("chat", level.model), level.model,
-      `Language model for ${level.name || `level ${index + 1}`}`);
+      `Language model for ${level.name || `level ${index + 1}`}`, true);
     select.dataset.focusKey = `model-${index}`;
     select.addEventListener("change", () => {
       // Other backends cannot switch models per level: one model for all.
@@ -1446,11 +1455,12 @@ function showSettings(data) {
   byId("backend").value = profile.backend;
   byId("query-format").value = profile.query_format;
   byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
+  const keepAnswers = ready || answerSettingsEdited;
   for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens", "temperature", "max_new_tokens"]) {
-    if (ready && ["temperature", "max_new_tokens"].includes(key)) continue;
+    if (keepAnswers && ["temperature", "max_new_tokens"].includes(key)) continue;
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
-  if (!ready) byId("thinking").checked = profile.thinking;
+  if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
@@ -1465,9 +1475,9 @@ function showSettings(data) {
  */
 function collectSettings() {
   // Preparation settings may require a model reload or index rebuild.
-  // Answer-time controls are sent only with the question below.
   saveModelFields();
   return {
+    ...newProjectAnswerSettings(),
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
@@ -1482,6 +1492,26 @@ function collectSettings() {
     // Models are downloaded from Settings, never silently while preparing.
     allow_download: false,
   };
+}
+
+/**
+ * Return the Answers settings for a new project, so its profile starts
+ * with them; later changes are saved when a question is asked.
+ *
+ * @returns ``thinking``, plus ``temperature`` and ``max_new_tokens`` when
+ *   valid ("none" for a blank token limit); invalid values are left out so
+ *   the project keeps its defaults.
+ */
+function newProjectAnswerSettings() {
+  const settings = { thinking: byId("thinking").checked };
+  const temperature = Number(byId("temperature").value);
+  if (byId("temperature").value.trim() && Number.isFinite(temperature) && temperature >= 0) {
+    settings.temperature = temperature;
+  }
+  const tokens = byId("max-new-tokens").value.trim();
+  if (!tokens) settings.max_new_tokens = "none";
+  else if (Number.isInteger(Number(tokens)) && Number(tokens) > 0) settings.max_new_tokens = Number(tokens);
+  return settings;
 }
 
 /**
@@ -4519,6 +4549,8 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
@@ -4550,6 +4582,8 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
+    // The open project now owns its Answers settings.
+    answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
@@ -5048,6 +5082,9 @@ byId("attach-folder").addEventListener("click", () => {
   bridge?.chooseAttachmentFolder();
 });
 byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
+for (const id of ["thinking", "temperature", "max-new-tokens"]) {
+  byId(id).addEventListener("change", () => { if (!ready) answerSettingsEdited = true; });
+}
 byId("type-id").addEventListener("change", () => {
   hideResume();
   bridge?.requestSettings(byId("type-id").value, "");
