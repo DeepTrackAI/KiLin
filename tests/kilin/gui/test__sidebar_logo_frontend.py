@@ -245,10 +245,9 @@ console.log("orders passed");
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_projects_list_highlights_and_switches(self):
-        """Open project marked; five shown, with type; More shows the rest."""
+        """Open project marked, with type; every project listed."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
-        start = source.index("const SIDEBAR_PROJECTS")
         script = r"""
 const assert = require("node:assert/strict");
 function element() {
@@ -279,8 +278,6 @@ function setBusy(value, message) {
   calls.push(["busy", message]);
 }
 """
-        script += source[start : source.index("\n", start) + 1]
-        script += "let sidebarProjectsExpanded = false;\n"
         for name in (
             "sidebarPref",
             "manualOrder",
@@ -298,16 +295,12 @@ const names = () => list.children.map((item) =>
 const projects = ["a", "b", "c", "d", "e", "f", "g"].map((name) => (
   { project: `/w/${name}`, name, type_id: "literature" }
 ));
-// Recent use order; five shown, then More.
+// Recent use order; all listed (the list scrolls after five).
 renderSidebarProjects(projects, "/w/b");
-assert.deepEqual(names(), ["a", "b", "c", "d", "e", "More (2)"]);
+assert.deepEqual(names(), ["a", "b", "c", "d", "e", "f", "g"]);
 assert.equal(buttonOf(1).children[1].textContent, "Literature");
 assert.ok(buttonOf(1).classList.set.has("active"));
 assert.equal(buttonOf(1).attributes["aria-current"], "true");
-list.children[5].listeners.click();
-assert.deepEqual(names(), ["a", "b", "c", "d", "e", "f", "g", "Fewer"]);
-list.children[7].listeners.click();
-assert.equal(list.children.length, 6);
 // Clicking the open project does nothing; another one is resumed.
 buttonOf(1).listeners.click();
 assert.deepEqual(calls, []);
@@ -317,7 +310,7 @@ assert.deepEqual(calls, [["busy", "Opening a…"], ["resume", "/w/a"]]);
 busy = false;
 calls.length = 0;
 assert.deepEqual(list.children.map((row) => row.children.length),
-  [1, 2, 1, 1, 1, 0]);
+  [1, 2, 1, 1, 1, 1, 1]);
 list.children[1].children[1].listeners.click();
 assert.deepEqual(calls, [["settings"]]);
 // A project outside the listed folder is still shown, first.
