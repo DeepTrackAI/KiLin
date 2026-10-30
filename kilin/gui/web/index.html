@@ -205,7 +205,8 @@
         <section id="settings-project" class="settings-section" data-settings-tab="project">
           <div class="advanced-fields">
             <label for="workspace-path">Workspace folder</label>
-            <div class="folder-row"><input id="workspace-path" type="text" placeholder="Required without sources"><button id="browse-workspace" type="button" class="secondary">Browse</button></div>
+            <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
+            <p id="workspace-note" class="hint">The folder that holds your projects; KíLín remembers it.</p>
             <label for="backend">Computation backend</label>
             <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
             <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">

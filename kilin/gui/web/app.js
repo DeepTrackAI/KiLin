@@ -94,7 +94,6 @@ let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
 let activeBackend = "mlx";
-let resumeRefreshTimer = null;
 let activeTracePath = "";
 let activeConversationId = "";
 // Last conversation registry, and the empty chat whose first question is
@@ -121,6 +120,8 @@ let messageAttachments = [];
 // A question whose attached files are being added to sources; it is asked
 // once the index is refreshed.
 let attachedAsk = null;
+// Set while Qt restarts the engine to use another projects folder.
+let switchingProjectsFolder = false;
 let currentTurnCount = 0;
 // Project types sent by the engine from kilin/project_types/*.json.
 let projectTypes = Object.create(null);
@@ -198,16 +199,7 @@ function hideResume() { byId("saved-projects").classList.add("hidden"); }
  */
 function refreshSavedProject() {
   if (!bridge || busy || ready) return;
-  bridge.listSavedProjects(byId("workspace-path").value.trim());
-}
-
-/**
- * Invalidate the resume shortcut and debounce the next lookup.
- */
-function queueSavedProjectRefresh() {
-  hideResume();
-  clearTimeout(resumeRefreshTimer);
-  resumeRefreshTimer = setTimeout(refreshSavedProject, 250);
+  bridge.listSavedProjects("");
 }
 
 /**
@@ -631,7 +623,7 @@ function previewSources() {
     setBusy(true, "Scanning selected sources…");
     bridge.previewSources(
       JSON.stringify(selectedSources), JSON.stringify(projectFileTypes()),
-      Number(byId("max-file-bytes").value), byId("workspace-path").value.trim(),
+      Number(byId("max-file-bytes").value), "",
     );
   }
 }
@@ -1831,7 +1823,7 @@ async function deleteFromFolder(folder, path, isFile) {
  * @param path Workspace-relative path, such as outputs/summary.md.
  */
 function copyToSources(path) {
-  const root = byId("workspace-path").value.trim().replace(/[\\/]+$/, "");
+  const root = openProjectPath.replace(/[\\/]+$/, "");
   if (!root || !EDITABLE_FOLDERS.some((name) => path.startsWith(`${name}/`))) return;
   addSources([`${root}/${path}`]);
 }
@@ -4518,7 +4510,6 @@ function onEvent(raw) {
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
     if (!data.turns.length) renderConversationEmpty();
-    byId("workspace-path").value = data.project;
     byId("workspace-location").textContent = data.project;
     renderSidebarProjects(savedProjects, openProjectPath);
     if (bridge) bridge.listSavedProjects("");
@@ -4575,6 +4566,8 @@ function onEvent(raw) {
     }
   } else if (data.event === "source_changes") {
     showSourceSync(data);
+  } else if (data.event === "projects_folder") {
+    showProjectsFolder(data);
   } else if (data.event === "sources_checked") {
     if (attachedAsk) return addAttachedSources(data);
     setBusy(false);
@@ -4610,10 +4603,7 @@ function onEvent(raw) {
       pendingTurn = null;
       ready = false;
       setBusy(true, "Reopening project after interruption…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value,
-        activeConversationId,
-      );
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
       return;
     }
     ready = false;
@@ -4627,7 +4617,7 @@ function onEvent(raw) {
     clearReferences();
     byId("connection").textContent = "Stopped · reopen your project";
     setBusy(false);
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
   } else if (data.event === "backend_failed") {
     ready = false;
     updateFloatingHeader();
@@ -4640,9 +4630,7 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
-    const reopenProject = ready
-      && byId("workspace-path").value.trim()
-      && activeConversationId;
+    const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
     setupCompletionVisible = true;
     byId("readiness-time").textContent = data.message;
@@ -4652,14 +4640,11 @@ function onEvent(raw) {
     ready = false;
     setBusy(false);
     byId("connection").textContent = "Ready";
-    bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+    bridge.requestSettings(byId("type-id").value, "");
     bridge.requestReadiness();
     if (reopenProject) {
       setBusy(true, "Reopening the project after backend recovery…");
-      bridge.resumeProjectConversation(
-        byId("workspace-path").value.trim(),
-        activeConversationId,
-      );
+      bridge.resumeProjectConversation(openProjectPath, activeConversationId);
     }
   } else if (data.event === "workspace_conflict") {
     // Creation never reuses a project; opening one is a separate decision.
@@ -4693,7 +4678,8 @@ function onEvent(raw) {
 }
 
 // UI handlers validate user input before issuing bridge commands.
-byId("browse-workspace").addEventListener("click", () => bridge?.chooseWorkspace());
+byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
+byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
 dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -4780,15 +4766,13 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  if (!included.length && !byId("workspace-path").value.trim()) {
-    openModels();
-    byId("workspace-path").focus();
-    return showError("Choose a workspace folder to create a project without sources.");
-  }
+  // With sources the engine names the project after the first one; an
+  // empty project gets a free "new-project" name in the workspace folder.
+  const destination = included.length ? "" : emptyProjectPath();
   setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
-    JSON.stringify(included), byId("type-id").value, byId("workspace-path").value.trim(),
+    JSON.stringify(included), byId("type-id").value, destination,
     JSON.stringify(selected), JSON.stringify(collectSettings()),
   );
 });
@@ -4820,6 +4804,64 @@ byId("question-form").addEventListener("submit", (event) => {
   setBusy(true, "Adding the attached files to sources…");
   bridge.checkProjectSources(JSON.stringify(ask.attachments));
 });
+
+/**
+ * Show the projects folder in Settings; after a switch, list its projects.
+ *
+ * @param data The ``projects_folder`` event: ``folder`` in use, ``saved``
+ *   choice ("" for the default), and whether that choice is ``missing``.
+ */
+function showProjectsFolder(data) {
+  byId("workspace-path").value = data.folder;
+  byId("workspace-path").title = data.folder;
+  byId("default-workspace").disabled = !data.saved;
+  byId("workspace-note").textContent = data.missing
+    ? `${data.saved} is not available, so KíLín uses the default folder.`
+    : "The folder that holds your projects; KíLín remembers it.";
+  if (!switchingProjectsFolder) return;
+  // The engine restarted with the new folder: list the projects there.
+  switchingProjectsFolder = false;
+  setBusy(false);
+  bridge.requestSettings(byId("type-id").value, "");
+  bridge.requestReadiness();
+  refreshSavedProject();
+}
+
+/**
+ * Pick a free folder for a project created without sources.
+ *
+ * @returns "<workspace folder>/new-project", numbered when that name is
+ *   taken by a listed project.
+ */
+function emptyProjectPath() {
+  const root = byId("workspace-path").value.replace(/[\\/]+$/, "");
+  const taken = new Set(savedProjects.map((project) => project.name));
+  let name = "new-project";
+  for (let number = 2; taken.has(name); number += 1) name = `new-project-${number}`;
+  return `${root}/${name}`;
+}
+
+/**
+ * Choose another projects folder, or go back to the default one.
+ *
+ * Qt saves the choice and restarts the engine, so this is offered only on
+ * the start screen while KíLín is idle.
+ *
+ * @param useDefault Whether to go back to the default folder.
+ */
+function changeProjectsFolder(useDefault) {
+  if (!bridge || busy) return;
+  if (ready) {
+    error.textContent = "Go back to the start screen to change the workspace folder.";
+    error.classList.remove("hidden");
+    return;
+  }
+  // Set before Browse: Qt answers only once a folder is chosen.
+  switchingProjectsFolder = true;
+  if (!useDefault) return bridge.chooseProjectsFolder();
+  setBusy(true, "Switching to the default workspace folder…");
+  bridge.useDefaultProjectsFolder();
+}
 
 /**
  * Ask a question; attached files, already in sources, are listed under it.
@@ -4905,7 +4947,6 @@ function returnToLaunch() {
   byId("conversations-panel").classList.add("hidden");
   byId("toggle-conversations").classList.add("hidden");
   setup.classList.remove("hidden");
-  byId("workspace-path").value = "";
   selectedSources.length = 0;
   previewRoots.clear();
   previewSkipped.clear();
@@ -5009,12 +5050,7 @@ byId("attach-folder").addEventListener("click", () => {
 byId("appearance").addEventListener("change", (event) => applyAppearance(event.target.value));
 byId("type-id").addEventListener("change", () => {
   hideResume();
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
-  refreshSavedProject();
-});
-byId("workspace-path").addEventListener("input", queueSavedProjectRefresh);
-byId("workspace-path").addEventListener("change", () => {
-  bridge?.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
 byId("backend").addEventListener("change", () => { saveModelFields(); showModelFields(); });
@@ -5057,13 +5093,9 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     }
     renderAttachments();
   });
-  bridge.workspaceSelected.connect((path) => {
-    byId("workspace-path").value = path;
-    bridge.requestSettings(byId("type-id").value, path);
-    refreshSavedProject();
-  });
-  bridge.requestSettings(byId("type-id").value, byId("workspace-path").value.trim());
+  bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
+  bridge.requestProjectsFolder();
   showWorkspace(false);
   renderEffortPicker();
   setBusy(false);

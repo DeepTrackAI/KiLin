@@ -141,16 +141,20 @@ package, it is a per-user application-data directory:
 - Windows: `%LOCALAPPDATA%/kilin/workspaces/` (with a home fallback)
 
 `KILIN_WORKSPACES_DIR` overrides this default in both cases and must
-be an absolute path (or a home-expanded `~/...` path). Explicit
-workspace paths entered through the interface take precedence. The engine
+be an absolute path (or a home-expanded `~/...` path). Otherwise the
+Workspace folder chosen in Settings → Project (Browse) is used: it is saved
+in the preferences file as `workspace_folder`, so it is kept after a
+restart, and Use default goes back to the standard folder. A chosen folder
+that is missing or not mounted is skipped with a note. Changing it restarts
+the engine, so it is offered only on the start screen. The engine
 does not create the default directory until a project needs it; existing
 projects are never moved. Repeated creation from the same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: choose an explicit
-workspace folder in Settings. Their managed `sources/` folder is initially
+A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: they get a free
+`new-project` folder in the workspace folder. Their managed `sources/` folder is initially
 empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.
