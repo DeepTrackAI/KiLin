@@ -1283,7 +1283,7 @@ function levelProblem(levels, depth) {
  * @param closeAfter Whether to close Settings after applying the changes.
  * @param explicitDownload Model ID to download, or null for ordinary edits.
  */
-function applyModelEdits(closeAfter = false, explicitDownload = null) {
+async function applyModelEdits(closeAfter = false, explicitDownload = null) {
   if (busy || !bridge) return;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
@@ -1307,9 +1307,9 @@ function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const reindex = ready && (settings.embedding_model !== before.embedding_model
     || settings.query_format !== before.query_format);
   const warnings = [];
-  if (missing.some((id) => id !== explicitDownload)) warnings.push(`These models need to download, which may take a while:\n${missing.join("\n")}`);
-  if (reindex) warnings.push("Changing the embedding model or query format will rebuild this project's index. Your saved chats will be kept.");
-  if (warnings.length && !confirm(`${warnings.join("\n\n")}\n\nProceed?`)) return;
+  if (missing.some((id) => id !== explicitDownload)) warnings.push(`KíLín downloads ${missing.join(", ")}, which may take a while.`);
+  if (reindex) warnings.push("KíLín rebuilds this project's index; saved chats are kept.");
+  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return;
   applyingModels = true;
   closeAfterModelsApply = closeAfter;
   error.classList.add("hidden");
@@ -1815,9 +1815,10 @@ function showFolderMenu(x, y, folder, path, isFile) {
  * @param path Workspace-relative target path.
  * @param isFile Whether the target is a file.
  */
-function deleteFromFolder(folder, path, isFile) {
+async function deleteFromFolder(folder, path, isFile) {
   const name = path.split("/").pop();
-  if (!confirm(`Delete "${name}" from ${folder}?\n\n${path}\n\nKíLín deletes it permanently; it does not go to the Trash.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "It is deleted permanently, not moved to the Trash.", "Delete")) return;
   editFolder({ folder, operation: "remove", paths: [path] }, `Deleting from ${folder}…`);
 }
 
@@ -1851,10 +1852,11 @@ function editFolder(request, message) {
  * @param purpose "add", or the workspace path to replace.
  * @param paths Local files chosen in the native dialog.
  */
-function folderFilesChosen(folder, purpose, paths) {
+async function folderFilesChosen(folder, purpose, paths) {
   if (purpose !== "add") {
     const name = purpose.split("/").pop();
-    if (!confirm(`Replace "${name}" with the content of ${paths[0].split(/[\\/]/).pop()}?\n\nThe name stays ${name}.`)) return;
+    const source = paths[0].split(/[\\/]/).pop();
+    if (!await askKilin(`Replace “${name}”?`, `KíLín puts the content of ${source} in it; the name stays.`, "Replace")) return;
     editFolder({ folder, operation: "replace", path: purpose, source: paths[0] }, `Replacing a file in ${folder}…`);
     return;
   }
@@ -1862,7 +1864,11 @@ function folderFilesChosen(folder, purpose, paths) {
   const taken = names.filter((name) => workspacePaths.has(`${folder}/${name}`));
   let replace = false;
   if (taken.length) {
-    replace = confirm(`These names are already in ${folder}:\n\n${taken.join("\n")}\n\nOK replaces them; Cancel keeps both (the new copies get a number).`);
+    const what = taken.length === 1 ? `“${taken[0]}” is` : `${taken.map((name) => `“${name}”`).join(", ")} are`;
+    const answer = await askKilin(`${what} already in ${folder}`,
+      "Keep both gives the new copies a number.", "Replace", "Keep both");
+    if (!answer) return;
+    replace = answer === true;
   }
   editFolder({ folder, operation: "add", paths, replace }, `Adding to ${folder}…`);
 }
@@ -1880,11 +1886,11 @@ function hideSourceMenu() {
  * @param path Workspace-relative path beginning with sources/.
  * @param isFile Whether the path is a file rather than a folder.
  */
-function removeSource(path, isFile) {
+async function removeSource(path, isFile) {
   if (busy || !bridge) return;
   const name = path.split("/").pop();
-  const what = isFile ? `the file "${name}"` : `the folder "${name}" and everything in it`;
-  if (!confirm(`Delete ${what} from sources?\n\n${path}\n\nKíLín deletes only the project's copy; your original stays.`)) return;
+  const what = isFile ? `“${name}”` : `the folder “${name}” and everything in it`;
+  if (!await askKilin(`Delete ${what}?`, "", "Delete") || busy) return;
   error.classList.add("hidden");
   setBusy(true, "Removing sources and updating the index…");
   bridge.removeProjectSources(JSON.stringify([path]));
@@ -1904,8 +1910,9 @@ document.addEventListener("scroll", hideSourceMenu, true);
  *
  * @param path Workspace-relative path to the selected file.
  */
-function openWorkspaceFile(path) {
-  if (!path || !bridge || !confirm(`Open ${path} with its default application?`)) return;
+async function openWorkspaceFile(path) {
+  if (!path || !bridge) return;
+  if (!await askKilin(`Open “${path.split("/").pop()}” in its default app?`, "", "Open")) return;
   bridge.openWorkspaceFile(path);
 }
 
@@ -3093,16 +3100,22 @@ function renderConversations(data) {
  * @param title Short question, such as "Delete “Notes”?".
  * @param message One sentence on what KíLín will do; empty hides it.
  * @param action Label of the confirming button, such as "Delete".
- * @returns Promise of true when the user confirms, false otherwise.
+ * @param other Label of an optional third button, such as "Keep both".
+ * @returns Promise of true when the user confirms, "other" for the third
+ *   button, false otherwise.
  */
-function askKilin(title, message, action) {
+function askKilin(title, message, action, other = "") {
   const dialog = byId("kilin-ask");
   byId("kilin-ask-title").textContent = title;
   byId("kilin-ask-message").textContent = message;
   byId("kilin-ask-message").classList.toggle("hidden", !message);
   byId("kilin-ask-confirm").textContent = action;
+  byId("kilin-ask-other").textContent = other;
+  byId("kilin-ask-other").classList.toggle("hidden", !other);
   return new Promise((resolve) => {
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    dialog.addEventListener("close", () => resolve(
+      dialog.returnValue === "confirm" || (dialog.returnValue === "other" && "other")),
+    { once: true });
     dialog.returnValue = "";
     dialog.showModal();
     byId("kilin-ask-cancel").focus();
@@ -4387,16 +4400,20 @@ function onEvent(raw) {
     setBusy(false);
     error.textContent = data.message;
     error.classList.remove("hidden");
-    const resume = data.existing_project && confirm(
-      `A project already exists at ${data.workspace}.\n\nOpen that project instead? Selected sources and new-project settings will not be applied.\n\nCancel to choose another destination.`,
-    );
-    if (resume) {
-      setBusy(true, "Opening the existing project...");
-      bridge.resumeProject(data.workspace);
-    } else {
-      openModels();
-      byId("workspace-path").focus();
-    }
+    const asking = data.existing_project
+      ? askKilin("Open the existing project?",
+        `A project already exists at ${data.workspace}. KíLín opens it without the new sources and settings; Cancel to choose another place.`,
+        "Open project")
+      : Promise.resolve(false);
+    asking.then((resume) => {
+      if (resume) {
+        setBusy(true, "Opening the existing project...");
+        bridge.resumeProject(data.workspace);
+      } else {
+        openModels();
+        byId("workspace-path").focus();
+      }
+    });
   } else if (data.event === "error") {
     showError(data.message, data.trace_path || activeTracePath);
   }
@@ -4625,6 +4642,7 @@ byId("sort-conversations").addEventListener("click", (event) => {
 });
 byId("leave-project-cancel").addEventListener("click", () => byId("leave-project").close());
 byId("kilin-ask-cancel").addEventListener("click", () => byId("kilin-ask").close("cancel"));
+byId("kilin-ask-other").addEventListener("click", () => byId("kilin-ask").close("other"));
 byId("kilin-ask-confirm").addEventListener("click", () => byId("kilin-ask").close("confirm"));
 byId("leave-project-confirm").addEventListener("click", () => {
   byId("leave-project").close();

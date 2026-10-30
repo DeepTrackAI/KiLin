@@ -38,6 +38,7 @@ class TestKilinDialogsFrontend(unittest.TestCase):
             "kilin-ask-title",
             "kilin-ask-message",
             "kilin-ask-cancel",
+            "kilin-ask-other",
             "kilin-ask-confirm",
         ):
             self.assertIn(f'id="{part}"', dialog)
@@ -51,9 +52,44 @@ class TestKilinDialogsFrontend(unittest.TestCase):
         ask = 'await askKilin(`Delete “${item.name}”?`, "", "Delete")'
         self.assertIn(ask, render)
 
+    def test_delete_source_asks_in_the_kilin_dialog(self):
+        """Deleting from sources no longer uses the system pop-up."""
+
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        remove = _function(source, "removeSource")
+        self.assertNotIn("confirm(", remove)
+        self.assertIn(
+            'await askKilin(`Delete ${what}?`, "", "Delete")', remove
+        )
+
+    def test_no_system_pop_ups_are_left(self):
+        """Every question asks in the KíLín dialog."""
+
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        self.assertNotRegex(source, r"(^|[^.\w])(alert|confirm|prompt)\(")
+        for name in (
+            "applyModelEdits",
+            "deleteFromFolder",
+            "folderFilesChosen",
+            "openWorkspaceFile",
+        ):
+            self.assertIn("await askKilin(", _function(source, name))
+        start = source.index('data.event === "workspace_conflict"')
+        conflict = source[start : source.index("data.event ===", start + 1)]
+        self.assertIn('askKilin("Open the existing project?"', conflict)
+
+    def test_taken_names_can_be_replaced_kept_or_cancelled(self):
+        """Replace, Keep both, or Cancel adds nothing."""
+
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        chosen = _function(source, "folderFilesChosen")
+        self.assertIn('"Replace", "Keep both");', chosen)
+        self.assertIn("if (!answer) return;", chosen)
+        self.assertIn("replace = answer === true;", chosen)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_answer_follows_the_button_pressed(self):
-        """Confirm gives true; Cancel and Escape give false."""
+        """Confirm gives true, the third button "other", else false."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         script = r"""
@@ -97,6 +133,9 @@ const byId = (id) => id === "kilin-ask" ? dialog
   assert.equal(message.textContent, "KíLín moves it.");
   assert.equal(message.classList.contains("hidden"), false);
   assert.equal(parts["kilin-ask-confirm"].textContent, "Delete");
+  // No third label: only Cancel and the action show.
+  const other = parts["kilin-ask-other"];
+  assert.equal(other.classList.contains("hidden"), true);
   // Cancel has focus first, so Enter does not confirm by accident.
   assert.deepEqual(focused, ["kilin-ask-cancel"]);
   dialog.close("confirm");
@@ -111,6 +150,11 @@ const byId = (id) => id === "kilin-ask" ? dialog
   answer = askKilin("Once more?", "KíLín asks once more.", "Delete");
   dialog.close();
   assert.equal(await answer, false);
+  answer = askKilin("Taken?", "", "Replace", "Keep both");
+  assert.equal(other.textContent, "Keep both");
+  assert.equal(other.classList.contains("hidden"), false);
+  dialog.close("other");
+  assert.equal(await answer, "other");
   console.log("kilin dialog passed");
 })().catch((error) => { console.error(error); process.exit(1); });
 """
