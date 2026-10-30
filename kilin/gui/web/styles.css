@@ -397,6 +397,12 @@ button:disabled { opacity: .62; cursor: default; }
 .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 9px; }
 .attachment-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 260px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); background: var(--surface-soft); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attachment-chip button { min-height: 0; padding: 0; border: 0; color: inherit; background: transparent; }
+.question-attachments { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; white-space: normal; }
+.question-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; min-height: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--user-bubble-text); background: var(--surface); font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.question-attachment::before { content: ""; flex: none; width: 9px; height: 11px; border: 1.5px solid currentColor; border-radius: 2px; opacity: .6; }
+button.question-attachment:hover, button.question-attachment:focus-visible { border-color: var(--citation); color: var(--citation); }
+.revealed { animation: revealed 1.6s ease-out; }
+@keyframes revealed { from { background: var(--highlight); outline: 2px solid var(--citation); } to { background: transparent; outline: 2px solid transparent; } }
 .effort-picker { position: relative; }
 .effort-button { min-width: 58px; min-height: 32px; padding: 0 6px; border: 0; color: var(--muted); background: transparent; font-size: 12px; font-weight: 400; }
 .effort-button:hover { color: var(--muted); background: rgb(120 130 124 / 9%); }

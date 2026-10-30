@@ -72,6 +72,9 @@ records supplied with that answer.
 LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
 KaTeX (`web/vendor/`, MIT) as MathML, without fonts or network access;
 LaTeX it cannot read stays as text.
+Files attached to a message are first added to the project's sources and
+indexed, without the add dialog; the question then lists their `sources/`
+paths. The question shows them as chips that open the workspace tree there.
 
 ## Source selection and workspace preparation
 
