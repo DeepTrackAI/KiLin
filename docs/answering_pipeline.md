@@ -231,3 +231,12 @@ limit does not exceed either the tool budget or the session's
 `max_new_tokens` setting. The router keeps its separate deterministic
 nonthinking behavior. Isolated tool replies never enter persistent chat
 history.
+
+Internal `ask_model` calls still return thinking-free text for tool
+parsers, but the tool coordinator collects any model thinking and presents
+it in the conversation's thinking section. When an answer callback is
+provided, each completed side call emits only its thinking, not its
+intermediate structured reply. The saved answer contains the same thinking
+followed by the tool's composed answer. `write` continues to stream and
+return the full user-visible model response. Router calls remain nonthinking.
+The model's thinking setting determines whether thinking is generated.

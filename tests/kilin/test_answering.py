@@ -259,7 +259,35 @@ class TestPackagedAnsweringDefaults(unittest.TestCase):
 
 
 class TestStripThinking(unittest.TestCase):
-    """Test removal of optional model reasoning from visible answers."""
+    """Test extraction and removal of model-generated thinking text."""
+
+    def test_extracts_complete_and_template_opened_thinking(self) -> None:
+        """Read thinking separately from answer text in common formats."""
+
+        self.assertEqual(
+            answering.extract_thinking(
+                "<think>First</think>Body<think>Second</think>"
+            ),
+            "First\n\nSecond",
+        )
+        self.assertEqual(
+            answering.extract_thinking("Template reasoning</think>Answer"),
+            "Template reasoning",
+        )
+        self.assertEqual(
+            answering.extract_thinking("Implicit</think><think>More</think>"),
+            "Implicit\n\nMore",
+        )
+
+    def test_extracts_open_thinking_without_inventing_answer(self) -> None:
+        """Keep an unfinished thought without retaining ordinary text."""
+
+        self.assertEqual(
+            answering.extract_thinking("Text<think>unfinished"),
+            "unfinished",
+        )
+        self.assertEqual(answering.extract_thinking("Plain answer"), "")
+        self.assertEqual(answering.extract_thinking(""), "")
 
     def test_removes_complete_thinking_blocks(self) -> None:
         """Remove multiple reasoning blocks without removing answer text."""
@@ -342,6 +370,38 @@ class TestSideReply(unittest.TestCase):
         )
         self.assertFalse(chat.observations[1]["thinking"])
         self.assertEqual(chat.observations[1]["temperature"], 0.0)
+
+    def test_visible_tool_reply_preserves_thinking_and_stream(self) -> None:
+        """Return the raw tool answer without altering the streamed text."""
+
+        chat = _FakeChat()
+        history = [dict(message) for message in chat.messages]
+        streamed: list[str] = []
+
+        answer = answering.side_reply(
+            chat, "Tool", "Summarize", max_new_tokens=120,
+            token_callback=streamed.append, inherit_settings=True,
+            preserve_thinking=True,
+        )
+
+        self.assertEqual(answer, "<think>draft</think>Final reply.")
+        self.assertEqual(streamed, [answer])
+        self.assertEqual(chat.messages, history)
+        self.assertTrue(chat.thinking)
+        self.assertEqual(chat.temperature, 0.6)
+        self.assertTrue(chat.observations[0]["thinking"])
+
+    def test_internal_tool_reply_strips_thinking_by_default(self) -> None:
+        """Do not expose thinking from tool calls used internally."""
+
+        chat = _FakeChat()
+        answer = answering.side_reply(
+            chat, "Tool", "Inspect", max_new_tokens=120,
+            inherit_settings=True,
+        )
+
+        self.assertEqual(answer, "Final reply.")
+        self.assertTrue(chat.observations[0]["thinking"])
 
     def test_tool_side_reply_inherits_token_budget_by_default(self) -> None:
         """No tool cap: ChatSession.reply gets its own budget (None)."""
@@ -1273,6 +1333,16 @@ class TestHistory(unittest.TestCase):
         self.assertEqual(len(representation["sources"]), 5)
         self.assertEqual(turn.question, question)
         self.assertEqual(turn.answer, answer)
+
+    def test_representation_ignores_citations_inside_thinking(self) -> None:
+        """Only cited evidence in the visible answer selects sources."""
+
+        turn = _turn(
+            "Explain fit", "<think>Inspect [1]</think>Result [2].", (1, 2)
+        )
+        representation = answering.turn_representation(turn, 4)
+        self.assertEqual(representation["sources"], ["file2.py:fit"])
+        self.assertEqual(representation["summary"], "Result.")
 
     def test_representation_strips_thinking_and_collapses_spaces(self) -> None:
         """Exclude thinking text and normalize whitespace in summaries."""

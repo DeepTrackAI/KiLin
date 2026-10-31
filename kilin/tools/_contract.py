@@ -205,11 +205,14 @@ class ToolContext:
         thinking off and greedy decoding; the conversation is untouched.
     ask_model: Callable[[str, str, int | None], str]
         Asks the selected answering model with inherited session thinking
-        and temperature. A ``None`` token argument inherits the session's
-        maximum; an explicit limit is capped by that maximum.
+        and temperature. Returns only the parsed-answer text; any thinking
+        is captured by the coordinator for display, not returned to the
+        tool. A ``None`` token argument inherits the session maximum; an
+        explicit limit is capped by that maximum.
     write: Callable[[str, str, int], str]
-        Same generation policy as ``ask_model``, but streams to the user
-        as the answer; a tool using it returns ``streamed=True``.
+        Same generation settings as ``ask_model``, but preserves thinking
+        in the returned answer and streams the complete reply to the user;
+        a tool using it returns ``streamed=True``.
     model_id: str
         The answering model's ID, for plans and summaries.
     progress: Callable[..., None]

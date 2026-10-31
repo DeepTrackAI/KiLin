@@ -121,6 +121,15 @@ thinking responses should set an appropriate tool-specific output budget;
 a small structured-answer budget can otherwise truncate a thinking reply.
 Internal and user-facing answering-model calls follow the same policy.
 
+The returned text differs intentionally: `ask_model` removes thinking
+from the value it passes to tool logic, so classification, reference
+selection, and other structured parsing remain reliable. The coordinator
+captures any thinking from these calls separately, shows it in the answer's
+collapsible thinking section, and saves it with the turn. The captured
+thinking is also forwarded to the answer callback after each call completes.
+A tool using `write` preserves and streams the model's full final reply.
+Neither behavior changes the model's generation settings or adds calls.
+
 The `ask_router` adapter is unaffected: router side questions remain
 nonthinking, deterministic, and isolated from the conversation. All tool
 side calls restore the original conversation history after success or

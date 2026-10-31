@@ -156,11 +156,13 @@ from kilin.defaults import (
 from kilin.answering import (
     MACHINE_STATE_ANSWERING,
     RouteDecision,
+    extract_thinking,
     history_messages,
     route_question,
     search_text as answering_search_text,
     select_history,
     side_reply,
+    strip_thinking,
     turn_representation,
 )
 from kilin.chat import (
@@ -384,6 +386,7 @@ def _invalid_citations(
 
     """
 
+    answer = strip_thinking(answer)
     if "[" not in answer:
         return ()
     available = {item.citation for item in evidence}
@@ -3462,30 +3465,44 @@ class RAGSession:
             question,
         )
 
-        def ask(chat: object) -> Callable[[str, str, int | None], str]:
-            """Adapt a chat session to the tools' side-question callback.
+        tool_thoughts: list[str] = []
+
+        def ask_model(
+            system: str, prompt: str, tokens: int | None
+        ) -> str:
+            """Capture thinking without exposing it to tool parsers.
 
             Parameters
             ----------
-            chat: object
-                Chat session used to answer an isolated side question.
+            system: str
+                Instructions for the isolated model request.
+            prompt: str
+                Request sent to the answering model.
+            tokens: int | None
+                Output limit, or ``None`` to inherit the session limit.
 
             Returns
             -------
-            Callable[[str, str, int | None], str]
-                Callback accepting system instructions, a prompt, and an
-                optional token limit. ``None`` inherits the session maximum.
-                Calls delegate to ``side_reply`` on the chat session.
+            str
+                Reply without thinking tags, safe for tool parsing.
 
             """
 
-            return lambda system, prompt, tokens: side_reply(
-                chat, system, prompt, max_new_tokens=tokens,
+            raw = side_reply(
+                self.chat_session, system, prompt, max_new_tokens=tokens,
                 language_context=language_context, inherit_settings=True,
+                preserve_thinking=True,
             )
+            thinking = extract_thinking(raw)
+            if thinking:
+                part = f"Model call {len(tool_thoughts) + 1}:\n{thinking}\n\n"
+                tool_thoughts.append(part)
+                if token_callback is not None:
+                    token_callback(f"<think>{part}</think>\n\n")
+            return strip_thinking(raw)
 
-        # ``ask_model`` answers silently; ``write`` streams a tool's final
-        # answer to the caller through ``token_callback``.
+        # ``ask_model`` supplies clean data to tools while retaining its
+        # thinking for display; ``write`` streams a raw final model answer.
         context = ToolContext(
             project_root=Path(self.project.root),
             chunks=self.chunks,
@@ -3495,7 +3512,7 @@ class RAGSession:
             unsearchable=self._unsearchable_sources,
             source_files=self._source_files,
             ask_router=self._ask_router,
-            ask_model=ask(self.chat_session),
+            ask_model=ask_model,
             write=lambda system, prompt, tokens: side_reply(
                 self.chat_session,
                 system,
@@ -3504,6 +3521,7 @@ class RAGSession:
                 token_callback=token_callback,
                 language_context=language_context,
                 inherit_settings=True,
+                preserve_thinking=True,
             ),
             model_id=str(getattr(self.chat_session, "model_id", "")),
             progress=lambda message, **details: report_phase(
@@ -3528,7 +3546,20 @@ class RAGSession:
             guidance=answer_guidance,
             earlier=self._earlier_turns(decision),
         )
-        return run_tool(use, request, context)
+        result = run_tool(use, request, context)
+        if not tool_thoughts:
+            return result
+
+        prefix = "".join(
+            f"<think>{part}</think>\n\n" for part in tool_thoughts
+        )
+        if token_callback is not None and not result.streamed:
+            token_callback(result.answer)
+        return replace(
+            result,
+            answer=prefix + result.answer,
+            streamed=result.streamed or token_callback is not None,
+        )
 
     def _earlier_turns(
         self: RAGSession, decision: RouteDecision
@@ -3587,7 +3618,7 @@ class RAGSession:
                 EarlierTurn(
                     number=number,
                     question=turn.question,
-                    answer=turn.answer,
+                    answer=strip_thinking(turn.answer),
                     paths=tuple(Path(item.path) for item in turn.evidence),
                     texts=tuple(item.text for item in turn.evidence),
                     lines=tuple(item.start_line for item in turn.evidence),
@@ -4677,7 +4708,7 @@ def _add_related_evidence(
     for turn in reversed(turns):
         cited = {
             int(number)
-            for group in _CITATION_GROUP.findall(str(turn.answer))
+            for group in _CITATION_GROUP.findall(strip_thinking(turn.answer))
             for number in _CITATION_SEPARATOR.split(group)
         }
         chosen = [item for item in turn.evidence if item.citation in cited]

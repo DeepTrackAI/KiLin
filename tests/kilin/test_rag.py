@@ -215,6 +215,19 @@ class TestCitationIdentifierValidation(unittest.TestCase):
             (3, 0),
         )
 
+    def test_citations_inside_thinking_are_not_answer_citations(
+        self,
+    ) -> None:
+        """Do not flag intermediate model notes as unsupported sources."""
+
+        self.assertEqual(
+            rag._invalid_citations(
+                "<think>Inspect [99] first.</think>Answer [1].",
+                (_evidence(1),),
+            ),
+            (),
+        )
+
     def test_no_citations_is_a_noop(self) -> None:
         """Return nothing when no citation group is present."""
         self.assertEqual(rag._invalid_citations("Plain answer", ()), ())
@@ -377,6 +390,18 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertEqual([item.start_line for item in combined],
                          [1, 20, 10])
         self.assertEqual([item.citation for item in combined], [1, 2, 3])
+
+    def test_related_evidence_ignores_thinking_only_citations(self) -> None:
+        """Do not promote sources mentioned only in model thinking."""
+
+        earlier = _turn(
+            answer="<think>Inspect [2]</think>Use [1].",
+            evidence=(
+                _evidence(1, start=10), _evidence(2, start=20)
+            ),
+        )
+        evidence = rag._add_related_evidence((), [earlier])
+        self.assertEqual([item.start_line for item in evidence], [10])
 
     def test_related_evidence_without_citations_is_limited(self) -> None:
         """Limit related evidence when earlier answers cite no sources."""
@@ -1483,6 +1508,157 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
         tokens.assert_not_called()
         self.assertEqual(session.turns[-1].answer, "streamed")
 
+    def test_tool_writer_streams_and_saves_thinking(self) -> None:
+        """Keep a user-visible tool answer intact through commitment."""
+
+        session = _session()
+        session.chat_session.thinking = True
+        raw = "<think>Reading the paper</think>Overview [1]."
+        tokens = Mock()
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("paper_overview", object()),
+        )
+
+        def model_reply(_prompt: str, **options: object) -> str:
+            """Simulate streaming the complete answering-model output."""
+
+            callback = options.get("token_callback")
+            if callback is not None:
+                callback(raw)
+            return raw
+
+        def tool(_use: object, request: object, context: object) -> ToolResult:
+            """Write an answer through the real tool context adapter."""
+
+            answer = context.write("Summarize", request.question, 100)
+            return ToolResult(
+                answer, (asdict(_evidence()),),
+                {"name": "paper_overview"}, streamed=True,
+            )
+
+        session.chat_session.reply.side_effect = model_reply
+        with _answer_patches(session, intent) as mocks:
+            mocks.run.side_effect = lambda *args, **kwargs: (
+                rag.RAGSession._run_tool(session, *args, **kwargs)
+            )
+            with patch.object(rag, "run_tool", side_effect=tool):
+                answer = session.ask(
+                    "Summarize the paper", use_router=False,
+                    token_callback=tokens,
+                )
+
+        self.assertEqual(answer, raw)
+        self.assertEqual(session.turns[-1].answer, raw)
+        self.assertNotIn("invalid_citations", session.turns[-1].parameters)
+        tokens.assert_called_once_with(raw)
+        session.chat_session.reply.assert_called_once()
+        self.assertTrue(session.chat_session.thinking)
+
+    def test_tool_ask_model_thinking_is_shown_without_parser_leak(
+        self,
+    ) -> None:
+        """Aggregate internal thoughts but parse only clean model results."""
+
+        session = _session()
+        session.chat_session.thinking = True
+        tokens = Mock()
+        intent = _intent(
+            RETRIEVAL_MODE_NONE,
+            tool=ToolUse("filter_results", object()),
+        )
+        session.chat_session.reply.side_effect = [
+            "<think>Check [99]</think>1, 2",
+            "Reason about scope</think>3",
+        ]
+
+        def tool(_use: object, request: object, context: object) -> ToolResult:
+            """Validate the replies that reach a real tool parser."""
+
+            self.assertEqual(context.ask_model("System", "First", 20),
+                             "1, 2")
+            self.assertEqual(context.ask_model("System", "Second", 20),
+                             "3")
+            return ToolResult(
+                "Found [1].", (asdict(_evidence()),),
+                {"name": "filter_results"},
+            )
+
+        with _answer_patches(session, intent) as mocks:
+            mocks.run.side_effect = lambda *args, **kwargs: (
+                rag.RAGSession._run_tool(session, *args, **kwargs)
+            )
+            with patch.object(rag, "run_tool", side_effect=tool):
+                answer = session.ask(
+                    "Filter items", use_router=False,
+                    token_callback=tokens,
+                )
+
+        self.assertEqual(
+            answer,
+            "<think>Model call 1:\nCheck [99]\n\n</think>\n\n"
+            "<think>Model call 2:\nReason about scope\n\n</think>"
+            "\n\nFound [1].",
+        )
+        streamed = "".join(call.args[0] for call in tokens.call_args_list)
+        self.assertEqual(streamed, answer)
+        self.assertEqual(rag.strip_thinking(streamed), "Found [1].")
+        self.assertEqual(session.turns[-1].answer, answer)
+        self.assertNotIn("invalid_citations", session.turns[-1].parameters)
+        self.assertEqual(session.chat_session.reply.call_count, 2)
+        self.assertTrue(session.chat_session.thinking)
+
+    def test_tool_ask_model_thinking_and_writer_stream_together(
+        self,
+    ) -> None:
+        """Preserve thoughts from intermediate and final model calls."""
+
+        session = _session()
+        tokens = Mock()
+        session.chat_session.reply.side_effect = [
+            "<think>Plan</think>selected",
+            "<think>Compose</think>Final [1].",
+        ]
+
+        def tool(_use: object, request: object, context: object) -> ToolResult:
+            """Use both adapters without duplicating streamed thoughts."""
+
+            self.assertEqual(context.ask_model("s", "q", 20), "selected")
+            answer = context.write("s", "q", 20)
+            return ToolResult(
+                answer, (asdict(_evidence()),),
+                {"name": "paper_overview"}, streamed=True,
+            )
+
+        def reply(_prompt: str, **options: object) -> str:
+            """Emit raw writer tokens as the real chat session would."""
+
+            response = next(responses)
+            callback = options.get("token_callback")
+            if callback is not None:
+                callback(response)
+            return response
+
+        responses = iter(session.chat_session.reply.side_effect)
+        session.chat_session.reply.side_effect = reply
+        with patch.object(rag, "run_tool", side_effect=tool):
+            result = session._run_tool(
+                ToolUse("paper_overview", object()), "Overview",
+                RouteDecision("paper_overview", True),
+                trace_turn_id=None, report_phase=Mock(),
+                token_callback=tokens,
+            )
+        expected = (
+            "<think>Model call 1:\nPlan\n\n</think>\n\n"
+            "<think>Compose</think>Final [1]."
+        )
+        self.assertTrue(result.streamed)
+        self.assertEqual(result.answer, expected)
+        self.assertEqual(
+            "".join(call.args[0] for call in tokens.call_args_list),
+            expected,
+        )
+
     def test_generation_failure_does_not_append_turn(self) -> None:
         """Avoid appending a turn when generation raises an error."""
         session = _session()
@@ -2129,6 +2305,20 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertEqual(earlier[-1].texts, ("source text",))
         self.assertEqual(earlier[-1].lines, (1,))
 
+    def test_earlier_turns_excludes_model_thinking(self) -> None:
+        """Give tool follow-ups only the earlier answer, not its thoughts."""
+
+        session = _session()
+        first = replace(
+            _turn("Question"),
+            answer="<think>Private [99]</think>Result [1].",
+        )
+        session.turns = [first]
+        earlier = session._earlier_turns(
+            RouteDecision("test_intent", False, refers_back=True)
+        )
+        self.assertEqual(earlier[0].answer, "Result [1].")
+
     def test_earlier_turns_handles_back_reference_without_links(self) -> None:
         """Resolve backward references when explicit links are missing."""
         session = _session()
@@ -2224,16 +2414,41 @@ class TestRAGRoutingAndTools(unittest.TestCase):
         self.assertEqual(side.call_args_list[0].kwargs,
                          {"max_new_tokens": None,
                           "language_context": ("Question",),
-                          "inherit_settings": True})
+                          "inherit_settings": True,
+                          "preserve_thinking": True})
         self.assertEqual(side.call_args_list[1].kwargs,
                          {"max_new_tokens": 5,
                           "language_context": ("Question",),
-                          "inherit_settings": True})
+                          "inherit_settings": True,
+                          "preserve_thinking": True})
         self.assertEqual(side.call_args_list[2].kwargs,
                          {"max_new_tokens": 6,
                           "token_callback": tokens,
                           "language_context": ("Question",),
-                          "inherit_settings": True})
+                          "inherit_settings": True,
+                          "preserve_thinking": True})
+
+    def test_tool_writer_preserves_thinking_only_for_visible_answer(
+        self,
+    ) -> None:
+        """Keep raw output from write but strip internal model replies."""
+
+        session = _session()
+        session.chat_session.thinking = True
+        raw = "<think>Reasoning</think>Overview [1]."
+        session.chat_session.reply.return_value = raw
+        with patch.object(rag, "run_tool") as runner:
+            session._run_tool(
+                ToolUse("paper_overview", object()), "Summarize",
+                RouteDecision("paper_overview", True),
+                trace_turn_id=None, report_phase=Mock(),
+            )
+            context = runner.call_args.args[2]
+            self.assertEqual(context.ask_model("s", "q", 80),
+                             "Overview [1].")
+            self.assertEqual(context.write("s", "q", 80), raw)
+        self.assertEqual(session.chat_session.reply.call_count, 2)
+        session.chat_session.restore_history.assert_called()
 
 
 class TestRAGConversationPersistence(unittest.TestCase):

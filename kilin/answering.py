@@ -162,6 +162,7 @@ __all__ = [
     "MAX_RELATED_TURNS",
     "MachineState",
     "RouteDecision",
+    "extract_thinking",
     "history_messages",
     "refers_back",
     "route_question",
@@ -325,6 +326,41 @@ class RouteDecision:
     dropped_turns: tuple[tuple[int, str], ...] = ()
 
 
+def extract_thinking(text: str) -> str:
+    """Extract model thinking while leaving the original reply untouched.
+
+    Parameters
+    ----------
+    text: str
+        Model output, including possible thinking delimiters.
+
+    Returns
+    -------
+    str
+        Thinking text, or an empty string when there is none. Supports
+        multiple blocks and a closing tag opened by the chat template.
+
+    """
+
+    raw = str(text)
+    parts: list[str] = []
+    first_close = raw.find("</think>")
+    first_open = raw.find("<think>")
+    if first_close != -1 and (first_open == -1 or first_close < first_open):
+        parts.append(raw[:first_close])
+        raw = raw[first_close + len("</think>"):]
+
+    for match in re.finditer(r"<think>(.*?)</think>", raw, flags=re.S):
+        parts.append(match.group(1))
+
+    last_open = raw.rfind("<think>")
+    last_close = raw.rfind("</think>")
+    if last_open > last_close:
+        parts.append(raw[last_open + len("<think>"):])
+
+    return "\n\n".join(part.strip() for part in parts if part.strip())
+
+
 def strip_thinking(text: str) -> str:
     """Remove <think> blocks, including one opened by the chat template.
 
@@ -402,14 +438,15 @@ def turn_representation(turn: object, number: int) -> dict[str, object]:
 
     """
 
-    answer = _without_citations(strip_thinking(getattr(turn, "answer", "")))
+    clean = strip_thinking(getattr(turn, "answer", ""))
+    answer = _without_citations(clean)
     first = re.split(r"(?<=[.!?])\s+", " ".join(answer.split()), maxsplit=1)
 
     # Only cited evidence is listed; an answer without citations lists all.
     cited = {
         int(citation)
         for group in re.findall(
-            r"\[(\d+(?:\s*,\s*\d+)*)\]", str(getattr(turn, "answer", ""))
+            r"\[(\d+(?:\s*,\s*\d+)*)\]", clean
         )
         for citation in re.split(r"\s*,\s*", group)
     }
@@ -468,6 +505,7 @@ def side_reply(
     token_callback: Callable[[str], None] | None = None,
     language_context: Sequence[str] = (),
     inherit_settings: bool = False,
+    preserve_thinking: bool = False,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -493,11 +531,16 @@ def side_reply(
         override, inherit the session's maximum output tokens. An explicit
         override remains capped by the session maximum when one is set.
         False retains deterministic router behavior.
+    preserve_thinking: bool, optional
+        Return the complete model output, including thinking text, for a
+        visible answer or for separate capture by the tool coordinator.
+        Other side requests continue to strip thinking by default.
 
     Returns
     -------
     str
-        The reply with thinking text removed.
+        The complete reply when ``preserve_thinking`` is true; otherwise
+        the reply with thinking text removed.
 
     Notes
     -----
@@ -537,7 +580,7 @@ def side_reply(
         if not inherit_settings:
             chat.configure_generation(previous)
 
-    return strip_thinking(reply)
+    return reply if preserve_thinking else strip_thinking(reply)
 
 
 def _router_prompt(
