@@ -6,7 +6,7 @@
     <title>KíLín</title>
     <link rel="stylesheet" href="styles.css">
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
-    <script src="vendor/katex.min.js" defer></script>
+    <script src="katex/katex.min.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -87,7 +87,10 @@
               <div class="effort-picker">
                 <button id="effort-button" class="effort-button" type="button" aria-expanded="false">Lagom · 20</button>
                 <div id="effort-menu" class="effort-menu hidden">
-                  <strong id="effort-name" class="effort-title">Lagom</strong>
+                  <button id="effort-name" class="effort-title" type="button" aria-expanded="false" aria-controls="effort-thinking"><span id="effort-level-name">Lagom</span><span class="effort-chevron" aria-hidden="true">›</span></button>
+                  <div id="effort-thinking" class="effort-section effort-thinking hidden">
+                    <div class="effort-heading"><span>Thinking</span><div class="segmented" role="radiogroup" aria-label="Thinking"><label><input type="radio" name="effort-thinking" value="on"><span>On</span></label><label><input type="radio" name="effort-thinking" value="off"><span>Off</span></label></div></div>
+                  </div>
                   <div class="effort-section">
                     <div class="effort-heading"><span>Model</span></div>
                     <span id="effort-model-detail" class="effort-detail">Qwen3-8B-MLX-4bit</span>

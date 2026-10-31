@@ -2840,7 +2840,7 @@ function isMarkdownBlockStart(line) {
 /**
  * Build LaTeX maths as MathML, which Qt WebEngine draws natively.
  *
- * KaTeX (``vendor/katex.min.js``) writes the markup itself and runs
+ * KaTeX (``katex/katex.min.js``) writes the markup itself and runs
  * without ``trust``, so commands such as \href are refused. LaTeX it
  * cannot read, or a missing KaTeX, shows the original text instead.
  *
@@ -3001,9 +3001,11 @@ function renderMarkdown(host, text, linkCitation = null) {
 }
 
 // Inline code, bold, italics (not inside words such as snake_case),
-// citation markers such as [1] or [2, 3], and maths: $$…$$, \(…\), or
-// $…$ with no space just inside, so prices such as "$5 and $10" stay text.
-const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[\d+(?:\s*,\s*\d+)*\])|(\$\$[^$]+?\$\$|\\\(.+?\\\)|(?<![\\\w$])\$(?![\s$])[^$\n]*?[^\s\\$]\$(?![\w$])|(?<![\\\w$])\$[^\s$\\]\$(?![\w$]))/g;
+// external https links such as [text](https://…), citation markers such as
+// [1] or [2, 3], and maths: $$…$$, \(…\), or $…$ with no space just inside,
+// so prices such as "$5 and $10" stay text. Groups: 1 code, 2 bold,
+// 3 italics, 4 link, 5 citation, 6 maths.
+const MARKDOWN_INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*|__[^_\n]+__)|((?<![\w*])\*[^*\s][^*\n]*\*(?![\w*])|(?<![\w_])_[^_\s][^_\n]*_(?![\w_]))|(\[[^\]\n]{1,100}\]\(https:\/\/[^\s)\n]+\))|(\[\d+(?:\s*,\s*\d+)*\])|(\$\$[^$]+?\$\$|\\\(.+?\\\)|(?<![\\\w$])\$(?![\s$])[^$\n]*?[^\s\\$]\$(?![\w$])|(?<![\\\w$])\$[^\s$\\]\$(?![\w$]))/g;
 
 /**
  * Render escaped inline Markdown and optionally link evidence citations.
@@ -3022,9 +3024,9 @@ function appendInlineMarkdown(element, text, linkCitation) {
       const code = document.createElement("code");
       code.textContent = match[1].slice(1, -1);
       element.append(code);
-    } else if (match[5]) {
+    } else if (match[6]) {
       element.append(before);
-      const source = match[5];
+      const source = match[6];
       const wrap = source.startsWith("$$") ? 2 : source.startsWith("\\(") ? 2 : 1;
       element.append(mathNode(source.slice(wrap, -wrap).trim(), source, false));
     } else if (match[2] || match[3]) {
@@ -3620,7 +3622,8 @@ function renderEffortPicker() {
   const depth = currentDepth();
   if (levels.length !== 5 || depth.length !== 5) return;
   // The effort is named by the model level; search depth is a count.
-  byId("effort-name").textContent = levels[selectedModelLevel].name;
+  byId("effort-level-name").textContent = levels[selectedModelLevel].name;
+  showThinkingSwitch(levels[selectedModelLevel].model);
   for (const [kind, index] of [["model", selectedModelLevel], ["depth", selectedDepthStep]]) {
     byId(`effort-${kind}-detail`).textContent = kind === "model"
       ? levels[index].model.split("/").pop()
@@ -3636,6 +3639,24 @@ function renderEffortPicker() {
     `${levels[selectedModelLevel].name} · ${depth[selectedDepthStep]}`;
   byId("effort-button").title =
     `${levels[selectedModelLevel].name}: ${levels[selectedModelLevel].model.split("/").pop()} · search depth ${depth[selectedDepthStep]} passages`;
+}
+
+/**
+ * Show the Thinking switch under "Lagom ›" as Settings → Answers has it.
+ *
+ * Both are one setting: the switch only sets the Answers checkbox, which
+ * saves it to the open project. A model that cannot think disables the
+ * switch.
+ *
+ * @param model Model of the chosen effort level.
+ */
+function showThinkingSwitch(model) {
+  const supported = modelCanThink(model);
+  const on = byId("thinking").checked;
+  for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
+    input.checked = (input.value === "on") === on;
+    input.disabled = busy || !supported;
+  }
 }
 
 /**
@@ -4759,6 +4780,14 @@ function onEvent(raw) {
       }
     });
   } else if (data.event === "error") {
+    if (data.pending_choice === true) {
+      // The engine rejected an unrelated command, not this answer.
+      // It is still waiting; preserve the controls and busy state.
+      error.textContent = data.message;
+      error.classList.remove("hidden");
+      pendingTurn?.prompt?.querySelector("button")?.focus({ preventScroll: true });
+      return;
+    }
     if (attachedAsk) {
       // Adding the attached files failed: give the question back.
       byId("question").value = attachedAsk.question;
@@ -5117,8 +5146,30 @@ byId("effort-button").addEventListener("click", (event) => {
   // One composer menu at a time.
   byId("usage-menu").classList.add("hidden");
   byId("usage-button").setAttribute("aria-expanded", "false");
+  // The project may have changed Thinking since the menu was last open.
+  renderEffortPicker();
   menu.classList.toggle("hidden");
   byId("effort-button").setAttribute("aria-expanded", String(!menu.classList.contains("hidden")));
+});
+byId("effort-name").addEventListener("click", () => {
+  const open = byId("effort-thinking").classList.toggle("hidden") === false;
+  byId("effort-name").setAttribute("aria-expanded", String(open));
+});
+for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
+  input.addEventListener("change", () => {
+    // The Answers checkbox is the setting; its change listener keeps a
+    // start-screen choice for the next new project.
+    byId("thinking").checked = input.value === "on";
+    byId("thinking").dispatchEvent(new Event("change"));
+  });
+}
+byId("thinking").addEventListener("change", () => {
+  // Saved to the open project at once, so every chat and Settings agree.
+  // On the start screen it goes with the new project instead.
+  if (ready && !busy && bridge) {
+    bridge.saveAnswerSettings(JSON.stringify({ thinking: byId("thinking").checked }));
+  }
+  renderEffortPicker();
 });
 byId("effort-model-range").addEventListener("input", (event) => {
   setEffortLevel("model", event.target.value);

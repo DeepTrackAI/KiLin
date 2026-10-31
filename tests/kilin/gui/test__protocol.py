@@ -209,6 +209,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ["/a"], "code", "", None, None
         )
 
+    def test_answer_settings_are_saved_on_their_own(self) -> None:
+        """Forward Thinking from the menu without asking a question."""
+
+        worker, _ = self._run([
+            json.dumps({
+                "action": "save_answer_settings",
+                "settings": {"thinking": False},
+            }),
+        ])
+        worker.save_answer_settings.assert_called_once_with(
+            {"thinking": False}
+        )
+        worker.ask.assert_not_called()
+
     def test_resume_forwards_the_requested_conversation(self) -> None:
         """Restore an explicit ID without changing ordinary project resume."""
 
@@ -746,6 +760,15 @@ class TestGUIProtocolBridge(unittest.TestCase):
         self.bridge.useDefaultProjectsFolder()
         self.assertEqual(chosen, [""])
         self.assertEqual(self.commands, [])
+
+    def test_answer_settings_command_payload(self) -> None:
+        """The bridge sends the settings as a command of their own."""
+
+        self.bridge.saveAnswerSettings(json.dumps({"thinking": True}))
+        self.assertEqual(self.commands, [
+            {"action": "save_answer_settings",
+             "settings": {"thinking": True}},
+        ])
 
     def test_copy_text_goes_to_the_system_clipboard(self) -> None:
         """Copy through Qt, since the page may not write the clipboard."""

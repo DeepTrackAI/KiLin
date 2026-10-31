@@ -76,9 +76,9 @@ include = ["kilin*"]
     "web/*.html",
     "web/*.css",
     "web/*.js",
-    "web/vendor/*.js",
-    "web/vendor/KATEX-LICENSE",
-    "web/vendor/README.md",
+    "web/katex/katex.min.js",
+    "web/katex/LICENSE",
+    "web/katex/README.md",
     "icons/*.png",
     "icons/README.md",
 ]
