@@ -143,6 +143,10 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
 from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import (
@@ -1201,6 +1205,7 @@ def run(
 
     started = perf_counter()
     runs = parts[:1] if choice == PLAN_CHOICE_QUICK else to_read
+    failures: list[dict[str, object]] = []
     notes = take_notes(
         _notes_task(template),
         path.name,
@@ -1209,9 +1214,21 @@ def run(
         context,
         what="paper",
         whole=choice != PLAN_CHOICE_QUICK,
+        failures=failures,
     )
+    reading_incomplete = bool(failures)
+    read_indices = {index for number, _ in notes for index in runs[number - 1]}
+    read = len(read_indices)
 
     if not any(lines for _, lines in notes):
+        if failures:
+            return partial_result(
+                ToolResult(
+                    "No usable notes are available. No report file was saved.",
+                    (), {**summary, "valid": False, "saved": None,
+                         "saved_pdf": None, "passages_read": read},
+                ), failures, completed=False,
+            )
         raise IncompleteModelResponse(
             "No usable cited notes were produced for the report.",
             reason="no_notes",
@@ -1219,38 +1236,65 @@ def run(
 
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
-    headline, fixes = _write_headline(template, path.name, notes, context)
+    try:
+        headline, fixes = _write_headline(template, path.name, notes, context)
+    except IncompleteModelResponse as error:
+        headline, fixes = template.title, []
+        failures.append({"item": "Headline", **error.to_dict()})
     # The PDF on disk lets the shared extractor read two columns in order.
     entries = reference_entries(
         passages, REFERENCE_LAYOUT, _paper_file(path, context)
     )
     written: list[tuple[str, str]] = []
+    accepted: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
-        if section.source == SECTION_SOURCE_CITATION:
-            # Copied, not written: the model never touches the citation.
-            citation = paper_citation(_paper_file(path, context), passages)
-            written.append((section.name, citation))
-            continue
-
-        if section.source == SECTION_SOURCE_REFERENCES:
-            context.progress(f"Choosing {section.name}")
-            content, problem = _fill_references(
-                template, section, path.name, notes, entries, context
-            )
-            if problem:
-                unsupported.append(problem)
-            written.append((section.name, content))
-            continue
-
-        content, section_fixes = _write_section(
-            template, section, path.name, notes, written, settings, context
-        )
-        fixes.extend(section_fixes)
+        try:
+            if section.source == SECTION_SOURCE_CITATION:
+                # Bibliographic data is copied, not generated.
+                content = paper_citation(_paper_file(path, context), passages)
+            elif section.source == SECTION_SOURCE_REFERENCES:
+                context.progress(f"Choosing {section.name}")
+                content, problem = _fill_references(
+                    template, section, path.name, notes, entries, context
+                )
+                if problem:
+                    unsupported.append(problem)
+            else:
+                content, section_fixes = _write_section(
+                    template, section, path.name, notes, accepted, settings,
+                    context, incomplete_reading=reading_incomplete,
+                )
+                fixes.extend(section_fixes)
+            accepted.append((section.name, content))
+        except IncompleteModelResponse as error:
+            failures.append({"item": section.name, **error.to_dict()})
+            content = f"*Not completed: {error}*"
+        # Failed placeholders remain visible, but never feed later sections.
         written.append((section.name, content))
 
     if template.max_total_words:
         written = _fit_total(written, template)
+    if failures:
+        # A partial artifact may contain validated sections and explicit
+        # omissions, never an unmarked invalid section rescued by another's
+        # failure. Validate after any document-wide shortening as well.
+        accepted_names = {name for name, _ in accepted}
+        for index, (section, (name, content)) in enumerate(
+            zip(template.sections, written)
+        ):
+            if name not in accepted_names:
+                continue
+            problem = section_problem(section, content)
+            if problem:
+                failures.append({
+                    "item": name, "message": problem,
+                    "reason": "report_validation",
+                })
+                written[index] = (name, f"*Not completed: {problem}*")
+                accepted_names.remove(name)
+        accepted = [(name, text) for name, text in accepted
+                    if name in accepted_names]
     draft = _draft(headline, written, template)
 
     context.progress("Checking the template")
@@ -1264,7 +1308,9 @@ def run(
         turn_id=context.trace_turn_id,
     )
 
-    if not check.valid or unsupported:
+    if (not check.valid or unsupported or failures) and not (
+        failures and accepted
+    ):
         problems = check.problems() + unsupported
         summary.update({
             "status": "incomplete",
@@ -1273,7 +1319,7 @@ def run(
             "valid": False,
             "problems": problems,
             "repairs": repairs,
-            "passages_read": sum(len(part) for part in runs),
+            "passages_read": read,
             "notes": sum(len(lines) for _, lines in notes),
             "saved": None,
             "saved_pdf": None,
@@ -1287,18 +1333,32 @@ def run(
         context.done(
             "Report validation failed; no file saved", evidence_count=0
         )
-        return ToolResult(
-            "The report could not be completed because its validation "
-            "failed. No report file was saved.\n\n"
-            + "\n".join(f"- {problem}" for problem in problems),
-            (), summary,
+        return partial_result(
+            ToolResult(
+                "The report could not be completed because its validation "
+                "failed. No report file was saved.\n\n"
+                + "\n".join(f"- {problem}" for problem in problems),
+                (), summary,
+            ), failures, completed=False,
         )
 
     file_text = summary_file_text(draft, path)
+    suffix = "_summary.md"
+    if failures:
+        suffix = "_summary_partial.md"
+        file_text = (
+            "> **Partial report:** incomplete items are marked below. "
+            "Do not treat omissions as negative evidence.\n\n"
+            + file_text + incomplete_notice(failures) + "\n"
+        )
     saved = save_output_file(
-        context.project_root, f"{path.stem}_summary.md", file_text
+        context.project_root, path.stem + suffix, file_text
     )
-    pdf, pdf_note = _write_pdf(file_text, saved, template, context)
+    # A partial draft must not replace the completed report or its PDF.
+    pdf, pdf_note = (
+        (None, "No PDF was produced for this partial report.") if failures
+        else _write_pdf(file_text, saved, template, context)
+    )
     trace.emit(
         "tool.generate_paper_summary.saved",
         component="tool",
@@ -1309,12 +1369,12 @@ def run(
     # The answer says where the files are and then shows the saved file
     # itself, so the chat and the file never differ. Checks and fixes are
     # recorded in the turn and the trace.
-    read = sum(len(part) for part in runs)
     files = f"`{saved.as_posix()}`" + (
         f" and `{pdf.as_posix()}`" if pdf else ""
     )
     lead = [
-        f"Done: the {template.title.lower()} of {path.name} is saved as "
+        ("Partial report: the " if failures else "Done: the ")
+        + f"{template.title.lower()} of {path.name} is saved as "
         f"{files}."
     ]
     if pdf_note:
@@ -1325,7 +1385,7 @@ def run(
             + (
                 " (quick version: the first part)."
                 if choice == PLAN_CHOICE_QUICK
-                else " (the model-call limit was reached)."
+                else " (reading coverage is incomplete)."
             )
         )
 
@@ -1333,7 +1393,7 @@ def run(
         {
             "passages_read": read,
             "notes": sum(len(lines) for _, lines in notes),
-            "valid": check.valid and not unsupported,
+            "valid": check.valid and not unsupported and not failures,
             "problems": check.problems() + unsupported,
             "repairs": repairs,
             "saved": saved.as_posix(),
@@ -1342,6 +1402,12 @@ def run(
             "model": context.model_id,
         }
     )
+    if failures:
+        summary.update({
+            "status": "partial", "reason": "item_completion",
+            "message": "Some report items could not be completed.",
+            "incomplete_items": failures,
+        })
     trace.emit(
         "tool.generate_paper_summary.result",
         component="tool",
@@ -1352,7 +1418,10 @@ def run(
         },
         turn_id=context.trace_turn_id,
     )
-    context.done(f"Saved {saved.as_posix()}", evidence_count=len(passages))
+    context.done(
+        f"Saved {saved.as_posix()}",
+        evidence_count=read if failures else len(passages),
+    )
 
     evidence = tuple(
         {
@@ -1365,6 +1434,7 @@ def run(
             "cell": chunk.cell,
         }
         for index, chunk in enumerate(passages)
+        if not failures or index in read_indices
     )
     answer = " ".join(lead) + "\n\n---\n\n" + file_text.strip()
     return ToolResult(answer, evidence, summary)
@@ -1460,6 +1530,8 @@ def _write_section(
     written: list[tuple[str, str]],
     settings: SummarySettings,
     context: ToolContext,
+    *,
+    incomplete_reading: bool = False,
 ) -> tuple[str, list[str]]:
     """Write one section from the notes, then fix it toward its limits.
 
@@ -1479,6 +1551,8 @@ def _write_section(
         The intent's repair-attempt setting.
     context: ToolContext
         KíLín's services.
+    incomplete_reading: bool, optional
+        Warn that failed reading parts are not evidence of absence.
 
     Returns
     -------
@@ -1492,7 +1566,15 @@ def _write_section(
 
     context.progress(f"Writing {section.name}")
     system, prompt = section_prompt(template, section, name, notes, written)
-    content = _content(context.ask_model(system, prompt, None), section)
+    coverage = (
+        "\n\nSome reading parts failed. Use only the supplied notes. "
+        "When these do not cover a topic, say it could not be established "
+        "from the available notes, not that it is absent from the paper."
+        if incomplete_reading else ""
+    )
+    content = _content(
+        context.ask_model(system, prompt + coverage, None), section
+    )
     problem = section_problem(section, content)
 
     fixes: list[str] = []
@@ -1508,7 +1590,9 @@ def _write_section(
         system, prompt = fix_prompt(
             section, content, problem, notes if short else None
         )
-        content = _content(context.ask_model(system, prompt, None), section)
+        content = _content(
+            context.ask_model(system, prompt + coverage, None), section
+        )
         problem = section_problem(section, content)
 
     if problem and section.words and (

@@ -64,6 +64,7 @@ import re
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
+from kilin.tools._shared.model_results import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools.batch_classify import _configuration as _config
@@ -284,11 +285,13 @@ def run(
     ``scan_and_list.collect_mentions``). The plan (items, batches, calls,
     approximate time, categories) is traced and, when the confirmation
     policy asks, offered through ``context.confirm``. Batches use the
-    answering model with thinking off and greedy decoding. A batch's
+    answering model with the tool's explicit thinking policy. A batch's
     missing or invalid labels are retried once, in groups of at most eight
     mentions; mentions still without a label are reported as not
-    classified. Calls beyond ``max_model_calls`` are not made, and the
-    answer says how many mentions were left out.
+    classified. ``max_model_calls`` bounds initial batches, not the existing
+    label repairs or the coordinator's one nonthinking recovery attempt.
+    Incomplete batches stay unclassified and do not enter label repair;
+    independent batches continue with explicit partial status.
 
     """
 
@@ -371,6 +374,7 @@ def run(
     runs = [quick] if choice == PLAN_CHOICE_QUICK else to_run
     labels: dict[int, Label] = {}
     failed: list[int] = []
+    failures: list[dict[str, object]] = []
     calls = 0
     started = perf_counter()
     for number, batch in enumerate(runs, start=1):
@@ -383,24 +387,33 @@ def run(
             )
         context.progress(message, current=number, total=len(runs))
         batch_started = perf_counter()
-        found_labels = _label_batch(
-            request.question, scan.terms, categories, texts, batch, context
-        )
         calls += 1
-        missing = [index for index in batch if index not in found_labels]
-        # Retry missing labels once, in groups small enough to finish.
-        for start in range(0, len(missing), _RETRY_GROUP):
-            found_labels.update(
-                _label_batch(
-                    request.question,
-                    scan.terms,
-                    categories,
-                    texts,
-                    missing[start : start + _RETRY_GROUP],
-                    context,
-                )
+        try:
+            found_labels = _label_batch(
+                request.question, scan.terms, categories, texts, batch, context
             )
+        except IncompleteModelResponse as error:
+            failures.append({
+                "item": f"Classification batch {number}",
+                "items": [index + 1 for index in batch], **error.to_dict(),
+            })
+            failed.extend(batch)
+            continue
+        missing = [index for index in batch if index not in found_labels]
+        # Existing schema-repair retries apply only to completed model replies.
+        for start in range(0, len(missing), _RETRY_GROUP):
+            group = missing[start : start + _RETRY_GROUP]
             calls += 1
+            try:
+                found_labels.update(_label_batch(
+                    request.question, scan.terms, categories, texts,
+                    group, context,
+                ))
+            except IncompleteModelResponse as error:
+                failures.append({
+                    "item": f"Classification batch {number}, missing labels",
+                    "items": [index + 1 for index in group], **error.to_dict(),
+                })
         labels.update(found_labels)
         failed += [index for index in batch if index not in found_labels]
         trace.emit(
@@ -459,7 +472,10 @@ def run(
         f"Classified {len(labels)} of {len(scan.mentions)} mentions",
         evidence_count=len(evidence),
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=bool(labels),
+    )
 
 
 def _label_batch(

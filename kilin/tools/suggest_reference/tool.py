@@ -89,6 +89,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.tools._contract import (
     ToolContext,
@@ -590,6 +591,11 @@ def run(
         notes.append(
             f"Explicitly excluded draft document(s): {left_out}."
         )
+    failures = [
+        {"item": support.cited.as_posix(), "message": support.comment,
+         "reason": "model_result"}
+        for support in supports if support.verdict == VERDICT_FAILED
+    ]
     answer, quoted = chat_answer(statement, supports, " ".join(notes))
     verdicts = Counter(support.verdict for support in supports)
     summary.update(
@@ -630,7 +636,10 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=len(supports) > len(failures),
+    )
 
 
 def _paper_seconds(settings: SuggestReferenceSettings) -> float:

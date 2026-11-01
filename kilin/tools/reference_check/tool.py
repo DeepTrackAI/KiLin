@@ -103,6 +103,10 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
 from kilin.chunking import Chunk
 from kilin.tools._contract import (
     ToolContext,
@@ -164,6 +168,7 @@ from kilin.tools.reference_check._matching import (
     settle_duplicates,
 )
 from kilin.tools._shared.claims import (
+    VERDICT_FAILED,
     VERDICTS,
     Claim,
     Verdict,
@@ -889,11 +894,16 @@ def run(
     if settings.verify and not link_request:
         report = _verify(report, by_file, settings, context)
 
+    failures = [
+        {"item": f"Reference {v.claim.number}, line {v.claim.sentence.line}",
+         "message": v.comment, "reason": "model_result"}
+        for v in report.verdicts if v.verdict == VERDICT_FAILED
+    ]
     saved = (
         save_output_file(
             context.project_root,
             f"{path.stem}_reference_check.md",
-            report_markdown(report),
+            report_markdown(report) + incomplete_notice(failures),
         )
         if report.entries
         else None
@@ -963,7 +973,10 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=bool(report.entries),
+    )
 
 
 

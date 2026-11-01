@@ -31,3 +31,11 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+If the optional model explanation remains incomplete, verbatim source
+passages and citations are still returned. The result is explicitly partial
+and labels the missing explanation. The shared internal adapter may retry
+unfinished, exhausted thinking once; it never supplies truncated text as the
+explanation. Source selection and routing are unchanged.

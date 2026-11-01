@@ -159,14 +159,16 @@ defaults reader. Further model orchestration tests can exercise the
 
 Model calls must finish with usable final text. A token-limit stop, unfinished
 thinking block or missing final answer makes the operation incomplete; it is
-not a zero-match result. The coordinator saves an explicit failure notice
-and completion metadata without adding retries. Internal parsers never
-receive thinking text.
+not a zero-match result. The shared adapter may retry unfinished exhausted
+thinking once without thinking; failed items remain explicitly incomplete.
+Internal parsers never receive thinking or truncated output.
 
-A report with no usable cited notes is not written. Reports which fail the
-final template or reference checks are returned with `status: incomplete`,
-`valid: false` and the validation problems. Neither Markdown nor PDF is
-published in that case; existing files remain untouched.
+A report with no usable cited notes is not written. Without recoverable item
+failures, reports that fail final template or reference checks still return
+`status: incomplete`, `valid: false` and no new report file. Independent useful
+sections may survive an item failure as an explicitly marked partial draft,
+subject to the partial-completion rules below; no invalid result is promoted
+to a completed report. Existing files remain untouched.
 
 
 ## Generation settings
@@ -187,3 +189,14 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Internal calls share the coordinator's one nonthinking recovery attempt when
+thinking exhausts the allowance before closing. Reading parts and report
+sections that still fail are explicitly recorded; independent work continues.
+Failed notes and section placeholders are never supplied as evidence to later
+sections. If useful checked sections remain, the tool saves a labelled
+`*_summary_partial.md` with `status: partial`, `valid: false`, omissions and no
+PDF. Existing complete outputs remain intact. With no usable notes/sections,
+no report is published. Normal report validation remains unchanged.

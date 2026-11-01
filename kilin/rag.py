@@ -251,6 +251,7 @@ from kilin.tools import (
     ToolUse,
     run_tool,
 )
+from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.choose_document import document_scope
 from kilin.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
@@ -1677,11 +1678,12 @@ class RAGSession:
                 answer = result.answer
                 evidence = tuple(Evidence(**item) for item in result.evidence)
                 effective["tool"] = result.summary
-                if result.summary.get("status") == "incomplete":
+                if result.summary.get("status") in ("incomplete", "partial"):
                     effective["completion"] = {
                         key: result.summary[key]
                         for key in (
-                            "status", "reason", "finish_reason", "message"
+                            "status", "reason", "finish_reason", "message",
+                            "incomplete_items",
                         )
                         if key in result.summary
                     }
@@ -3544,30 +3546,67 @@ class RAGSession:
             str
                 Reply without thinking tags, safe for tool parsing.
 
+            Notes
+            -----
+            Retry once without thinking only when a thinking call exhausts
+            its output allowance inside an unclosed thinking block. The
+            original prompt and session allowance are retained. Failed
+            attempts never enter parser input or successful thinking text.
+
+            Raises
+            ------
+            IncompleteModelResponse
+                If completion still fails or no retry is applicable.
+
             """
 
             override = model_policy.thinking_override()
-            call: dict[str, object] = {
-                "thinking": (
-                    self.chat_session.thinking
-                    if override is None else override
-                ),
-                "requested_max_new_tokens": tokens,
-            }
-            model_calls.append(call)
-            try:
-                raw = side_reply(
-                    self.chat_session, system, prompt, max_new_tokens=tokens,
-                    language_context=language_context, inherit_settings=True,
-                    preserve_thinking=True, require_complete=True,
-                    thinking=override,
+            for attempt in (1, 2):
+                call: dict[str, object] = {
+                    "thinking": (
+                        self.chat_session.thinking
+                        if override is None else override
+                    ),
+                    "requested_max_new_tokens": tokens,
+                    "attempt": attempt,
+                }
+                model_calls.append(call)
+                try:
+                    raw = side_reply(
+                        self.chat_session, system, prompt,
+                        max_new_tokens=tokens,
+                        language_context=language_context,
+                        inherit_settings=True, preserve_thinking=True,
+                        require_complete=True, thinking=override,
+                    )
+                except IncompleteModelResponse as error:
+                    call.update(error.to_dict())
+                    if not (
+                        attempt == 1 and call["thinking"]
+                        and error.finish_reason == "length"
+                        and thinking_is_open(error.raw_text)
+                    ):
+                        raise
+                    # Retry the original request, never its truncated output.
+                    # Keep the user's allowance, not a short metadata cap.
+                    override, tokens = False, None
+                    trace.emit(
+                        "tool.generation.retry", component="tool",
+                        data={"name": use.name, **error.to_dict()},
+                        turn_id=trace_turn_id,
+                    )
+                    report_phase(
+                        ANSWER_PHASE_PROCESSING,
+                        message=("Output limit reached while thinking; "
+                                 "retrying once without thinking."),
+                    )
+                    continue
+                call["status"] = "complete"
+                finish = getattr(self.chat_session, "last_finish_reason", None)
+                call["finish_reason"] = (
+                    finish if isinstance(finish, str) else None
                 )
-            except IncompleteModelResponse as error:
-                call.update(error.to_dict())
-                raise
-            call["status"] = "complete"
-            finish = getattr(self.chat_session, "last_finish_reason", None)
-            call["finish_reason"] = finish if isinstance(finish, str) else None
+                break
             thinking = extract_thinking(raw)
             if thinking:
                 part = f"Model call {len(tool_thoughts) + 1}:\n{thinking}\n\n"
@@ -3662,6 +3701,10 @@ class RAGSession:
                 _incomplete_answer(error), (),
                 {"name": use.name, **error.to_dict()},
             )
+        if result.streamed and token_callback is not None:
+            failures = result.summary.get("incomplete_items", [])
+            if failures:
+                token_callback(incomplete_notice(failures))
         if model_calls:
             result = replace(result, summary={
                 **result.summary,

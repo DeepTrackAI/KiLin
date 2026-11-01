@@ -789,8 +789,11 @@ def _judge(
         )
     try:
         reply = ask_model(prompts[0], prompts[1], None)
-    except IncompleteModelResponse:
-        raise
+    except IncompleteModelResponse as error:
+        return (
+            VERDICT_FAILED, "", None,
+            f"Not completed ({error.reason}): {error}", "failed",
+        )
     except Exception as error:  # A failed call is reported, not fatal.
         return VERDICT_FAILED, "", None, f"Model error: {error}", "failed"
     return _checked_verdict(reply, passages)

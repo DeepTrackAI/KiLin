@@ -56,6 +56,7 @@ Examples
 
 from __future__ import annotations
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.tools._shared.document_notes import (
     NOTHING,
     answer_citations,
@@ -397,6 +398,7 @@ def run(
         )
     runs = quick_parts if choice == PLAN_CHOICE_QUICK else to_read
     started = perf_counter()
+    failures: list[dict[str, object]] = []
     notes = take_notes(
         request.question,
         name,
@@ -411,15 +413,28 @@ def run(
             else "file"
         ),
         whole=choice != PLAN_CHOICE_QUICK,
+        failures=failures,
     )
-    read = sorted(index for part in runs for index in part)
+    read = sorted(index for number, _ in notes for index in runs[number - 1])
+    if failures and not any(lines for _, lines in notes):
+        return partial_result(
+            ToolResult(
+                "No usable notes are available to answer.", (), summary,
+            ),
+            failures, completed=False,
+        )
     context.done(
         f"Read {len(read)} of {len(passages)} passages of {name}",
-        evidence_count=len(passages),
+        evidence_count=len(read),
     )
     system, prompt = answer_prompt(
         request.question, name, notes, len(runs), request.guidance
     )
+    if failures:
+        prompt += (
+            "\n\nSome reading parts failed. Answer only from the supplied "
+            "notes; do not infer absence from missing notes."
+        )
     answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK or len(read) < len(passages):
@@ -432,13 +447,13 @@ def run(
                     else " (the most relevant ones)."
                 )
                 if choice == PLAN_CHOICE_QUICK
-                else " (the model-call limit was reached)."
+                else " (reading coverage is incomplete)."
             )
             + "*"
         )
     summary.update(
         {
-            "parts_read": len(runs),
+            "parts_read": len(notes),
             "passages_read": len(read),
             "notes": sum(len(lines) for _, lines in notes),
             "parts_without_notes": [
@@ -470,8 +485,11 @@ def run(
             "cell": chunk.cell,
         }
         for index, chunk in enumerate(passages)
+        if not failures or index in read
     )
-    return ToolResult(answer, evidence, summary, streamed=True)
+    return partial_result(
+        ToolResult(answer, evidence, summary, streamed=True), failures,
+    )
 
 
 def _fit(

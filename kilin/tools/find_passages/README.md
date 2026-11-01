@@ -57,3 +57,12 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+A failed model batch remains unassessed, not a zero-match result. Other
+batches continue; only completed responses reach the number parser. The answer
+and any exported list identify partial coverage and failed batches. Successful
+`NONE` replies remain valid negatives. The shared adapter retries exhausted,
+unfinished thinking once when applicable; the default nonthinking failure is
+not retried.

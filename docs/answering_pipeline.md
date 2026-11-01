@@ -253,42 +253,76 @@ thinking, budgets and completion status in `internal_generation.calls`.
 Existing tool-specific `model_calls` counters keep their original meaning.
 See [internal tool thinking](configuration.md#internal-tool-thinking).
 
-## Model-output completion contract
+## Model-output completion and bounded recovery
 
-The core checks completion separately from whether the model emitted text.
-Direct answers and both tool model services reject `finish_reason=length`,
-unclosed `<think>` blocks, and replies with no final content. The private
-`IncompleteModelResponse` exception carries a reason, finish reason and raw
-text; only safe status metadata is copied to the saved turn. Existing model
-traces retain generated content according to the configured trace policy.
+The core checks completion separately from whether a model emitted text.
+Direct answers and tool model services reject `finish_reason=length`, unclosed
+`<think>` blocks, and replies with no final content. `IncompleteModelResponse`
+carries a reason, finish reason and raw text; only safe status metadata is
+copied to item results and saved turns. Model traces retain generated content
+according to the configured trace policy.
 
-`side_reply(require_complete=True)` restores the previous messages and
-generation settings even when this check fails. Tools do not receive a
-truncated response merely because it looks like parseable JSON or numbers.
-The built-in note-taking, classification and claim-checking helpers propagate
-completion failures to the coordinator. Sentence selection and filtering
-require an explicit `NONE` for a negative result. Unparseable selections or
-notes are failures, not evidence that a paper lacks the requested material.
+`side_reply(require_complete=True)` restores the original messages and settings
+on success or failure. Tools never receive truncated text as parser input.
 
-The coordinator returns and checkpoints an explicit incomplete-operation
-notice with `parameters.completion.status = "incomplete"`. Tool summaries
-retain the same status and reason. Failed operations contribute their actual
-token usage, but no result evidence. No automatic retry or extra inference
-is introduced. Previously streamed partial text may be visible until the
-GUI replaces it with the persisted failure notice; an open thinking block
-is closed before streaming that notice.
+### One recovery attempt for internal thinking
 
-History reconstruction omits incomplete turns and legacy thinking-only
-answers as entire user/assistant pairs. Original stored turns and their
-numbering remain intact for diagnosis. Reopening an old conversation or
-asking a later question must never restore an empty assistant message.
+The shared `context.ask_model` adapter retries exactly once when the effective
+mode was thinking, the finish reason is `length`, and a visible thinking block
+remains unclosed. The retry uses the **original system prompt, request and
+user-selected allowance**, with thinking disabled. Temperature and model are
+unchanged. In particular, a small nonthinking metadata cap is not reinstated
+for this recovery attempt. The next logical call uses its configured policy.
 
-Structured reports with no usable notes or failed final template checks are
-not published as completed Markdown/PDF outputs. This is stricter than the
-earlier best-effort publication policy. Other successful report behavior is
-unchanged. Router fallback behavior is unchanged.
+A nonthinking failure, a truncated final answer after closed thinking, an
+invalid parsed result, or an unrelated backend error does not trigger this
+retry. Failure after the retry propagates normally. Direct answers, routers,
+and final streaming `context.write` calls are not automatically retried.
+No repetition detection or temperature adjustment is introduced.
 
-Completion validation does not prove factual correctness, citation support,
-correct routing or exhaustive retrieval. A backend without termination
-metadata can only be checked using the available text. It cannot be assumed
-to expose an implicit unfinished thinking block with no visible delimiters.
+Both attempts contribute their actual input/output usage. The existing model
+trace records each attempt; `tool.generation.retry` records why recovery was
+attempted. `internal_generation.calls` records attempt numbers, thinking,
+requested caps and completion status. Failed text remains diagnostic only,
+never evidence, parser input, or successful thinking displayed in the answer.
+Planning estimates and tool `model_calls` fields describe logical requests;
+recovery can add one actual inference to each eligible request.
+
+### Independent work and partial results
+
+Tool loops catch typed incomplete-result failures at independent item
+boundaries: document-reading parts, sentence/filter/classification batches,
+report sections and reference judgments. They retain checked successful items
+and continue. Invalid selector output is an unassessed batch, not zero
+matches; only `NONE` establishes an empty selection. Failed note parts are
+omitted rather than represented as `NOTHING`. Failed claims are `failed` and
+unrated, never `not supported` or assigned invented quotations.
+
+Tool answers include an **Incomplete items** notice and safe item-specific
+metadata in `incomplete_items`. Summaries and `parameters.completion` use
+`status="partial"` when useful independent work survives, otherwise
+`status="incomplete"`. Reading counts exclude failed parts, and synthesis
+prompts explicitly warn against interpreting missing notes as absent evidence.
+A necessary input with no usable notes stops dependent synthesis. Optional
+`show_source` explanations can fail without hiding the verbatim passages.
+
+History omits wholly incomplete turns and legacy thinking-only answers as
+user/assistant pairs. Partial answers retain their completed content and
+warning. Original turn numbers and diagnostic records remain intact.
+
+Reports with independent completed sections may be saved as explicitly
+labelled `*_summary_partial.md` files with placeholders for unfinished
+sections. Failed placeholders are never fed into later writing prompts.
+Surviving sections are checked after document-wide trimming. Partial drafts
+have `valid=false`, receive no PDF, and do not replace complete reports.
+When no usable notes or sections survive, no report is published. Ordinary
+reports with failed validation and no recoverable item failures still fail
+strictly; unrelated invalid output is not promoted to a complete report.
+
+Existing schema-repair calls remain separate; a completion-failed
+classification batch is not sent through another schema-repair retry. Backend
+and programming errors are not newly swallowed by a general retry mechanism.
+Completion validation and partial recovery do not prove factual correctness,
+citation support, correct routing or exhaustive retrieval. A backend without
+termination metadata or visible thinking delimiters may not provide enough
+information to trigger the conservative recovery condition.

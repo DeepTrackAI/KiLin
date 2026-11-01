@@ -50,3 +50,12 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Independent reading parts continue after incomplete model results. Failed
+parts are omitted from notes rather than represented as `NOTHING`; the final
+synthesis receives a coverage warning. Useful completed work is returned with
+`status: partial` and `incomplete_items`. No usable notes means an incomplete
+result without synthesis. The shared internal adapter may retry unfinished,
+length-limited thinking once without thinking; final `write` is not retried.

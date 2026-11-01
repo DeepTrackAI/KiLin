@@ -83,6 +83,7 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.document_notes import (
@@ -397,6 +398,7 @@ def run(
             summary,
         )
 
+    failures: list[dict[str, object]] = []
     if choice == PLAN_CHOICE_QUICK and terms:
         material = _notes(
             request.question,
@@ -405,6 +407,7 @@ def run(
             settings,
             context,
             whole=False,
+            failures=failures,
         )
         read = len(hits)
     elif choice == PLAN_CHOICE_QUICK:
@@ -432,8 +435,17 @@ def run(
             settings,
             context,
             whole=True,
+            failures=failures,
         )
         read = sum(len(part) for part in budget)
+    read -= sum(int(item["passages"]) for item in failures)
+    if failures and not any(lines for _, lines in material):
+        return partial_result(
+            ToolResult(
+                "No usable notes are available to answer.", (), summary,
+            ),
+            failures, completed=False,
+        )
     context.done(
         f"Read {read} of {len(passages)} passages",
         evidence_count=read,
@@ -445,6 +457,11 @@ def run(
         request.guidance,
         quick=choice == PLAN_CHOICE_QUICK and not terms,
     )
+    if failures:
+        prompt += (
+            "\n\nSome reading parts failed. Answer only from the supplied "
+            "notes; do not infer absence from missing notes."
+        )
     answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK:
@@ -459,8 +476,8 @@ def run(
         )
     elif read < len(passages):
         answer += (
-            f"\n\n*Read {read} of {len(passages)} passages (the model-call "
-            "limit was reached).*"
+            f"\n\n*Read {read} of {len(passages)} passages; "
+            "reading coverage is incomplete.*"
         )
     summary.update(
         {
@@ -473,7 +490,10 @@ def run(
     )
 
     # Citations keep their numbers, so evidence ``n`` is passage ``n``.
-    cited = _cited(answer, len(passages))
+    cited = _cited(answer, len(passages)) - {
+        number for failure in failures
+        for number in failure["passage_numbers"]
+    }
     evidence = tuple(
         {
             "citation": index + 1,
@@ -487,7 +507,9 @@ def run(
         for index, chunk in enumerate(passages)
         if index + 1 in cited
     )
-    return ToolResult(answer, evidence, summary, streamed=True)
+    return partial_result(
+        ToolResult(answer, evidence, summary, streamed=True), failures,
+    )
 
 
 def _notes(
@@ -498,6 +520,7 @@ def _notes(
     context: ToolContext,
     *,
     whole: bool,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Take notes on each file's parts; return the note lines per file.
 
@@ -518,6 +541,8 @@ def _notes(
         Tool context for the current request.
     whole: bool
         Whether to use the complete source text.
+    failures: list[dict[str, object]] | None, optional
+        Collect failed parts while keeping validated notes from other parts.
 
     Returns
     -------
@@ -531,27 +556,15 @@ def _notes(
         if not parts:
             continue
 
-        if whole:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                        context,
-                what="paper" if path.suffix.lower() == ".pdf" else "file",
-            )
-        else:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                        context,
-                whole=False,
-            )
-        material.append(
-            (path.name, [line for _, lines in notes for line in lines])
+        notes = take_notes(
+            question, path.name, texts, parts, context,
+            what="paper" if path.suffix.lower() == ".pdf" else "file",
+            whole=whole, failures=failures,
         )
+        if notes:
+            material.append(
+                (path.name, [line for _, lines in notes for line in lines])
+            )
     return material
 
 

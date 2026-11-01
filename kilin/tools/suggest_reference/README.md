@@ -139,3 +139,11 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+An incomplete candidate judgment is `failed` and unrated, not evidence against
+citing that paper. Other candidates continue and valid suggestions remain
+available. The answer explicitly lists incomplete items; all failed judgments
+produce an incomplete/inconclusive result rather than a false zero-support
+conclusion. The shared internal adapter owns the one eligible retry.

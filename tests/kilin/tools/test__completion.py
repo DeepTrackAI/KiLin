@@ -94,8 +94,14 @@ class TestToolCompletion(unittest.TestCase):
     def test_claim_checking_propagates_incompletion(self) -> None:
         """Do not convert a completion failure into a scientific verdict."""
 
-        with self.assertRaises(IncompleteModelResponse):
-            judge_claim(("s", "p"), self.chunks, self.context.ask_model)
+        verdict, quote, passage, comment, status = judge_claim(
+            ("s", "p"), self.chunks, self.context.ask_model
+        )
+        self.assertEqual(verdict, "failed")
+        self.assertEqual(status, "failed")
+        self.assertEqual(quote, "")
+        self.assertIsNone(passage)
+        self.assertIn("token_limit", comment)
         self.context.ask_model.assert_called_once()
 
 
@@ -135,10 +141,17 @@ class TestToolCompletion(unittest.TestCase):
                     ask_model=Mock(return_value=reply), progress=Mock(),
                     done=Mock(),
                 )
-                with self.assertRaises(IncompleteModelResponse):
-                    filter_items(FilterSettings(), request, context)
+                result = filter_items(FilterSettings(), request, context)
+                self.assertEqual(result.summary["status"], "incomplete")
+                self.assertEqual(result.summary["matched"], 0)
+                self.assertEqual(result.evidence, ())
+                self.assertNotIn("None of the items matches", result.answer)
+                self.assertEqual(
+                    result.summary["incomplete_items"][0]["reason"],
+                    "invalid_output",
+                )
                 context.ask_model.assert_called_once()
-                context.done.assert_not_called()
+                context.done.assert_called_once()
 
 
 if __name__ == "__main__":

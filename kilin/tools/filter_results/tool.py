@@ -66,6 +66,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
+from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools.filter_results import _configuration as _config
 from kilin.tools._contract import (
@@ -220,15 +222,22 @@ def run(
     ]
     batches = _batches(items, settings.batch_tokens)
     picked: list[int] = []
+    failures: list[dict[str, object]] = []
     for index, batch in enumerate(batches, start=1):
         context.progress(
             f"Judging the {len(items)} items of turn {turn.number} "
             f"(batch {index} of {len(batches)})"
         )
         system, prompt = filter_prompt(request.question, batch)
-        reply = context.ask_model(system, prompt, None)
-        numbers = {number for number, _ in batch}
-        picked += selected_numbers(reply, numbers)
+        try:
+            reply = context.ask_model(system, prompt, None)
+            numbers = {number for number, _ in batch}
+            picked += selected_numbers(reply, numbers)
+        except IncompleteModelResponse as error:
+            failures.append({
+                "item": f"Filter batch {index}",
+                "items": [number for number, _ in batch], **error.to_dict(),
+            })
     summary.update(
         {"turn": turn.number, "items": len(items), "matched": len(picked)}
     )
@@ -261,8 +270,14 @@ def run(
             }
         )
     if not picked:
-        lines.append("None of the items matches.")
-    return ToolResult("\n".join(lines), tuple(evidence), summary)
+        lines.append(
+            "No match established; failed batches remain unassessed."
+            if failures else "None of the items matches."
+        )
+    return partial_result(
+        ToolResult("\n".join(lines), tuple(evidence), summary), failures,
+        completed=len(batches) > len(failures),
+    )
 
 
 def _batches(

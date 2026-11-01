@@ -43,3 +43,11 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Independent batches continue after incomplete generation or malformed
+selections. Failed items remain unassessed rather than rejected. Valid matches
+are retained with an **Incomplete items** notice and partial status. Only an
+explicit `NONE` establishes zero matches; the shared internal adapter owns
+any eligible one-time nonthinking recovery.

@@ -107,6 +107,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens, named_paths
 from kilin.tools._shared.choose_document import document_scope
@@ -476,12 +477,18 @@ def run(
         runs = [] if terms else quick
     else:
         runs = to_run
+    failures: list[dict[str, object]] = []
     if not runs and terms:
         found = list(exact)  # The exact match needs no reading.
     else:
-        found = _judge(topic, runs, request.question, context)
+        found = _judge(topic, runs, request.question, context, failures)
 
-    read = sum(len(batch) for batch in runs)
+    read = sum(len(batch) for batch in runs) - sum(
+        int(item["sentences"]) for item in failures
+    )
+    if failures:
+        summary["incomplete_items"] = failures
+        summary["batches_completed"] = len(runs) - len(failures)
     summary.update(
         {"sentences": len(sentences), "read": read, "found": len(found)}
     )
@@ -520,10 +527,12 @@ def run(
     if saved:
         summary["saved"] = saved.as_posix()
         counts = full.answer.split("\n", 1)[0]
-        return ToolResult(
-            f"{counts}\n\nThe full list is saved as `{saved.as_posix()}`.",
-            (),
-            summary,
+        label = "partial list" if failures else "full list"
+        return partial_result(
+            ToolResult(
+                f"{counts}\n\nThe {label} is saved as `{saved.as_posix()}`.",
+                (), summary,
+            ), failures, completed=len(runs) > len(failures) or exact_only,
         )
 
     # When the user could be asked, the chat shows at most
@@ -642,11 +651,12 @@ def _judge(
     batches: Sequence[Sequence[Sentence]],
     question: str,
     context: ToolContext,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[Sentence]:
     """Return the sentences the model judges to be about the topic.
 
-    Failed or malformed batches stop the operation. Only an explicit
-    NONE reply establishes that a batch contains no matches.
+    Only an explicit NONE reply establishes that a batch contains no matches.
+    An optional collector lets independent batches continue after failure.
 
     Parameters
     ----------
@@ -658,6 +668,8 @@ def _judge(
         Question or request to analyze.
     context: ToolContext
         Tool context for the current request.
+    failures: list[dict[str, object]] | None, optional
+        Collect failed batches and continue; None propagates failures.
 
     Returns
     -------
@@ -676,8 +688,15 @@ def _judge(
         system, prompt = judge_prompt(topic, batch, question)
         try:
             reply = context.ask_model(system, prompt, None)
-        except IncompleteModelResponse:
-            raise
+            picked = selected_numbers(reply, range(1, len(batch) + 1))
+        except IncompleteModelResponse as error:
+            if failures is None:
+                raise
+            failures.append({
+                "item": f"Sentence batch {number}", "batch": number,
+                "sentences": len(batch), **error.to_dict(),
+            })
+            continue
         except Exception as error:  # Never turn failure into zero matches.
             context.trace.emit(
                 "tool.find_passages.batch_failed",
@@ -690,7 +709,6 @@ def _judge(
                 reason="model_error",
             ) from error
 
-        picked = selected_numbers(reply, range(1, len(batch) + 1))
         found.extend(batch[index - 1] for index in picked)
     return found
 
@@ -809,8 +827,8 @@ def _result(
         )
     elif read < total:
         lines.append(
-            f"{read} of {total} sentences were read (the "
-            "model-call limit was reached)."
+            f"{read} of {total} sentences were successfully read; "
+            "coverage is incomplete."
         )
 
     names = short_names(sorted({sentence.path for sentence in found}, key=str))
@@ -832,8 +850,16 @@ def _result(
                 f"- **{names[path]}** ({count}): “{first.text}” [{cite}]"
             )
         if not found:
-            lines.append("No file in scope matches.")
-        return ToolResult("\n".join(lines), tuple(evidence), summary)
+            lines.append(
+                "No match established; some files remain unassessed."
+                if summary.get("incomplete_items")
+                else "No file in scope matches."
+            )
+        return partial_result(
+            ToolResult("\n".join(lines), tuple(evidence), summary),
+            summary.get("incomplete_items", []),
+            completed=summary.get("batches_completed", 1) > 0,
+        )
 
     listed = found[:limit]
     current: Path | None = None
@@ -848,5 +874,13 @@ def _result(
             f"\nListed the first {len(listed)} of {len(found)} sentences."
         )
     if not found:
-        lines.append("No sentence in scope is about this topic.")
-    return ToolResult("\n".join(lines), tuple(evidence), summary)
+        lines.append(
+            "No match established; some sentences remain unassessed."
+            if summary.get("incomplete_items")
+            else "No sentence in scope is about this topic."
+        )
+    return partial_result(
+        ToolResult("\n".join(lines), tuple(evidence), summary),
+        summary.get("incomplete_items", []),
+        completed=summary.get("batches_completed", 1) > 0,
+    )

@@ -210,8 +210,11 @@ class ToolContext:
         for display, not returned to the
         tool. ``None`` inherits the session maximum. Explicit caps apply
         only when effective thinking is off, never exceeding that maximum.
-        Incomplete generation raises ``IncompleteModelResponse`` instead
-        of returning empty data.
+        A thinking call that exhausts its allowance inside unfinished
+        thinking is retried once without thinking, with the same request
+        and user allowance. Other failures, or a failed retry, raise
+        ``IncompleteModelResponse`` rather than returning empty data.
+        Independent item loops can retain checked results and report gaps.
     write: Callable[[str, str, int | None], str]
         Inherits session thinking and temperature, independently of the
         internal MODEL_CALLS policy. Preserves thinking in the returned
@@ -279,6 +282,9 @@ class ToolResult:
         ``text`` must be exact source lines so previews can locate it.
     summary: dict[str, object]
         JSON-compatible facts saved with the turn under ``"tool"``.
+        Partial operations set ``status="partial"`` and ``incomplete_items``;
+        operations without usable results set ``status="incomplete"``.
+        An unassessed item is never a negative finding.
     streamed: bool, optional
         True when the answer already reached the user through
         ``ToolContext.write``. Defaults to ``False``.

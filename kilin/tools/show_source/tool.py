@@ -80,6 +80,8 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.tools.show_source import _configuration as _config
 from kilin.tools._shared.earlier_turns import newest_listed
@@ -269,7 +271,12 @@ def run(
         for number, (path, sentences, focus) in enumerate(shown, start=1)
     ]
     system, prompt = explain_prompt(request.question, windows)
-    explanation = context.ask_model(system, prompt, None)
+    failures: list[dict[str, object]] = []
+    try:
+        explanation = context.ask_model(system, prompt, None)
+    except IncompleteModelResponse as error:
+        explanation = ""
+        failures.append({"item": "Source explanation", **error.to_dict()})
 
     lines: list[str] = []
     evidence: list[dict[str, object]] = []
@@ -291,7 +298,10 @@ def run(
         )
     summary.update({"turn": turn.number, "passages": len(shown)})
     answer = "\n".join(lines) + explanation.strip()
-    return ToolResult(answer, tuple(evidence), summary)
+    return partial_result(
+        ToolResult(answer, tuple(evidence), summary), failures,
+        completed=bool(evidence),
+    )
 
 
 

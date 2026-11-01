@@ -44,3 +44,12 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Incomplete batches remain unclassified while later batches continue. They do
+not enter the existing missing-label repair loop. Completed replies with
+missing labels still use that existing loop. Partial status and item-specific
+failure records distinguish unassessed mentions from classified categories.
+The shared internal adapter owns the eligible one-time nonthinking fallback;
+logical batch/repair counts are distinct from actual retry inference counts.

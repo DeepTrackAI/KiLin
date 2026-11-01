@@ -221,6 +221,7 @@ def take_notes(
     *,
     what: str = "document",
     whole: bool = True,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[tuple[int, list[str]]]:
     """Take checked notes on each part of a document with the model.
 
@@ -243,13 +244,18 @@ def take_notes(
     whole: bool, optional
         True when the parts cover the whole document; False for a quick
         reading of its most relevant passages. Defaults to ``True``.
+    failures: list[dict[str, object]] | None, optional
+        Collect independent failed parts and continue when supplied. Failed
+        parts are omitted from notes, never represented as NOTHING. None
+        retains strict failure propagation.
 
     Returns
     -------
     list[tuple[int, list[str]]]
         Part numbers with checked note lines. Explicit NOTHING replies
-        give empty parts; failed calls or unparseable notes raise
-        ``IncompleteModelResponse`` rather than inventing a negative result.
+        give empty parts. Failed calls or unparseable notes are omitted
+        when a failure collector is supplied; otherwise they raise
+        ``IncompleteModelResponse``. They never imply a negative result.
 
     """
 
@@ -275,8 +281,27 @@ def take_notes(
         )
         try:
             reply = context.ask_model(system, prompt, None)
-        except IncompleteModelResponse:
-            raise
+            lines = clean_notes(reply, [index + 1 for index in part])
+            if not lines and reply.strip() != NOTHING:
+                raise IncompleteModelResponse(
+                    "The model returned neither cited notes nor NOTHING.",
+                    reason="invalid_output", raw_text=reply,
+                )
+        except IncompleteModelResponse as error:
+            if failures is None:
+                raise
+            failure = {
+                "item": f"{name}, reading part {number}",
+                "part": number, "passages": len(part),
+                "passage_numbers": [index + 1 for index in part],
+                **error.to_dict(),
+            }
+            failures.append(failure)
+            context.trace.emit(
+                "tool.part.failed", component="tool", data=failure,
+                turn_id=context.trace_turn_id,
+            )
+            continue
         except Exception as error:
             context.trace.emit(
                 "tool.part.failed", component="tool",
@@ -287,12 +312,6 @@ def take_notes(
                 f"Document reading failed in part {number}: {error}",
                 reason="model_error",
             ) from error
-        lines = clean_notes(reply, [index + 1 for index in part])
-        if not lines and reply.strip() != NOTHING:
-            raise IncompleteModelResponse(
-                "The model returned neither cited notes nor NOTHING.",
-                reason="invalid_output", raw_text=reply,
-            )
         notes.append((number, lines))
         data: dict[str, object] = {
             "part": number,

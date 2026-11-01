@@ -262,3 +262,11 @@ Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
 forces thinking and bypasses local short-response caps. Restart after editing
 cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
 for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+An incomplete evidence judgment is `failed` and unrated, not unsupported.
+Other claims are still checked, and both the saved report and answer identify
+incomplete items with partial status. Existing support and quotation checks
+apply to every completed judgment. The shared internal adapter retries only
+length-exhausted unfinished thinking, once without thinking.

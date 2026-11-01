@@ -18,6 +18,10 @@ Key Features
 Module Structure
 ----------------
 
+- ``incomplete_notice`` and ``partial_result``
+
+    Mark independent failed items without turning them into negative findings.
+
 - ``selected_numbers``
 
     Parse a completed selector reply or raise an incomplete-result error.
@@ -34,12 +38,14 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
+from dataclasses import replace
 import re
 
 from kilin._model_completion import IncompleteModelResponse
+from kilin.tools._contract import ToolResult
 
-__all__ = ["selected_numbers"]
+__all__ = ["incomplete_notice", "partial_result", "selected_numbers"]
 
 
 def selected_numbers(reply: str, allowed: Collection[int]) -> list[int]:
@@ -77,4 +83,72 @@ def selected_numbers(reply: str, allowed: Collection[int]) -> list[int]:
     raise IncompleteModelResponse(
         "The model did not return valid item numbers or NONE.",
         reason="invalid_output", raw_text=reply,
+    )
+
+
+def incomplete_notice(failures: Sequence[dict[str, object]]) -> str:
+    """Describe uncompleted work without making claims about its evidence.
+
+    Parameters
+    ----------
+    failures: Sequence[dict[str, object]]
+        Item labels with safe ``IncompleteModelResponse.to_dict`` metadata.
+
+    Returns
+    -------
+    str
+        Markdown suffix; empty when all items completed. Raw model text is
+        deliberately excluded.
+
+    """
+
+    if not failures:
+        return ""
+    return (
+        "\n\n**Incomplete items** (not negative findings):\n"
+        + "\n".join(
+            f"- {item['item']}: {item['message']}" for item in failures
+        )
+    )
+
+
+def partial_result(
+    result: ToolResult,
+    failures: Sequence[dict[str, object]],
+    *,
+    completed: bool = True,
+) -> ToolResult:
+    """Retain completed work and explicitly mark skipped independent items.
+
+    Parameters
+    ----------
+    result: ToolResult
+        Valid completed results only; never include truncated model output.
+    failures: Sequence[dict[str, object]]
+        Item labels and safe failure metadata collected by the tool.
+    completed: bool, optional
+        Whether any independent work completed. Defaults to ``True``.
+        A valid zero-match batch counts as completed; a failed batch does not.
+
+    Returns
+    -------
+    ToolResult
+        Original result on success; otherwise a partial or incomplete result
+        with an explicit notice and machine-readable item failures. The RAG
+        adapter streams the suffix separately when the answer was streamed.
+
+    """
+
+    if not failures:
+        return result
+    return replace(
+        result,
+        answer=result.answer + incomplete_notice(failures),
+        summary={
+            **result.summary,
+            "status": "partial" if completed else "incomplete",
+            "reason": "item_completion",
+            "message": "Some requested items could not be completed.",
+            "incomplete_items": list(failures),
+        },
     )
