@@ -144,11 +144,7 @@ from kilin.model_defaults import (
     DEFAULT_EMBEDDING_MODEL_MLX,
     DEFAULT_EMBEDDING_MODEL_TORCH,
 )
-from kilin.project_type import (
-    ProjectTypeId,
-    load_project_types,
-    project_type,
-)
+from kilin.project_type import ProjectTypeId, load_project_types
 from kilin.project_layout import (
     ensure_project_folders,
     install_project_resources,
@@ -173,6 +169,7 @@ from kilin.runtime import (
     SelectedBackend,
 )
 from kilin.trace_logging import NullTraceLogger, TraceSink
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
     "PROJECT_TYPE_ID_CODE",
@@ -378,7 +375,9 @@ def default_project_profile(type_id: ProjectTypeId) -> ProjectProfile:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     extensions = _PROJECT_EXTENSIONS[type_id]
     parser = ConfigParser()
-    parser.read_string(_default_profile_text(type_id, "sources", extensions))
+    parser.read_string(
+        _default_profile_text(type_id, PROJECT_SOURCES_DIRECTORY, extensions)
+    )
     return _read_profile(parser)
 
 
@@ -690,8 +689,8 @@ def initialize_project(
         New or empty destination. Existing projects and nonempty directories
         are rejected without modification, including partial initialization.
     type_id: ProjectTypeId
-        Registered project type. Its source_directory convention selects the
-        new source subdirectory.
+        Registered project type. Every type gets the same ``sources/``
+        subdirectory.
 
     Returns
     -------
@@ -722,8 +721,7 @@ def initialize_project(
     if type_id not in PROJECT_TYPE_IDS:
         raise ValueError(f"type_id must be one of: {_TYPE_ID_CHOICE_TEXT}.")
     root = destination_path(directory)
-    source = project_type(type_id).source_directory
-    return _initialize_profile(root, type_id, source)
+    return _initialize_profile(root, type_id)
 
 
 class _InitializationJournal:
@@ -841,12 +839,14 @@ def _prepared_profile(
 def _preparing_project(
     root: Path,
     type_id: ProjectTypeId,
-    source: str,
     *,
     settings: dict[str, object] | None = None,
     allocate: bool = False,
 ) -> Iterator[tuple[QAProject, _InitializationJournal]]:
     """Reserve a new project, initialize resources, and publish its profile.
+
+    Every creation path uses this context, so every new project keeps its
+    sources in ``sources/`` whatever its project type.
 
     Parameters
     ----------
@@ -854,9 +854,6 @@ def _preparing_project(
         Explicit destination or preferred default directory.
     type_id: ProjectTypeId
         Registered project type.
-    source: str
-        Relative source location for the new project. It must not alias the
-        workspace root, its reservation marker, or managed state entries.
     settings: dict[str, object] | None, optional
         Profile overrides validated before creation. Defaults to None.
     allocate: bool, optional
@@ -876,21 +873,9 @@ def _preparing_project(
 
     """
 
-    relative = Path(source)
-    reserved = {
-        "indexes", "logs", "outputs", "templates", "profile.ini",
-        "sources.json", "source_snapshot.json", ".kilin-creating",
-    }
-    if (
-        relative.is_absolute() or not relative.parts
-        or ".." in relative.parts
-        or relative.parts[0].lower() in reserved
-    ):
-        raise ValueError(
-            "The source folder conflicts with managed workspace entries; "
-            "use prepare_sources_workspace to import it under sources/."
-        )
-    text, profile = _prepared_profile(type_id, source, settings)
+    text, profile = _prepared_profile(
+        type_id, PROJECT_SOURCES_DIRECTORY, settings
+    )
     layout = plan_project_layout(type_id)
     with claim_workspace(root, allocate=allocate) as actual_root:
         root = actual_root
@@ -900,9 +885,8 @@ def _preparing_project(
             journal.note(root / name)
         for resource in layout.resources:
             journal.note(root / resource.destination)
-        source_path = root / source
-        if source_path != root:
-            journal.note(source_path)
+        source_path = root / PROJECT_SOURCES_DIRECTORY
+        journal.note(source_path)
         try:
             source_path.mkdir(parents=True, exist_ok=True)
             ensure_project_folders(root)
@@ -924,9 +908,7 @@ def _preparing_project(
             raise
 
 
-def _initialize_profile(
-    root: Path, type_id: ProjectTypeId, source: str
-) -> QAProject:
+def _initialize_profile(root: Path, type_id: ProjectTypeId) -> QAProject:
     """Create a project profile after successful resource initialization.
 
     Parameters
@@ -935,8 +917,6 @@ def _initialize_profile(
         Workspace root.
     type_id: ProjectTypeId
         Expected project type.
-    source: str
-        Source folder within a new profile.
 
     Returns
     -------
@@ -945,7 +925,7 @@ def _initialize_profile(
 
     """
 
-    with _preparing_project(root, type_id, source):
+    with _preparing_project(root, type_id):
         pass
     return open_project(root)
 
@@ -970,13 +950,14 @@ def prepare_project_workspace(
     Returns
     -------
     QAProject
-        Independent project containing selected source copies and provenance.
+        Independent project containing selected source copies, in its
+        ``sources/`` folder, and provenance.
 
     Raises
     ------
     ValueError
         If the project type or source/destination relationship is invalid,
-        or the source basename conflicts with managed workspace entries.
+        or the source is a filesystem root.
     OSError
         If scanning, exclusive creation, copying, or publication fails.
 
@@ -994,6 +975,8 @@ def prepare_project_workspace(
     source = Path(source_directory).expanduser().resolve(strict=True)
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
+    if source == Path(source.anchor):
+        raise ValueError(f"Choose a source folder, not the drive: {source}")
     if not str(workspace_root).strip():
         raise ValueError("Choose a workspace parent folder.")
     sandbox = Path(workspace_root).expanduser().resolve()
@@ -1003,7 +986,7 @@ def prepare_project_workspace(
     safe_name = safe_name or "project"
     preferred = sandbox / f"project_{safe_name}"
     with _preparing_project(
-        preferred, type_id, source.name, allocate=True
+        preferred, type_id, allocate=True
     ) as (project, journal):
         _synchronize_snapshot(project, source, sandbox, journal)
     return open_project(project.root)
@@ -1039,7 +1022,9 @@ def synchronize_project_workspace(
     Notes
     -----
     Unlike cumulative add_project_sources, this explicit operation may replace
-    local snapshot edits and remove copies deleted from the original. Existing
+    local snapshot edits and remove copies deleted from the original. The
+    copy is the project's saved source folder: ``sources/`` for new mirrors,
+    the original's name for older ones, which are never renamed. Existing
     resource templates are not restored. Synchronization is not atomic across
     all files; a failure may leave earlier snapshot changes in place.
 
@@ -1085,14 +1070,25 @@ def _synchronize_snapshot(
     """
 
     root = project.root
-    snapshot = root / source.name
+    # New mirrors copy into sources/; mirrors created before that convention
+    # keep the original's name and are never renamed. No other folder is
+    # accepted, because a rebuild replaces the whole copy.
+    snapshot = next(
+        (
+            path
+            for path in (root / PROJECT_SOURCES_DIRECTORY, root / source.name)
+            if path.resolve() == project.source
+        ),
+        None,
+    )
+    if snapshot is None:
+        raise ValueError(
+            "Managed workspace project.source must be "
+            f"{PROJECT_SOURCES_DIRECTORY}/ or, for an older mirror, "
+            f"{source.name}/."
+        )
     if snapshot.is_symlink():
         raise ValueError("Managed source copy must not be a symbolic link.")
-    if project.source != snapshot.resolve(strict=True):
-        raise ValueError(
-            "Managed workspace project.source must keep the source folder "
-            f"set to {source.name}."
-        )
     excludes: tuple[str, ...] = ()
     if sandbox.is_relative_to(source):
         excludes = (sandbox.relative_to(source).as_posix(),)

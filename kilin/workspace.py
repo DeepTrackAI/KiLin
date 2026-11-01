@@ -151,6 +151,7 @@ from kilin.repository_reason_codes import (
     SELECTION_REASON_FILE_TYPE_NOT_SELECTED,
 )
 from kilin.trace_logging import NullTraceLogger, TraceSink
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
     "prepare_sources_workspace",
@@ -530,7 +531,9 @@ def preview_project_sources(
             kind = "folder"
         name = imported.get(str(source))
         if name is None:
-            name = _unique_name(source, used, root / "sources")
+            name = _unique_name(
+                source, used, root / PROJECT_SOURCES_DIRECTORY
+            )
             state = "renamed" if name != source.name else "new"
             used.add(name)
         else:
@@ -656,15 +659,14 @@ def _prepare_sources_workspace(
                 f"missing: {missing}; unexpected: {unexpected}."
             )
 
-    source_root = workspace / "sources"
+    source_root = workspace / PROJECT_SOURCES_DIRECTORY
     if not allocate and source_root.is_symlink():
         raise ValueError("The workspace sources folder must not be a link.")
     preparation = (
         nullcontext((existing, None))
         if existing is not None
         else _preparing_project(
-            workspace, type_id, "sources", settings=settings,
-            allocate=allocate,
+            workspace, type_id, settings=settings, allocate=allocate,
         )
     )
     with preparation as (project, journal):
@@ -690,7 +692,8 @@ def _prepare_sources_workspace(
             },
             status="started",
         )
-        if project.source != (workspace / "sources").resolve(strict=True):
+        managed = (workspace / PROJECT_SOURCES_DIRECTORY).resolve(strict=True)
+        if project.source != managed:
             raise ValueError(
                 "project.source must use the managed sources/ folder."
             )
@@ -1320,7 +1323,7 @@ def remove_workspace_sources(
     if not isinstance(project, QAProject):
         raise TypeError("Expected an opened QAProject.")
     root = project.root.resolve(strict=True)
-    managed = root / "sources"
+    managed = root / PROJECT_SOURCES_DIRECTORY
     if (
         managed.is_symlink()
         or not managed.is_dir()
@@ -1341,7 +1344,7 @@ def remove_workspace_sources(
             or "\\" in value
             or any(part in ("", ".", "..") for part in value.split("/"))
             or len(relative.parts) < 2
-            or relative.parts[0] != "sources"
+            or relative.parts[0] != PROJECT_SOURCES_DIRECTORY
         ):
             raise ValueError(
                 f"Only items inside sources/ can be removed: {value}"
@@ -1479,16 +1482,16 @@ def list_source_versions(project: QAProject) -> list[SourceVersion]:
     if root is None:
         return []
     versions: list[SourceVersion] = []
-    managed = root / "sources"
+    managed = root / PROJECT_SOURCES_DIRECTORY
     for record in _read_records(root / "sources.json"):
+        copy = f"{PROJECT_SOURCES_DIRECTORY}/{record['name']}"
         for item in record.get("versions", []):
             if not _is_regular_snapshot(managed, item["path"]):
                 continue
             versions.append(SourceVersion(
-                source=f"sources/{record['name']}/{item['file']}"
-                if record.get("kind") != "file"
-                else f"sources/{record['name']}",
-                version=f"sources/{item['path']}",
+                source=copy if record.get("kind") == "file"
+                else f"{copy}/{item['file']}",
+                version=f"{PROJECT_SOURCES_DIRECTORY}/{item['path']}",
                 sha256=item["sha256"],
             ))
     return sorted(versions, key=lambda item: item["version"])
@@ -1697,7 +1700,7 @@ def sync_project_sources(
                     )
                 copy.unlink()
                 _untrack_file(record, relative)
-                folder = root / "sources" / record["name"]
+                folder = root / PROJECT_SOURCES_DIRECTORY / record["name"]
                 parent = copy.parent
                 while (
                     parent != folder and parent.is_relative_to(folder)
@@ -1812,7 +1815,7 @@ def _archive_source_version(
             PurePosixPath(_VERSION_DIRECTORY) / record["name"] /
             original.parent / name
         ).as_posix()
-        destination = root / "sources" / archived
+        destination = root / PROJECT_SOURCES_DIRECTORY / archived
         if not destination.exists() and not destination.is_symlink():
             break
     _copy_file(copy, destination)
@@ -1891,7 +1894,7 @@ def _managed_root(project: QAProject) -> Path | None:
     if not isinstance(project, QAProject):
         raise TypeError("Expected an opened QAProject.")
     root = project.root.resolve(strict=True)
-    managed = root / "sources"
+    managed = root / PROJECT_SOURCES_DIRECTORY
     if (
         managed.is_symlink()
         or not managed.is_dir()
@@ -1966,7 +1969,7 @@ def _differences(
     """
 
     found = []
-    managed = root / "sources"
+    managed = root / PROJECT_SOURCES_DIRECTORY
     for record in records:
         original = Path(record["original"])
         destination = managed / record["name"]
@@ -2092,7 +2095,7 @@ def include_explicit_imports(
     """
 
     root = project.root.resolve(strict=True)
-    managed = root / "sources"
+    managed = root / PROJECT_SOURCES_DIRECTORY
     if (
         project.source.resolve(strict=True) != managed
         or not (root / "sources.json").is_file()

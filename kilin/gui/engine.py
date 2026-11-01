@@ -125,6 +125,7 @@ from kilin.workspace import (
     remove_workspace_sources,
     sync_project_sources,
 )
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 from kilin.project_files import (
     add_project_files,
     list_project_files,
@@ -1960,8 +1961,10 @@ class ChatEngine:
                     group: [
                         path for path in paths
                         if any(
-                            path == f"sources/{name}"
-                            or path.startswith(f"sources/{name}/")
+                            path == f"{PROJECT_SOURCES_DIRECTORY}/{name}"
+                            or path.startswith(
+                                f"{PROJECT_SOURCES_DIRECTORY}/{name}/"
+                            )
                             for name in existing
                         )
                     ]

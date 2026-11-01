@@ -1,7 +1,6 @@
 {
   "display_name": "Literature collection",
   "description": "A collection of scientific literature and related documents.",
-  "source_directory": "documents",
   "extensions": [
     ".pdf",
     ".md",

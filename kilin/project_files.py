@@ -45,7 +45,11 @@ from tempfile import NamedTemporaryFile
 from typing import Sequence
 
 from kilin.project import QAProject
-from kilin.workspace_resources import OUTPUTS_FOLDER, TEMPLATES_FOLDER
+from kilin.workspace_resources import (
+    OUTPUTS_FOLDER,
+    PROJECT_SOURCES_DIRECTORY,
+    TEMPLATES_FOLDER,
+)
 
 __all__ = [
     "add_project_files",
@@ -419,7 +423,7 @@ def list_project_files(project: QAProject) -> list[str]:
     """
 
     root = _project_root(project)
-    names = {"sources", "indexes", "logs", OUTPUTS_FOLDER,
+    names = {PROJECT_SOURCES_DIRECTORY, "indexes", "logs", OUTPUTS_FOLDER,
              TEMPLATES_FOLDER}
     if project.source.is_relative_to(root) and project.source != root:
         names.add(project.source.relative_to(root).parts[0])

@@ -191,6 +191,7 @@ from kilin.tools._shared.planning import (
     confirm_plan,
 )
 from kilin.workspace_resources import (
+    PROJECT_SOURCES_DIRECTORY,
     WorkspaceResource,
     templates_folder,
 )
@@ -1821,7 +1822,7 @@ def _paper_file(path: Path, context: ToolContext) -> Path | None:
     """
 
     root = context.project_root
-    for candidate in (root / path, root / "sources" / path):
+    for candidate in (root / path, root / PROJECT_SOURCES_DIRECTORY / path):
         if candidate.is_file():
             return candidate
 

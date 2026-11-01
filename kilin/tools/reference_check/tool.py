@@ -177,6 +177,7 @@ from kilin.tools._shared.claims import (
     verify_claim,
     quote_line_range,
 )
+from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
     "ReferenceCheckSettings",
@@ -1877,7 +1878,7 @@ def _source_file(path: Path, context: ToolContext) -> Path | None:
 
     for candidate in (
         context.project_root / path,
-        context.project_root / "sources" / path,
+        context.project_root / PROJECT_SOURCES_DIRECTORY / path,
     ):
         if candidate.is_file():
             return candidate
