@@ -55,7 +55,13 @@ from kilin.tools._shared.references import ReferenceLayout
 from kilin.tools.reference_check._citations import CitationRules
 from kilin.tools.reference_check._matching import MatchRules
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "CALL_SECONDS",
     "CITATION_RULES",
     "DEFAULT_ANSWER_TOKENS",
@@ -80,6 +86,9 @@ __all__ = [
 _TOOL = "reference_check"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
+    "MODEL_CALLS": {
+        "THINKING", "SHORT_REPLY_THINKING", "SHORT_REPLY_MAX_TOKENS",
+    },
     "SETTINGS": {
         "MAX_LISTED", "VERIFY", "PASSAGES", "PASSAGE_TOKENS",
         "ANSWER_TOKENS", "MAX_MODEL_CALLS", "QUICK_CLAIMS", "CONFIRMATION",
@@ -235,4 +244,8 @@ CITATION_RULES: Final[CitationRules] = CitationRules(
     byline_share=require_number(
         _CITATIONS, "BYLINE_SHARE", "CITATIONS", 0.0, 1.0
     ),
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

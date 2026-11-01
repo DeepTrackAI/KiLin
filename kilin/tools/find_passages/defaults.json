@@ -19,5 +19,10 @@
     "JUDGE_PROMPT_TOKENS": 150,
     "JUDGE_REPLY_ESTIMATE_TOKENS": 15,
     "CALL_SECONDS": 1.0
+  },
+  "MODEL_CALLS": {
+    "THINKING": "off",
+    "SHORT_REPLY_THINKING": "inherit",
+    "SHORT_REPLY_MAX_TOKENS": 0
   }
 }

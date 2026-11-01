@@ -278,3 +278,63 @@ new packaged JSON resource.
 Related: [Package defaults](package_defaults.md),
 [Model management](model_management.md), [Project workspaces](project_workspaces.md),
 [Tool packages](tool_packages.md), [Development](development.md).
+
+### Internal tool thinking
+
+Each registered tool owns a validated `MODEL_CALLS` section in its packaged
+`kilin/tools/<tool>/defaults.json`. It controls internal `context.ask_model`
+requests through the same core adapter in the GUI and direct API. It does
+not change intent routing or the user-visible `context.write` policy.
+
+```json
+"MODEL_CALLS": {
+  "THINKING": "inherit",
+  "SHORT_REPLY_THINKING": "off",
+  "SHORT_REPLY_MAX_TOKENS": 512
+}
+```
+
+Resolution order is explicit:
+
+1. `THINKING: "on"` or `"off"` forces every internal call.
+2. With `THINKING: "inherit"`, an explicit positive output-token request at
+   or below `SHORT_REPLY_MAX_TOKENS` uses `SHORT_REPLY_THINKING`.
+3. Otherwise, or when the selected policy is `"inherit"`, use the main
+   answering session's current thinking setting.
+
+Both policy fields accept exactly `inherit`, `on`, or `off`; booleans,
+unknown values and misspelled keys are rejected. The bound is an integer
+from 0 to 100000, inclusive; zero disables the short rule. The bound uses
+the tool's requested output budget, before the session ceiling, not the
+length of the user's question. A `None` budget inherits the session limit
+and is not treated as short. This is deterministic configuration, not a
+second model-based classification.
+
+| Tools | Packaged policy | Rationale |
+| --- | --- | --- |
+| `find_passages`, `filter_results`, `batch_classify` | `off`; no short override | Return bounded numbers or labels, not narrative analysis. |
+| `batch_review`, `find_fact`, `generate_paper_summary` | `inherit`; `off` through 512 tokens | Short notes and report metadata must fit; longer drafting inherits. |
+| `reference_check`, `suggest_reference` | `inherit`; `off` through 512 tokens | Normal judgments with no explicit cap inherit; explicitly capped short calls can opt out. |
+| `show_source`, `paper_overview`, `project_inventory`, `scan_and_list` | Full `inherit`; no short override | Narrative explanation or no internal answering calls. |
+
+The fallback policy object is full inheritance. Every shipped tool declares
+its policy explicitly. To reset any tool to full inheritance, use
+`THINKING: "inherit"` and `SHORT_REPLY_THINKING: "inherit"` (or a zero
+bound). To enable thinking for every internal call, use `THINKING: "on"`.
+Restart the app or notebook kernel after editing cached defaults. No project
+migration or reindexing is needed. These are tool defaults, not fields of
+project-type intent objects or `profile.ini`.
+
+Overrides do not change temperature, model identity, token ceilings or call
+counts. Final `context.write` responses still inherit the main interface
+setting; router/title requests remain greedy and nonthinking. All settings
+and isolated messages are restored on success and failure. Models that
+ignore `enable_thinking` cannot be forced into a different mode by this
+policy. No retry or extra model is introduced.
+
+The saved tool summary's `internal_generation` records the policy and each
+executed call's effective thinking, requested output cap and completion
+status. Detailed model traces retain the actual generation parameters.
+Forcing thinking on a short budget can still cause an incomplete response;
+the [completion contract](answering_pipeline.md#model-output-completion-contract)
+prevents that failure from being mistaken for a valid negative result.

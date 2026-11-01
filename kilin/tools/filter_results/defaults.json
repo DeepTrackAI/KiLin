@@ -6,5 +6,10 @@
   "ESTIMATES": {
     "ITEM_NUMBER_TOKENS": 4,
     "REPLY_TOKENS": 120
+  },
+  "MODEL_CALLS": {
+    "THINKING": "off",
+    "SHORT_REPLY_THINKING": "inherit",
+    "SHORT_REPLY_MAX_TOKENS": 0
   }
 }

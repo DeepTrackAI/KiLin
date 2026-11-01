@@ -18,5 +18,10 @@
     "PROMPT_OVERHEAD_TOKENS": 350,
     "REPLY_TOKEN_LIMIT_PER_ITEM": 60,
     "RETRY_GROUP": 8
+  },
+  "MODEL_CALLS": {
+    "THINKING": "off",
+    "SHORT_REPLY_THINKING": "inherit",
+    "SHORT_REPLY_MAX_TOKENS": 0
   }
 }

@@ -2416,13 +2416,15 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                           "language_context": ("Question",),
                           "inherit_settings": True,
                           "preserve_thinking": True,
-                          "require_complete": True})
+                          "require_complete": True,
+                          "thinking": None})
         self.assertEqual(side.call_args_list[1].kwargs,
                          {"max_new_tokens": 5,
                           "language_context": ("Question",),
                           "inherit_settings": True,
                           "preserve_thinking": True,
-                          "require_complete": True})
+                          "require_complete": True,
+                          "thinking": None})
         self.assertEqual(side.call_args_list[2].kwargs,
                          {"max_new_tokens": 6,
                           "token_callback": tokens,

@@ -6,5 +6,10 @@
   },
   "HEURISTICS": {
     "MIN_WORDS": 4
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit",
+    "SHORT_REPLY_THINKING": "inherit",
+    "SHORT_REPLY_MAX_TOKENS": 0
   }
 }

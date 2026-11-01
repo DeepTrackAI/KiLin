@@ -59,7 +59,13 @@ from kilin.tools._defaults import (
 )
 from kilin.tools._shared.planning import CONFIRMATION_CHOICES
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "BEGINNING_CHARACTERS",
     "BEGINNING_PASSAGES",
     "CALL_SECONDS",
@@ -95,6 +101,9 @@ __all__ = [
 _NAME = re.compile(r"[A-Za-z0-9][\w-]*")
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
+    "MODEL_CALLS": {
+        "THINKING", "SHORT_REPLY_THINKING", "SHORT_REPLY_MAX_TOKENS",
+    },
     "SETTINGS": {
         "TEMPLATE", "PART_TOKENS", "NOTE_TOKENS", "SECTION_TOKENS",
         "REPAIR_ATTEMPTS", "MAX_MODEL_CALLS", "CONFIRMATION",
@@ -239,4 +248,8 @@ LIMIT_TOLERANCE: Final[float] = require_number(
 )
 MIN_TOTAL_WORDS: Final[int] = require_int(
     _VALIDATION, "MIN_TOTAL_WORDS", "TEMPLATE_VALIDATION", 1, 1000000
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

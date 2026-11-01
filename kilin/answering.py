@@ -488,6 +488,7 @@ def side_reply(
     inherit_settings: bool = False,
     preserve_thinking: bool = False,
     require_complete: bool = False,
+    thinking: bool | None = None,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -520,6 +521,10 @@ def side_reply(
     require_complete: bool, optional
         Reject truncated, thinking-only or empty output before a tool
         consumes it. Defaults to ``False`` for router compatibility.
+    thinking: bool | None, optional
+        Temporary thinking override for an inherited tool request.
+        ``None`` inherits unchanged. Only valid with ``inherit_settings``
+        enabled; router calls cannot enable thinking through this option.
 
     Returns
     -------
@@ -527,12 +532,27 @@ def side_reply(
         The complete reply when ``preserve_thinking`` is true; otherwise
         the reply with thinking text removed.
 
+    Raises
+    ------
+    ValueError
+        If an override is not a boolean or attempts to change router
+        thinking without inheriting tool settings.
+    IncompleteModelResponse
+        If completion is required and the reply is truncated, unfinished
+        or has no usable final content.
+
     Notes
     -----
     Router questions use greedy, nonthinking generation by default.
     Tool questions can inherit the answering session generation settings.
 
     """
+
+    if thinking is not None:
+        if type(thinking) is not bool or not inherit_settings:
+            raise ValueError(
+                "thinking requires a boolean and inherit_settings=True."
+            )
 
     history = [dict(message) for message in chat.messages]
     previous = {"thinking": chat.thinking, "temperature": chat.temperature}
@@ -543,6 +563,10 @@ def side_reply(
         if not inherit_settings:
             chat.configure_generation({
                 "thinking": False, "temperature": 0.0,
+            })
+        elif thinking is not None:
+            chat.configure_generation({
+                "thinking": thinking, "temperature": chat.temperature,
             })
         session_limit = getattr(chat, "max_new_tokens", None)
         token_limit = (
@@ -566,7 +590,7 @@ def side_reply(
             )
     finally:
         chat.restore_history(history)
-        if not inherit_settings:
+        if not inherit_settings or thinking is not None:
             chat.configure_generation(previous)
 
     return reply if preserve_thinking else strip_thinking(reply)

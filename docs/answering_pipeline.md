@@ -226,9 +226,10 @@ Related: [Architecture](architecture.md),
 
 Registered tools use `ToolContext.ask_model` for internal judgments and
 `ToolContext.write` for streamed final answers. Both preserve the current
-answering model's thinking and temperature, while the per-call output
-limit does not exceed either the tool budget or the session's
-`max_new_tokens` setting. The router keeps its separate deterministic
+answering model and temperature. Internal requests resolve thinking from
+the tool-owned `MODEL_CALLS` policy; final `write` requests inherit the
+session thinking setting unchanged. The per-call output limit does not
+exceed either the tool budget or the session's `max_new_tokens` setting. The router keeps its separate deterministic
 nonthinking behavior. Isolated tool replies never enter persistent chat
 history.
 
@@ -239,7 +240,11 @@ provided, each completed side call emits only its thinking, not its
 intermediate structured reply. The saved answer contains the same thinking
 followed by the tool's composed answer. `write` continues to stream and
 return the full user-visible model response. Router calls remain nonthinking.
-The model's thinking setting determines whether thinking is generated.
+Internal overrides are temporary and restored even when completion fails.
+The tool summary records `internal_generation.policy` and actual request
+thinking, budgets and completion status in `internal_generation.calls`.
+Existing tool-specific `model_calls` counters keep their original meaning.
+See [internal tool thinking](configuration.md#internal-tool-thinking).
 
 ## Model-output completion contract
 

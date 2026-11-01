@@ -204,15 +204,17 @@ class ToolContext:
         Asks the router model ``(system, prompt, max_new_tokens)`` with
         thinking off and greedy decoding; the conversation is untouched.
     ask_model: Callable[[str, str, int | None], str]
-        Asks the selected answering model with inherited session thinking
-        and temperature. Returns only the parsed-answer text; any thinking
+        Asks the selected answering model with inherited temperature and
+        the tool-owned MODEL_CALLS thinking policy. Returns only the
+        parsed-answer text; any thinking
         is captured by the coordinator for display, not returned to the
         tool. A ``None`` token argument inherits the session maximum; an
         explicit limit is capped by that maximum. Incomplete generation
         raises ``IncompleteModelResponse`` instead of returning empty data.
     write: Callable[[str, str, int], str]
-        Same generation settings as ``ask_model``, but preserves thinking
-        in the returned answer and streams the complete reply to the user;
+        Inherits session thinking and temperature, independently of the
+        internal MODEL_CALLS policy. Preserves thinking in the returned
+        answer and streams the complete reply to the user;
         a tool using it returns ``streamed=True``. Completion is validated
         before the reply can become a successful tool result.
     model_id: str

@@ -50,7 +50,13 @@ from kilin.tools._defaults import (
 )
 from kilin.tools._shared.planning import CONFIRMATION_CHOICES
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "CALL_SECONDS",
     "DEFAULT_ANSWER_TOKENS",
     "DEFAULT_CONFIRMATION",
@@ -71,6 +77,9 @@ __all__ = [
 _TOOL = "suggest_reference"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
+    "MODEL_CALLS": {
+        "THINKING", "SHORT_REPLY_THINKING", "SHORT_REPLY_MAX_TOKENS",
+    },
     "SETTINGS": {
         "FILES", "PASSAGES", "PASSAGE_TOKENS", "ANSWER_TOKENS",
         "QUICK_FILES", "CONFIRMATION", "LARGE_BATCHES",
@@ -140,4 +149,8 @@ PROMPT_OVERHEAD_TOKENS: Final[int] = require_int(
 )
 REPLY_SHARE: Final[float] = require_number(
     _ESTIMATES, "REPLY_SHARE", "ESTIMATES", 0.0, 1.0
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

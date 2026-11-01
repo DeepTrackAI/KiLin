@@ -13,5 +13,10 @@
     "NOTES_PROMPT_TOKENS": 300,
     "CALL_SECONDS": 1.0,
     "QUICK_ANSWER_SECONDS": 2.0
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit",
+    "SHORT_REPLY_THINKING": "off",
+    "SHORT_REPLY_MAX_TOKENS": 512
   }
 }

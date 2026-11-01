@@ -242,6 +242,7 @@ from kilin.sources import (
 )
 from kilin.sources.extensions.sources_pdf import PDF_TEXT_EXTRACTOR
 from kilin.tools import (
+    TOOL_REGISTRY,
     EarlierTurn,
     ToolContext,
     ToolPlan,
@@ -3520,6 +3521,8 @@ class RAGSession:
         )
 
         tool_thoughts: list[str] = []
+        model_policy = TOOL_REGISTRY[use.name].model_calls
+        model_calls: list[dict[str, object]] = []
 
         def ask_model(
             system: str, prompt: str, tokens: int | None
@@ -3542,12 +3545,28 @@ class RAGSession:
 
             """
 
-            raw = side_reply(
-                self.chat_session, system, prompt, max_new_tokens=tokens,
-                language_context=language_context, inherit_settings=True,
-                preserve_thinking=True,
-                require_complete=True,
-            )
+            override = model_policy.thinking_override(tokens)
+            call: dict[str, object] = {
+                "thinking": (
+                    self.chat_session.thinking
+                    if override is None else override
+                ),
+                "requested_max_new_tokens": tokens,
+            }
+            model_calls.append(call)
+            try:
+                raw = side_reply(
+                    self.chat_session, system, prompt, max_new_tokens=tokens,
+                    language_context=language_context, inherit_settings=True,
+                    preserve_thinking=True, require_complete=True,
+                    thinking=override,
+                )
+            except IncompleteModelResponse as error:
+                call.update(error.to_dict())
+                raise
+            call["status"] = "complete"
+            finish = getattr(self.chat_session, "last_finish_reason", None)
+            call["finish_reason"] = finish if isinstance(finish, str) else None
             thinking = extract_thinking(raw)
             if thinking:
                 part = f"Model call {len(tool_thoughts) + 1}:\n{thinking}\n\n"
@@ -3642,6 +3661,13 @@ class RAGSession:
                 _incomplete_answer(error), (),
                 {"name": use.name, **error.to_dict()},
             )
+        if model_calls:
+            result = replace(result, summary={
+                **result.summary,
+                "internal_generation": {
+                    "policy": asdict(model_policy), "calls": model_calls,
+                },
+            })
         if not tool_thoughts:
             return result
 
