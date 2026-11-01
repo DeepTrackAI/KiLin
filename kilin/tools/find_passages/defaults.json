@@ -11,8 +11,7 @@
     "MIN_WORDS": 4
   },
   "ESTIMATES": {
-    "TOPIC_REPLY_TOKENS": 80,
-    "JUDGE_REPLY_TOKENS": 120,
+    "TOPIC_REPLY_TOKENS": 128,
     "SENTENCE_NUMBER_TOKENS": 2,
     "PROMPT_TOKENS_PER_SECOND": 700.0,
     "REPLY_TOKENS_PER_SECOND": 25.0,
@@ -21,8 +20,6 @@
     "CALL_SECONDS": 1.0
   },
   "MODEL_CALLS": {
-    "THINKING": "off",
-    "SHORT_REPLY_THINKING": "inherit",
-    "SHORT_REPLY_MAX_TOKENS": 0
+    "THINKING": "off"
   }
 }

@@ -54,7 +54,6 @@ __all__ = [
     "DEFAULT_CONTEXT_SENTENCES",
     "DEFAULT_MAX_PASSAGES",
     "MIN_WORDS",
-    "DEFAULT_ANSWER_TOKENS",
 ]
 
 _DEFAULTS = load_tool_defaults(
@@ -72,7 +71,6 @@ require_keys(
     _SETTINGS, {
         "CONTEXT_SENTENCES",
         "MAX_PASSAGES",
-        "ANSWER_TOKENS",
     }, "show_source.SETTINGS"
 )
 DEFAULT_CONTEXT_SENTENCES: Final[int] = (
@@ -80,9 +78,6 @@ DEFAULT_CONTEXT_SENTENCES: Final[int] = (
 )
 DEFAULT_MAX_PASSAGES: Final[int] = (
     require_int(_SETTINGS, "MAX_PASSAGES", "show_source.SETTINGS", 1, 10)
-)
-DEFAULT_ANSWER_TOKENS: Final[int] = (
-    require_int(_SETTINGS, "ANSWER_TOKENS", "show_source.SETTINGS", 100, 2000)
 )
 
 _HEURISTICS = require_section(

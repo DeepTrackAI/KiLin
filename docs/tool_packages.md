@@ -113,13 +113,19 @@ and DeepTrack-style documentation conventions apply to all Python modules.
 
 ## Generation settings for tools
 
-The tool context's `ask_model` and `write` adapters inherit the active
-answering session's selected model, thinking mode and temperature. The
-smaller of the tool's requested `max_new_tokens` and the active session's
-configured output-token maximum governs the call. Tools requiring lengthy
-thinking responses should set an appropriate tool-specific output budget;
-a small structured-answer budget can otherwise truncate a thinking reply.
-Internal and user-facing answering-model calls follow the same policy.
+The `ask_model` and `write` adapters use the active session's model,
+temperature and output allowance. `write` inherits session thinking;
+`ask_model` uses the tool's explicit `MODEL_CALLS.THINKING` policy.
+Thinking requests always inherit the user-selected token limit. Only
+nonthinking requests may supply a smaller cap, which cannot exceed the
+user's maximum. Pass `None` for ordinary analysis, prose, or variable-length
+structured output; reserve explicit caps for genuinely brief responses.
+Do not infer thinking from the cap or use duration estimates as limits.
+
+The allowance is per model call, includes thinking and final output, and is
+not a target response length. Source-input budgets and template word limits
+serve different purposes. See [configuration](configuration.md#internal-tool-thinking)
+for defaults, retained exceptions, and removed configuration keys.
 
 The returned text differs intentionally: `ask_model` removes thinking
 from the value it passes to tool logic, so classification, reference

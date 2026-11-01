@@ -80,7 +80,7 @@ _DOCUMENT_WORDS: Final[frozenset[str]] = frozenset(
 )
 # Longest router reply naming the terms; the same budget as exact-term
 # listing without categories.
-_TERMS_REPLY_TOKENS: Final[int] = 96
+_TERMS_REPLY_TOKENS: Final[int] = 128
 # Name of the quick version that reads only the passages with a term.
 _QUICK_LABEL: Final[str] = "Exact matches only"
 

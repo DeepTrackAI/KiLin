@@ -166,7 +166,6 @@ _REQUEST_WORDS: Final[re.Pattern[str]] = re.compile(
 )
 # Longest replies: the router's line of JSON and a batch's numbers.
 _TOPIC_REPLY_TOKENS: Final[int] = _config.TOPIC_REPLY_TOKENS
-_JUDGE_REPLY_TOKENS: Final[int] = _config.JUDGE_REPLY_TOKENS
 # Estimated tokens that a sentence's number and line break add to a batch.
 _SENTENCE_NUMBER_TOKENS: Final[int] = _config.SENTENCE_NUMBER_TOKENS
 # Rough speeds of an 8B 4-bit model on Apple silicon, for estimates only.
@@ -676,7 +675,7 @@ def _judge(
         )
         system, prompt = judge_prompt(topic, batch, question)
         try:
-            reply = context.ask_model(system, prompt, _JUDGE_REPLY_TOKENS)
+            reply = context.ask_model(system, prompt, None)
         except IncompleteModelResponse:
             raise
         except Exception as error:  # Never turn failure into zero matches.

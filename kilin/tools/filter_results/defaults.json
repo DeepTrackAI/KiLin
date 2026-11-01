@@ -4,12 +4,9 @@
     "ITEM_CHARACTERS": 400
   },
   "ESTIMATES": {
-    "ITEM_NUMBER_TOKENS": 4,
-    "REPLY_TOKENS": 120
+    "ITEM_NUMBER_TOKENS": 4
   },
   "MODEL_CALLS": {
-    "THINKING": "off",
-    "SHORT_REPLY_THINKING": "inherit",
-    "SHORT_REPLY_MAX_TOKENS": 0
+    "THINKING": "off"
   }
 }

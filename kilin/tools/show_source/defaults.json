@@ -1,15 +1,12 @@
 {
   "SETTINGS": {
     "CONTEXT_SENTENCES": 2,
-    "MAX_PASSAGES": 3,
-    "ANSWER_TOKENS": 400
+    "MAX_PASSAGES": 3
   },
   "HEURISTICS": {
     "MIN_WORDS": 4
   },
   "MODEL_CALLS": {
-    "THINKING": "inherit",
-    "SHORT_REPLY_THINKING": "inherit",
-    "SHORT_REPLY_MAX_TOKENS": 0
+    "THINKING": "inherit"
   }
 }

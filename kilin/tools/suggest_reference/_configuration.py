@@ -56,9 +56,9 @@ from kilin.tools._model_calls import (
 )
 
 __all__ = [
+    "JUDGE_REPLY_TOKENS",
     "MODEL_CALLS",
     "CALL_SECONDS",
-    "DEFAULT_ANSWER_TOKENS",
     "DEFAULT_CONFIRMATION",
     "DEFAULT_FILES",
     "DEFAULT_LARGE_BATCHES",
@@ -78,14 +78,15 @@ _TOOL = "suggest_reference"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
     "MODEL_CALLS": {
-        "THINKING", "SHORT_REPLY_THINKING", "SHORT_REPLY_MAX_TOKENS",
+        "THINKING",
     },
     "SETTINGS": {
-        "FILES", "PASSAGES", "PASSAGE_TOKENS", "ANSWER_TOKENS",
+        "FILES", "PASSAGES", "PASSAGE_TOKENS",
         "QUICK_FILES", "CONFIRMATION", "LARGE_BATCHES",
     },
     "STATEMENT": {"MIN_WORDS", "ROUTER_TOKENS", "ROUTER_WORD_SHARE"},
     "ESTIMATES": {
+        "JUDGE_REPLY_TOKENS",
         "PROMPT_TOKENS_PER_SECOND", "REPLY_TOKENS_PER_SECOND",
         "CALL_SECONDS", "PROMPT_OVERHEAD_TOKENS", "REPLY_SHARE",
     },
@@ -107,11 +108,6 @@ DEFAULT_PASSAGES: Final[int] = require_int(
 )
 DEFAULT_PASSAGE_TOKENS: Final[int] = require_int(
     _SETTINGS, "PASSAGE_TOKENS", _WHERE, 300, 16000
-)
-DEFAULT_ANSWER_TOKENS: Final[int | None] = (
-    None if _SETTINGS["ANSWER_TOKENS"] is None else require_int(
-        _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 131072
-    )
 )
 DEFAULT_QUICK_FILES: Final[int] = require_int(
     _SETTINGS, "QUICK_FILES", _WHERE, 1, 20
@@ -135,6 +131,9 @@ ROUTER_WORD_SHARE: Final[float] = require_number(
     _STATEMENT, "ROUTER_WORD_SHARE", "STATEMENT", 0.0, 1.0
 )
 
+JUDGE_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "JUDGE_REPLY_TOKENS", "ESTIMATES", 1, 131072
+)
 PROMPT_TOKENS_PER_SECOND: Final[float] = require_number(
     _ESTIMATES, "PROMPT_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
 )

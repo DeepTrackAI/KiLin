@@ -217,7 +217,6 @@ def take_notes(
     name: str,
     texts: Sequence[str],
     parts: Sequence[Sequence[int]],
-    note_tokens: int,
     context: ToolContext,
     *,
     what: str = "document",
@@ -236,8 +235,6 @@ def take_notes(
         Every passage's text; passage ``n`` is ``texts[n - 1]``.
     parts: Sequence[Sequence[int]]
         Passage indices per part, in reading order.
-    note_tokens: int
-        Longest notes for one part, in tokens.
     context: ToolContext
         KíLín's services (``ask_model``, ``progress``, ``trace``).
     what: str, optional
@@ -277,7 +274,7 @@ def take_notes(
             [(index + 1, texts[index]) for index in part],
         )
         try:
-            reply = context.ask_model(system, prompt, note_tokens)
+            reply = context.ask_model(system, prompt, None)
         except IncompleteModelResponse:
             raise
         except Exception as error:

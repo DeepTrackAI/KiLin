@@ -3,14 +3,13 @@
     "FILES": 5,
     "PASSAGES": 4,
     "PASSAGE_TOKENS": 4000,
-    "ANSWER_TOKENS": null,
     "QUICK_FILES": 2,
     "CONFIRMATION": "when_large",
     "LARGE_BATCHES": 5
   },
   "STATEMENT": {
     "MIN_WORDS": 4,
-    "ROUTER_TOKENS": 200,
+    "ROUTER_TOKENS": 256,
     "ROUTER_WORD_SHARE": 0.8
   },
   "ESTIMATES": {
@@ -18,11 +17,10 @@
     "REPLY_TOKENS_PER_SECOND": 25.0,
     "CALL_SECONDS": 1.0,
     "PROMPT_OVERHEAD_TOKENS": 450,
-    "REPLY_SHARE": 0.6
+    "REPLY_SHARE": 0.6,
+    "JUDGE_REPLY_TOKENS": 256
   },
   "MODEL_CALLS": {
-    "THINKING": "inherit",
-    "SHORT_REPLY_THINKING": "off",
-    "SHORT_REPLY_MAX_TOKENS": 512
+    "THINKING": "inherit"
   }
 }

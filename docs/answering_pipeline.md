@@ -146,6 +146,13 @@ session. The configured `thinking` remains resumable state, while
 intents cannot declare explicit overrides. See
 [Per-intent thinking policy](configuration.md#per-intent-thinking-policy).
 
+All tool answering-model calls inherit the active per-question output
+allowance. Thinking-enabled calls never use a smaller tool-local cap;
+nonthinking calls can do so only for explicitly bounded short responses.
+Internal thinking is configured independently by the tool's `MODEL_CALLS`
+policy, not inferred from its token budget. See
+[tool generation settings](tool_packages.md#generation-settings-for-tools).
+
 For a tool intent, `tools/_registry.run_tool()` invokes the registered
 package with a `ToolRequest` and a `ToolContext`. It returns `ToolResult`
 containing `answer`, numbered evidence, summary metadata and the `streamed`

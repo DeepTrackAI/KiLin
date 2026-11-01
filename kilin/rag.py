@@ -3536,7 +3536,8 @@ class RAGSession:
             prompt: str
                 Request sent to the answering model.
             tokens: int | None
-                Output limit, or ``None`` to inherit the session limit.
+                Optional nonthinking cap. Thinking requests and ``None``
+                always inherit the active session's output limit.
 
             Returns
             -------
@@ -3545,7 +3546,7 @@ class RAGSession:
 
             """
 
-            override = model_policy.thinking_override(tokens)
+            override = model_policy.thinking_override()
             call: dict[str, object] = {
                 "thinking": (
                     self.chat_session.thinking
@@ -3575,7 +3576,7 @@ class RAGSession:
                     token_callback(f"<think>{part}</think>\n\n")
             return strip_thinking(raw)
 
-        def write(system: str, prompt: str, tokens: int) -> str:
+        def write(system: str, prompt: str, tokens: int | None) -> str:
             """Stream a final tool reply while enforcing its completion.
 
             Parameters
@@ -3584,8 +3585,8 @@ class RAGSession:
                 Instructions for the user-visible model request.
             prompt: str
                 User-visible generation prompt.
-            tokens: int
-                Requested output-token limit.
+            tokens: int | None
+                Optional nonthinking cap; ``None`` inherits the user limit.
 
             Returns
             -------

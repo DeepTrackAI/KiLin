@@ -88,7 +88,6 @@ __all__ = [
 # Estimated tokens that an item's number and blank line add to a batch.
 _ITEM_NUMBER_TOKENS: Final[int] = _config.ITEM_NUMBER_TOKENS
 # Longest reply of one batch: its matching item numbers.
-_REPLY_TOKENS: Final[int] = _config.REPLY_TOKENS
 
 
 @dataclass(frozen=True, slots=True)
@@ -227,7 +226,7 @@ def run(
             f"(batch {index} of {len(batches)})"
         )
         system, prompt = filter_prompt(request.question, batch)
-        reply = context.ask_model(system, prompt, _REPLY_TOKENS)
+        reply = context.ask_model(system, prompt, None)
         numbers = {number for number, _ in batch}
         picked += selected_numbers(reply, numbers)
     summary.update(

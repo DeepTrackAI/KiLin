@@ -2337,7 +2337,7 @@ class ChatEngine:
             "brackets, labels, quotation marks, or punctuation. Return only "
             "the title.",
             f"{prompt}Title:",
-            max_new_tokens=24,
+            max_new_tokens=32,
             language_context=(question,),
         )
         title = title.splitlines()[0] if title.splitlines() else ""

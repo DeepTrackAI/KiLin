@@ -50,10 +50,10 @@ from kilin.tools._model_calls import (
 )
 
 __all__ = [
+    "ANSWER_REPLY_TOKENS",
+    "NOTE_REPLY_TOKENS",
     "MODEL_CALLS",
     "DEFAULT_PART_TOKENS",
-    "DEFAULT_NOTE_TOKENS",
-    "DEFAULT_ANSWER_TOKENS",
     "DEFAULT_MAX_MODEL_CALLS",
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
@@ -78,8 +78,6 @@ _SETTINGS = require_section(
 require_keys(
     _SETTINGS, {
         "PART_TOKENS",
-        "NOTE_TOKENS",
-        "ANSWER_TOKENS",
         "MAX_MODEL_CALLS",
         "CONFIRMATION",
         "LARGE_BATCHES",
@@ -87,12 +85,6 @@ require_keys(
 )
 DEFAULT_PART_TOKENS: Final[int] = (
     require_int(_SETTINGS, "PART_TOKENS", "find_fact.SETTINGS", 1000, 16000)
-)
-DEFAULT_NOTE_TOKENS: Final[int] = (
-    require_int(_SETTINGS, "NOTE_TOKENS", "find_fact.SETTINGS", 100, 1500)
-)
-DEFAULT_ANSWER_TOKENS: Final[int] = (
-    require_int(_SETTINGS, "ANSWER_TOKENS", "find_fact.SETTINGS", 100, 4000)
 )
 DEFAULT_MAX_MODEL_CALLS: Final[int] = (
     require_int(_SETTINGS, "MAX_MODEL_CALLS", "find_fact.SETTINGS", 1, 500)
@@ -110,12 +102,20 @@ _ESTIMATES = require_section(
 )
 require_keys(
     _ESTIMATES, {
+        "ANSWER_REPLY_TOKENS",
+        "NOTE_REPLY_TOKENS",
         "PROMPT_TOKENS_PER_SECOND",
         "REPLY_TOKENS_PER_SECOND",
         "NOTES_PROMPT_TOKENS",
         "CALL_SECONDS",
         "QUICK_ANSWER_SECONDS",
     }, "find_fact.ESTIMATES"
+)
+NOTE_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "NOTE_REPLY_TOKENS", "find_fact.ESTIMATES", 1, 131072
+)
+ANSWER_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "ANSWER_REPLY_TOKENS", "find_fact.ESTIMATES", 1, 131072
 )
 PROMPT_TOKENS_PER_SECOND: Final[float] = (
     require_number(

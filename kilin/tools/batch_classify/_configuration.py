@@ -65,7 +65,6 @@ __all__ = [
     "REPLY_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_ITEM",
     "PROMPT_OVERHEAD_TOKENS",
-    "REPLY_TOKEN_LIMIT_PER_ITEM",
     "RETRY_GROUP",
 ]
 
@@ -165,7 +164,6 @@ require_keys(
         "REPLY_TOKENS_PER_SECOND",
         "REPLY_TOKENS_PER_ITEM",
         "PROMPT_OVERHEAD_TOKENS",
-        "REPLY_TOKEN_LIMIT_PER_ITEM",
         "RETRY_GROUP",
     }, "batch_classify.ESTIMATES"
 )
@@ -202,15 +200,6 @@ PROMPT_OVERHEAD_TOKENS: Final[int] = (
         "PROMPT_OVERHEAD_TOKENS",
         "batch_classify.ESTIMATES",
         0,
-        100000,
-    )
-)
-REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "REPLY_TOKEN_LIMIT_PER_ITEM",
-        "batch_classify.ESTIMATES",
-        1,
         100000,
     )
 )

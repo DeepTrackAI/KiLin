@@ -74,17 +74,11 @@ class TestSuggestReferencePackage(unittest.TestCase):
         """An omitted limit never imposes the historical 250-token cap."""
 
         settings = tool.parse_settings({}, "test")
-        self.assertIsNone(settings.answer_tokens)
-        self.assertIsNone(tool.parse_settings(
-            {"answer_tokens": None}, "test",
-        ).answer_tokens)
-        self.assertEqual(tool.parse_settings(
-            {"answer_tokens": 4096}, "test",
-        ).answer_tokens, 4096)
-        for bad in (0, -1, "250", False, 131073):
-            with self.subTest(value=bad):
-                with self.assertRaises(ValueError):
-                    tool.parse_settings({"answer_tokens": bad}, "test")
+        self.assertNotIn("answer_tokens", {f.name for f in fields(settings)})
+        for obsolete in (None, 4096, 0, -1, "250", False, 131073):
+            with self.subTest(value=obsolete):
+                with self.assertRaisesRegex(ValueError, "unknown settings"):
+                    tool.parse_settings({"answer_tokens": obsolete}, "test")
 
     def test_invalid_project_type_settings(self) -> None:
         for values in (

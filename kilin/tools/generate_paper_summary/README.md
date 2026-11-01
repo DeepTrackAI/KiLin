@@ -35,8 +35,6 @@ uses the global README to define its settings.
 | --- | --- | --- |
 | `TEMPLATE` | `research_briefing` | Default template ID when no format is named; a safe filename stem, without `.md` or directory separators. |
 | `PART_TOKENS` | 6000 | Approximate paper tokens read per model call; integer, 1000–16000. |
-| `NOTE_TOKENS` | 500 | Maximum tokens of notes per reading part; integer, 100–1500. |
-| `SECTION_TOKENS` | 600 | Maximum tokens when writing a section without a specified length; integer, 100–2000. |
 | `REPAIR_ATTEMPTS` | 1 | Allowed targeted revisions of a nonconforming section; integer, 0–4. |
 | `MAX_MODEL_CALLS` | 20 | Limit on paper-reading parts; integer, 1–200. |
 | `CONFIRMATION` | `when_large` | Confirmation policy: `always`, `when_large`, or `never`. |
@@ -76,10 +74,15 @@ tool, when choosing entries for a report.
 | Key | Default | Meaning and validation |
 | --- | --- | --- |
 | `EARLIER_SECTION_WORDS` | 30 | Words retained from previously written sections to discourage repetition; positive integer. |
-| `HEADLINE_TOKENS` | 60 | Maximum response tokens for writing or repairing a headline; positive integer. |
-| `REFERENCES_TOKENS` | 40 | Maximum response tokens for choosing reference-item numbers; positive integer. |
+| `HEADLINE_TOKENS` | 128 | Nonthinking cap for a headline; ignored when thinking is on. Positive integer. |
+| `REFERENCES_TOKENS` | 128 | Nonthinking cap for reference identifiers; ignored when thinking is on. Positive integer. |
 
 ## `ESTIMATES` — model-time planning assumptions
+
+- `NOTE_REPLY_TOKENS` (default `256`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
+- `SECTION_REPLY_TOKENS` (default `512`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
 
 These values are **planning estimates**, not model-specific measurements.
 They preserve the original assumptions for a small local model on Apple
@@ -165,29 +168,22 @@ final template or reference checks are returned with `status: incomplete`,
 `valid: false` and the validation problems. Neither Markdown nor PDF is
 published in that case; existing files remain untouched.
 
-## Internal model thinking
 
-`MODEL_CALLS` in this tool's `defaults.json` controls only
-`ToolContext.ask_model`, identically in the notebook and GUI.
+## Generation settings
 
-Bounded internal replies of at most 512 requested output tokens default to nonthinking inference. Longer analysis requests and requests without an explicit output cap inherit the main setting.
+Output allowances come from the active session, including per-question GUI
+or API settings. They are ceilings for each model call, not target lengths
+or a total budget for a multi-call tool. Prose length is controlled by the
+prompt or report template; input passage budgets remain separate.
 
-| Key | Packaged value | Meaning |
-| --- | --- | --- |
-| `THINKING` | `inherit` | `inherit` follows the session subject to the short-reply rule; `on` or `off` forces all internal requests and takes precedence. |
-| `SHORT_REPLY_THINKING` | `off` | `inherit`, `on`, or `off` for bounded short requests, only when `THINKING` is `inherit`. |
-| `SHORT_REPLY_MAX_TOKENS` | `512` | Inclusive requested output-token bound; integer 0-100000. Zero disables the rule. `tokens=None` never counts as short. |
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"inherit"`).
+It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
+It never infers thinking from a token count. `context.write` always inherits
+main-session thinking. Router calls remain nonthinking and separately bounded.
 
-To restore full inheritance, set `THINKING` and `SHORT_REPLY_THINKING` to
-`inherit` (or set the short bound to zero). To force thinking for every
-internal request, set `THINKING` to `on`. Restart KíLín or the notebook kernel
-after editing these cached packaged defaults. Existing projects need no
-reindexing; saved answers are not changed. Project-type tool settings do not
-override this section.
-
-These controls do not change the selected model, temperature, output cap,
-or number of model calls. They do not affect `context.write()` final answers
-or the nonthinking router. A small output budget can still be exhausted when
-thinking is forced on; the completion guard reports an incomplete operation
-instead of a false result. Models must support the existing thinking control.
-See [configuration policy](../../../docs/configuration.md#internal-tool-thinking).
+Thinking requests use the user's full allowance. Only nonthinking requests
+may use an explicit smaller cap, never exceeding the user's maximum.
+Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
+forces thinking and bypasses local short-response caps. Restart after editing
+cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
+for precedence, the retained exceptions, and migration of obsolete keys.

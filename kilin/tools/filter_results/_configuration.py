@@ -54,7 +54,6 @@ __all__ = [
     "DEFAULT_BATCH_TOKENS",
     "DEFAULT_ITEM_CHARACTERS",
     "ITEM_NUMBER_TOKENS",
-    "REPLY_TOKENS",
 ]
 
 _DEFAULTS = load_tool_defaults(
@@ -98,7 +97,6 @@ _ESTIMATES = require_section(
 require_keys(
     _ESTIMATES, {
         "ITEM_NUMBER_TOKENS",
-        "REPLY_TOKENS",
     }, "filter_results.ESTIMATES"
 )
 ITEM_NUMBER_TOKENS: Final[int] = (
@@ -107,15 +105,6 @@ ITEM_NUMBER_TOKENS: Final[int] = (
         "ITEM_NUMBER_TOKENS",
         "filter_results.ESTIMATES",
         0,
-        100000,
-    )
-)
-REPLY_TOKENS: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "REPLY_TOKENS",
-        "filter_results.ESTIMATES",
-        1,
         100000,
     )
 )

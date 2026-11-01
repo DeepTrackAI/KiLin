@@ -65,6 +65,8 @@ from kilin.tools._model_calls import (
 )
 
 __all__ = [
+    "SECTION_REPLY_TOKENS",
+    "NOTE_REPLY_TOKENS",
     "MODEL_CALLS",
     "BEGINNING_CHARACTERS",
     "BEGINNING_PASSAGES",
@@ -73,11 +75,9 @@ __all__ = [
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
     "DEFAULT_MAX_MODEL_CALLS",
-    "DEFAULT_NOTE_TOKENS",
     "DEFAULT_PART_TOKENS",
     "DEFAULT_REFERENCE_ITEMS",
     "DEFAULT_REPAIR_ATTEMPTS",
-    "DEFAULT_SECTION_TOKENS",
     "DEFAULT_TEMPLATE",
     "EARLIER_SECTION_WORDS",
     "ENTRY_MIN_WORDS",
@@ -102,10 +102,10 @@ _NAME = re.compile(r"[A-Za-z0-9][\w-]*")
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
     "MODEL_CALLS": {
-        "THINKING", "SHORT_REPLY_THINKING", "SHORT_REPLY_MAX_TOKENS",
+        "THINKING",
     },
     "SETTINGS": {
-        "TEMPLATE", "PART_TOKENS", "NOTE_TOKENS", "SECTION_TOKENS",
+        "TEMPLATE", "PART_TOKENS",
         "REPAIR_ATTEMPTS", "MAX_MODEL_CALLS", "CONFIRMATION",
         "LARGE_BATCHES",
     },
@@ -123,6 +123,8 @@ _GROUPS = {
         "REFERENCES_TOKENS",
     },
     "ESTIMATES": {
+        "SECTION_REPLY_TOKENS",
+        "NOTE_REPLY_TOKENS",
         "PROMPT_TOKENS_PER_SECOND", "REPLY_TOKENS_PER_SECOND",
         "CALL_SECONDS", "PART_PROMPT_TOKENS", "SECTION_PROMPT_TOKENS",
         "REPLY_SHARE", "REFERENCES_REPLY_TOKENS",
@@ -157,12 +159,6 @@ if not _NAME.fullmatch(DEFAULT_TEMPLATE):
     raise ValueError("SETTINGS.TEMPLATE must be a plain template name.")
 DEFAULT_PART_TOKENS: Final[int] = require_int(
     _SETTINGS, "PART_TOKENS", "SETTINGS", 1000, 16000
-)
-DEFAULT_NOTE_TOKENS: Final[int] = require_int(
-    _SETTINGS, "NOTE_TOKENS", "SETTINGS", 100, 1500
-)
-DEFAULT_SECTION_TOKENS: Final[int] = require_int(
-    _SETTINGS, "SECTION_TOKENS", "SETTINGS", 100, 2000
 )
 DEFAULT_REPAIR_ATTEMPTS: Final[int] = require_int(
     _SETTINGS, "REPAIR_ATTEMPTS", "SETTINGS", 0, 4
@@ -221,6 +217,12 @@ REFERENCES_TOKENS: Final[int] = require_int(
     _WRITING, "REFERENCES_TOKENS", "WRITING", 1, 100000
 )
 
+NOTE_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "NOTE_REPLY_TOKENS", "ESTIMATES", 1, 131072
+)
+SECTION_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "SECTION_REPLY_TOKENS", "ESTIMATES", 1, 131072
+)
 PROMPT_TOKENS_PER_SECOND: Final[float] = require_number(
     _ESTIMATES, "PROMPT_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
 )

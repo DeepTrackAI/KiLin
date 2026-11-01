@@ -124,7 +124,6 @@ _REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 _REPLY_TOKENS_PER_ITEM: Final[int] = _config.REPLY_TOKENS_PER_ITEM
 _PROMPT_OVERHEAD_TOKENS: Final[int] = _config.PROMPT_OVERHEAD_TOKENS
 # Room for one label object per item; reasons are asked to stay short.
-_REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = _config.REPLY_TOKEN_LIMIT_PER_ITEM
 # Missing labels are retried in groups of at most this many items.
 _RETRY_GROUP: Final[int] = _config.RETRY_GROUP
 
@@ -500,7 +499,7 @@ def _label_batch(
     )
     try:
         reply = context.ask_model(
-            system, prompt, _REPLY_TOKEN_LIMIT_PER_ITEM * len(indices) + 64
+            system, prompt, None
         )
     except IncompleteModelResponse:
         raise

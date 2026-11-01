@@ -115,10 +115,6 @@ class ReviewSettings:
     ----------
     part_tokens: int
         Estimated tokens of document per part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    answer_tokens: int
-        Longest final answer, in tokens (200-4000).
     max_model_calls: int
         Most part calls one answer may make (1-200); later parts are
         reported as not read.
@@ -131,8 +127,6 @@ class ReviewSettings:
     """
 
     part_tokens: int = _config.DEFAULT_PART_TOKENS
-    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -165,8 +159,6 @@ def parse_settings(data: dict, where: str) -> ReviewSettings:
         data,
         (
             "part_tokens",
-            "note_tokens",
-            "answer_tokens",
             "max_model_calls",
             "confirmation",
             "large_batches",
@@ -176,12 +168,6 @@ def parse_settings(data: dict, where: str) -> ReviewSettings:
     return ReviewSettings(
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 200, 4000
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1, 200
@@ -355,14 +341,14 @@ def run(
         batches=len(parts),
         batches_to_run=len(to_read),
         estimated_seconds=round(
-            _estimate(to_read, texts, settings) + _answer_seconds(settings),
+            _estimate(to_read, texts) + _answer_seconds(),
             1,
         ),
         quick_items=len(quick),
         quick_seconds=round(
             (
-                _estimate(quick_parts, texts, settings)
-                + _answer_seconds(settings)
+                _estimate(quick_parts, texts)
+                + _answer_seconds()
             )
             if quick
             else 0.0,
@@ -416,7 +402,6 @@ def run(
         name,
         texts,
         runs,
-        settings.note_tokens,
         context,
         what=(
             "function"
@@ -435,7 +420,7 @@ def run(
     system, prompt = answer_prompt(
         request.question, name, notes, len(runs), request.guidance
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
+    answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK or len(read) < len(passages):
         answer += (
@@ -524,7 +509,6 @@ def _fit(
 def _estimate(
     parts: Sequence[Sequence[int]],
     texts: Sequence[str],
-    settings: ReviewSettings,
 ) -> float:
     """Approximate seconds to take notes on the parts.
 
@@ -534,8 +518,6 @@ def _estimate(
         Parts of the document to process.
     texts: Sequence[str]
         Text passages or fields to inspect.
-    settings: ReviewSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -550,17 +532,12 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += 1.0 + prompt / _PROMPT_TOKENS_PER_SECOND
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        total += _config.NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
     return total
 
 
-def _answer_seconds(settings: ReviewSettings) -> float:
+def _answer_seconds() -> float:
     """Approximate seconds for the final answer.
-
-    Parameters
-    ----------
-    settings: ReviewSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -569,4 +546,4 @@ def _answer_seconds(settings: ReviewSettings) -> float:
 
     """
 
-    return 2.0 + settings.answer_tokens / 3 / _REPLY_TOKENS_PER_SECOND
+    return 2.0 + _config.ANSWER_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND

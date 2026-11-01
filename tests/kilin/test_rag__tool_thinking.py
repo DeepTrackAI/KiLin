@@ -93,11 +93,11 @@ class TestToolThinking(unittest.TestCase):
         )
         self.assertEqual(
             [x["thinking"] for x in chat.observations],
-            [False, False, True, True],
+            [True, True, True, True],
         )
         self.assertEqual(
             [x["max_new_tokens"] for x in chat.observations],
-            [60, 500, 600, 1024],
+            [8192, 8192, 8192, 8192],
         )
         self.assertTrue(
             all(x["temperature"] == 0.6 for x in chat.observations)
@@ -115,8 +115,10 @@ class TestToolThinking(unittest.TestCase):
                     chat.thinking = original
                     _, chat = _run(tool, [None, 120], chat=chat)
                     self.assertIs(chat.observations[0]["thinking"], original)
-                    self.assertIsNone(chat.observations[0]["max_new_tokens"])
-                    self.assertFalse(chat.observations[1]["thinking"])
+                    self.assertEqual(
+                        chat.observations[0]["max_new_tokens"], 8192
+                    )
+                    self.assertIs(chat.observations[1]["thinking"], original)
                     self.assertIs(chat.thinking, original)
 
     def test_show_source_keeps_narrative_thinking(self) -> None:
@@ -141,8 +143,7 @@ class TestToolThinking(unittest.TestCase):
                 with self.subTest(policy=policy):
                     path = Path(directory) / f"defaults_{index}.json"
                     path.write_text(json.dumps({"MODEL_CALLS": {
-                        "THINKING": policy, "SHORT_REPLY_THINKING": "inherit",
-                        "SHORT_REPLY_MAX_TOKENS": 0,
+                        "THINKING": policy,
                     }}), encoding="utf-8")
                     configured = load_model_call_settings(path)
                     chat = _FakeChat(response="Result")

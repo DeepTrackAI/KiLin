@@ -501,8 +501,10 @@ def side_reply(
     prompt: str
         The side question.
     max_new_tokens: int | None
-        Explicit per-call output limit, or ``None`` to inherit the chat
-        session's configured maximum. The router supplies its own limit.
+        Optional cap for a nonthinking request. Inherited thinking requests
+        always use the active session maximum, including their thinking.
+        ``None`` inherits that maximum in either mode. Router calls retain
+        their separate explicit limits.
     token_callback: Callable[[str], None] | None, optional
         Receives the reply as it is generated, for a side answer shown to
         the user. Defaults to ``None``.
@@ -510,10 +512,9 @@ def side_reply(
         Original user messages authorizing CJK output, oldest first. The
         generated side prompt cannot authorize scripts. Defaults to ``()``.
     inherit_settings: bool, optional
-        Keep the session thinking and temperature. With no explicit token
-        override, inherit the session's maximum output tokens. An explicit
-        override remains capped by the session maximum when one is set.
-        False retains deterministic router behavior.
+        Keep session thinking and temperature unless explicitly overridden.
+        Only nonthinking calls may use a smaller local cap; it never exceeds
+        the user's maximum. False retains deterministic router behavior.
     preserve_thinking: bool, optional
         Return the complete model output, including thinking text, for a
         visible answer or for separate capture by the tool coordinator.
@@ -535,8 +536,9 @@ def side_reply(
     Raises
     ------
     ValueError
-        If an override is not a boolean or attempts to change router
-        thinking without inheriting tool settings.
+        If the cap is not a positive integer, an override is not a boolean,
+        or a caller attempts to change router thinking without inheriting
+        tool settings.
     IncompleteModelResponse
         If completion is required and the reply is truncated, unfinished
         or has no usable final content.
@@ -548,6 +550,10 @@ def side_reply(
 
     """
 
+    if max_new_tokens is not None and (
+        type(max_new_tokens) is not int or max_new_tokens < 1
+    ):
+        raise ValueError("max_new_tokens must be a positive integer or None.")
     if thinking is not None:
         if type(thinking) is not bool or not inherit_settings:
             raise ValueError(
@@ -569,14 +575,12 @@ def side_reply(
                 "thinking": thinking, "temperature": chat.temperature,
             })
         session_limit = getattr(chat, "max_new_tokens", None)
-        token_limit = (
-            min(max_new_tokens, session_limit)
-            if (
-                inherit_settings and max_new_tokens is not None
-                and session_limit is not None
-            )
-            else max_new_tokens
-        )
+        token_limit = max_new_tokens
+        if inherit_settings:
+            if chat.thinking or token_limit is None:
+                token_limit = session_limit
+            elif session_limit is not None:
+                token_limit = min(token_limit, session_limit)
         options: dict[str, object] = {
             "max_new_tokens": token_limit,
             "language_context": language_context,

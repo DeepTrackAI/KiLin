@@ -281,60 +281,91 @@ Related: [Package defaults](package_defaults.md),
 
 ### Internal tool thinking
 
-Each registered tool owns a validated `MODEL_CALLS` section in its packaged
-`kilin/tools/<tool>/defaults.json`. It controls internal `context.ask_model`
-requests through the same core adapter in the GUI and direct API. It does
-not change intent routing or the user-visible `context.write` policy.
+Every tool inherits the active answering session's output allowance. This
+includes per-question `generation_settings`, whether supplied through the
+GUI or the Python API. The allowance is **per call**, includes thinking and
+final output together, and is not a target length or an aggregate tool budget.
+Tool prompts and report templates still control the requested prose length.
+
+Each tool owns one explicit `MODEL_CALLS` policy in
+`kilin/tools/<tool>/defaults.json`:
 
 ```json
 "MODEL_CALLS": {
-  "THINKING": "inherit",
-  "SHORT_REPLY_THINKING": "off",
-  "SHORT_REPLY_MAX_TOKENS": 512
+  "THINKING": "inherit"
 }
 ```
 
-Resolution order is explicit:
+`THINKING` accepts `inherit`, `on`, or `off`. It controls internal
+`context.ask_model` requests; `context.write` uses main-session thinking.
+The three structured selection tools (`find_passages`, `filter_results`,
+`batch_classify`) default to `off`. All other tools default to `inherit`.
+Changing this value to `inherit` or `on` is sufficient to reset or force
+thinking. There is no short-reply threshold and no token-based mode switch.
 
-1. `THINKING: "on"` or `"off"` forces every internal call.
-2. With `THINKING: "inherit"`, an explicit positive output-token request at
-   or below `SHORT_REPLY_MAX_TOKENS` uses `SHORT_REPLY_THINKING`.
-3. Otherwise, or when the selected policy is `"inherit"`, use the main
-   answering session's current thinking setting.
+Output-limit resolution is deliberately independent:
 
-Both policy fields accept exactly `inherit`, `on`, or `off`; booleans,
-unknown values and misspelled keys are rejected. The bound is an integer
-from 0 to 100000, inclusive; zero disables the short rule. The bound uses
-the tool's requested output budget, before the session ceiling, not the
-length of the user's question. A `None` budget inherits the session limit
-and is not treated as short. This is deterministic configuration, not a
-second model-based classification.
+1. A thinking call uses the active session's maximum, ignoring any local cap.
+2. A nonthinking call with no explicit cap also uses the session maximum.
+3. A nonthinking call with a cap uses the smaller of that cap and the user's
+   maximum. A tool never silently raises the user's selected maximum.
 
-| Tools | Packaged policy | Rationale |
-| --- | --- | --- |
-| `find_passages`, `filter_results`, `batch_classify` | `off`; no short override | Return bounded numbers or labels, not narrative analysis. |
-| `batch_review`, `find_fact`, `generate_paper_summary` | `inherit`; `off` through 512 tokens | Short notes and report metadata must fit; longer drafting inherits. |
-| `reference_check`, `suggest_reference` | `inherit`; `off` through 512 tokens | Normal judgments with no explicit cap inherit; explicitly capped short calls can opt out. |
-| `show_source`, `paper_overview`, `project_inventory`, `scan_and_list` | Full `inherit`; no short override | Narrative explanation or no internal answering calls. |
+When the session maximum is `None`, inherited calls retain the existing
+backend/context-derived budget; a nonthinking local cap still applies.
+Invalid caps (including booleans, zero and negative values) are rejected.
+No minimum generation length is imposed, and no automatic retry is added.
 
-The fallback policy object is full inheritance. Every shipped tool declares
-its policy explicitly. To reset any tool to full inheritance, use
-`THINKING: "inherit"` and `SHORT_REPLY_THINKING: "inherit"` (or a zero
-bound). To enable thinking for every internal call, use `THINKING: "on"`.
-Restart the app or notebook kernel after editing cached defaults. No project
-migration or reindexing is needed. These are tool defaults, not fields of
-project-type intent objects or `profile.ini`.
+Paper overviews, source explanations, document notes, report sections and
+reference judgments no longer have separate local output ceilings. Variable-
+length lists from the three selection tools also inherit the user limit,
+even though these tools default to nonthinking. Input chunk, passage, batch
+and reading budgets are unchanged and must not be confused with output caps.
 
-Overrides do not change temperature, model identity, token ceilings or call
-counts. Final `context.write` responses still inherit the main interface
-setting; router/title requests remain greedy and nonthinking. All settings
-and isolated messages are restored on success and failure. Models that
-ignore `enable_thinking` cannot be forced into a different mode by this
-policy. No retry or extra model is introduced.
+The retained short-response exceptions use powers of two:
 
-The saved tool summary's `internal_generation` records the policy and each
-executed call's effective thinking, requested output cap and completion
-status. Detailed model traces retain the actual generation parameters.
-Forcing thinking on a short budget can still cause an incomplete response;
-the [completion contract](answering_pipeline.md#model-output-completion-contract)
-prevents that failure from being mistaken for a valid negative result.
+| Request | Local output cap | When it applies |
+| --- | ---: | --- |
+| Report headline | 128 | Only when effective thinking is off |
+| Report reference identifiers | 128 | Only when effective thinking is off |
+| Router intent decision | 64 | Separate nonthinking router |
+| Router document selection | 8 | Separate nonthinking router |
+| Router term/topic extraction | 128 | Separate nonthinking router |
+| Router category or statement extraction | 256 | Separate nonthinking router |
+| GUI conversation title | 32 | Separate nonthinking router |
+
+User-supplied limits are not rounded or restricted to powers of two. Router
+limits remain separate from the answering model's session ceiling. The
+report metadata caps are configurable in its `WRITING` section, and are
+bypassed automatically when thinking is enabled.
+
+Temperature, selected models, existing call counts and completion checks
+are unchanged. Internal replies remain thinking-free for parsers; generated
+thinking is retained separately for display as before. All temporary settings
+and isolated histories are restored on success or failure. Models still need
+to support the existing thinking control. An exhausted user budget remains
+an explicit incomplete result, not a false negative or a successful report.
+
+Duration estimates describe expected output, not maximum generation. The
+new `*_REPLY_TOKENS` entries under `ESTIMATES` are used only in plan timing;
+they do not control the model. Estimates remain approximate, particularly
+when thinking uses more of the selected allowance.
+
+#### Migration from the previous tool budgets
+
+The packaged files are updated together. Customized project-type tool
+objects must remove `answer_tokens`, `note_tokens`, and `section_tokens`.
+The corresponding `SETTINGS` defaults (`ANSWER_TOKENS`, `NOTE_TOKENS`,
+`SECTION_TOKENS`) are removed. They are rejected as unknown settings rather
+than silently overriding the interface or becoming ineffective settings.
+
+Remove `SHORT_REPLY_THINKING` and `SHORT_REPLY_MAX_TOKENS` from `MODEL_CALLS`.
+Only `THINKING` remains. Selection output caps `find_passages`'
+`JUDGE_REPLY_TOKENS`, `filter_results`' `REPLY_TOKENS`, and `batch_classify`'s
+`REPLY_TOKEN_LIMIT_PER_ITEM` are removed from those tools' old estimate groups.
+Restart KíLín or the notebook kernel to clear the existing configuration
+cache. No source reindexing or rewriting of historical answers is needed.
+
+The saved tool summary retains `internal_generation` with the resolved
+thinking policy, requested cap and completion status for each internal call.
+The model trace records the actual effective generation allowance. See the
+[completion contract](answering_pipeline.md#model-output-completion-contract).

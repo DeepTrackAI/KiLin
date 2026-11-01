@@ -76,8 +76,6 @@ class TestGeneratePaperSummary(unittest.TestCase):
             SummarySettings(
                 template="research_briefing",
                 part_tokens=6000,
-                note_tokens=500,
-                section_tokens=600,
                 repair_attempts=1,
                 max_model_calls=20,
                 confirmation="when_large",
@@ -101,7 +99,7 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(settings.part_tokens, 8000)
         self.assertEqual(settings.repair_attempts, 2)
         self.assertEqual(settings.confirmation, "always")
-        self.assertEqual(settings.note_tokens, SummarySettings().note_tokens)
+        self.assertFalse(hasattr(settings, "note_tokens"))
 
         names = [
             intent.tool.settings.template
@@ -157,8 +155,8 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(
             {field.name for field in fields(SummarySettings)},
             {
-                "template", "part_tokens", "note_tokens",
-                "section_tokens", "repair_attempts", "max_model_calls",
+                "template", "part_tokens",
+                "repair_attempts", "max_model_calls",
                 "confirmation", "large_batches",
             },
         )
@@ -174,8 +172,8 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(config.NUMBERED_ENTRIES_MIN, 5)
         self.assertEqual(config.DEFAULT_REFERENCE_ITEMS, (1, 3))
         self.assertEqual(config.EARLIER_SECTION_WORDS, 30)
-        self.assertEqual(config.HEADLINE_TOKENS, 60)
-        self.assertEqual(config.REFERENCES_TOKENS, 40)
+        self.assertEqual(config.HEADLINE_TOKENS, 128)
+        self.assertEqual(config.REFERENCES_TOKENS, 128)
         self.assertEqual(config.LIMIT_TOLERANCE, 0.1)
         self.assertEqual(config.MIN_TOTAL_WORDS, 50)
         self.assertEqual(config.PROMPT_TOKENS_PER_SECOND, 700.0)

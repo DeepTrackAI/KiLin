@@ -52,7 +52,6 @@ from kilin.tools._model_calls import (
 __all__ = [
     "MODEL_CALLS",
     "DEFAULT_MAX_TOKENS",
-    "DEFAULT_ANSWER_TOKENS",
     "OPENING_PASSAGES",
 ]
 
@@ -70,7 +69,6 @@ _SETTINGS = require_section(
 require_keys(
     _SETTINGS, {
         "MAX_TOKENS",
-        "ANSWER_TOKENS",
     }, "paper_overview.SETTINGS"
 )
 DEFAULT_MAX_TOKENS: Final[int] = (
@@ -80,15 +78,6 @@ DEFAULT_MAX_TOKENS: Final[int] = (
         "paper_overview.SETTINGS",
         1000,
         20000,
-    )
-)
-DEFAULT_ANSWER_TOKENS: Final[int] = (
-    require_int(
-        _SETTINGS,
-        "ANSWER_TOKENS",
-        "paper_overview.SETTINGS",
-        100,
-        2000,
     )
 )
 _HEURISTICS = require_section(

@@ -198,16 +198,16 @@ from kilin.tools.generate_paper_summary._configuration import (
     DEFAULT_CONFIRMATION,
     DEFAULT_LARGE_BATCHES,
     DEFAULT_MAX_MODEL_CALLS,
-    DEFAULT_NOTE_TOKENS,
     DEFAULT_PART_TOKENS,
     DEFAULT_REFERENCE_ITEMS,
     DEFAULT_REPAIR_ATTEMPTS,
-    DEFAULT_SECTION_TOKENS,
     DEFAULT_TEMPLATE,
     EARLIER_SECTION_WORDS,
     ENTRY_MIN_WORDS,
     HEADLINE_TOKENS,
     NUMBERED_ENTRIES_MIN,
+    NOTE_REPLY_TOKENS,
+    SECTION_REPLY_TOKENS,
     ORGANISATION_WORDS,
     PART_PROMPT_TOKENS,
     PROMPT_TOKENS_PER_SECOND,
@@ -320,10 +320,6 @@ class SummarySettings:
         ``.md`` in the project's ``templates/`` folder.
     part_tokens: int
         Estimated tokens of paper per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    section_tokens: int
-        Longest section without a word or item limit, in tokens (100-2000).
     repair_attempts: int
         Targeted fixes allowed per section that misses its limit (0-4).
     max_model_calls: int
@@ -338,8 +334,6 @@ class SummarySettings:
 
     template: str = DEFAULT_TEMPLATE
     part_tokens: int = DEFAULT_PART_TOKENS
-    note_tokens: int = DEFAULT_NOTE_TOKENS
-    section_tokens: int = DEFAULT_SECTION_TOKENS
     repair_attempts: int = DEFAULT_REPAIR_ATTEMPTS
     max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = DEFAULT_CONFIRMATION
@@ -373,8 +367,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
     names = (
         "template",
         "part_tokens",
-        "note_tokens",
-        "section_tokens",
         "repair_attempts",
         "max_model_calls",
         "confirmation",
@@ -395,12 +387,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
         template=template,
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        section_tokens=check_int(
-            where, data, "section_tokens", defaults.section_tokens, 100, 2000
         ),
         repair_attempts=check_int(
             where, data, "repair_attempts", defaults.repair_attempts, 0, 4
@@ -1167,11 +1153,11 @@ def run(
         batches=len(parts),
         batches_to_run=len(to_read),
         estimated_seconds=round(
-            _estimate(to_read, texts, settings, template), 1
+            _estimate(to_read, texts, template), 1
         ),
         quick_items=len(parts[0]),
         quick_seconds=round(
-            _estimate(parts[:1], texts, settings, template), 1
+            _estimate(parts[:1], texts, template), 1
         ),
         details=(
             *(
@@ -1220,7 +1206,6 @@ def run(
         path.name,
         texts,
         runs,
-        settings.note_tokens,
         context,
         what="paper",
         whole=choice != PLAN_CHOICE_QUICK,
@@ -1491,7 +1476,7 @@ def _write_section(
     written: list[tuple[str, str]]
         Sections written so far, so they are not repeated.
     settings: SummarySettings
-        The intent's settings (``repair_attempts``, ``section_tokens``).
+        The intent's repair-attempt setting.
     context: ToolContext
         KíLín's services.
 
@@ -1507,8 +1492,7 @@ def _write_section(
 
     context.progress(f"Writing {section.name}")
     system, prompt = section_prompt(template, section, name, notes, written)
-    tokens = _section_tokens(section, settings)
-    content = _content(context.ask_model(system, prompt, tokens), section)
+    content = _content(context.ask_model(system, prompt, None), section)
     problem = section_problem(section, content)
 
     fixes: list[str] = []
@@ -1524,7 +1508,7 @@ def _write_section(
         system, prompt = fix_prompt(
             section, content, problem, notes if short else None
         )
-        content = _content(context.ask_model(system, prompt, tokens), section)
+        content = _content(context.ask_model(system, prompt, None), section)
         problem = section_problem(section, content)
 
     if problem and section.words and (
@@ -1829,23 +1813,20 @@ def _headline(reply: str) -> str:
     return line.strip().lstrip("#").strip().strip('"“”*').strip()
 
 
-def _section_tokens(
-    section: TemplateSection, settings: SummarySettings
-) -> int:
-    """Return the reply room for one section, in tokens.
+def _section_reply_estimate(section: TemplateSection) -> int:
+    """Estimate section output for the plan, not generation control.
 
     Parameters
     ----------
     section: TemplateSection
         The section.
-    settings: SummarySettings
-        The intent's settings (``section_tokens``).
 
     Returns
     -------
     int
         Two tokens per word of the word maximum plus 80; else 90 tokens
-        per item of the item maximum plus 40; else ``section_tokens``.
+        per item of the item maximum plus 40; otherwise the packaged section
+        estimate.
 
     """
 
@@ -1855,13 +1836,12 @@ def _section_tokens(
     if section.items:
         return 90 * section.items[1] + 40
 
-    return settings.section_tokens
+    return SECTION_REPLY_TOKENS
 
 
 def _estimate(
     parts: list[list[int]],
     texts: list[str],
-    settings: SummarySettings,
     template: ReportTemplate,
 ) -> float:
     """Return the approximate seconds of a run, for the plan.
@@ -1872,8 +1852,6 @@ def _estimate(
         Passage indices of the parts to read.
     texts: list[str]
         Every passage's text.
-    settings: SummarySettings
-        The intent's settings.
     template: ReportTemplate
         The report template.
 
@@ -1892,10 +1870,10 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        # Notes use about half of their reply room.
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        # Planning estimates are independent of generation limits.
+        total += NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
 
-    notes = len(parts) * settings.note_tokens * _REPLY_SHARE
+    notes = len(parts) * NOTE_REPLY_TOKENS * _REPLY_SHARE
     written = [
         section
         for section in template.sections
@@ -1906,7 +1884,7 @@ def _estimate(
         reply = (
             _REFERENCES_REPLY_TOKENS
             if section.source == SECTION_SOURCE_REFERENCES
-            else _section_tokens(section, settings) * _REPLY_SHARE
+            else _section_reply_estimate(section) * _REPLY_SHARE
         )
         total += _CALL_SECONDS + reply / _REPLY_TOKENS_PER_SECOND
     total += (

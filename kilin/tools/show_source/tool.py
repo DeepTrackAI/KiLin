@@ -116,14 +116,11 @@ class SourceSettings:
         Sentences shown before and after the cited sentence (0-10).
     max_passages: int
         Most cited passages shown (1-10).
-    answer_tokens: int
-        Longest explanation, in tokens (100-2000).
 
     """
 
     context_sentences: int = _config.DEFAULT_CONTEXT_SENTENCES
     max_passages: int = _config.DEFAULT_MAX_PASSAGES
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> SourceSettings:
@@ -149,7 +146,7 @@ def parse_settings(data: dict, where: str) -> SourceSettings:
     """
 
     reject_unknown(
-        where, data, ("context_sentences", "max_passages", "answer_tokens")
+        where, data, ("context_sentences", "max_passages")
     )
 
     defaults = SourceSettings()
@@ -164,9 +161,6 @@ def parse_settings(data: dict, where: str) -> SourceSettings:
         ),
         max_passages=check_int(
             where, data, "max_passages", defaults.max_passages, 1, 10
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 2000
         ),
     )
 
@@ -275,7 +269,7 @@ def run(
         for number, (path, sentences, focus) in enumerate(shown, start=1)
     ]
     system, prompt = explain_prompt(request.question, windows)
-    explanation = context.ask_model(system, prompt, settings.answer_tokens)
+    explanation = context.ask_model(system, prompt, None)
 
     lines: list[str] = []
     evidence: list[dict[str, object]] = []

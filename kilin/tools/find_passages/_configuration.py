@@ -59,7 +59,6 @@ __all__ = [
     "DEFAULT_LARGE_BATCHES",
     "MIN_WORDS",
     "TOPIC_REPLY_TOKENS",
-    "JUDGE_REPLY_TOKENS",
     "SENTENCE_NUMBER_TOKENS",
     "PROMPT_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_SECOND",
@@ -127,7 +126,6 @@ _ESTIMATES = require_section(
 require_keys(
     _ESTIMATES, {
         "TOPIC_REPLY_TOKENS",
-        "JUDGE_REPLY_TOKENS",
         "SENTENCE_NUMBER_TOKENS",
         "PROMPT_TOKENS_PER_SECOND",
         "REPLY_TOKENS_PER_SECOND",
@@ -140,15 +138,6 @@ TOPIC_REPLY_TOKENS: Final[int] = (
     require_int(
         _ESTIMATES,
         "TOPIC_REPLY_TOKENS",
-        "find_passages.ESTIMATES",
-        1,
-        100000,
-    )
-)
-JUDGE_REPLY_TOKENS: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "JUDGE_REPLY_TOKENS",
         "find_passages.ESTIMATES",
         1,
         100000,

@@ -28,59 +28,40 @@ class TestModelCallSettings(unittest.TestCase):
     """Keep inheritance explicit and every override reversible."""
 
     def test_default_inherits_for_every_budget(self) -> None:
-        for tokens in (None, 1, 120, 512, 8192):
-            with self.subTest(tokens=tokens):
-                self.assertIsNone(
-                    ModelCallSettings().thinking_override(tokens)
-                )
+        self.assertIsNone(ModelCallSettings().thinking_override())
+        self.assertEqual(list(ModelCallSettings.__dataclass_fields__),
+                         ["thinking"])
 
-    def test_short_override_uses_inclusive_requested_bound(self) -> None:
-        policy = ModelCallSettings("inherit", "off", 512)
-        for tokens, expected in [(1, False), (512, False), (513, None),
-                                 (8192, None), (None, None)]:
-            with self.subTest(tokens=tokens):
-                self.assertIs(policy.thinking_override(tokens), expected)
+    def test_removed_short_override_fields_are_rejected(self) -> None:
+        for field in ("short_reply_thinking", "short_reply_max_tokens"):
+            with self.subTest(field=field), self.assertRaises(TypeError):
+                ModelCallSettings(**{field: "off"})
 
-    def test_forced_policy_wins_over_short_reply_rule(self) -> None:
+    def test_forced_policy_is_explicit(self) -> None:
         for forced, expected in [("off", False), ("on", True)]:
-            policy = ModelCallSettings(forced, "off", 512)
-            for tokens in (None, 120, 1000):
-                with self.subTest(forced=forced, tokens=tokens):
-                    self.assertIs(policy.thinking_override(tokens), expected)
+            self.assertIs(ModelCallSettings(forced).thinking_override(),
+                          expected)
 
-    def test_zero_or_inherit_disables_short_override(self) -> None:
-        for policy in (ModelCallSettings("inherit", "off", 0),
-                       ModelCallSettings("inherit", "inherit", 512)):
-            self.assertIsNone(policy.thinking_override(120))
-        self.assertTrue(
-            ModelCallSettings("inherit", "on", 120).thinking_override(120)
-        )
+    def test_inherit_resets_a_forced_policy(self) -> None:
+        for value in ("inherit", "off", "on", "inherit"):
+            result = ModelCallSettings(value).thinking_override()
+            self.assertIs(
+                result, None if value == "inherit" else value == "on"
+            )
 
     def test_invalid_values_are_rejected(self) -> None:
         for value in (True, False, None, "auto", "ON", 1, []):
-            with self.subTest(value=value):
-                with self.assertRaises(ValueError):
-                    ModelCallSettings(thinking=value)
-                with self.assertRaises(ValueError):
-                    ModelCallSettings(short_reply_thinking=value)
-        for value in (True, -1, 100001, 512.0, "512", None):
-            with self.subTest(bound=value):
-                with self.assertRaises(ValueError):
-                    ModelCallSettings(short_reply_max_tokens=value)
-        for value in (True, 0, -1, 1.5, "120"):
-            with self.subTest(tokens=value):
-                with self.assertRaises(ValueError):
-                    ModelCallSettings().thinking_override(value)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ModelCallSettings(thinking=value)
 
     def test_json_validation_and_cache(self) -> None:
         with TemporaryDirectory() as directory:
             path = Path(directory) / "defaults.json"
             path.write_text(json.dumps({"MODEL_CALLS": {
-                "THINKING": "inherit", "SHORT_REPLY_THINKING": "off",
-                "SHORT_REPLY_MAX_TOKENS": 512,
+                "THINKING": "inherit",
             }}), encoding="utf-8")
             policy = load_model_call_settings(path)
-            self.assertEqual(policy, ModelCallSettings("inherit", "off", 512))
+            self.assertEqual(policy, ModelCallSettings("inherit"))
             self.assertIs(load_model_call_settings(path), policy)
             # Existing defaults are deliberately cached until restart.
             path.write_text("not json", encoding="utf-8")
@@ -88,13 +69,12 @@ class TestModelCallSettings(unittest.TestCase):
 
     def test_json_rejects_missing_unknown_and_wrong_types(self) -> None:
         valid = {
-            "THINKING": "inherit", "SHORT_REPLY_THINKING": "off",
-            "SHORT_REPLY_MAX_TOKENS": 512,
+            "THINKING": "inherit",
         }
         bad_sections = [
             {}, {**valid, "THINKNG": "on"}, {**valid, "THINKING": True},
-            {**valid, "SHORT_REPLY_MAX_TOKENS": True},
-            {**valid, "SHORT_REPLY_THINKING": "auto"}, [],
+            {**valid, "SHORT_REPLY_MAX_TOKENS": 512},
+            {**valid, "SHORT_REPLY_THINKING": "inherit"}, [],
         ]
         with TemporaryDirectory() as directory:
             for index, section in enumerate(bad_sections):
@@ -111,8 +91,6 @@ class TestModelCallSettings(unittest.TestCase):
 
     def test_all_shipped_policies_match_owned_configuration(self) -> None:
         off = {"batch_classify", "find_passages", "filter_results"}
-        short = {"batch_review", "find_fact", "generate_paper_summary",
-                 "reference_check", "suggest_reference"}
         self.assertEqual(len(TOOL_REGISTRY), 12)
         for name, tool in TOOL_REGISTRY.items():
             with self.subTest(tool=name):
@@ -122,8 +100,7 @@ class TestModelCallSettings(unittest.TestCase):
                 self.assertEqual(tool.model_calls, config.MODEL_CALLS)
                 expected = (
                     ModelCallSettings("off") if name in off else
-                    ModelCallSettings("inherit", "off", 512)
-                    if name in short else ModelCallSettings()
+                    ModelCallSettings()
                 )
                 self.assertEqual(tool.model_calls, expected)
 

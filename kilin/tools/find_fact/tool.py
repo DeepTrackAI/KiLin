@@ -142,10 +142,6 @@ class FactSettings:
     ----------
     part_tokens: int
         Estimated tokens of passages per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    answer_tokens: int
-        Longest answer, in tokens (100-4000).
     max_model_calls: int
         Most reading parts (1-500).
     confirmation: "always" | "when_large" | "never"
@@ -157,8 +153,6 @@ class FactSettings:
     """
 
     part_tokens: int = _config.DEFAULT_PART_TOKENS
-    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -188,8 +182,6 @@ def parse_settings(data: dict, where: str) -> FactSettings:
 
     names = (
         "part_tokens",
-        "note_tokens",
-        "answer_tokens",
         "max_model_calls",
         "confirmation",
         "large_batches",
@@ -200,12 +192,6 @@ def parse_settings(data: dict, where: str) -> FactSettings:
     return FactSettings(
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 4000
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1, 500
@@ -354,7 +340,7 @@ def run(
     if terms:
         label, note = term_label(terms, hits)
         quick_parts = [part for _, parts in quick_by_file for part in parts]
-        quick_seconds = _estimate(quick_parts, texts, settings)
+        quick_seconds = _estimate(quick_parts, texts)
     else:
         label = "Quick answer"
         note = (
@@ -383,7 +369,7 @@ def run(
         items=len(passages),
         batches=len(all_parts),
         batches_to_run=len(budget),
-        estimated_seconds=round(_estimate(budget, texts, settings), 1),
+        estimated_seconds=round(_estimate(budget, texts), 1),
         quick_items=len(hits) if terms else len(ranked),
         quick_seconds=round(quick_seconds, 1),
         details=(f"Model: {context.model_id}",),
@@ -459,7 +445,7 @@ def run(
         request.guidance,
         quick=choice == PLAN_CHOICE_QUICK and not terms,
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
+    answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK:
         which = (
@@ -551,8 +537,7 @@ def _notes(
                 path.name,
                 texts,
                 parts,
-                settings.note_tokens,
-                context,
+                        context,
                 what="paper" if path.suffix.lower() == ".pdf" else "file",
             )
         else:
@@ -561,8 +546,7 @@ def _notes(
                 path.name,
                 texts,
                 parts,
-                settings.note_tokens,
-                context,
+                        context,
                 whole=False,
             )
         material.append(
@@ -608,11 +592,11 @@ def _cited(answer: str, count: int) -> set[int]:
 
 
 def _estimate(
-    parts: list[list[int]], texts: list[str], settings: FactSettings
+    parts: list[list[int]], texts: list[str]
 ) -> float:
     """Return the approximate seconds of the notes calls and the answer.
 
-    Replies are assumed to use half their token limit.
+    Reply estimates do not cap model generation.
 
     Parameters
     ----------
@@ -620,8 +604,6 @@ def _estimate(
         Parts of the document to process.
     texts: list[str]
         Text passages or fields to inspect.
-    settings: FactSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -636,6 +618,6 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
-    total += settings.answer_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        total += _config.NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
+    total += _config.ANSWER_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
     return total

@@ -115,11 +115,11 @@ class TestDocumentNotes(unittest.TestCase):
         )
         notes = take_notes(
             "Read a paper", "paper.md", ["Observation"],
-            [[0]], 200, context, what="paper",
+            [[0]], context, what="paper",
         )
         self.assertEqual(notes, [(1, ["- Observation [1]"])])
         self.assertEqual(context.ask_model.call_count, 1)
-        self.assertEqual(context.ask_model.call_args.args[-1], 200)
+        self.assertIsNone(context.ask_model.call_args.args[-1])
         progress.assert_called_once()
         emit.assert_called_once()
         self.assertEqual(emit.call_args.kwargs["data"]["notes"], 1)
@@ -138,7 +138,7 @@ class TestDocumentNotes(unittest.TestCase):
         )
         with self.assertRaises(IncompleteModelResponse) as failure:
             take_notes(
-                "Summarize", "paper.md", ["Example"], [[0]], 200, context
+                "Summarize", "paper.md", ["Example"], [[0]], context
             )
         self.assertEqual(failure.exception.reason, "model_error")
         context.ask_model.assert_called_once()

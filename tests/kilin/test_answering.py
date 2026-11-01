@@ -404,7 +404,7 @@ class TestSideReply(unittest.TestCase):
         self.assertTrue(chat.observations[0]["thinking"])
 
     def test_tool_side_reply_inherits_token_budget_by_default(self) -> None:
-        """No tool cap: ChatSession.reply gets its own budget (None)."""
+        """No tool cap: use the active user-selected output allowance."""
 
         chat = _FakeChat()
         chat.max_new_tokens = 4096
@@ -416,16 +416,16 @@ class TestSideReply(unittest.TestCase):
         self.assertEqual(result, "Final reply.")
         self.assertEqual(chat.messages, original)
         observation = chat.observations[0]
-        self.assertIsNone(observation["max_new_tokens"])
+        self.assertEqual(observation["max_new_tokens"], 4096)
         self.assertTrue(observation["thinking"])
         self.assertEqual(observation["temperature"], 0.6)
 
-        # An explicit tool override still respects the session maximum.
+        # Thinking bypasses a local cap, while respecting the user maximum.
         answering.side_reply(
             chat, "Tool system", "Check the quotation",
             max_new_tokens=2048, inherit_settings=True,
         )
-        self.assertEqual(chat.observations[1]["max_new_tokens"], 2048)
+        self.assertEqual(chat.observations[1]["max_new_tokens"], 4096)
         answering.side_reply(
             chat, "Tool system", "Check the quotation",
             max_new_tokens=8192, inherit_settings=True,

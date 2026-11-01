@@ -68,8 +68,7 @@ class TestToolCompletion(unittest.TestCase):
         """Do not continue reading or write a report after failed notes."""
 
         with self.assertRaises(IncompleteModelResponse):
-            take_notes("Task", "paper", ["text"], [[0], [0]], 200,
-                       self.context)
+            take_notes("Task", "paper", ["text"], [[0], [0]], self.context)
         self.context.ask_model.assert_called_once()
 
     def test_notes_require_citations_or_explicit_nothing(self) -> None:
@@ -77,10 +76,10 @@ class TestToolCompletion(unittest.TestCase):
 
         self.context.ask_model = Mock(return_value="An uncited note")
         with self.assertRaises(IncompleteModelResponse):
-            take_notes("Task", "paper", ["text"], [[0]], 200, self.context)
+            take_notes("Task", "paper", ["text"], [[0]], self.context)
         self.context.ask_model.return_value = "NOTHING"
         self.assertEqual(
-            take_notes("Task", "paper", ["text"], [[0]], 200, self.context),
+            take_notes("Task", "paper", ["text"], [[0]], self.context),
             [(1, [])],
         )
 
@@ -96,7 +95,7 @@ class TestToolCompletion(unittest.TestCase):
         """Do not convert a completion failure into a scientific verdict."""
 
         with self.assertRaises(IncompleteModelResponse):
-            judge_claim(("s", "p"), self.chunks, self.context.ask_model, None)
+            judge_claim(("s", "p"), self.chunks, self.context.ask_model)
         self.context.ask_model.assert_called_once()
 
 
