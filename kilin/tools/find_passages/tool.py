@@ -22,9 +22,10 @@ sentences and one example. A long answer can be saved as a Markdown file
 instead of shown in the chat.
 
 Sentences have at least four words, so headings and labels are never
-listed. A failed batch is recorded in the trace and skipped, so its
-sentences are missing from the answer. Numbers in the model's reply that
-are not in the batch are ignored. Batches beyond ``max_model_calls`` are
+listed. An incomplete or failed batch stops the operation instead of
+reporting zero matches. Numbers outside the current batch are ignored
+only when valid selected numbers remain; zero matches require NONE.
+Batches beyond ``max_model_calls`` are
 not read, and the answer says so.
 
 Key Features
@@ -106,9 +107,11 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens, named_paths
 from kilin.tools._shared.choose_document import document_scope
 from kilin.tools.find_passages import _configuration as _config
+from kilin.tools._shared.model_results import selected_numbers
 from kilin.tools._shared.sentences import Sentence, split_sentences
 from kilin.tools._contract import (
     ToolContext,
@@ -643,8 +646,8 @@ def _judge(
 ) -> list[Sentence]:
     """Return the sentences the model judges to be about the topic.
 
-    A failed batch is recorded in the trace and skipped. Numbers in a reply
-    that are not in the batch are ignored.
+    Failed or malformed batches stop the operation. Only an explicit
+    NONE reply establishes that a batch contains no matches.
 
     Parameters
     ----------
@@ -674,23 +677,22 @@ def _judge(
         system, prompt = judge_prompt(topic, batch, question)
         try:
             reply = context.ask_model(system, prompt, _JUDGE_REPLY_TOKENS)
-        except Exception as error:  # One failed batch does not stop the run.
+        except IncompleteModelResponse:
+            raise
+        except Exception as error:  # Never turn failure into zero matches.
             context.trace.emit(
                 "tool.find_passages.batch_failed",
                 component="tool",
                 data={"batch": number, "error": str(error)},
                 turn_id=context.trace_turn_id,
             )
-            continue
+            raise IncompleteModelResponse(
+                f"Sentence classification failed in batch {number}: {error}",
+                reason="model_error",
+            ) from error
 
-        picked = sorted(
-            {
-                int(value) - 1
-                for value in re.findall(r"\d+", reply)
-                if 0 < int(value) <= len(batch)
-            }
-        )
-        found.extend(batch[index] for index in picked)
+        picked = selected_numbers(reply, range(1, len(batch) + 1))
+        found.extend(batch[index - 1] for index in picked)
     return found
 
 

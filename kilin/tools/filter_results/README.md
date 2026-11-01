@@ -14,3 +14,14 @@ This package owns the `filter_results` registered tool. Its `defaults.json` is i
 - `ITEM_NUMBER_TOKENS` (default `4`): Item number tokens used by this tool during execution. Allowed range: 0–100000.
 - `REPLY_TOKENS` (default `120`): Reply tokens used by this tool during execution. Allowed range: 1–100000.
 
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The coordinator saves an explicit failure notice
+and completion metadata without adding retries. Internal parsers never
+receive thinking text.
+
+A selector must return item numbers or the explicit `NONE` sentinel. Empty
+or malformed text cannot establish that no items matched.

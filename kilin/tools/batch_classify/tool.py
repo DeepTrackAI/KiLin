@@ -64,6 +64,7 @@ import re
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools.batch_classify import _configuration as _config
 from kilin.tools._contract import (
@@ -501,6 +502,8 @@ def _label_batch(
         reply = context.ask_model(
             system, prompt, _REPLY_TOKEN_LIMIT_PER_ITEM * len(indices) + 64
         )
+    except IncompleteModelResponse:
+        raise
     except Exception as error:  # A failed batch is reported, not fatal.
         reply = f"failed: {error}"
     if context.trace.include_content:

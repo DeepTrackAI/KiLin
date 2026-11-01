@@ -29,8 +29,8 @@ of re-implementing them.
 
 A template or paper that cannot be read gives an answer saying so, without
 model calls. Problems that remain after the allowed fixes are recorded in
-the result summary and the trace, and the report is saved anyway. The
-checks verify structure and length, not truth: the model can still misstate
+the result summary and the trace; an invalid report is not published.
+The checks verify structure and length, not truth: the model can still misstate
 what the paper says. The citation uses only the PDF metadata and the first
 page; without a metadata title it names the file. Reference entries are
 found with layout rules, so an unusual layout can split or join entries
@@ -143,6 +143,7 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import (
     estimate_tokens,
@@ -1225,6 +1226,12 @@ def run(
         whole=choice != PLAN_CHOICE_QUICK,
     )
 
+    if not any(lines for _, lines in notes):
+        raise IncompleteModelResponse(
+            "No usable cited notes were produced for the report.",
+            reason="no_notes",
+        )
+
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
     headline, fixes = _write_headline(template, path.name, notes, context)
@@ -1271,6 +1278,36 @@ def run(
         data={"checks": checks, "repairs": repairs, "valid": check.valid},
         turn_id=context.trace_turn_id,
     )
+
+    if not check.valid or unsupported:
+        problems = check.problems() + unsupported
+        summary.update({
+            "status": "incomplete",
+            "reason": "report_validation",
+            "message": "The generated report failed its template checks.",
+            "valid": False,
+            "problems": problems,
+            "repairs": repairs,
+            "passages_read": sum(len(part) for part in runs),
+            "notes": sum(len(lines) for _, lines in notes),
+            "saved": None,
+            "saved_pdf": None,
+            "seconds": round(perf_counter() - started, 1),
+            "model": context.model_id,
+        })
+        trace.emit(
+            "tool.generate_paper_summary.incomplete", component="tool",
+            data=summary, turn_id=context.trace_turn_id,
+        )
+        context.done(
+            "Report validation failed; no file saved", evidence_count=0
+        )
+        return ToolResult(
+            "The report could not be completed because its validation "
+            "failed. No report file was saved.\n\n"
+            + "\n".join(f"- {problem}" for problem in problems),
+            (), summary,
+        )
 
     file_text = summary_file_text(draft, path)
     saved = save_output_file(

@@ -19,3 +19,11 @@ This package owns the `batch_review` registered tool. Its `defaults.json` is ind
 - `REPLY_TOKENS_PER_SECOND` (default `25.0`): Estimated model generation throughput, tokens per second; planning only. Allowed range: 0.001–1000000000.0.
 - `PROMPT_OVERHEAD_TOKENS` (default `300`): Prompt overhead tokens used by this tool during execution. Allowed range: 0–100000.
 
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The coordinator saves an explicit failure notice
+and completion metadata without adding retries. Internal parsers never
+receive thinking text.

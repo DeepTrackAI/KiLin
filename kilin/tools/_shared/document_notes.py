@@ -54,6 +54,7 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._contract import ToolContext
@@ -249,8 +250,9 @@ def take_notes(
     Returns
     -------
     list[tuple[int, list[str]]]
-        Part numbers with their note lines (see ``clean_notes``). A failed
-        call gives an empty part.
+        Part numbers with checked note lines. Explicit NOTHING replies
+        give empty parts; failed calls or unparseable notes raise
+        ``IncompleteModelResponse`` rather than inventing a negative result.
 
     """
 
@@ -276,9 +278,24 @@ def take_notes(
         )
         try:
             reply = context.ask_model(system, prompt, note_tokens)
-        except Exception as error:  # A failed part is reported, not fatal.
-            reply = f"failed: {error}"
+        except IncompleteModelResponse:
+            raise
+        except Exception as error:
+            context.trace.emit(
+                "tool.part.failed", component="tool",
+                data={"part": number, "notes": 0, "error": str(error)},
+                turn_id=context.trace_turn_id,
+            )
+            raise IncompleteModelResponse(
+                f"Document reading failed in part {number}: {error}",
+                reason="model_error",
+            ) from error
         lines = clean_notes(reply, [index + 1 for index in part])
+        if not lines and reply.strip() != NOTHING:
+            raise IncompleteModelResponse(
+                "The model returned neither cited notes nor NOTHING.",
+                reason="invalid_output", raw_text=reply,
+            )
         notes.append((number, lines))
         data: dict[str, object] = {
             "part": number,

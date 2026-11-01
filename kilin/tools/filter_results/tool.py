@@ -64,7 +64,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-import re
 from typing import Final
 
 from kilin.retrievals.document_reading import estimate_tokens
@@ -77,6 +76,7 @@ from kilin.tools._contract import (
     reject_unknown,
 )
 from kilin.tools._shared.earlier_turns import newest_listed
+from kilin.tools._shared.model_results import selected_numbers
 
 __all__ = [
     "FilterSettings",
@@ -229,9 +229,7 @@ def run(
         system, prompt = filter_prompt(request.question, batch)
         reply = context.ask_model(system, prompt, _REPLY_TOKENS)
         numbers = {number for number, _ in batch}
-        picked += sorted(
-            {int(n) for n in re.findall(r"\d+", reply) if int(n) in numbers}
-        )
+        picked += selected_numbers(reply, numbers)
     summary.update(
         {"turn": turn.number, "items": len(items), "matched": len(picked)}
     )

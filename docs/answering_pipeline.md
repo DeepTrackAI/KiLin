@@ -240,3 +240,43 @@ intermediate structured reply. The saved answer contains the same thinking
 followed by the tool's composed answer. `write` continues to stream and
 return the full user-visible model response. Router calls remain nonthinking.
 The model's thinking setting determines whether thinking is generated.
+
+## Model-output completion contract
+
+The core checks completion separately from whether the model emitted text.
+Direct answers and both tool model services reject `finish_reason=length`,
+unclosed `<think>` blocks, and replies with no final content. The private
+`IncompleteModelResponse` exception carries a reason, finish reason and raw
+text; only safe status metadata is copied to the saved turn. Existing model
+traces retain generated content according to the configured trace policy.
+
+`side_reply(require_complete=True)` restores the previous messages and
+generation settings even when this check fails. Tools do not receive a
+truncated response merely because it looks like parseable JSON or numbers.
+The built-in note-taking, classification and claim-checking helpers propagate
+completion failures to the coordinator. Sentence selection and filtering
+require an explicit `NONE` for a negative result. Unparseable selections or
+notes are failures, not evidence that a paper lacks the requested material.
+
+The coordinator returns and checkpoints an explicit incomplete-operation
+notice with `parameters.completion.status = "incomplete"`. Tool summaries
+retain the same status and reason. Failed operations contribute their actual
+token usage, but no result evidence. No automatic retry or extra inference
+is introduced. Previously streamed partial text may be visible until the
+GUI replaces it with the persisted failure notice; an open thinking block
+is closed before streaming that notice.
+
+History reconstruction omits incomplete turns and legacy thinking-only
+answers as entire user/assistant pairs. Original stored turns and their
+numbering remain intact for diagnosis. Reopening an old conversation or
+asking a later question must never restore an empty assistant message.
+
+Structured reports with no usable notes or failed final template checks are
+not published as completed Markdown/PDF outputs. This is stricter than the
+earlier best-effort publication policy. Other successful report behavior is
+unchanged. Router fallback behavior is unchanged.
+
+Completion validation does not prove factual correctness, citation support,
+correct routing or exhaustive retrieval. A backend without termination
+metadata can only be checked using the available text. It cannot be assumed
+to expose an implicit unfinished thinking block with no visible delimiters.

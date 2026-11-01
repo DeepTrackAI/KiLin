@@ -95,6 +95,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.sentences import Sentence
@@ -800,6 +801,8 @@ def _judge(
         )
     try:
         reply = ask_model(prompts[0], prompts[1], answer_tokens)
+    except IncompleteModelResponse:
+        raise
     except Exception as error:  # A failed call is reported, not fatal.
         return VERDICT_FAILED, "", None, f"Model error: {error}", "failed"
     return _checked_verdict(reply, passages)

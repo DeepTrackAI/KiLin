@@ -21,3 +21,11 @@ This package owns the `find_fact` registered tool. Its `defaults.json` is indepe
 - `CALL_SECONDS` (default `1.0`): Fixed per-call overhead, seconds, for planning estimates. Allowed range: 0–1000000000.0.
 - `QUICK_ANSWER_SECONDS` (default `2.0`): Quick answer seconds used by this tool during execution. Allowed range: 0–1000000000.0.
 
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The coordinator saves an explicit failure notice
+and completion metadata without adding retries. Internal parsers never
+receive thinking text.

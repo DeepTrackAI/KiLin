@@ -28,3 +28,14 @@ This package owns the `find_passages` registered tool. Its `defaults.json` is in
 - `JUDGE_REPLY_ESTIMATE_TOKENS` (default `15`): Judge reply estimate tokens used by this tool during execution. Allowed range: 0–100000.
 - `CALL_SECONDS` (default `1.0`): Fixed per-call overhead, seconds, for planning estimates. Allowed range: 0–1000000000.0.
 
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The coordinator saves an explicit failure notice
+and completion metadata without adding retries. Internal parsers never
+receive thinking text.
+
+A selector must return item numbers or the explicit `NONE` sentinel. Empty
+or malformed text cannot establish that no items matched.

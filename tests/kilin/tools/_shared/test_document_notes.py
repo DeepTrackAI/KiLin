@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.tools._shared.document_notes import (
     NOTHING,
@@ -125,7 +126,7 @@ class TestDocumentNotes(unittest.TestCase):
         self.assertIn("raw", emit.call_args.kwargs["data"])
 
     def test_failed_model_call_is_recorded_without_notes(self) -> None:
-        """Continue gracefully on one failed reading part.
+        """Record a failed reading part without treating it as empty notes.
 
         """
 
@@ -135,10 +136,12 @@ class TestDocumentNotes(unittest.TestCase):
             trace=SimpleNamespace(include_content=False, emit=Mock()),
             trace_turn_id=None,
         )
-        notes = take_notes(
-            "Summarize", "paper.md", ["Example"], [[0]], 200, context
-        )
-        self.assertEqual(notes, [(1, [])])
+        with self.assertRaises(IncompleteModelResponse) as failure:
+            take_notes(
+                "Summarize", "paper.md", ["Example"], [[0]], 200, context
+            )
+        self.assertEqual(failure.exception.reason, "model_error")
+        context.ask_model.assert_called_once()
         event = context.trace.emit.call_args.kwargs["data"]
         self.assertEqual(event["notes"], 0)
         self.assertNotIn("raw", event)

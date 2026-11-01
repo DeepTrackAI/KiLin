@@ -137,6 +137,10 @@ from pathlib import PureWindowsPath
 import re
 from typing import Final, Literal, Protocol, TypeAlias
 
+from kilin._model_completion import (
+    require_complete_reply,
+    strip_thinking,
+)
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
 from kilin.defaults import (
     load_defaults_section,
@@ -361,29 +365,6 @@ def extract_thinking(text: str) -> str:
     return "\n\n".join(part.strip() for part in parts if part.strip())
 
 
-def strip_thinking(text: str) -> str:
-    """Remove <think> blocks, including one opened by the chat template.
-
-    Parameters
-    ----------
-    text: str
-        Model output.
-
-    Returns
-    -------
-    str
-        The output without thinking text, stripped of surrounding space.
-
-    """
-
-    text = re.sub(r"<think>.*?</think>", "", str(text), flags=re.S)
-    # A template that opens <think> itself leaves only the closing tag.
-    if "</think>" in text:
-        text = text.split("</think>", 1)[1]
-
-    return text.split("<think>", 1)[0].strip()
-
-
 def _without_citations(text: str) -> str:
     """Remove citation groups such as ``[1]`` or ``[2, 3]``.
 
@@ -506,6 +487,7 @@ def side_reply(
     language_context: Sequence[str] = (),
     inherit_settings: bool = False,
     preserve_thinking: bool = False,
+    require_complete: bool = False,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -535,6 +517,9 @@ def side_reply(
         Return the complete model output, including thinking text, for a
         visible answer or for separate capture by the tool coordinator.
         Other side requests continue to strip thinking by default.
+    require_complete: bool, optional
+        Reject truncated, thinking-only or empty output before a tool
+        consumes it. Defaults to ``False`` for router compatibility.
 
     Returns
     -------
@@ -575,6 +560,10 @@ def side_reply(
         if token_callback is not None:
             options["token_callback"] = token_callback
         reply = chat.reply(prompt, **options)
+        if require_complete:
+            require_complete_reply(
+                reply, getattr(chat, "last_finish_reason", None)
+            )
     finally:
         chat.restore_history(history)
         if not inherit_settings:
@@ -1153,6 +1142,8 @@ def history_messages(
         text is included. Thinking text is removed, and citation numbers
         become ``HISTORY_CITATION_MARKER``: the evidence they referred to is
         not in the prompt, but the answers still show the citing style.
+        Incomplete turns and legacy thinking-only replies are omitted as
+        complete question/answer pairs; stored turn numbering is unchanged.
 
     """
 
@@ -1160,6 +1151,11 @@ def history_messages(
     for number in numbers:
         turn = turns[number - 1]
         answer = _neutral_citations(strip_thinking(turn.answer)).strip()
+        completion = getattr(turn, "parameters", {}).get("completion", {})
+        if not answer or completion.get("status") == "incomplete":
+            # Keep the saved turn for inspection, but never restore an
+            # empty assistant message or use a failed result as history.
+            continue
         messages.append({"role": USER_ROLE, "content": str(turn.question)})
         messages.append({"role": ASSISTANT_ROLE, "content": answer})
 

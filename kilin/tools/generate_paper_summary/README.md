@@ -151,3 +151,16 @@ registry integration, resource selection, parsing, and model-free error
 paths. `tests/kilin/tools/test__defaults.py` tests the shared private
 defaults reader. Further model orchestration tests can exercise the
 `ToolContext` callbacks with fakes instead of requiring an LLM.
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The coordinator saves an explicit failure notice
+and completion metadata without adding retries. Internal parsers never
+receive thinking text.
+
+A report with no usable cited notes is not written. Reports which fail the
+final template or reference checks are returned with `status: incomplete`,
+`valid: false` and the validation problems. Neither Markdown nor PDF is
+published in that case; existing files remain untouched.
