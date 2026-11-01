@@ -45,6 +45,6 @@
     "MIN_TOTAL_WORDS": 50
   },
   "MODEL_CALLS": {
-    "THINKING": "inherit"
+    "THINKING": "off"
   }
 }

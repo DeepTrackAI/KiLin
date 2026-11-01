@@ -176,7 +176,7 @@ or API settings. They are ceilings for each model call, not target lengths
 or a total budget for a multi-call tool. Prose length is controlled by the
 prompt or report template; input passage budgets remain separate.
 
-`MODEL_CALLS` contains one key: `THINKING` (packaged value `"inherit"`).
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"off"`).
 It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
 It never infers thinking from a token count. `context.write` always inherits
 main-session thinking. Router calls remain nonthinking and separately bounded.

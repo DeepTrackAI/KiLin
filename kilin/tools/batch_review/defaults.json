@@ -13,6 +13,6 @@
     "ANSWER_REPLY_TOKENS": 512
   },
   "MODEL_CALLS": {
-    "THINKING": "inherit"
+    "THINKING": "off"
   }
 }

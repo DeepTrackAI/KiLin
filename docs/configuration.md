@@ -298,8 +298,10 @@ Each tool owns one explicit `MODEL_CALLS` policy in
 
 `THINKING` accepts `inherit`, `on`, or `off`. It controls internal
 `context.ask_model` requests; `context.write` uses main-session thinking.
-The three structured selection tools (`find_passages`, `filter_results`,
-`batch_classify`) default to `off`. All other tools default to `inherit`.
+The structured selection tools (`find_passages`, `filter_results`,
+`batch_classify`) and the two document-processing tools (`batch_review`,
+`generate_paper_summary`) default to `off`. Other tools default to
+`inherit`.
 Changing this value to `inherit` or `on` is sufficient to reset or force
 thinking. There is no short-reply threshold and no token-based mode switch.
 

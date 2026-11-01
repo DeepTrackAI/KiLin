@@ -93,11 +93,11 @@ class TestToolThinking(unittest.TestCase):
         )
         self.assertEqual(
             [x["thinking"] for x in chat.observations],
-            [True, True, True, True],
+            [False, False, False, True],
         )
         self.assertEqual(
             [x["max_new_tokens"] for x in chat.observations],
-            [8192, 8192, 8192, 8192],
+            [60, 500, 600, 8192],
         )
         self.assertTrue(
             all(x["temperature"] == 0.6 for x in chat.observations)
@@ -129,7 +129,7 @@ class TestToolThinking(unittest.TestCase):
         chat = _FakeChat(response="Result")
         chat.max_new_tokens = 100
         result, chat = _run("generate_paper_summary", [600], chat=chat)
-        self.assertTrue(chat.observations[0]["thinking"])
+        self.assertFalse(chat.observations[0]["thinking"])
         self.assertEqual(chat.observations[0]["max_new_tokens"], 100)
         call = result.summary["internal_generation"]["calls"][0]
         self.assertEqual(call["requested_max_new_tokens"], 600)

@@ -26,7 +26,10 @@ class TestToolUserBudgets(unittest.TestCase):
     """Use the interface budget without changing the model or call count."""
 
     def test_all_tool_adapters_inherit_user_ceiling(self) -> None:
-        off = {"find_passages", "filter_results", "batch_classify"}
+        off = {
+            "batch_classify", "batch_review", "filter_results",
+            "find_passages", "generate_paper_summary",
+        }
         for name in TOOL_REGISTRY:
             for thinking in (True, False):
                 for ceiling in (128, 2048, 16384):
@@ -95,7 +98,7 @@ class TestToolUserBudgets(unittest.TestCase):
                             "thinking": thinking, "temperature": 0.25,
                         },
                     )
-                expected = ceiling if thinking else min(128, ceiling)
+                expected = min(128, ceiling)
                 self.assertEqual(
                     [call.args[1] for call in generate.call_args_list],
                     [expected, ceiling, ceiling],
