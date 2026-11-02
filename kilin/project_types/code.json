@@ -44,8 +44,6 @@
       "tool": {
         "name": "find_fact",
         "part_tokens": 6000,
-        "note_tokens": 300,
-        "answer_tokens": 1024,
         "max_model_calls": 200,
         "confirmation": "always",
         "large_batches": 0
@@ -88,8 +86,6 @@
       "tool": {
         "name": "batch_review",
         "part_tokens": 6000,
-        "note_tokens": 400,
-        "answer_tokens": 1024,
         "max_model_calls": 20,
         "confirmation": "when_large",
         "large_batches": 3
@@ -189,8 +185,7 @@
       "tool": {
         "name": "show_source",
         "context_sentences": 2,
-        "max_passages": 3,
-        "answer_tokens": 400
+        "max_passages": 3
       }
     },
     "conversation_followup": {

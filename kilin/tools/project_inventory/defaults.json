@@ -2,5 +2,8 @@
   "SETTINGS": {
     "MAX_LISTED": 200,
     "MAX_FOLDERS": 20
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
   }
 }

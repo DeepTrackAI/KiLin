@@ -183,7 +183,7 @@ class TestParseVerdict(unittest.TestCase):
             lambda *_: (
                 "VERDICT: supported\nQUOTE: Treatment reduced mortality "
                 "by 10% in mice.\nCOMMENT: exact"
-            ), 250,
+            ),
         )
         self.assertEqual(exact.evidence_status, "exact")
         self.assertEqual(quote_line_range(exact.quote, passage), (21, 21))
@@ -193,7 +193,7 @@ class TestParseVerdict(unittest.TestCase):
             lambda *_: (
                 "VERDICT: supported\nQUOTE: Treatment reduced "
                 "mortality by 10% in mice\nCOMMENT: partial"
-            ), 250,
+            ),
         )
         self.assertIn(approximate.evidence_status, ("exact", "approximate"))
         rejected = judge_support(
@@ -202,7 +202,7 @@ class TestParseVerdict(unittest.TestCase):
             lambda *_: (
                 "VERDICT: supported\nQUOTE: Treatment reduced mortality "
                 "by 90% in mice.\nCOMMENT: changed"
-            ), 250,
+            ),
         )
         self.assertEqual(rejected.evidence_status, "rejected")
         self.assertIsNone(rejected.quote_chunk)
@@ -218,7 +218,7 @@ class TestParseVerdict(unittest.TestCase):
                     lambda *_: (
                         f"VERDICT: {verdict}\nQUOTE: NONE\n"
                         "COMMENT: Not demonstrated by the excerpts."
-                    ), None,
+                    ),
                 )
                 self.assertEqual(result.evidence_status, "not required")
                 self.assertIsNone(result.quote_chunk)
@@ -226,7 +226,7 @@ class TestParseVerdict(unittest.TestCase):
             "Running benefits mice", Path("cited.md"), PASSAGES,
             lambda *_: (
                 "VERDICT: supported\nQUOTE: NONE\nCOMMENT: Supported."
-            ), None,
+            ),
         )
         self.assertEqual(positive.evidence_status, "missing")
 
@@ -243,7 +243,7 @@ class TestParseVerdict(unittest.TestCase):
             )
         result = judge_support(
             "Running extends lifespan in mice", Path("cited.md"),
-            PASSAGES, model, None,
+            PASSAGES, model,
         )
         self.assertEqual(received, [None])
         self.assertIs(result.quote_chunk, PASSAGES[0])
@@ -407,7 +407,7 @@ class TestVerifyClaim(unittest.TestCase):
                 "a deep neural network classifier to prioritize brain "
                 "networks that distinguish cases from controls.\n"
                 "COMMENT: The cited study uses the described classifier."
-            ), 250,
+            ),
         )
         self.assertEqual(verified.verdict, "supported")
         self.assertIs(verified.quote_chunk, source)
@@ -433,7 +433,6 @@ class TestVerifyClaim(unittest.TestCase):
                 "VERDICT: supported\nQUOTE: The effect was absent in rats.\n"
                 "COMMENT: ok"
             ),
-            200,
         )
         self.assertEqual(verdict.verdict, VERDICT_SUPPORTED)
         self.assertEqual(verdict.passages, PASSAGES)
@@ -441,10 +440,10 @@ class TestVerifyClaim(unittest.TestCase):
         def broken(system: str, prompt: str, tokens: int) -> str:
             raise RuntimeError("out of memory")
 
-        failed = verify_claim(CLAIM, PASSAGES, broken, 200)
+        failed = verify_claim(CLAIM, PASSAGES, broken)
         self.assertEqual(failed.verdict, VERDICT_FAILED)
         self.assertIn("out of memory", failed.comment)
-        empty = verify_claim(CLAIM, (), broken, 200)
+        empty = verify_claim(CLAIM, (), broken)
         self.assertEqual(empty.verdict, VERDICT_NO_TEXT)
 
 
@@ -469,7 +468,6 @@ class TestSupport(unittest.TestCase):
                 "VERDICT: partly supported\nQUOTE: Mice that ran daily "
                 "lived 20% longer than sedentary mice.\nCOMMENT: Mice only."
             ),
-            200,
         )
         self.assertEqual(support.verdict, VERDICT_PARTLY)
         self.assertIs(support.quote_chunk, PASSAGES[0])
@@ -481,12 +479,11 @@ class TestSupport(unittest.TestCase):
                 "VERDICT: contradicted\nQUOTE: Running shortens the life "
                 "of every mammal.\nCOMMENT: No."
             ),
-            200,
         )
         self.assertEqual(invented.verdict, VERDICT_NOT_SUPPORTED)
         self.assertIsNone(invented.quote_chunk)
         empty = judge_support(
-            "Running extends lifespan.", Path("cited.md"), (), None, 200
+            "Running extends lifespan.", Path("cited.md"), (), None
         )
         self.assertEqual(empty.verdict, VERDICT_NO_TEXT)
 

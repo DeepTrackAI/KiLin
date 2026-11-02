@@ -35,8 +35,6 @@ uses the global README to define its settings.
 | --- | --- | --- |
 | `TEMPLATE` | `research_briefing` | Default template ID when no format is named; a safe filename stem, without `.md` or directory separators. |
 | `PART_TOKENS` | 6000 | Approximate paper tokens read per model call; integer, 1000–16000. |
-| `NOTE_TOKENS` | 500 | Maximum tokens of notes per reading part; integer, 100–1500. |
-| `SECTION_TOKENS` | 600 | Maximum tokens when writing a section without a specified length; integer, 100–2000. |
 | `REPAIR_ATTEMPTS` | 1 | Allowed targeted revisions of a nonconforming section; integer, 0–4. |
 | `MAX_MODEL_CALLS` | 20 | Limit on paper-reading parts; integer, 1–200. |
 | `CONFIRMATION` | `when_large` | Confirmation policy: `always`, `when_large`, or `never`. |
@@ -76,10 +74,15 @@ tool, when choosing entries for a report.
 | Key | Default | Meaning and validation |
 | --- | --- | --- |
 | `EARLIER_SECTION_WORDS` | 30 | Words retained from previously written sections to discourage repetition; positive integer. |
-| `HEADLINE_TOKENS` | 60 | Maximum response tokens for writing or repairing a headline; positive integer. |
-| `REFERENCES_TOKENS` | 40 | Maximum response tokens for choosing reference-item numbers; positive integer. |
+| `HEADLINE_TOKENS` | 128 | Nonthinking cap for a headline; ignored when thinking is on. Positive integer. |
+| `REFERENCES_TOKENS` | 128 | Nonthinking cap for reference identifiers; ignored when thinking is on. Positive integer. |
 
 ## `ESTIMATES` — model-time planning assumptions
+
+- `NOTE_REPLY_TOKENS` (default `256`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
+- `SECTION_REPLY_TOKENS` (default `512`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
 
 These values are **planning estimates**, not model-specific measurements.
 They preserve the original assumptions for a small local model on Apple
@@ -151,3 +154,49 @@ registry integration, resource selection, parsing, and model-free error
 paths. `tests/kilin/tools/test__defaults.py` tests the shared private
 defaults reader. Further model orchestration tests can exercise the
 `ToolContext` callbacks with fakes instead of requiring an LLM.
+
+## Model completion
+
+Model calls must finish with usable final text. A token-limit stop, unfinished
+thinking block or missing final answer makes the operation incomplete; it is
+not a zero-match result. The shared adapter may retry unfinished exhausted
+thinking once without thinking; failed items remain explicitly incomplete.
+Internal parsers never receive thinking or truncated output.
+
+A report with no usable cited notes is not written. Without recoverable item
+failures, reports that fail final template or reference checks still return
+`status: incomplete`, `valid: false` and no new report file. Independent useful
+sections may survive an item failure as an explicitly marked partial draft,
+subject to the partial-completion rules below; no invalid result is promoted
+to a completed report. Existing files remain untouched.
+
+
+## Generation settings
+
+Output allowances come from the active session, including per-question GUI
+or API settings. They are ceilings for each model call, not target lengths
+or a total budget for a multi-call tool. Prose length is controlled by the
+prompt or report template; input passage budgets remain separate.
+
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"off"`).
+It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
+It never infers thinking from a token count. `context.write` always inherits
+main-session thinking. Router calls remain nonthinking and separately bounded.
+
+Thinking requests use the user's full allowance. Only nonthinking requests
+may use an explicit smaller cap, never exceeding the user's maximum.
+Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
+forces thinking and bypasses local short-response caps. Restart after editing
+cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
+for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+Internal calls share the coordinator's one nonthinking recovery attempt when
+thinking exhausts the allowance before closing. Reading parts and report
+sections that still fail are explicitly recorded; independent work continues.
+Failed notes and section placeholders are never supplied as evidence to later
+sections. If useful checked sections remain, the tool saves a labelled
+`*_summary_partial.md` with `status: partial`, `valid: false`, omissions and no
+PDF. Existing complete outputs remain intact. With no usable notes/sections,
+no report is published. Normal report validation remains unchanged.

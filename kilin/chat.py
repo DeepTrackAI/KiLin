@@ -98,6 +98,7 @@ import re
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.defaults import (
     load_defaults_section,
     require_default_lowercase_words,
@@ -858,7 +859,10 @@ class ChatSession:
         ) * 1000
 
         if not isinstance(answer, str) or not answer.strip():
-            raise RuntimeError("The model returned no text.")
+            raise IncompleteModelResponse(
+                "The model returned no text.", reason="empty_answer",
+                finish_reason=self.last_finish_reason,
+            )
 
         if (
             self.trace.enabled

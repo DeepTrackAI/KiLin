@@ -137,6 +137,10 @@ from pathlib import PureWindowsPath
 import re
 from typing import Final, Literal, Protocol, TypeAlias
 
+from kilin._model_completion import (
+    require_complete_reply,
+    strip_thinking,
+)
 from kilin.chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE
 from kilin.defaults import (
     load_defaults_section,
@@ -361,29 +365,6 @@ def extract_thinking(text: str) -> str:
     return "\n\n".join(part.strip() for part in parts if part.strip())
 
 
-def strip_thinking(text: str) -> str:
-    """Remove <think> blocks, including one opened by the chat template.
-
-    Parameters
-    ----------
-    text: str
-        Model output.
-
-    Returns
-    -------
-    str
-        The output without thinking text, stripped of surrounding space.
-
-    """
-
-    text = re.sub(r"<think>.*?</think>", "", str(text), flags=re.S)
-    # A template that opens <think> itself leaves only the closing tag.
-    if "</think>" in text:
-        text = text.split("</think>", 1)[1]
-
-    return text.split("<think>", 1)[0].strip()
-
-
 def _without_citations(text: str) -> str:
     """Remove citation groups such as ``[1]`` or ``[2, 3]``.
 
@@ -506,6 +487,8 @@ def side_reply(
     language_context: Sequence[str] = (),
     inherit_settings: bool = False,
     preserve_thinking: bool = False,
+    require_complete: bool = False,
+    thinking: bool | None = None,
 ) -> str:
     """Ask a chat model a side question, then restore its conversation.
 
@@ -518,8 +501,10 @@ def side_reply(
     prompt: str
         The side question.
     max_new_tokens: int | None
-        Explicit per-call output limit, or ``None`` to inherit the chat
-        session's configured maximum. The router supplies its own limit.
+        Optional cap for a nonthinking request. Inherited thinking requests
+        always use the active session maximum, including their thinking.
+        ``None`` inherits that maximum in either mode. Router calls retain
+        their separate explicit limits.
     token_callback: Callable[[str], None] | None, optional
         Receives the reply as it is generated, for a side answer shown to
         the user. Defaults to ``None``.
@@ -527,14 +512,20 @@ def side_reply(
         Original user messages authorizing CJK output, oldest first. The
         generated side prompt cannot authorize scripts. Defaults to ``()``.
     inherit_settings: bool, optional
-        Keep the session thinking and temperature. With no explicit token
-        override, inherit the session's maximum output tokens. An explicit
-        override remains capped by the session maximum when one is set.
-        False retains deterministic router behavior.
+        Keep session thinking and temperature unless explicitly overridden.
+        Only nonthinking calls may use a smaller local cap; it never exceeds
+        the user's maximum. False retains deterministic router behavior.
     preserve_thinking: bool, optional
         Return the complete model output, including thinking text, for a
         visible answer or for separate capture by the tool coordinator.
         Other side requests continue to strip thinking by default.
+    require_complete: bool, optional
+        Reject truncated, thinking-only or empty output before a tool
+        consumes it. Defaults to ``False`` for router compatibility.
+    thinking: bool | None, optional
+        Temporary thinking override for an inherited tool request.
+        ``None`` inherits unchanged. Only valid with ``inherit_settings``
+        enabled; router calls cannot enable thinking through this option.
 
     Returns
     -------
@@ -542,12 +533,32 @@ def side_reply(
         The complete reply when ``preserve_thinking`` is true; otherwise
         the reply with thinking text removed.
 
+    Raises
+    ------
+    ValueError
+        If the cap is not a positive integer, an override is not a boolean,
+        or a caller attempts to change router thinking without inheriting
+        tool settings.
+    IncompleteModelResponse
+        If completion is required and the reply is truncated, unfinished
+        or has no usable final content.
+
     Notes
     -----
     Router questions use greedy, nonthinking generation by default.
     Tool questions can inherit the answering session generation settings.
 
     """
+
+    if max_new_tokens is not None and (
+        type(max_new_tokens) is not int or max_new_tokens < 1
+    ):
+        raise ValueError("max_new_tokens must be a positive integer or None.")
+    if thinking is not None:
+        if type(thinking) is not bool or not inherit_settings:
+            raise ValueError(
+                "thinking requires a boolean and inherit_settings=True."
+            )
 
     history = [dict(message) for message in chat.messages]
     previous = {"thinking": chat.thinking, "temperature": chat.temperature}
@@ -559,15 +570,17 @@ def side_reply(
             chat.configure_generation({
                 "thinking": False, "temperature": 0.0,
             })
+        elif thinking is not None:
+            chat.configure_generation({
+                "thinking": thinking, "temperature": chat.temperature,
+            })
         session_limit = getattr(chat, "max_new_tokens", None)
-        token_limit = (
-            min(max_new_tokens, session_limit)
-            if (
-                inherit_settings and max_new_tokens is not None
-                and session_limit is not None
-            )
-            else max_new_tokens
-        )
+        token_limit = max_new_tokens
+        if inherit_settings:
+            if chat.thinking or token_limit is None:
+                token_limit = session_limit
+            elif session_limit is not None:
+                token_limit = min(token_limit, session_limit)
         options: dict[str, object] = {
             "max_new_tokens": token_limit,
             "language_context": language_context,
@@ -575,9 +588,13 @@ def side_reply(
         if token_callback is not None:
             options["token_callback"] = token_callback
         reply = chat.reply(prompt, **options)
+        if require_complete:
+            require_complete_reply(
+                reply, getattr(chat, "last_finish_reason", None)
+            )
     finally:
         chat.restore_history(history)
-        if not inherit_settings:
+        if not inherit_settings or thinking is not None:
             chat.configure_generation(previous)
 
     return reply if preserve_thinking else strip_thinking(reply)
@@ -1153,6 +1170,8 @@ def history_messages(
         text is included. Thinking text is removed, and citation numbers
         become ``HISTORY_CITATION_MARKER``: the evidence they referred to is
         not in the prompt, but the answers still show the citing style.
+        Incomplete turns and legacy thinking-only replies are omitted as
+        complete question/answer pairs; stored turn numbering is unchanged.
 
     """
 
@@ -1160,6 +1179,11 @@ def history_messages(
     for number in numbers:
         turn = turns[number - 1]
         answer = _neutral_citations(strip_thinking(turn.answer)).strip()
+        completion = getattr(turn, "parameters", {}).get("completion", {})
+        if not answer or completion.get("status") == "incomplete":
+            # Keep the saved turn for inspection, but never restore an
+            # empty assistant message or use a failed result as history.
+            continue
         messages.append({"role": USER_ROLE, "content": str(turn.question)})
         messages.append({"role": ASSISTANT_ROLE, "content": answer})
 

@@ -83,6 +83,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, Literal, TypeAlias
 
 from kilin.tools import (
@@ -100,6 +101,10 @@ from kilin.tools import (
     suggest_reference,
 )
 from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
 from kilin.workspace_resources import WorkspaceResource
 
 __all__ = [
@@ -184,6 +189,8 @@ class Tool:
     follows_up: bool
         True when the tool works on an earlier answer, so a question
         routed to it always relates to an earlier turn.
+    model_calls: ModelCallSettings
+        Tool-owned policy for internal answering-model calls.
     workspace_resources: Callable | None
         Optional declaration of packaged resources for a new project.
 
@@ -197,6 +204,21 @@ class Tool:
     workspace_resources: (
         Callable[[object], tuple[WorkspaceResource, ...]] | None
     ) = None
+
+    @property
+    def model_calls(self) -> ModelCallSettings:
+        """Return the registered tool's validated internal thinking policy.
+
+        Returns
+        -------
+        ModelCallSettings
+            Cached policy from this tool's own packaged defaults.
+
+        """
+
+        return load_model_call_settings(
+            Path(__file__).parent / self.name / "defaults.json"
+        )
 
 
 @dataclass(frozen=True, slots=True)

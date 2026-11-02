@@ -29,8 +29,8 @@ of re-implementing them.
 
 A template or paper that cannot be read gives an answer saying so, without
 model calls. Problems that remain after the allowed fixes are recorded in
-the result summary and the trace, and the report is saved anyway. The
-checks verify structure and length, not truth: the model can still misstate
+the result summary and the trace; an invalid report is not published.
+The checks verify structure and length, not truth: the model can still misstate
 what the paper says. The citation uses only the PDF metadata and the first
 page; without a metadata title it names the file. Reference entries are
 found with layout rules, so an unusual layout can split or join entries
@@ -143,6 +143,11 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import (
     estimate_tokens,
@@ -197,16 +202,16 @@ from kilin.tools.generate_paper_summary._configuration import (
     DEFAULT_CONFIRMATION,
     DEFAULT_LARGE_BATCHES,
     DEFAULT_MAX_MODEL_CALLS,
-    DEFAULT_NOTE_TOKENS,
     DEFAULT_PART_TOKENS,
     DEFAULT_REFERENCE_ITEMS,
     DEFAULT_REPAIR_ATTEMPTS,
-    DEFAULT_SECTION_TOKENS,
     DEFAULT_TEMPLATE,
     EARLIER_SECTION_WORDS,
     ENTRY_MIN_WORDS,
     HEADLINE_TOKENS,
     NUMBERED_ENTRIES_MIN,
+    NOTE_REPLY_TOKENS,
+    SECTION_REPLY_TOKENS,
     ORGANISATION_WORDS,
     PART_PROMPT_TOKENS,
     PROMPT_TOKENS_PER_SECOND,
@@ -319,10 +324,6 @@ class SummarySettings:
         ``.md`` in the project's ``templates/`` folder.
     part_tokens: int
         Estimated tokens of paper per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    section_tokens: int
-        Longest section without a word or item limit, in tokens (100-2000).
     repair_attempts: int
         Targeted fixes allowed per section that misses its limit (0-4).
     max_model_calls: int
@@ -337,8 +338,6 @@ class SummarySettings:
 
     template: str = DEFAULT_TEMPLATE
     part_tokens: int = DEFAULT_PART_TOKENS
-    note_tokens: int = DEFAULT_NOTE_TOKENS
-    section_tokens: int = DEFAULT_SECTION_TOKENS
     repair_attempts: int = DEFAULT_REPAIR_ATTEMPTS
     max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = DEFAULT_CONFIRMATION
@@ -372,8 +371,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
     names = (
         "template",
         "part_tokens",
-        "note_tokens",
-        "section_tokens",
         "repair_attempts",
         "max_model_calls",
         "confirmation",
@@ -394,12 +391,6 @@ def parse_settings(data: dict, where: str) -> SummarySettings:
         template=template,
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        section_tokens=check_int(
-            where, data, "section_tokens", defaults.section_tokens, 100, 2000
         ),
         repair_attempts=check_int(
             where, data, "repair_attempts", defaults.repair_attempts, 0, 4
@@ -1166,11 +1157,11 @@ def run(
         batches=len(parts),
         batches_to_run=len(to_read),
         estimated_seconds=round(
-            _estimate(to_read, texts, settings, template), 1
+            _estimate(to_read, texts, template), 1
         ),
         quick_items=len(parts[0]),
         quick_seconds=round(
-            _estimate(parts[:1], texts, settings, template), 1
+            _estimate(parts[:1], texts, template), 1
         ),
         details=(
             *(
@@ -1214,51 +1205,96 @@ def run(
 
     started = perf_counter()
     runs = parts[:1] if choice == PLAN_CHOICE_QUICK else to_read
+    failures: list[dict[str, object]] = []
     notes = take_notes(
         _notes_task(template),
         path.name,
         texts,
         runs,
-        settings.note_tokens,
         context,
         what="paper",
         whole=choice != PLAN_CHOICE_QUICK,
+        failures=failures,
     )
+    reading_incomplete = bool(failures)
+    read_indices = {index for number, _ in notes for index in runs[number - 1]}
+    read = len(read_indices)
+
+    if not any(lines for _, lines in notes):
+        if failures:
+            return partial_result(
+                ToolResult(
+                    "No usable notes are available. No report file was saved.",
+                    (), {**summary, "valid": False, "saved": None,
+                         "saved_pdf": None, "passages_read": read},
+                ), failures, completed=False,
+            )
+        raise IncompleteModelResponse(
+            "No usable cited notes were produced for the report.",
+            reason="no_notes",
+        )
 
     # Python owns the structure: the model writes the headline and each
     # section separately, and each piece is checked against its limit.
-    headline, fixes = _write_headline(template, path.name, notes, context)
+    try:
+        headline, fixes = _write_headline(template, path.name, notes, context)
+    except IncompleteModelResponse as error:
+        headline, fixes = template.title, []
+        failures.append({"item": "Headline", **error.to_dict()})
     # The PDF on disk lets the shared extractor read two columns in order.
     entries = reference_entries(
         passages, REFERENCE_LAYOUT, _paper_file(path, context)
     )
     written: list[tuple[str, str]] = []
+    accepted: list[tuple[str, str]] = []
     unsupported: list[str] = []
     for section in template.sections:
-        if section.source == SECTION_SOURCE_CITATION:
-            # Copied, not written: the model never touches the citation.
-            citation = paper_citation(_paper_file(path, context), passages)
-            written.append((section.name, citation))
-            continue
-
-        if section.source == SECTION_SOURCE_REFERENCES:
-            context.progress(f"Choosing {section.name}")
-            content, problem = _fill_references(
-                template, section, path.name, notes, entries, context
-            )
-            if problem:
-                unsupported.append(problem)
-            written.append((section.name, content))
-            continue
-
-        content, section_fixes = _write_section(
-            template, section, path.name, notes, written, settings, context
-        )
-        fixes.extend(section_fixes)
+        try:
+            if section.source == SECTION_SOURCE_CITATION:
+                # Bibliographic data is copied, not generated.
+                content = paper_citation(_paper_file(path, context), passages)
+            elif section.source == SECTION_SOURCE_REFERENCES:
+                context.progress(f"Choosing {section.name}")
+                content, problem = _fill_references(
+                    template, section, path.name, notes, entries, context
+                )
+                if problem:
+                    unsupported.append(problem)
+            else:
+                content, section_fixes = _write_section(
+                    template, section, path.name, notes, accepted, settings,
+                    context, incomplete_reading=reading_incomplete,
+                )
+                fixes.extend(section_fixes)
+            accepted.append((section.name, content))
+        except IncompleteModelResponse as error:
+            failures.append({"item": section.name, **error.to_dict()})
+            content = f"*Not completed: {error}*"
+        # Failed placeholders remain visible, but never feed later sections.
         written.append((section.name, content))
 
     if template.max_total_words:
         written = _fit_total(written, template)
+    if failures:
+        # A partial artifact may contain validated sections and explicit
+        # omissions, never an unmarked invalid section rescued by another's
+        # failure. Validate after any document-wide shortening as well.
+        accepted_names = {name for name, _ in accepted}
+        for index, (section, (name, content)) in enumerate(
+            zip(template.sections, written)
+        ):
+            if name not in accepted_names:
+                continue
+            problem = section_problem(section, content)
+            if problem:
+                failures.append({
+                    "item": name, "message": problem,
+                    "reason": "report_validation",
+                })
+                written[index] = (name, f"*Not completed: {problem}*")
+                accepted_names.remove(name)
+        accepted = [(name, text) for name, text in accepted
+                    if name in accepted_names]
     draft = _draft(headline, written, template)
 
     context.progress("Checking the template")
@@ -1272,11 +1308,57 @@ def run(
         turn_id=context.trace_turn_id,
     )
 
+    if (not check.valid or unsupported or failures) and not (
+        failures and accepted
+    ):
+        problems = check.problems() + unsupported
+        summary.update({
+            "status": "incomplete",
+            "reason": "report_validation",
+            "message": "The generated report failed its template checks.",
+            "valid": False,
+            "problems": problems,
+            "repairs": repairs,
+            "passages_read": read,
+            "notes": sum(len(lines) for _, lines in notes),
+            "saved": None,
+            "saved_pdf": None,
+            "seconds": round(perf_counter() - started, 1),
+            "model": context.model_id,
+        })
+        trace.emit(
+            "tool.generate_paper_summary.incomplete", component="tool",
+            data=summary, turn_id=context.trace_turn_id,
+        )
+        context.done(
+            "Report validation failed; no file saved", evidence_count=0
+        )
+        return partial_result(
+            ToolResult(
+                "The report could not be completed because its validation "
+                "failed. No report file was saved.\n\n"
+                + "\n".join(f"- {problem}" for problem in problems),
+                (), summary,
+            ), failures, completed=False,
+        )
+
     file_text = summary_file_text(draft, path)
+    suffix = "_summary.md"
+    if failures:
+        suffix = "_summary_partial.md"
+        file_text = (
+            "> **Partial report:** incomplete items are marked below. "
+            "Do not treat omissions as negative evidence.\n\n"
+            + file_text + incomplete_notice(failures) + "\n"
+        )
     saved = save_output_file(
-        context.project_root, f"{path.stem}_summary.md", file_text
+        context.project_root, path.stem + suffix, file_text
     )
-    pdf, pdf_note = _write_pdf(file_text, saved, template, context)
+    # A partial draft must not replace the completed report or its PDF.
+    pdf, pdf_note = (
+        (None, "No PDF was produced for this partial report.") if failures
+        else _write_pdf(file_text, saved, template, context)
+    )
     trace.emit(
         "tool.generate_paper_summary.saved",
         component="tool",
@@ -1287,12 +1369,12 @@ def run(
     # The answer says where the files are and then shows the saved file
     # itself, so the chat and the file never differ. Checks and fixes are
     # recorded in the turn and the trace.
-    read = sum(len(part) for part in runs)
     files = f"`{saved.as_posix()}`" + (
         f" and `{pdf.as_posix()}`" if pdf else ""
     )
     lead = [
-        f"Done: the {template.title.lower()} of {path.name} is saved as "
+        ("Partial report: the " if failures else "Done: the ")
+        + f"{template.title.lower()} of {path.name} is saved as "
         f"{files}."
     ]
     if pdf_note:
@@ -1303,7 +1385,7 @@ def run(
             + (
                 " (quick version: the first part)."
                 if choice == PLAN_CHOICE_QUICK
-                else " (the model-call limit was reached)."
+                else " (reading coverage is incomplete)."
             )
         )
 
@@ -1311,7 +1393,7 @@ def run(
         {
             "passages_read": read,
             "notes": sum(len(lines) for _, lines in notes),
-            "valid": check.valid and not unsupported,
+            "valid": check.valid and not unsupported and not failures,
             "problems": check.problems() + unsupported,
             "repairs": repairs,
             "saved": saved.as_posix(),
@@ -1320,6 +1402,12 @@ def run(
             "model": context.model_id,
         }
     )
+    if failures:
+        summary.update({
+            "status": "partial", "reason": "item_completion",
+            "message": "Some report items could not be completed.",
+            "incomplete_items": failures,
+        })
     trace.emit(
         "tool.generate_paper_summary.result",
         component="tool",
@@ -1330,7 +1418,10 @@ def run(
         },
         turn_id=context.trace_turn_id,
     )
-    context.done(f"Saved {saved.as_posix()}", evidence_count=len(passages))
+    context.done(
+        f"Saved {saved.as_posix()}",
+        evidence_count=read if failures else len(passages),
+    )
 
     evidence = tuple(
         {
@@ -1343,6 +1434,7 @@ def run(
             "cell": chunk.cell,
         }
         for index, chunk in enumerate(passages)
+        if not failures or index in read_indices
     )
     answer = " ".join(lead) + "\n\n---\n\n" + file_text.strip()
     return ToolResult(answer, evidence, summary)
@@ -1438,6 +1530,8 @@ def _write_section(
     written: list[tuple[str, str]],
     settings: SummarySettings,
     context: ToolContext,
+    *,
+    incomplete_reading: bool = False,
 ) -> tuple[str, list[str]]:
     """Write one section from the notes, then fix it toward its limits.
 
@@ -1454,9 +1548,11 @@ def _write_section(
     written: list[tuple[str, str]]
         Sections written so far, so they are not repeated.
     settings: SummarySettings
-        The intent's settings (``repair_attempts``, ``section_tokens``).
+        The intent's repair-attempt setting.
     context: ToolContext
         KíLín's services.
+    incomplete_reading: bool, optional
+        Warn that failed reading parts are not evidence of absence.
 
     Returns
     -------
@@ -1470,8 +1566,15 @@ def _write_section(
 
     context.progress(f"Writing {section.name}")
     system, prompt = section_prompt(template, section, name, notes, written)
-    tokens = _section_tokens(section, settings)
-    content = _content(context.ask_model(system, prompt, tokens), section)
+    coverage = (
+        "\n\nSome reading parts failed. Use only the supplied notes. "
+        "When these do not cover a topic, say it could not be established "
+        "from the available notes, not that it is absent from the paper."
+        if incomplete_reading else ""
+    )
+    content = _content(
+        context.ask_model(system, prompt + coverage, None), section
+    )
     problem = section_problem(section, content)
 
     fixes: list[str] = []
@@ -1487,7 +1590,9 @@ def _write_section(
         system, prompt = fix_prompt(
             section, content, problem, notes if short else None
         )
-        content = _content(context.ask_model(system, prompt, tokens), section)
+        content = _content(
+            context.ask_model(system, prompt + coverage, None), section
+        )
         problem = section_problem(section, content)
 
     if problem and section.words and (
@@ -1792,23 +1897,20 @@ def _headline(reply: str) -> str:
     return line.strip().lstrip("#").strip().strip('"“”*').strip()
 
 
-def _section_tokens(
-    section: TemplateSection, settings: SummarySettings
-) -> int:
-    """Return the reply room for one section, in tokens.
+def _section_reply_estimate(section: TemplateSection) -> int:
+    """Estimate section output for the plan, not generation control.
 
     Parameters
     ----------
     section: TemplateSection
         The section.
-    settings: SummarySettings
-        The intent's settings (``section_tokens``).
 
     Returns
     -------
     int
         Two tokens per word of the word maximum plus 80; else 90 tokens
-        per item of the item maximum plus 40; else ``section_tokens``.
+        per item of the item maximum plus 40; otherwise the packaged section
+        estimate.
 
     """
 
@@ -1818,13 +1920,12 @@ def _section_tokens(
     if section.items:
         return 90 * section.items[1] + 40
 
-    return settings.section_tokens
+    return SECTION_REPLY_TOKENS
 
 
 def _estimate(
     parts: list[list[int]],
     texts: list[str],
-    settings: SummarySettings,
     template: ReportTemplate,
 ) -> float:
     """Return the approximate seconds of a run, for the plan.
@@ -1835,8 +1936,6 @@ def _estimate(
         Passage indices of the parts to read.
     texts: list[str]
         Every passage's text.
-    settings: SummarySettings
-        The intent's settings.
     template: ReportTemplate
         The report template.
 
@@ -1855,10 +1954,10 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        # Notes use about half of their reply room.
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        # Planning estimates are independent of generation limits.
+        total += NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
 
-    notes = len(parts) * settings.note_tokens * _REPLY_SHARE
+    notes = len(parts) * NOTE_REPLY_TOKENS * _REPLY_SHARE
     written = [
         section
         for section in template.sections
@@ -1869,7 +1968,7 @@ def _estimate(
         reply = (
             _REFERENCES_REPLY_TOKENS
             if section.source == SECTION_SOURCE_REFERENCES
-            else _section_tokens(section, settings) * _REPLY_SHARE
+            else _section_reply_estimate(section) * _REPLY_SHARE
         )
         total += _CALL_SECONDS + reply / _REPLY_TOKENS_PER_SECOND
     total += (

@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,17 +44,23 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_BATCH_TOKENS",
     "DEFAULT_ITEM_CHARACTERS",
     "ITEM_NUMBER_TOKENS",
-    "REPLY_TOKENS",
 ]
 
 _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
     "ESTIMATES",
 }, "filter_results")
@@ -86,7 +97,6 @@ _ESTIMATES = require_section(
 require_keys(
     _ESTIMATES, {
         "ITEM_NUMBER_TOKENS",
-        "REPLY_TOKENS",
     }, "filter_results.ESTIMATES"
 )
 ITEM_NUMBER_TOKENS: Final[int] = (
@@ -98,12 +108,7 @@ ITEM_NUMBER_TOKENS: Final[int] = (
         100000,
     )
 )
-REPLY_TOKENS: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "REPLY_TOKENS",
-        "filter_results.ESTIMATES",
-        1,
-        100000,
-    )
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

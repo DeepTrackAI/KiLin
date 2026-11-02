@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,17 +44,23 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_CONTEXT_SENTENCES",
     "DEFAULT_MAX_PASSAGES",
     "MIN_WORDS",
-    "DEFAULT_ANSWER_TOKENS",
 ]
 
 _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
     "HEURISTICS",
 }, "show_source")
@@ -60,7 +71,6 @@ require_keys(
     _SETTINGS, {
         "CONTEXT_SENTENCES",
         "MAX_PASSAGES",
-        "ANSWER_TOKENS",
     }, "show_source.SETTINGS"
 )
 DEFAULT_CONTEXT_SENTENCES: Final[int] = (
@@ -68,9 +78,6 @@ DEFAULT_CONTEXT_SENTENCES: Final[int] = (
 )
 DEFAULT_MAX_PASSAGES: Final[int] = (
     require_int(_SETTINGS, "MAX_PASSAGES", "show_source.SETTINGS", 1, 10)
-)
-DEFAULT_ANSWER_TOKENS: Final[int] = (
-    require_int(_SETTINGS, "ANSWER_TOKENS", "show_source.SETTINGS", 100, 2000)
 )
 
 _HEURISTICS = require_section(
@@ -81,4 +88,8 @@ require_keys(
 )
 MIN_WORDS: Final[int] = require_int(
     _HEURISTICS, "MIN_WORDS", "show_source.HEURISTICS", 1, 100
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

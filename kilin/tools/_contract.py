@@ -204,15 +204,24 @@ class ToolContext:
         Asks the router model ``(system, prompt, max_new_tokens)`` with
         thinking off and greedy decoding; the conversation is untouched.
     ask_model: Callable[[str, str, int | None], str]
-        Asks the selected answering model with inherited session thinking
-        and temperature. Returns only the parsed-answer text; any thinking
-        is captured by the coordinator for display, not returned to the
-        tool. A ``None`` token argument inherits the session maximum; an
-        explicit limit is capped by that maximum.
-    write: Callable[[str, str, int], str]
-        Same generation settings as ``ask_model``, but preserves thinking
-        in the returned answer and streams the complete reply to the user;
-        a tool using it returns ``streamed=True``.
+        Asks the selected answering model with inherited temperature and
+        the tool-owned MODEL_CALLS thinking policy. Returns only the
+        parsed-answer text; any thinking is captured by the coordinator
+        for display, not returned to the
+        tool. ``None`` inherits the session maximum. Explicit caps apply
+        only when effective thinking is off, never exceeding that maximum.
+        A thinking call that exhausts its allowance inside unfinished
+        thinking is retried once without thinking, with the same request
+        and user allowance. Other failures, or a failed retry, raise
+        ``IncompleteModelResponse`` rather than returning empty data.
+        Independent item loops can retain checked results and report gaps.
+    write: Callable[[str, str, int | None], str]
+        Inherits session thinking and temperature, independently of the
+        internal MODEL_CALLS policy. Preserves thinking in the returned
+        answer and streams the complete reply to the user;
+        a tool using it returns ``streamed=True``. Completion is validated
+        before the reply can become a successful tool result. ``None``
+        inherits the user limit; a smaller cap applies only without thinking.
     model_id: str
         The answering model's ID, for plans and summaries.
     progress: Callable[..., None]
@@ -248,7 +257,7 @@ class ToolContext:
     source_files: Callable[[], dict[Path, int]]
     ask_router: Callable[[str, str, int], str]
     ask_model: Callable[[str, str, int | None], str]
-    write: Callable[[str, str, int], str]
+    write: Callable[[str, str, int | None], str]
     model_id: str
     progress: Callable[..., None]
     done: Callable[..., None]
@@ -273,6 +282,9 @@ class ToolResult:
         ``text`` must be exact source lines so previews can locate it.
     summary: dict[str, object]
         JSON-compatible facts saved with the turn under ``"tool"``.
+        Partial operations set ``status="partial"`` and ``incomplete_items``;
+        operations without usable results set ``status="incomplete"``.
+        An unassessed item is never a negative finding.
     streamed: bool, optional
         True when the answer already reached the user through
         ``ToolContext.write``. Defaults to ``False``.

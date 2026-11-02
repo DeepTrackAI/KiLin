@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,9 +44,14 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_MAX_TOKENS",
-    "DEFAULT_ANSWER_TOKENS",
     "OPENING_PASSAGES",
 ]
 
@@ -49,6 +59,7 @@ _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
     "HEURISTICS",
 }, "paper_overview")
@@ -58,7 +69,6 @@ _SETTINGS = require_section(
 require_keys(
     _SETTINGS, {
         "MAX_TOKENS",
-        "ANSWER_TOKENS",
     }, "paper_overview.SETTINGS"
 )
 DEFAULT_MAX_TOKENS: Final[int] = (
@@ -68,15 +78,6 @@ DEFAULT_MAX_TOKENS: Final[int] = (
         "paper_overview.SETTINGS",
         1000,
         20000,
-    )
-)
-DEFAULT_ANSWER_TOKENS: Final[int] = (
-    require_int(
-        _SETTINGS,
-        "ANSWER_TOKENS",
-        "paper_overview.SETTINGS",
-        100,
-        2000,
     )
 )
 _HEURISTICS = require_section(
@@ -95,4 +96,8 @@ OPENING_PASSAGES: Final[int] = (
         1,
         100,
     )
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

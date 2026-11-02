@@ -44,8 +44,8 @@ kilin/tools/example_tool/
 The reference `generate_paper_summary` tool additionally has a private
 report-template parser and a pure report HTML formatter. Qt-based PDF writing
 remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
-to the tool as a callback. The tool does not import the GUI, and it always
-saves Markdown even without a PDF backend. Other tools can add private
+to the tool as a callback. The tool does not import the GUI, and it
+saves validated Markdown even without a PDF backend. Other tools can add private
 modules as needed.
 All eleven built-in registered tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
@@ -113,13 +113,19 @@ and DeepTrack-style documentation conventions apply to all Python modules.
 
 ## Generation settings for tools
 
-The tool context's `ask_model` and `write` adapters inherit the active
-answering session's selected model, thinking mode and temperature. The
-smaller of the tool's requested `max_new_tokens` and the active session's
-configured output-token maximum governs the call. Tools requiring lengthy
-thinking responses should set an appropriate tool-specific output budget;
-a small structured-answer budget can otherwise truncate a thinking reply.
-Internal and user-facing answering-model calls follow the same policy.
+The `ask_model` and `write` adapters use the active session's model,
+temperature and output allowance. `write` inherits session thinking;
+`ask_model` uses the tool's explicit `MODEL_CALLS.THINKING` policy.
+Thinking requests always inherit the user-selected token limit. Only
+nonthinking requests may supply a smaller cap, which cannot exceed the
+user's maximum. Pass `None` for ordinary analysis, prose, or variable-length
+structured output; reserve explicit caps for genuinely brief responses.
+Do not infer thinking from the cap or use duration estimates as limits.
+
+The allowance is per model call, includes thinking and final output, and is
+not a target response length. Source-input budgets and template word limits
+serve different purposes. See [configuration](configuration.md#internal-tool-thinking)
+for defaults, retained exceptions, and removed configuration keys.
 
 The returned text differs intentionally: `ask_model` removes thinking
 from the value it passes to tool logic, so classification, reference
@@ -128,9 +134,28 @@ captures any thinking from these calls separately, shows it in the answer's
 collapsible thinking section, and saves it with the turn. The captured
 thinking is also forwarded to the answer callback after each call completes.
 A tool using `write` preserves and streams the model's full final reply.
-Neither behavior changes the model's generation settings or adds calls.
+The internal adapter may retry an exhausted, unfinished thinking call once
+without thinking. It keeps the original prompt and user allowance and records
+both attempts. Final streaming `write` calls are not retried automatically.
 
 The `ask_router` adapter is unaffected: router side questions remain
 nonthinking, deterministic, and isolated from the conversation. All tool
 side calls restore the original conversation history after success or
 failure.
+
+## Partial tool completion
+
+Keep recovery at two existing boundaries: `RAGSession` owns the single
+nonthinking retry for an internal `ask_model` request; each tool owns whether
+independent items can continue after `IncompleteModelResponse`. Do not add
+per-tool generation retries or parse truncated text. Use the shared
+`partial_result` helper to retain valid results with safe item labels, reasons,
+and a visible **Incomplete items** notice. The summary is partial when useful
+work remains, incomplete otherwise. Never turn a failed read into `NOTHING`, a
+failed selection into `NONE`, or a failed evidence judgment into a negative.
+
+Report placeholders are visible omissions, not source findings, and must not
+feed later model requests. Partial reports have distinct Markdown filenames,
+no PDF and explicit invalid/partial status. Keep normal template and evidence
+checks. See [completion and recovery](answering_pipeline.md#model-output-completion-and-bounded-recovery)
+for exact retry eligibility, accounting, persistence and dependency behavior.

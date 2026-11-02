@@ -54,6 +54,7 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._contract import ToolContext
@@ -216,11 +217,11 @@ def take_notes(
     name: str,
     texts: Sequence[str],
     parts: Sequence[Sequence[int]],
-    note_tokens: int,
     context: ToolContext,
     *,
     what: str = "document",
     whole: bool = True,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[tuple[int, list[str]]]:
     """Take checked notes on each part of a document with the model.
 
@@ -235,8 +236,6 @@ def take_notes(
         Every passage's text; passage ``n`` is ``texts[n - 1]``.
     parts: Sequence[Sequence[int]]
         Passage indices per part, in reading order.
-    note_tokens: int
-        Longest notes for one part, in tokens.
     context: ToolContext
         KíLín's services (``ask_model``, ``progress``, ``trace``).
     what: str, optional
@@ -245,12 +244,18 @@ def take_notes(
     whole: bool, optional
         True when the parts cover the whole document; False for a quick
         reading of its most relevant passages. Defaults to ``True``.
+    failures: list[dict[str, object]] | None, optional
+        Collect independent failed parts and continue when supplied. Failed
+        parts are omitted from notes, never represented as NOTHING. None
+        retains strict failure propagation.
 
     Returns
     -------
     list[tuple[int, list[str]]]
-        Part numbers with their note lines (see ``clean_notes``). A failed
-        call gives an empty part.
+        Part numbers with checked note lines. Explicit NOTHING replies
+        give empty parts. Failed calls or unparseable notes are omitted
+        when a failure collector is supplied; otherwise they raise
+        ``IncompleteModelResponse``. They never imply a negative result.
 
     """
 
@@ -275,10 +280,38 @@ def take_notes(
             [(index + 1, texts[index]) for index in part],
         )
         try:
-            reply = context.ask_model(system, prompt, note_tokens)
-        except Exception as error:  # A failed part is reported, not fatal.
-            reply = f"failed: {error}"
-        lines = clean_notes(reply, [index + 1 for index in part])
+            reply = context.ask_model(system, prompt, None)
+            lines = clean_notes(reply, [index + 1 for index in part])
+            if not lines and reply.strip() != NOTHING:
+                raise IncompleteModelResponse(
+                    "The model returned neither cited notes nor NOTHING.",
+                    reason="invalid_output", raw_text=reply,
+                )
+        except IncompleteModelResponse as error:
+            if failures is None:
+                raise
+            failure = {
+                "item": f"{name}, reading part {number}",
+                "part": number, "passages": len(part),
+                "passage_numbers": [index + 1 for index in part],
+                **error.to_dict(),
+            }
+            failures.append(failure)
+            context.trace.emit(
+                "tool.part.failed", component="tool", data=failure,
+                turn_id=context.trace_turn_id,
+            )
+            continue
+        except Exception as error:
+            context.trace.emit(
+                "tool.part.failed", component="tool",
+                data={"part": number, "notes": 0, "error": str(error)},
+                turn_id=context.trace_turn_id,
+            )
+            raise IncompleteModelResponse(
+                f"Document reading failed in part {number}: {error}",
+                reason="model_error",
+            ) from error
         notes.append((number, lines))
         data: dict[str, object] = {
             "part": number,

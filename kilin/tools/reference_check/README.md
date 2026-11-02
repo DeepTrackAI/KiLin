@@ -143,7 +143,6 @@ are internal thresholds. All values are read and validated on import.
 - `PASSAGE_TOKENS` (default `5000`): Most estimated tokens of those
   passages (an indexed passage is often 700-1000); the best-ranked one is
   always read. Allowed range: 300–16000.
-- `ANSWER_TOKENS` (default `null`): Optional per-call output-token cap.
   With `null`, the answering model inherits the main interface's maximum
   output tokens (or its available context if no maximum was configured).
   An explicit override accepts 100–131072 and is capped by any session
@@ -227,6 +226,9 @@ Thresholds for finding in-text citations (`CitationRules`).
 
 ### `ESTIMATES`
 
+- `JUDGE_REPLY_TOKENS` (default `256`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
+
 Planning assumptions for the time shown before claims are checked; they
 are estimates, not limits.
 
@@ -240,3 +242,31 @@ are estimates, not limits.
   passages of one claim. Allowed range: 0–100000.
 - `REPLY_SHARE` (default `0.6`): Share of the answer budget a verdict uses
   on average. Allowed range: 0–1.
+
+
+## Generation settings
+
+Output allowances come from the active session, including per-question GUI
+or API settings. They are ceilings for each model call, not target lengths
+or a total budget for a multi-call tool. Prose length is controlled by the
+prompt or report template; input passage budgets remain separate.
+
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"inherit"`).
+It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
+It never infers thinking from a token count. `context.write` always inherits
+main-session thinking. Router calls remain nonthinking and separately bounded.
+
+Thinking requests use the user's full allowance. Only nonthinking requests
+may use an explicit smaller cap, never exceeding the user's maximum.
+Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
+forces thinking and bypasses local short-response caps. Restart after editing
+cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
+for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+An incomplete evidence judgment is `failed` and unrated, not unsupported.
+Other claims are still checked, and both the saved report and answer identify
+incomplete items with partial status. Existing support and quotation checks
+apply to every completed judgment. The shared internal adapter retries only
+length-exhausted unfinished thinking, once without thinking.

@@ -78,7 +78,6 @@ are internal thresholds. All values are read and validated on import.
   range: 1–20.
 - `PASSAGE_TOKENS` (default `4000`): Most estimated tokens of those
   passages; the best-ranked one is always read. Allowed range: 300–16000.
-- `ANSWER_TOKENS` (default `null`): Optional per-call output-token cap.
   With `null`, the answering model inherits the main interface's maximum
   output tokens (or its available context if no maximum was configured).
   An explicit override accepts 100–131072 and is capped by any session
@@ -96,13 +95,16 @@ How the statement is taken from the question.
 
 - `MIN_WORDS` (default `4`): Fewest words of a statement, quoted or after a
   colon, and of the router's copy. Allowed range: 1–100.
-- `ROUTER_TOKENS` (default `200`): Longest router answer when copying the
+- `ROUTER_TOKENS` (default `256`): Longest router answer when copying the
   statement, in tokens. Allowed range: 20–2000.
 - `ROUTER_WORD_SHARE` (default `0.8`): Least share of the router's words
   that must be words of the question; otherwise the whole question is
   used. Allowed range: 0–1.
 
 ### `ESTIMATES`
+
+- `JUDGE_REPLY_TOKENS` (default `256`): expected reply tokens for
+  duration estimates only; never a generation cap. Range: 1-131072.
 
 Planning assumptions for the time shown before the papers are judged;
 they are estimates, not limits.
@@ -117,3 +119,31 @@ they are estimates, not limits.
   passages of one paper. Allowed range: 0–100000.
 - `REPLY_SHARE` (default `0.6`): Share of the answer budget a verdict uses
   on average. Allowed range: 0–1.
+
+
+## Generation settings
+
+Output allowances come from the active session, including per-question GUI
+or API settings. They are ceilings for each model call, not target lengths
+or a total budget for a multi-call tool. Prose length is controlled by the
+prompt or report template; input passage budgets remain separate.
+
+`MODEL_CALLS` contains one key: `THINKING` (packaged value `"inherit"`).
+It accepts `inherit`, `on`, or `off` for internal `context.ask_model` calls.
+It never infers thinking from a token count. `context.write` always inherits
+main-session thinking. Router calls remain nonthinking and separately bounded.
+
+Thinking requests use the user's full allowance. Only nonthinking requests
+may use an explicit smaller cap, never exceeding the user's maximum.
+Changing `THINKING` to `inherit` resets this tool to the main setting; `on`
+forces thinking and bypasses local short-response caps. Restart after editing
+cached defaults. See the [shared policy](../../../docs/configuration.md#internal-tool-thinking)
+for precedence, the retained exceptions, and migration of obsolete keys.
+
+## Partial completion
+
+An incomplete candidate judgment is `failed` and unrated, not evidence against
+citing that paper. Other candidates continue and valid suggestions remain
+available. The answer explicitly lists incomplete items; all failed judgments
+produce an incomplete/inconclusive result rather than a false zero-support
+conclusion. The shared internal adapter owns the one eligible retry.

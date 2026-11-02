@@ -278,3 +278,96 @@ new packaged JSON resource.
 Related: [Package defaults](package_defaults.md),
 [Model management](model_management.md), [Project workspaces](project_workspaces.md),
 [Tool packages](tool_packages.md), [Development](development.md).
+
+### Internal tool thinking
+
+Every tool inherits the active answering session's output allowance. This
+includes per-question `generation_settings`, whether supplied through the
+GUI or the Python API. The allowance is **per call**, includes thinking and
+final output together, and is not a target length or an aggregate tool budget.
+Tool prompts and report templates still control the requested prose length.
+
+Each tool owns one explicit `MODEL_CALLS` policy in
+`kilin/tools/<tool>/defaults.json`:
+
+```json
+"MODEL_CALLS": {
+  "THINKING": "inherit"
+}
+```
+
+`THINKING` accepts `inherit`, `on`, or `off`. It controls internal
+`context.ask_model` requests; `context.write` uses main-session thinking.
+The structured selection tools (`find_passages`, `filter_results`,
+`batch_classify`) and the two document-processing tools (`batch_review`,
+`generate_paper_summary`) default to `off`. Other tools default to
+`inherit`.
+Changing this value to `inherit` or `on` is sufficient to reset or force
+thinking. There is no short-reply threshold and no token-based mode switch.
+
+Output-limit resolution is deliberately independent:
+
+1. A thinking call uses the active session's maximum, ignoring any local cap.
+2. A nonthinking call with no explicit cap also uses the session maximum.
+3. A nonthinking call with a cap uses the smaller of that cap and the user's
+   maximum. A tool never silently raises the user's selected maximum.
+
+When the session maximum is `None`, inherited calls retain the existing
+backend/context-derived budget; a nonthinking local cap still applies.
+Invalid caps (including booleans, zero and negative values) are rejected.
+No minimum generation length is imposed, and no automatic retry is added.
+
+Paper overviews, source explanations, document notes, report sections and
+reference judgments no longer have separate local output ceilings. Variable-
+length lists from the three selection tools also inherit the user limit,
+even though these tools default to nonthinking. Input chunk, passage, batch
+and reading budgets are unchanged and must not be confused with output caps.
+
+The retained short-response exceptions use powers of two:
+
+| Request | Local output cap | When it applies |
+| --- | ---: | --- |
+| Report headline | 128 | Only when effective thinking is off |
+| Report reference identifiers | 128 | Only when effective thinking is off |
+| Router intent decision | 64 | Separate nonthinking router |
+| Router document selection | 8 | Separate nonthinking router |
+| Router term/topic extraction | 128 | Separate nonthinking router |
+| Router category or statement extraction | 256 | Separate nonthinking router |
+| GUI conversation title | 32 | Separate nonthinking router |
+
+User-supplied limits are not rounded or restricted to powers of two. Router
+limits remain separate from the answering model's session ceiling. The
+report metadata caps are configurable in its `WRITING` section, and are
+bypassed automatically when thinking is enabled.
+
+Temperature, selected models, existing call counts and completion checks
+are unchanged. Internal replies remain thinking-free for parsers; generated
+thinking is retained separately for display as before. All temporary settings
+and isolated histories are restored on success or failure. Models still need
+to support the existing thinking control. An exhausted user budget remains
+an explicit incomplete result, not a false negative or a successful report.
+
+Duration estimates describe expected output, not maximum generation. The
+new `*_REPLY_TOKENS` entries under `ESTIMATES` are used only in plan timing;
+they do not control the model. Estimates remain approximate, particularly
+when thinking uses more of the selected allowance.
+
+#### Migration from the previous tool budgets
+
+The packaged files are updated together. Customized project-type tool
+objects must remove `answer_tokens`, `note_tokens`, and `section_tokens`.
+The corresponding `SETTINGS` defaults (`ANSWER_TOKENS`, `NOTE_TOKENS`,
+`SECTION_TOKENS`) are removed. They are rejected as unknown settings rather
+than silently overriding the interface or becoming ineffective settings.
+
+Remove `SHORT_REPLY_THINKING` and `SHORT_REPLY_MAX_TOKENS` from `MODEL_CALLS`.
+Only `THINKING` remains. Selection output caps `find_passages`'
+`JUDGE_REPLY_TOKENS`, `filter_results`' `REPLY_TOKENS`, and `batch_classify`'s
+`REPLY_TOKEN_LIMIT_PER_ITEM` are removed from those tools' old estimate groups.
+Restart KíLín or the notebook kernel to clear the existing configuration
+cache. No source reindexing or rewriting of historical answers is needed.
+
+The saved tool summary retains `internal_generation` with the resolved
+thinking policy, requested cap and completion status for each internal call.
+The model trace records the actual effective generation allowance. See the
+[completion contract](answering_pipeline.md#model-output-completion-contract).

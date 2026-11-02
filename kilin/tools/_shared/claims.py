@@ -95,6 +95,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.sentences import Sentence
@@ -690,7 +691,6 @@ def verify_claim(
     claim: Claim,
     passages: Sequence[Chunk],
     ask_model: Callable[[str, str, int | None], str],
-    answer_tokens: int | None,
 ) -> Verdict:
     """Judge one claim with the answering model.
 
@@ -702,9 +702,6 @@ def verify_claim(
         The cited file's passages to judge it from.
     ask_model: Callable[[str, str, int | None], str]
         The answering model (``ToolContext.ask_model``).
-    answer_tokens: int | None
-        Optional per-call output limit; ``None`` inherits the session
-        maximum output tokens.
 
     Returns
     -------
@@ -716,7 +713,7 @@ def verify_claim(
 
     verdict, quote, chunk, comment, status = _judge(
         verification_prompt(claim, passages) if passages else ("", ""),
-        passages, ask_model, answer_tokens,
+        passages, ask_model,
     )
     return Verdict(
         claim, verdict, quote, chunk, comment, tuple(passages), status
@@ -728,7 +725,6 @@ def judge_support(
     cited: Path,
     passages: Sequence[Chunk],
     ask_model: Callable[[str, str, int | None], str],
-    answer_tokens: int | None,
 ) -> Support:
     """Judge whether one work supports a statement, with the model.
 
@@ -742,9 +738,6 @@ def judge_support(
         The work's passages to judge it from.
     ask_model: Callable[[str, str, int | None], str]
         The answering model (``ToolContext.ask_model``).
-    answer_tokens: int | None
-        Optional per-call output limit; ``None`` inherits the session
-        maximum output tokens.
 
     Returns
     -------
@@ -757,7 +750,7 @@ def judge_support(
 
     verdict, quote, chunk, comment, status = _judge(
         support_prompt(statement, cited, passages) if passages else ("", ""),
-        passages, ask_model, answer_tokens,
+        passages, ask_model,
     )
     return Support(
         statement, cited, verdict, quote, chunk, comment,
@@ -769,7 +762,6 @@ def _judge(
     prompts: tuple[str, str],
     passages: Sequence[Chunk],
     ask_model: Callable[[str, str, int | None], str],
-    answer_tokens: int | None,
 ) -> tuple[str, str, Chunk | None, str, str]:
     """Ask the model for a verdict and check its answer.
 
@@ -781,9 +773,6 @@ def _judge(
         The passages the prompt shows; none means no model call.
     ask_model: Callable[[str, str, int | None], str]
         The answering model.
-    answer_tokens: int | None
-        Optional per-call output limit; ``None`` inherits the session
-        maximum output tokens.
 
     Returns
     -------
@@ -799,7 +788,12 @@ def _judge(
             "no text",
         )
     try:
-        reply = ask_model(prompts[0], prompts[1], answer_tokens)
+        reply = ask_model(prompts[0], prompts[1], None)
+    except IncompleteModelResponse as error:
+        return (
+            VERDICT_FAILED, "", None,
+            f"Not completed ({error.reason}): {error}", "failed",
+        )
     except Exception as error:  # A failed call is reported, not fatal.
         return VERDICT_FAILED, "", None, f"Model error: {error}", "failed"
     return _checked_verdict(reply, passages)

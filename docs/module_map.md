@@ -23,6 +23,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Module | Responsibility (source docstring) | Primary owner | Test family |
 | --- | --- | --- | --- |
 | [`kilin/__init__.py`](../kilin/__init__.py) | Expose the package-level KíLín API. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
+| [`kilin/_model_completion.py`](../kilin/_model_completion.py) | Validate completed model replies and diagnose incomplete output. | [Answering pipeline](answering_pipeline.md) | [Completion tests](../tests/kilin/test__model_completion.py) |
 | [`kilin/_project_creation.py`](../kilin/_project_creation.py) | Reserve empty destinations and allocate independent projects exclusively. | [Project workspaces](project_workspaces.md) | [Creation tests](../tests/kilin/test_project__creation.py) |
 | [`kilin/answering.py`](../kilin/answering.py) | Route questions by intent and select conversation history. | [Answering pipeline](answering_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Replace or exclusively publish text files atomically. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
@@ -82,6 +83,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/__init__.py`](../kilin/tools/__init__.py) | Tools that intents in a project type can use. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_contract.py`](../kilin/tools/_contract.py) | Define what KíLín gives a tool and what the tool returns. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_defaults.py`](../kilin/tools/_defaults.py) | Read and validate defaults owned by individual KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_model_calls.py`](../kilin/tools/_model_calls.py) | Validate and resolve tool-owned internal thinking policies. | [Configuration](configuration.md) | [Policy tests](../tests/kilin/tools/test__model_calls.py) |
 | [`kilin/tools/_registry.py`](../kilin/tools/_registry.py) | Register KíLín's tools and resolve an intent's tool. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/__init__.py`](../kilin/tools/_shared/__init__.py) | Private services shared by registered KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/claims.py`](../kilin/tools/_shared/claims.py) | Judge whether a cited work supports the sentence that cites it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -91,6 +93,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_shared/earlier_turns.py`](../kilin/tools/_shared/earlier_turns.py) | Select an earlier turn with listed supporting evidence. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/long_lists.py`](../kilin/tools/_shared/long_lists.py) | Offer to save a long list as a Markdown file instead of the chat. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/mentions.py`](../kilin/tools/_shared/mentions.py) | Reassemble and scan exact source mentions for multiple tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_shared/model_results.py`](../kilin/tools/_shared/model_results.py) | Validate bounded model selections without false empty results. | [Tool extension contracts](extension_interfaces.md) | [Selection tests](../tests/kilin/tools/_shared/test_model_results.py) |
 | [`kilin/tools/_shared/outputs.py`](../kilin/tools/_shared/outputs.py) | Read and write files in a project's ``outputs/`` folder. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/paths.py`](../kilin/tools/_shared/paths.py) | Name sources by the shortest unique ending of each path. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/planning.py`](../kilin/tools/_shared/planning.py) | Plan expensive tool runs and let the user confirm them or choose. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |

@@ -89,6 +89,7 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.tools._contract import (
     ToolContext,
@@ -173,9 +174,6 @@ class SuggestReferenceSettings:
         Most passages of each paper read (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int | None
-        Maximum verdict output tokens (100-131072), or ``None`` to
-        inherit the main interface's generation limit.
     quick_files: int
         Papers judged by the quick version (1-20).
     confirmation: ConfirmationPolicy
@@ -189,7 +187,6 @@ class SuggestReferenceSettings:
     files: int = _config.DEFAULT_FILES
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int | None = _config.DEFAULT_ANSWER_TOKENS
     quick_files: int = _config.DEFAULT_QUICK_FILES
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -221,7 +218,7 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         where,
         data,
         (
-            "files", "passages", "passage_tokens", "answer_tokens",
+            "files", "passages", "passage_tokens",
             "quick_files", "confirmation", "large_batches",
         ),
     )
@@ -232,12 +229,6 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         passage_tokens=check_int(
             where, data, "passage_tokens", defaults.passage_tokens, 300,
             16000,
-        ),
-        answer_tokens=(
-            None if data.get("answer_tokens") is None else check_int(
-                where, data, "answer_tokens", defaults.answer_tokens,
-                100, 131072,
-            )
         ),
         quick_files=check_int(
             where, data, "quick_files", defaults.quick_files, 1, 20
@@ -565,7 +556,6 @@ def run(
         )
         support = judge_support(
             statement, path, passages, context.ask_model,
-            settings.answer_tokens,
         )
         supports.append(support)
         rating = citation_suitability(support)
@@ -601,6 +591,11 @@ def run(
         notes.append(
             f"Explicitly excluded draft document(s): {left_out}."
         )
+    failures = [
+        {"item": support.cited.as_posix(), "message": support.comment,
+         "reason": "model_result"}
+        for support in supports if support.verdict == VERDICT_FAILED
+    ]
     answer, quoted = chat_answer(statement, supports, " ".join(notes))
     verdicts = Counter(support.verdict for support in supports)
     summary.update(
@@ -641,7 +636,10 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=len(supports) > len(failures),
+    )
 
 
 def _paper_seconds(settings: SuggestReferenceSettings) -> float:
@@ -660,9 +658,8 @@ def _paper_seconds(settings: SuggestReferenceSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    # The estimate uses a historical 250-token proxy when the actual
-    # output budget is inherited from the main session; it is not a cap.
-    reply = (settings.answer_tokens or 250) * _config.REPLY_SHARE
+    # Expected output is a planning estimate, never a generation cap.
+    reply = _config.JUDGE_REPLY_TOKENS * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND

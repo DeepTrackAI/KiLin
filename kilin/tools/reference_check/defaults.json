@@ -4,7 +4,6 @@
     "VERIFY": true,
     "PASSAGES": 6,
     "PASSAGE_TOKENS": 5000,
-    "ANSWER_TOKENS": null,
     "MAX_MODEL_CALLS": 100,
     "QUICK_CLAIMS": 5,
     "CONFIRMATION": "when_large",
@@ -51,6 +50,10 @@
     "REPLY_TOKENS_PER_SECOND": 25.0,
     "CALL_SECONDS": 1.0,
     "PROMPT_OVERHEAD_TOKENS": 450,
-    "REPLY_SHARE": 0.6
+    "REPLY_SHARE": 0.6,
+    "JUDGE_REPLY_TOKENS": 256
+  },
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
   }
 }

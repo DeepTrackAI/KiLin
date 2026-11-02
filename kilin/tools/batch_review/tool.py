@@ -56,6 +56,7 @@ Examples
 
 from __future__ import annotations
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.tools._shared.document_notes import (
     NOTHING,
     answer_citations,
@@ -115,10 +116,6 @@ class ReviewSettings:
     ----------
     part_tokens: int
         Estimated tokens of document per part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    answer_tokens: int
-        Longest final answer, in tokens (200-4000).
     max_model_calls: int
         Most part calls one answer may make (1-200); later parts are
         reported as not read.
@@ -131,8 +128,6 @@ class ReviewSettings:
     """
 
     part_tokens: int = _config.DEFAULT_PART_TOKENS
-    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -165,8 +160,6 @@ def parse_settings(data: dict, where: str) -> ReviewSettings:
         data,
         (
             "part_tokens",
-            "note_tokens",
-            "answer_tokens",
             "max_model_calls",
             "confirmation",
             "large_batches",
@@ -176,12 +169,6 @@ def parse_settings(data: dict, where: str) -> ReviewSettings:
     return ReviewSettings(
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 200, 4000
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1, 200
@@ -355,14 +342,14 @@ def run(
         batches=len(parts),
         batches_to_run=len(to_read),
         estimated_seconds=round(
-            _estimate(to_read, texts, settings) + _answer_seconds(settings),
+            _estimate(to_read, texts) + _answer_seconds(),
             1,
         ),
         quick_items=len(quick),
         quick_seconds=round(
             (
-                _estimate(quick_parts, texts, settings)
-                + _answer_seconds(settings)
+                _estimate(quick_parts, texts)
+                + _answer_seconds()
             )
             if quick
             else 0.0,
@@ -411,12 +398,12 @@ def run(
         )
     runs = quick_parts if choice == PLAN_CHOICE_QUICK else to_read
     started = perf_counter()
+    failures: list[dict[str, object]] = []
     notes = take_notes(
         request.question,
         name,
         texts,
         runs,
-        settings.note_tokens,
         context,
         what=(
             "function"
@@ -426,16 +413,29 @@ def run(
             else "file"
         ),
         whole=choice != PLAN_CHOICE_QUICK,
+        failures=failures,
     )
-    read = sorted(index for part in runs for index in part)
+    read = sorted(index for number, _ in notes for index in runs[number - 1])
+    if failures and not any(lines for _, lines in notes):
+        return partial_result(
+            ToolResult(
+                "No usable notes are available to answer.", (), summary,
+            ),
+            failures, completed=False,
+        )
     context.done(
         f"Read {len(read)} of {len(passages)} passages of {name}",
-        evidence_count=len(passages),
+        evidence_count=len(read),
     )
     system, prompt = answer_prompt(
         request.question, name, notes, len(runs), request.guidance
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
+    if failures:
+        prompt += (
+            "\n\nSome reading parts failed. Answer only from the supplied "
+            "notes; do not infer absence from missing notes."
+        )
+    answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK or len(read) < len(passages):
         answer += (
@@ -447,13 +447,13 @@ def run(
                     else " (the most relevant ones)."
                 )
                 if choice == PLAN_CHOICE_QUICK
-                else " (the model-call limit was reached)."
+                else " (reading coverage is incomplete)."
             )
             + "*"
         )
     summary.update(
         {
-            "parts_read": len(runs),
+            "parts_read": len(notes),
             "passages_read": len(read),
             "notes": sum(len(lines) for _, lines in notes),
             "parts_without_notes": [
@@ -485,8 +485,11 @@ def run(
             "cell": chunk.cell,
         }
         for index, chunk in enumerate(passages)
+        if not failures or index in read
     )
-    return ToolResult(answer, evidence, summary, streamed=True)
+    return partial_result(
+        ToolResult(answer, evidence, summary, streamed=True), failures,
+    )
 
 
 def _fit(
@@ -524,7 +527,6 @@ def _fit(
 def _estimate(
     parts: Sequence[Sequence[int]],
     texts: Sequence[str],
-    settings: ReviewSettings,
 ) -> float:
     """Approximate seconds to take notes on the parts.
 
@@ -534,8 +536,6 @@ def _estimate(
         Parts of the document to process.
     texts: Sequence[str]
         Text passages or fields to inspect.
-    settings: ReviewSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -550,17 +550,12 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += 1.0 + prompt / _PROMPT_TOKENS_PER_SECOND
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        total += _config.NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
     return total
 
 
-def _answer_seconds(settings: ReviewSettings) -> float:
+def _answer_seconds() -> float:
     """Approximate seconds for the final answer.
-
-    Parameters
-    ----------
-    settings: ReviewSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -569,4 +564,4 @@ def _answer_seconds(settings: ReviewSettings) -> float:
 
     """
 
-    return 2.0 + settings.answer_tokens / 3 / _REPLY_TOKENS_PER_SECOND
+    return 2.0 + _config.ANSWER_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND

@@ -83,6 +83,7 @@ import re
 from time import perf_counter
 from typing import Final
 
+from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.document_notes import (
@@ -142,10 +143,6 @@ class FactSettings:
     ----------
     part_tokens: int
         Estimated tokens of passages per reading part (1000-16000).
-    note_tokens: int
-        Longest notes for one part, in tokens (100-1500).
-    answer_tokens: int
-        Longest answer, in tokens (100-4000).
     max_model_calls: int
         Most reading parts (1-500).
     confirmation: "always" | "when_large" | "never"
@@ -157,8 +154,6 @@ class FactSettings:
     """
 
     part_tokens: int = _config.DEFAULT_PART_TOKENS
-    note_tokens: int = _config.DEFAULT_NOTE_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -188,8 +183,6 @@ def parse_settings(data: dict, where: str) -> FactSettings:
 
     names = (
         "part_tokens",
-        "note_tokens",
-        "answer_tokens",
         "max_model_calls",
         "confirmation",
         "large_batches",
@@ -200,12 +193,6 @@ def parse_settings(data: dict, where: str) -> FactSettings:
     return FactSettings(
         part_tokens=check_int(
             where, data, "part_tokens", defaults.part_tokens, 1000, 16000
-        ),
-        note_tokens=check_int(
-            where, data, "note_tokens", defaults.note_tokens, 100, 1500
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 4000
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1, 500
@@ -354,7 +341,7 @@ def run(
     if terms:
         label, note = term_label(terms, hits)
         quick_parts = [part for _, parts in quick_by_file for part in parts]
-        quick_seconds = _estimate(quick_parts, texts, settings)
+        quick_seconds = _estimate(quick_parts, texts)
     else:
         label = "Quick answer"
         note = (
@@ -383,7 +370,7 @@ def run(
         items=len(passages),
         batches=len(all_parts),
         batches_to_run=len(budget),
-        estimated_seconds=round(_estimate(budget, texts, settings), 1),
+        estimated_seconds=round(_estimate(budget, texts), 1),
         quick_items=len(hits) if terms else len(ranked),
         quick_seconds=round(quick_seconds, 1),
         details=(f"Model: {context.model_id}",),
@@ -411,6 +398,7 @@ def run(
             summary,
         )
 
+    failures: list[dict[str, object]] = []
     if choice == PLAN_CHOICE_QUICK and terms:
         material = _notes(
             request.question,
@@ -419,6 +407,7 @@ def run(
             settings,
             context,
             whole=False,
+            failures=failures,
         )
         read = len(hits)
     elif choice == PLAN_CHOICE_QUICK:
@@ -446,8 +435,17 @@ def run(
             settings,
             context,
             whole=True,
+            failures=failures,
         )
         read = sum(len(part) for part in budget)
+    read -= sum(int(item["passages"]) for item in failures)
+    if failures and not any(lines for _, lines in material):
+        return partial_result(
+            ToolResult(
+                "No usable notes are available to answer.", (), summary,
+            ),
+            failures, completed=False,
+        )
     context.done(
         f"Read {read} of {len(passages)} passages",
         evidence_count=read,
@@ -459,7 +457,12 @@ def run(
         request.guidance,
         quick=choice == PLAN_CHOICE_QUICK and not terms,
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
+    if failures:
+        prompt += (
+            "\n\nSome reading parts failed. Answer only from the supplied "
+            "notes; do not infer absence from missing notes."
+        )
+    answer = context.write(system, prompt, None)
     invalid = answer_citations(answer, len(passages))
     if choice == PLAN_CHOICE_QUICK:
         which = (
@@ -473,8 +476,8 @@ def run(
         )
     elif read < len(passages):
         answer += (
-            f"\n\n*Read {read} of {len(passages)} passages (the model-call "
-            "limit was reached).*"
+            f"\n\n*Read {read} of {len(passages)} passages; "
+            "reading coverage is incomplete.*"
         )
     summary.update(
         {
@@ -487,7 +490,10 @@ def run(
     )
 
     # Citations keep their numbers, so evidence ``n`` is passage ``n``.
-    cited = _cited(answer, len(passages))
+    cited = _cited(answer, len(passages)) - {
+        number for failure in failures
+        for number in failure["passage_numbers"]
+    }
     evidence = tuple(
         {
             "citation": index + 1,
@@ -501,7 +507,9 @@ def run(
         for index, chunk in enumerate(passages)
         if index + 1 in cited
     )
-    return ToolResult(answer, evidence, summary, streamed=True)
+    return partial_result(
+        ToolResult(answer, evidence, summary, streamed=True), failures,
+    )
 
 
 def _notes(
@@ -512,6 +520,7 @@ def _notes(
     context: ToolContext,
     *,
     whole: bool,
+    failures: list[dict[str, object]] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Take notes on each file's parts; return the note lines per file.
 
@@ -532,6 +541,8 @@ def _notes(
         Tool context for the current request.
     whole: bool
         Whether to use the complete source text.
+    failures: list[dict[str, object]] | None, optional
+        Collect failed parts while keeping validated notes from other parts.
 
     Returns
     -------
@@ -545,29 +556,15 @@ def _notes(
         if not parts:
             continue
 
-        if whole:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                settings.note_tokens,
-                context,
-                what="paper" if path.suffix.lower() == ".pdf" else "file",
-            )
-        else:
-            notes = take_notes(
-                question,
-                path.name,
-                texts,
-                parts,
-                settings.note_tokens,
-                context,
-                whole=False,
-            )
-        material.append(
-            (path.name, [line for _, lines in notes for line in lines])
+        notes = take_notes(
+            question, path.name, texts, parts, context,
+            what="paper" if path.suffix.lower() == ".pdf" else "file",
+            whole=whole, failures=failures,
         )
+        if notes:
+            material.append(
+                (path.name, [line for _, lines in notes for line in lines])
+            )
     return material
 
 
@@ -608,11 +605,11 @@ def _cited(answer: str, count: int) -> set[int]:
 
 
 def _estimate(
-    parts: list[list[int]], texts: list[str], settings: FactSettings
+    parts: list[list[int]], texts: list[str]
 ) -> float:
     """Return the approximate seconds of the notes calls and the answer.
 
-    Replies are assumed to use half their token limit.
+    Reply estimates do not cap model generation.
 
     Parameters
     ----------
@@ -620,8 +617,6 @@ def _estimate(
         Parts of the document to process.
     texts: list[str]
         Text passages or fields to inspect.
-    settings: FactSettings
-        Settings used to configure the operation.
 
     Returns
     -------
@@ -636,6 +631,6 @@ def _estimate(
             estimate_tokens(texts[index]) for index in part
         )
         total += _CALL_SECONDS + prompt / _PROMPT_TOKENS_PER_SECOND
-        total += settings.note_tokens / 2 / _REPLY_TOKENS_PER_SECOND
-    total += settings.answer_tokens / 2 / _REPLY_TOKENS_PER_SECOND
+        total += _config.NOTE_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
+    total += _config.ANSWER_REPLY_TOKENS / _REPLY_TOKENS_PER_SECOND
     return total

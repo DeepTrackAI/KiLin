@@ -101,13 +101,10 @@ class OverviewSettings:
     ----------
     max_tokens: int
         Most estimated tokens of the paper given to the model (1000-20000).
-    answer_tokens: int
-        Longest answer, in tokens (100-2000).
 
     """
 
     max_tokens: int = _config.DEFAULT_MAX_TOKENS
-    answer_tokens: int = _config.DEFAULT_ANSWER_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> OverviewSettings:
@@ -132,15 +129,12 @@ def parse_settings(data: dict, where: str) -> OverviewSettings:
 
     """
 
-    reject_unknown(where, data, ("max_tokens", "answer_tokens"))
+    reject_unknown(where, data, ("max_tokens",))
 
     defaults = OverviewSettings()
     return OverviewSettings(
         max_tokens=check_int(
             where, data, "max_tokens", defaults.max_tokens, 1000, 20000
-        ),
-        answer_tokens=check_int(
-            where, data, "answer_tokens", defaults.answer_tokens, 100, 2000
         ),
     )
 
@@ -262,7 +256,7 @@ def run(
         list(enumerate(chunks, start=1)),
         request.guidance,
     )
-    answer = context.write(system, prompt, settings.answer_tokens)
+    answer = context.write(system, prompt, None)
     summary["invalid_citations"] = answer_citations(answer, len(chunks))
     if guessed:
         answer += (

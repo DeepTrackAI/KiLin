@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,7 +44,13 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_MAX_LISTED",
     "DEFAULT_MAX_FOLDERS",
 ]
@@ -48,6 +59,7 @@ _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
 }, "project_inventory")
 _SETTINGS = require_section(
@@ -64,4 +76,8 @@ DEFAULT_MAX_LISTED: Final[int] = (
 )
 DEFAULT_MAX_FOLDERS: Final[int] = (
     require_int(_SETTINGS, "MAX_FOLDERS", "project_inventory.SETTINGS", 1, 100)
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

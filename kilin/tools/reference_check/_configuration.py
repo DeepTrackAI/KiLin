@@ -55,10 +55,16 @@ from kilin.tools._shared.references import ReferenceLayout
 from kilin.tools.reference_check._citations import CitationRules
 from kilin.tools.reference_check._matching import MatchRules
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "JUDGE_REPLY_TOKENS",
+    "MODEL_CALLS",
     "CALL_SECONDS",
     "CITATION_RULES",
-    "DEFAULT_ANSWER_TOKENS",
     "DEFAULT_CONFIRMATION",
     "DEFAULT_LARGE_BATCHES",
     "DEFAULT_MAX_LISTED",
@@ -80,9 +86,12 @@ __all__ = [
 _TOOL = "reference_check"
 _DEFAULTS = load_tool_defaults(Path(__file__).with_name("defaults.json"))
 _GROUPS = {
+    "MODEL_CALLS": {
+        "THINKING",
+    },
     "SETTINGS": {
         "MAX_LISTED", "VERIFY", "PASSAGES", "PASSAGE_TOKENS",
-        "ANSWER_TOKENS", "MAX_MODEL_CALLS", "QUICK_CLAIMS", "CONFIRMATION",
+        "MAX_MODEL_CALLS", "QUICK_CLAIMS", "CONFIRMATION",
         "LARGE_BATCHES", "ONLINE_LOOKUP", "MAX_ONLINE",
     },
     "REFERENCES": {
@@ -99,6 +108,7 @@ _GROUPS = {
         "MAX_RANGE", "UNIT_WORDS", "BYLINE_SHARE",
     },
     "ESTIMATES": {
+        "JUDGE_REPLY_TOKENS",
         "PROMPT_TOKENS_PER_SECOND", "REPLY_TOKENS_PER_SECOND",
         "CALL_SECONDS", "PROMPT_OVERHEAD_TOKENS", "REPLY_SHARE",
     },
@@ -128,11 +138,6 @@ DEFAULT_PASSAGES: Final[int] = require_int(
 DEFAULT_PASSAGE_TOKENS: Final[int] = require_int(
     _SETTINGS, "PASSAGE_TOKENS", _WHERE, 300, 16000
 )
-DEFAULT_ANSWER_TOKENS: Final[int | None] = (
-    None if _SETTINGS["ANSWER_TOKENS"] is None else require_int(
-        _SETTINGS, "ANSWER_TOKENS", _WHERE, 100, 131072
-    )
-)
 DEFAULT_MAX_MODEL_CALLS: Final[int] = require_int(
     _SETTINGS, "MAX_MODEL_CALLS", _WHERE, 1, 1000
 )
@@ -154,6 +159,9 @@ DEFAULT_MAX_ONLINE: Final[int] = require_int(
     _SETTINGS, "MAX_ONLINE", _WHERE, 1, 1000
 )
 
+JUDGE_REPLY_TOKENS: Final[int] = require_int(
+    _ESTIMATES, "JUDGE_REPLY_TOKENS", "ESTIMATES", 1, 131072
+)
 PROMPT_TOKENS_PER_SECOND: Final[float] = require_number(
     _ESTIMATES, "PROMPT_TOKENS_PER_SECOND", "ESTIMATES", 0.001, 1e9
 )
@@ -235,4 +243,8 @@ CITATION_RULES: Final[CitationRules] = CitationRules(
     byline_share=require_number(
         _CITATIONS, "BYLINE_SHARE", "CITATIONS", 0.0, 1.0
     ),
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )

@@ -103,6 +103,10 @@ from pathlib import Path
 import re
 from typing import Final
 
+from kilin.tools._shared.model_results import (
+    incomplete_notice,
+    partial_result,
+)
 from kilin.chunking import Chunk
 from kilin.tools._contract import (
     ToolContext,
@@ -164,6 +168,7 @@ from kilin.tools.reference_check._matching import (
     settle_duplicates,
 )
 from kilin.tools._shared.claims import (
+    VERDICT_FAILED,
     VERDICTS,
     Claim,
     Verdict,
@@ -271,9 +276,6 @@ class ReferenceCheckSettings:
         Most passages of the cited work read per claim (1-20).
     passage_tokens: int
         Most estimated tokens of those passages (300-16000).
-    answer_tokens: int | None
-        Maximum verdict output tokens (100-131072), or ``None`` to
-        inherit the main interface's generation limit.
     max_model_calls: int
         Most claims checked (1-1000); later ones are reported unchecked.
     quick_claims: int
@@ -296,7 +298,6 @@ class ReferenceCheckSettings:
     verify: bool = _config.DEFAULT_VERIFY
     passages: int = _config.DEFAULT_PASSAGES
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
-    answer_tokens: int | None = _config.DEFAULT_ANSWER_TOKENS
     max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
     quick_claims: int = _config.DEFAULT_QUICK_CLAIMS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
@@ -398,7 +399,7 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         data,
         (
             "max_listed", "verify", "passages", "passage_tokens",
-            "answer_tokens", "max_model_calls", "quick_claims",
+            "max_model_calls", "quick_claims",
             "confirmation", "large_batches", "online_lookup",
             "max_online",
         ),
@@ -413,12 +414,6 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         passage_tokens=check_int(
             where, data, "passage_tokens", defaults.passage_tokens, 300,
             16000,
-        ),
-        answer_tokens=(
-            None if data.get("answer_tokens") is None else check_int(
-                where, data, "answer_tokens", defaults.answer_tokens,
-                100, 131072,
-            )
         ),
         max_model_calls=check_int(
             where, data, "max_model_calls", defaults.max_model_calls, 1,
@@ -899,11 +894,16 @@ def run(
     if settings.verify and not link_request:
         report = _verify(report, by_file, settings, context)
 
+    failures = [
+        {"item": f"Reference {v.claim.number}, line {v.claim.sentence.line}",
+         "message": v.comment, "reason": "model_result"}
+        for v in report.verdicts if v.verdict == VERDICT_FAILED
+    ]
     saved = (
         save_output_file(
             context.project_root,
             f"{path.stem}_reference_check.md",
-            report_markdown(report),
+            report_markdown(report) + incomplete_notice(failures),
         )
         if report.entries
         else None
@@ -973,7 +973,10 @@ def run(
         }
         for number, chunk in enumerate(quoted, start=1)
     )
-    return ToolResult(answer, evidence, summary)
+    return partial_result(
+        ToolResult(answer, evidence, summary), failures,
+        completed=bool(report.entries),
+    )
 
 
 
@@ -1173,7 +1176,7 @@ def _verify(
             settings.passage_tokens,
         )
         verdict = verify_claim(
-            claim, passages, context.ask_model, settings.answer_tokens
+            claim, passages, context.ask_model
         )
         verdicts.append(verdict)
         context.trace.emit(
@@ -1273,9 +1276,8 @@ def _claim_seconds(settings: ReferenceCheckSettings) -> float:
     """
 
     prompt = _config.PROMPT_OVERHEAD_TOKENS + settings.passage_tokens
-    # The estimate uses a historical 250-token proxy when the actual
-    # output budget is inherited from the main session; it is not a cap.
-    reply = (settings.answer_tokens or 250) * _config.REPLY_SHARE
+    # Expected output is a planning estimate, never a generation cap.
+    reply = _config.JUDGE_REPLY_TOKENS * _config.REPLY_SHARE
     return (
         _config.CALL_SECONDS
         + prompt / _config.PROMPT_TOKENS_PER_SECOND

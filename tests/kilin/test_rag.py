@@ -2415,18 +2415,23 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                          {"max_new_tokens": None,
                           "language_context": ("Question",),
                           "inherit_settings": True,
-                          "preserve_thinking": True})
+                          "preserve_thinking": True,
+                          "require_complete": True,
+                          "thinking": None})
         self.assertEqual(side.call_args_list[1].kwargs,
                          {"max_new_tokens": 5,
                           "language_context": ("Question",),
                           "inherit_settings": True,
-                          "preserve_thinking": True})
+                          "preserve_thinking": True,
+                          "require_complete": True,
+                          "thinking": None})
         self.assertEqual(side.call_args_list[2].kwargs,
                          {"max_new_tokens": 6,
                           "token_callback": tokens,
                           "language_context": ("Question",),
                           "inherit_settings": True,
-                          "preserve_thinking": True})
+                          "preserve_thinking": True,
+                          "require_complete": True})
 
     def test_tool_writer_preserves_thinking_only_for_visible_answer(
         self,

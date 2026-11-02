@@ -2,6 +2,7 @@
 
 Unknown configuration keys and incorrect types are rejected at import.
 Project-type values override only the per-tool SETTINGS defaults.
+MODEL_CALLS owns the internal thinking policy, independently of the GUI.
 
 Key Features
 ------------
@@ -12,6 +13,10 @@ Key Features
 
 Module Structure
 ----------------
+
+- ``MODEL_CALLS``
+
+    Validated policy for internal answering-model requests.
 
 - ``DEFAULT_*`` and internal constants
 
@@ -39,7 +44,13 @@ from kilin.tools._defaults import (
     require_string,
 )
 
+from kilin.tools._model_calls import (
+    ModelCallSettings,
+    load_model_call_settings,
+)
+
 __all__ = [
+    "MODEL_CALLS",
     "DEFAULT_CASE_SENSITIVE",
     "DEFAULT_WHOLE_WORDS",
     "DEFAULT_CONTEXT_LINES",
@@ -54,7 +65,6 @@ __all__ = [
     "REPLY_TOKENS_PER_SECOND",
     "REPLY_TOKENS_PER_ITEM",
     "PROMPT_OVERHEAD_TOKENS",
-    "REPLY_TOKEN_LIMIT_PER_ITEM",
     "RETRY_GROUP",
 ]
 
@@ -62,6 +72,7 @@ _DEFAULTS = load_tool_defaults(
     Path(__file__).with_name("defaults.json")
 )
 require_keys(_DEFAULTS, {
+    "MODEL_CALLS",
     "SETTINGS",
     "ESTIMATES",
 }, "batch_classify")
@@ -153,7 +164,6 @@ require_keys(
         "REPLY_TOKENS_PER_SECOND",
         "REPLY_TOKENS_PER_ITEM",
         "PROMPT_OVERHEAD_TOKENS",
-        "REPLY_TOKEN_LIMIT_PER_ITEM",
         "RETRY_GROUP",
     }, "batch_classify.ESTIMATES"
 )
@@ -193,15 +203,6 @@ PROMPT_OVERHEAD_TOKENS: Final[int] = (
         100000,
     )
 )
-REPLY_TOKEN_LIMIT_PER_ITEM: Final[int] = (
-    require_int(
-        _ESTIMATES,
-        "REPLY_TOKEN_LIMIT_PER_ITEM",
-        "batch_classify.ESTIMATES",
-        1,
-        100000,
-    )
-)
 RETRY_GROUP: Final[int] = (
     require_int(
         _ESTIMATES,
@@ -210,4 +211,8 @@ RETRY_GROUP: Final[int] = (
         1,
         10000,
     )
+)
+
+MODEL_CALLS: Final[ModelCallSettings] = load_model_call_settings(
+    Path(__file__).with_name("defaults.json")
 )
