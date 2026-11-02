@@ -112,7 +112,11 @@ a `reference_error` if the reference cannot be resolved.
 `ConversationStore` manages the local conversation catalog and metadata.
 The engine can select, create, branch, rename, archive/delete or reset a
 conversation. A branch copies the whole conversation, or only its first
-turns. Existing answer-model sessions and indexes are reused when
+turns. Each message's **Branch from here** keeps the turns up to that answer;
+on a question it keeps the turns before it and puts the question back in the
+message box. Empty chats are not listed, so New chat, or a branch from the
+first question, reopens an unused empty chat instead of adding another file.
+Existing answer-model sessions and indexes are reused when
 switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.

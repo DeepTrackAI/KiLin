@@ -1,4 +1,4 @@
-"""Exercise the Copy and time row shown under each message.
+"""Exercise the Copy, Branch from here, and time row under each message.
 
 Run the production ``messageTime`` and ``answerCopyText`` functions in Node,
 and check that saved and newly answered turns get the row under both the
@@ -47,9 +47,110 @@ class TestMessageActionsFrontend(unittest.TestCase):
         self.assertIn("question.after(row);", actions)
         self.assertIn(
             "answer.after(messageActions(answerCopyText(turn), "
-            'turn.timestamp, "answer"));',
+            'turn.timestamp, "answer", ',
             actions,
         )
+
+    def test_every_message_can_be_branched_from(self):
+        """Branch from here sits in each row; the composer has none."""
+
+        source = _APP.read_text(encoding="utf-8")
+        row = _function(source, "messageActions")
+        self.assertIn('branch.title = "Branch from here";', row)
+        self.assertIn("row.append(copy, branch);", row)
+        actions = _function(source, "addMessageActions")
+        self.assertIn("branchFromMessage(item, false, asked)", actions)
+        self.assertIn('branchFromMessage(item, true, "")', actions)
+        # Busy KíLín disables every row's Branch button.
+        self.assertIn(".message-branch", _function(source, "setBusy"))
+        page = (_ROOT / "kilin/gui/web/index.html").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("branch-chat", page)
+        self.assertNotIn("branch-chat", source)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_branch_keeps_turns_up_to_the_message(self):
+        """An answer keeps its turn; a question keeps those before it."""
+
+        source = _APP.read_text(encoding="utf-8")
+        script = r"""
+const assert = require("node:assert/strict");
+const sent = [];
+const bridge = {
+  branchConversation: (count) => sent.push(count),
+  newConversation: () => sent.push("new"),
+};
+const box = { value: "", focus() {} };
+const byId = (id) => {
+  assert.equal(id, "question");
+  return box;
+};
+let busy = false;
+let branchDraft = null;
+const busyCalls = [];
+const setBusy = (value, message) => {
+  busy = value;
+  busyCalls.push(message);
+};
+const turn = (classes) => ({ classes });
+const first = turn("turn");
+const stopped = turn("turn stopped");
+const second = turn("turn");
+let shown = [first, stopped, second];
+const conversation = {
+  querySelectorAll(selector) {
+    assert.equal(selector, ".turn:not(.pending):not(.stopped)");
+    return shown.filter((item) => item !== stopped);
+  },
+  querySelector(selector) {
+    assert.equal(selector, ".turn");
+    return shown[0] || null;
+  },
+};
+"""
+        script += _function(source, "openEmptyChat")
+        script += _function(source, "branchFromMessage")
+        script += r"""
+// From the second answer: keep both turns.
+branchFromMessage(second, true, "");
+assert.deepEqual(sent, [2]);
+assert.equal(branchDraft, "");
+assert.deepEqual(busyCalls, ["Branching this conversation…"]);
+// Busy: nothing more is sent.
+branchFromMessage(first, true, "");
+assert.deepEqual(sent, [2]);
+busy = false;
+// From the second question: keep the first turn, put the question back.
+branchFromMessage(second, false, "Why?");
+assert.deepEqual(sent, [2, 1]);
+assert.equal(branchDraft, "Why?");
+busy = false;
+// From the first question: nothing to keep, so an empty chat, which the
+// engine reuses if one is unused, with the question to edit.
+branchFromMessage(first, false, "Hello");
+assert.deepEqual(sent, [2, 1, "new"]);
+assert.equal(branchDraft, "Hello");
+busy = false;
+// A stopped answer was never saved and cannot be branched from.
+branchFromMessage(stopped, true, "");
+assert.deepEqual(sent, [2, 1, "new"]);
+// New chat on a chat with no turns stays there: no new file.
+shown = [];
+openEmptyChat("Again");
+assert.deepEqual(sent, [2, 1, "new"]);
+assert.equal(box.value, "Again");
+console.log("branch from message passed");
+"""
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("branch from message passed", result.stdout)
 
     def test_copy_uses_qt_in_the_app(self):
         """Qt WebEngine blocks the page's clipboard; the bridge copies."""

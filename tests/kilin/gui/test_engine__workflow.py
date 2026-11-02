@@ -278,6 +278,34 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertFalse(shown(path))
 
     @patch("kilin.gui.engine.RAGSession")
+    def test_new_chat_reopens_an_unused_empty_chat(self, rag):
+        """Empty chats are not listed, so one left unused is reused."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        store = engine.conversation_store
+        first = engine.active_conversation
+        path = store.state_path(first)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conversation_state(payload)["turns"] = [{"question": "Asked"}]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation()
+        empty = engine.active_conversation
+        engine.select_conversation(first.conversation_id)
+        engine.create_conversation()
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertEqual(
+            engine.active_conversation.conversation_id, empty.conversation_id
+        )
+        self.assertEqual(len(list(path.parent.glob("conversation_*.json"))), 2)
+
+    @patch("kilin.gui.engine.RAGSession")
     def test_branch_from_a_message_keeps_its_first_turns(self, rag):
         """The engine branches the active chat at the requested turn."""
 

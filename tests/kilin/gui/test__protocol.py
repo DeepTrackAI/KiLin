@@ -742,6 +742,14 @@ class TestGUIProtocolBridge(unittest.TestCase):
         self.assertEqual(self.stops, [True])
         self.assertEqual(self.commands, [])
 
+    def test_branch_from_a_message_sends_the_turns_to_keep(self) -> None:
+        """Each message's Branch from here names how many turns to keep."""
+
+        self.bridge.branchConversation(2)
+        self.assertEqual(self.commands, [
+            {"action": "branch_conversation", "turn_count": 2},
+        ])
+
     def test_tool_plan_choice_uses_special_action(self) -> None:
         """Carry plan decisions through the existing command envelope."""
 

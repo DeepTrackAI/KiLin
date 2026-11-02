@@ -2834,8 +2834,10 @@ class ChatEngine:
         Notes
         -----
         Creates a new or branched store record, then activates it while reusing
-        loaded models. The previous conversation remains available. Errors are
-        reported through the frontend error channel.
+        loaded models. A new empty conversation reopens an unused empty one
+        instead, if any, so empty files do not pile up. The previous
+        conversation remains available. Errors are reported through the
+        frontend error channel.
 
         """
 
@@ -2846,6 +2848,11 @@ class ChatEngine:
                 or self.active_conversation is None
             ):
                 raise RuntimeError("Open a project first.")
+            unused = None if branch else self._unused_empty_conversation()
+            if unused is not None:
+                self.conversation_store.select(unused.conversation_id)
+                self._switch_with_store_rollback(unused)
+                return
             parent_id = (
                 self.active_conversation.conversation_id if branch else None
             )
@@ -2865,6 +2872,29 @@ class ChatEngine:
                 error,
                 str(error),
             )
+
+    def _unused_empty_conversation(self) -> ConversationInfo | None:
+        """Find an empty conversation other than the active one.
+
+        Returns
+        -------
+        ConversationInfo | None
+            The first such conversation in creation order, or None. Empty
+            conversations are not listed, so one left unused is reopened
+            rather than a new file created.
+
+        """
+
+        active = self.active_conversation.conversation_id
+        for item in self.conversation_store.conversations():
+            if item.conversation_id == active:
+                continue
+            try:
+                if self.conversation_store.is_empty(item.conversation_id):
+                    return item
+            except ValueError:
+                continue
+        return None
 
     def select_conversation(self, conversation_id: str) -> None:
         """Switch conversations while retaining loaded project resources.

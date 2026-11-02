@@ -147,8 +147,8 @@ class ChatBridge(QObject):
         Archive the current conversation in the backend process.
     newConversation()
         Create and open a separate empty conversation.
-    branchConversation()
-        Branch the active conversation at its current saved checkpoint.
+    branchConversation(turn_count)
+        Branch the active conversation, keeping its first turns.
     selectConversation(conversation_id)
         Open a saved conversation without reloading project resources.
     renameConversation(conversation_id, name)
@@ -614,11 +614,20 @@ class ChatBridge(QObject):
 
         self.commandRequested.emit({"action": "new_conversation"})
 
-    @Slot()
-    def branchConversation(self) -> None:
-        """Branch the active conversation at its current saved checkpoint."""
+    @Slot(int)
+    def branchConversation(self, turn_count: int) -> None:
+        """Branch the active conversation, keeping its first turns.
 
-        self.commandRequested.emit({"action": "branch_conversation"})
+        Parameters
+        ----------
+        turn_count: int
+            Number of saved turns the branch keeps.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "branch_conversation", "turn_count": turn_count}
+        )
 
     @Slot(str)
     def selectConversation(self, conversation_id: str) -> None:

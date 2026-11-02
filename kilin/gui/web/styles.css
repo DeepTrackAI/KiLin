@@ -385,8 +385,6 @@ button:disabled { opacity: .62; cursor: default; }
 .composer-icon, .send-button { display: grid; width: 32px; min-width: 32px; min-height: 32px; padding: 0; place-items: center; border-radius: 50%; font-size: 18px; font-weight: 400; line-height: 1; }
 .composer-icon { border: 0; color: var(--text); background: transparent; }
 .composer-icon:hover { background: rgb(120 130 124 / 12%); }
-.branch-button { background: var(--surface-soft); }
-.branch-button svg { display: block; width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .send-button { border: 0; color: white; background: var(--accent); }
 .send-button:hover:not(:disabled) { background: #d86529; }
 .send-button span { display: block; transform: translateY(-1px); }

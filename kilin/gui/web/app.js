@@ -106,6 +106,8 @@ let askingConversation = null;
 let pendingTurn = null;
 // A stopped answer's partial text, shown again after the engine restarts.
 let stoppedTurn = null;
+// The question put back in the message box once a branch or new chat opens.
+let branchDraft = null;
 let phaseTimer = null;
 let answerTimer = null;
 // Tokens used by the open chat and the project, from the engine; the
@@ -2396,8 +2398,7 @@ function setBusy(value, message = "") {
   byId("send").title = byId("send").getAttribute("aria-label");
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
-  byId("branch-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings").forEach((item) => { item.disabled = value || !ready; });
+  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
   byId("stop").disabled = !value;
@@ -3135,15 +3136,16 @@ async function copyToClipboard(text) {
 }
 
 /**
- * Build the row shown under a message on hover or focus: Copy and the
- * message's time.
+ * Build the row shown under a message on hover or focus: Copy, Branch from
+ * here, and the message's time.
  *
  * @param text Text the Copy button puts on the clipboard.
  * @param timestamp The turn's saved time, or "" while it is not saved.
  * @param label What is copied, for the button's accessible name.
+ * @param onBranch Starts a branch from this message.
  * @returns New element placed right after the message.
  */
-function messageActions(text, timestamp, label) {
+function messageActions(text, timestamp, label, onBranch) {
   const row = document.createElement("div");
   row.className = "message-actions";
   const copy = document.createElement("button");
@@ -3162,7 +3164,18 @@ function messageActions(text, timestamp, label) {
       copy.classList.remove("copied");
     }, 1500);
   });
-  row.append(copy);
+  const branch = document.createElement("button");
+  branch.type = "button";
+  branch.className = "message-action message-branch";
+  branch.title = "Branch from here";
+  branch.setAttribute("aria-label", `Branch from this ${label}`);
+  branch.disabled = busy;
+  branch.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M3 12h5c3.5 0 4.5-6 8-6h4M17 3l3 3-3 3M8 12c3.5 0 4.5 6 8 6h4M17 15l3 3-3 3"/></svg>';
+  branch.addEventListener("click", (event) => {
+    event.stopPropagation();
+    onBranch();
+  });
+  row.append(copy, branch);
   const shown = messageTime(timestamp);
   if (shown) {
     const time = document.createElement("time");
@@ -3175,7 +3188,8 @@ function messageActions(text, timestamp, label) {
 }
 
 /**
- * Add Copy and time rows under a turn's question and answer.
+ * Add Copy, Branch from here, and time rows under a turn's question and
+ * answer.
  *
  * @param item Conversation article holding the two messages.
  * @param turn Saved question and answer.
@@ -3183,12 +3197,56 @@ function messageActions(text, timestamp, label) {
 function addMessageActions(item, turn) {
   const question = item.querySelector(".user-message");
   const answer = item.querySelector(".answer-message");
+  const asked = splitAttached(turn.question).question;
   if (question) {
-    const row = messageActions(splitAttached(turn.question).question, turn.timestamp, "question");
+    const row = messageActions(asked, turn.timestamp, "question", () => branchFromMessage(item, false, asked));
     row.classList.add("user-actions");
     question.after(row);
   }
-  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer"));
+  if (answer) answer.after(messageActions(answerCopyText(turn), turn.timestamp, "answer", () => branchFromMessage(item, true, "")));
+}
+
+/**
+ * Open an empty chat: the one on screen when it has no turns yet, otherwise
+ * one the engine reuses or creates, so unused empty chats do not pile up.
+ *
+ * @param draft Question to put in the message box, or "".
+ */
+function openEmptyChat(draft) {
+  if (busy) return;
+  if (!conversation.querySelector(".turn")) {
+    if (draft) byId("question").value = draft;
+    byId("question").focus();
+    return;
+  }
+  branchDraft = draft;
+  setBusy(true, "Starting a new conversation…");
+  bridge.newConversation();
+}
+
+/**
+ * Branch the conversation at one message. From an answer, the branch keeps
+ * every turn up to it; from a question, the turns before it, with the
+ * question put back in the message box to edit and send again.
+ *
+ * @param item Conversation article holding the message.
+ * @param withAnswer Whether the branch keeps this turn's answer.
+ * @param draft Question to put back in the message box, or "".
+ */
+function branchFromMessage(item, withAnswer, draft) {
+  if (busy) return;
+  // Count saved turns only: a stopped answer on screen was never saved.
+  const saved = [...conversation.querySelectorAll(".turn:not(.pending):not(.stopped)")];
+  const index = saved.indexOf(item);
+  if (index < 0) return;
+  if (index === 0 && !withAnswer) {
+    // Nothing to keep before the first question: an empty chat will do.
+    openEmptyChat(draft);
+    return;
+  }
+  branchDraft = draft;
+  setBusy(true, "Branching this conversation…");
+  bridge.branchConversation(withAnswer ? index + 1 : index);
 }
 
 // The list KíLín adds under a question with attached files; older chats
@@ -4667,6 +4725,12 @@ function onEvent(raw) {
     updateChatSummary(data.turns.length);
     updateFloatingHeader();
     setBusy(false);
+    if (branchDraft) {
+      // A branch from a question: edit it and send it again.
+      byId("question").value = branchDraft;
+      byId("question").focus();
+    }
+    branchDraft = null;
   } else if (data.event === "conversations") {
     renderConversations(data);
     if (data.workspace_files) renderWorkspace(data.workspace_files);
@@ -4795,6 +4859,7 @@ function onEvent(raw) {
       attachedAsk = null;
       renderAttachments();
     }
+    branchDraft = null;
     showError(data.message, data.trace_path || activeTracePath);
   }
 }
@@ -5032,16 +5097,7 @@ byId("question").addEventListener("keydown", (event) => {
 });
 conversationScroll.addEventListener("scroll", updateFloatingHeader, { passive: true });
 byId("conversation-name").addEventListener("input", () => updateChatSummary());
-byId("new-chat").addEventListener("click", () => {
-  if (busy) return;
-  setBusy(true, "Starting a new conversation…");
-  bridge.newConversation();
-});
-byId("branch-chat").addEventListener("click", () => {
-  if (busy) return;
-  setBusy(true, "Branching this conversation…");
-  bridge.branchConversation();
-});
+byId("new-chat").addEventListener("click", () => openEmptyChat(""));
 /**
  * Send a valid edited conversation title to the backend.
  */
