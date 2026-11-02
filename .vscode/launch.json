@@ -2,6 +2,36 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "Debug tests in this file",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "unittest",
+            "args": ["-v", "${relativeFile}"],
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "windows": {
+                "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "presentation": { "group": "1-tests", "order": 1 }
+        },
+        {
+            "name": "Debug the selected test",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "unittest",
+            "args": ["-v", "${relativeFile}", "-k", "${selectedText}"],
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "windows": {
+                "python": "${workspaceFolder}/.venv/Scripts/python.exe"
+            },
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "presentation": { "group": "1-tests", "order": 2 }
+        },
+        {
             "name": "Check setup (automatic backend)",
             "type": "debugpy",
             "request": "launch",
@@ -13,7 +43,8 @@
             "cwd": "${workspaceFolder}",
             "args": ["--backend", "auto"],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": true,
+            "presentation": { "group": "2-setup", "order": 1 }
         },
         {
             "name": "Check setup (PyTorch)",
@@ -27,7 +58,8 @@
             "cwd": "${workspaceFolder}",
             "args": ["--backend", "torch"],
             "console": "integratedTerminal",
-            "justMyCode": true
+            "justMyCode": true,
+            "presentation": { "group": "2-setup", "order": 2 }
         }
     ]
 }
