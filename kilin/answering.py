@@ -589,8 +589,16 @@ def side_reply(
             options["token_callback"] = token_callback
         reply = chat.reply(prompt, **options)
         if require_complete:
+            # Some templates put <think> in the prompt. Reconstruct that
+            # opening for validation, without changing the generated text.
+            check_text = reply
+            if (
+                getattr(chat, "_last_prompt_opens_thinking", False)
+                and "<think>" not in reply and "</think>" not in reply
+            ):
+                check_text = "<think>" + reply
             require_complete_reply(
-                reply, getattr(chat, "last_finish_reason", None)
+                check_text, getattr(chat, "last_finish_reason", None)
             )
     finally:
         chat.restore_history(history)
