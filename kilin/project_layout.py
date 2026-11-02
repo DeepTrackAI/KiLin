@@ -75,6 +75,7 @@ from kilin.project_type import project_type
 from kilin.tools._registry import TOOL_REGISTRY
 from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
+    PROJECT_SOURCES_DIRECTORY,
     TEMPLATES_FOLDER,
     WorkspaceResource,
 )
@@ -91,7 +92,7 @@ _CORE_FOLDERS: Final[tuple[str, ...]] = (
     "indexes", "logs", OUTPUTS_FOLDER, TEMPLATES_FOLDER
 )
 _RESERVED_RESOURCE_ROOTS: Final[frozenset[str]] = frozenset(
-    ("sources", "indexes", "logs", "outputs")
+    (PROJECT_SOURCES_DIRECTORY, "indexes", "logs", "outputs")
 )
 _PROJECT_SOURCE_EXCLUDES: Final[tuple[str, ...]] = (
     *_CORE_FOLDERS,
@@ -385,7 +386,7 @@ def source_scan_exclusions(root: Path, source: Path) -> tuple[str, ...]:
     if resolved_root == resolved_source:
         return _PROJECT_SOURCE_EXCLUDES
     if (
-        resolved_source == resolved_root / "sources"
+        resolved_source == resolved_root / PROJECT_SOURCES_DIRECTORY
         and (resolved_root / "sources.json").is_file()
     ):
         return (".kilin_versions",)

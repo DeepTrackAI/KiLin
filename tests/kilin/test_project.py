@@ -240,10 +240,7 @@ class TestProjectInitialization(ProjectFixture):
                 )
                 result = project.initialize_project(directory, type_id)
                 self.assertEqual(result.root, directory)
-                self.assertEqual(
-                    result.source,
-                    directory / project_type(type_id).source_directory,
-                )
+                self.assertEqual(result.source, directory / "sources")
                 self.assertEqual(result.profile.type_id, type_id)
                 self.assertEqual(
                     result.profile.extensions,
@@ -261,10 +258,10 @@ class TestProjectInitialization(ProjectFixture):
                     "keep this content",
                 )
 
-    def test_initialize_prefers_sources_over_kind_specific_folders(
+    def test_initialize_never_adopts_existing_source_folders(
         self,
     ) -> None:
-        """Reject both existing source-layout alternatives without adoption."""
+        """Reject a folder that already holds source folders; adopt none."""
 
         for type_id, folder in (("code", "repository"),
                                 ("literature", "documents")):
@@ -278,20 +275,75 @@ class TestProjectInitialization(ProjectFixture):
                 self.assertTrue((directory / "sources").is_dir())
                 self.assertFalse((directory / "profile.ini").exists())
 
-    def test_initialize_uses_kind_specific_folder_when_available(
+    def test_initialize_creates_sources_for_every_type(self) -> None:
+        """Every project type gets sources/, never a type-specific name."""
+
+        for type_id in load_project_types():
+            with self.subTest(type_id=type_id):
+                directory = self.root / f"new-{type_id}"
+                result = project.initialize_project(directory, type_id)
+                self.assertEqual(result.source, directory / "sources")
+                self.assertEqual(result.profile.source, "sources")
+                self.assertEqual(
+                    sorted(path.name for path in directory.iterdir()),
+                    ["indexes", "logs", "outputs", "profile.ini",
+                     "sources", "templates"],
+                )
+
+    def test_every_creation_path_uses_sources(self) -> None:
+        """Core, mirror, and GUI creation give the same source folder."""
+
+        from kilin.workspace import prepare_sources_workspace
+        from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
+
+        original = self._folder("original")
+        self._write(original, "notes.md", "text")
+        for type_id in ("code", "literature"):
+            with self.subTest(type_id=type_id):
+                created = (
+                    project.initialize_project(
+                        self.root / f"core-{type_id}", type_id
+                    ),
+                    project.prepare_project_workspace(
+                        original, type_id, self.root / f"mirror-{type_id}"
+                    ),
+                    prepare_sources_workspace(
+                        [original], type_id, self.root / f"gui-{type_id}"
+                    ),
+                )
+                for result in created:
+                    self.assertEqual(
+                        result.profile.source, PROJECT_SOURCES_DIRECTORY
+                    )
+                    self.assertEqual(
+                        result.source, result.root / PROJECT_SOURCES_DIRECTORY
+                    )
+
+    def test_existing_source_folders_open_without_being_moved(
         self,
     ) -> None:
-        """Choose repository/documents when sources is absent."""
+        """Older documents/ or repository/ projects stay as they are."""
 
-        for type_id, source_name in (
-            ("code", "repository"),
+        for type_id, folder in (
             ("literature", "documents"),
+            ("code", "repository"),
+            ("code", "sources"),
         ):
-            directory = self._folder(f"specific-{type_id}")
-            source = directory / source_name
-            result = project.initialize_project(directory, type_id)
-            self.assertEqual(result.source, source)
-            self.assertEqual(result.profile.source, source_name)
+            with self.subTest(type_id=type_id, folder=folder):
+                directory = self._profile(
+                    f"saved-{type_id}-{folder}", type_id=type_id,
+                    source=folder,
+                )
+                paper = self._write(directory / folder, "a.md", "text")
+                opened = project.open_project(directory)
+                self.assertEqual(opened.source, directory / folder)
+                self.assertEqual(opened.profile.source, folder)
+                # Opening never renames, moves, or adds a source folder.
+                self.assertEqual(paper.read_text(encoding="utf-8"), "text")
+                self.assertEqual(
+                    sorted(path.name for path in directory.iterdir()),
+                    sorted([folder, "profile.ini"]),
+                )
 
     def test_initialize_is_idempotent_and_preserves_existing_profile(
         self,
@@ -796,7 +848,8 @@ class TestProjectWorkspace(ProjectFixture):
         result = self._prepare()
         self.assertTrue(result.root.is_relative_to(self.sandbox))
         self.assertEqual(result.profile.type_id, "code")
-        self.assertEqual(result.profile.source, self.source.name)
+        self.assertEqual(result.profile.source, "sources")
+        self.assertEqual(result.source, result.root / "sources")
         self.assertEqual(
             (result.source / self.file).read_text(encoding="utf-8"),
             "first version\n",
@@ -932,6 +985,26 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertEqual(independent.profile.type_id, "literature")
         self.assertEqual((original.root / "profile.ini").read_bytes(),
                          before)
+
+    def test_older_mirror_keeps_its_source_folder(self) -> None:
+        """A mirror copied into the original's name syncs in place."""
+
+        first = self._prepare()
+        older = first.root / self.source.name
+        first.source.rename(older)
+        self._edit(first.root, "project", "source", self.source.name)
+        self._write(self.source, "pkg/extra" + self.suffix, "new\n")
+
+        result = self._prepare()
+
+        self.assertEqual(result.source, older)
+        self.assertFalse((result.root / "sources").exists())
+        self.assertEqual(
+            (older / "pkg" / f"extra{self.suffix}").read_text(
+                encoding="utf-8"
+            ),
+            "new\n",
+        )
 
     def test_workspace_rejects_tampered_profile_source(self) -> None:
         """Reject profile sources that no longer point to the owned copy."""

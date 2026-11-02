@@ -138,7 +138,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
 
@@ -179,7 +179,6 @@ __all__ = [
 ]
 
 ProjectTypeId: TypeAlias = str
-_DEFAULT_SOURCE_DIRECTORY: Final[str] = "sources"
 
 # One JSON file per project type; the file name is the type's ID.
 PROJECT_TYPES_DIR: Final[Path] = Path(__file__).parent / "project_types"
@@ -351,12 +350,6 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
-    source_directory: str
-        Relative source folder created by ``initialize_project`` inside a
-        fresh directory.
-        Defaults to ``sources``; managed workspaces always use ``sources/``.
-        A saved profile source takes precedence, followed by an existing
-        ``sources/`` folder, this convention, and finally the project root.
 
     """
 
@@ -374,7 +367,6 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
-    source_directory: str = _DEFAULT_SOURCE_DIRECTORY
 
     @property
     def label(self) -> str:
@@ -660,64 +652,6 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     )
 
 
-def _source_directory(type_id: str, data: dict) -> str:
-    """Validate the optional relative source-folder convention.
-
-    Parameters
-    ----------
-    type_id: str
-        Identifier used to contextualize validation errors.
-    data: dict
-        Parsed project-type definition.
-
-    Returns
-    -------
-    str
-        Portable relative directory path, defaulting to ``sources``.
-
-    Raises
-    ------
-    ValueError
-        If the value is not a nonempty relative POSIX path, contains unsafe
-        components, or names a managed non-source resource directory.
-
-    Notes
-    -----
-    This is a source-subdirectory convention, not permission to traverse
-    arbitrary paths. Explicit saved profile sources are resolved separately.
-
-    """
-
-    value = data.get("source_directory", _DEFAULT_SOURCE_DIRECTORY)
-    reserved = {"indexes", "logs", "outputs", "templates"}
-    if not isinstance(value, str) or not value:
-        raise ValueError(
-            f"Project type {type_id!r} needs a relative source_directory."
-        )
-    parts = value.split("/")
-    if (
-        PurePosixPath(value).is_absolute()
-        or PureWindowsPath(value).drive
-        or "\\" in value
-        or any(char in value for char in '<>:"|?*%')
-        or any(ord(char) < 32 or ord(char) == 127 for char in value)
-        or any(
-            part in {"", ".", ".."} or part != part.strip()
-            or part.endswith(".")
-            or re.fullmatch(
-                r"(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?",
-                part, re.IGNORECASE,
-            )
-            for part in parts
-        )
-        or parts[0].lower() in reserved
-    ):
-        raise ValueError(
-            f"Project type {type_id!r} has an unsafe source_directory."
-        )
-    return value
-
-
 def _parse_project_type(type_id: object, data: object) -> ProjectType:
     """Validate one project type file.
 
@@ -758,7 +692,6 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "description",
             "extensions",
             "max_file_bytes",
-            "source_directory",
             "retrieval_instruction",
             "system_prompt",
             "capabilities",
@@ -835,7 +768,6 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
 
     return ProjectType(
         id=type_id,
-        source_directory=_source_directory(type_id, data),
         display_name=_text(type_id, data, "display_name"),
         description=_text(type_id, data, "description"),
         extensions=extensions,

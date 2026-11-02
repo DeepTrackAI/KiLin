@@ -24,7 +24,12 @@ import unittest
 
 import kilin
 from kilin import project
-from kilin.project_type import ProjectType, load_project_types, project_type
+from kilin.project_type import (
+    PROJECT_TYPES_DIR,
+    ProjectType,
+    load_project_types,
+    project_type,
+)
 from tests.kilin.test_project_types import _type_data
 from tests.kilin.test_rag import _session
 
@@ -79,44 +84,27 @@ class TestProjectTypeContract(unittest.TestCase):
             self.assertNotIn("project_kind", record)
             self.assertNotIn("project_type", record)
 
-    def test_source_directory_defaults_validation_and_builtin_values(
-        self,
-    ) -> None:
-        """Validate folder conventions without changing managed layouts."""
+    def test_project_types_do_not_name_a_source_folder(self) -> None:
+        """Types load without source_directory; new projects use sources/."""
 
-        self.assertEqual(project_type("code").source_directory, "repository")
-        self.assertEqual(project_type("literature").source_directory,
-                         "documents")
+        for type_id in load_project_types():
+            with self.subTest(type_id=type_id):
+                path = PROJECT_TYPES_DIR / f"{type_id}.json"
+                data = json.loads(path.read_text(encoding="utf-8"))
+                self.assertNotIn("source_directory", data)
+                self.assertFalse(
+                    hasattr(project_type(type_id), "source_directory")
+                )
+        # The folder name is no longer a project-type setting.
         with TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            valid = (None, "sources", "material", "data/collection")
-            invalid = (
-                "", ".", "..", "../outside", "/absolute", "a/../b",
-                "a//b", "a/./b", "a/", "a\\b", "C:/data", "C:data",
-                " source", "source ", "a/ b", "a\x00b", "a\nb",
-                "indexes", "logs/private", "outputs", "templates",
-                "LOGS", "logs.", "a*", "a?", "a%", "a|", "con",
-                "data/NUL.txt", "LPT9", "COM1", None, 4, False, [], {},
+            folder = Path(temporary)
+            data = _type_data()
+            data["source_directory"] = "material"
+            (folder / "samples.json").write_text(
+                json.dumps(data), encoding="utf-8"
             )
-            for index, value in enumerate((*valid, *invalid)):
-                with self.subTest(value=value):
-                    folder = root / str(index)
-                    folder.mkdir()
-                    data = _type_data()
-                    if value is not None or index >= len(valid):
-                        data["source_directory"] = value
-                    (folder / "samples.json").write_text(
-                        json.dumps(data), encoding="utf-8"
-                    )
-                    if index < len(valid):
-                        definition = load_project_types(folder)["samples"]
-                        self.assertEqual(definition.source_directory,
-                                         value or "sources")
-                    else:
-                        with self.assertRaisesRegex(
-                            ValueError, "source_directory"
-                        ):
-                            load_project_types(folder)
+            with self.assertRaisesRegex(ValueError, "source_directory"):
+                load_project_types(folder)
 
     def test_isolated_distribution_with_only_custom_types(self) -> None:
         """Import and use core and GUI with neither standard type present."""
@@ -137,7 +125,6 @@ class TestProjectTypeContract(unittest.TestCase):
                 path.unlink()
             for type_id in ("zeta", "alpha"):
                 data = _type_data()
-                data["source_directory"] = "material"
                 (directory / f"{type_id}.json").write_text(
                     json.dumps(data), encoding="utf-8"
                 )
@@ -164,17 +151,16 @@ root.mkdir()
 adopted = root / "adopted"
 adopted.mkdir()
 first = kilin.initialize_project(adopted, "alpha")
-assert first.source == (adopted / "material").resolve()
-(adopted / "sources").mkdir()
+assert first.source == (adopted / "sources").resolve()
 assert kilin.open_project(adopted).source == first.source
 preferred = root / "preferred"
 preferred.mkdir()
 assert kilin.initialize_project(preferred, "zeta").source == (
-    preferred / "material"
+    preferred / "sources"
 ).resolve()
 plain = root / "plain"
 plain.mkdir()
-assert kilin.initialize_project(plain, "alpha").source == plain / "material"
+assert kilin.initialize_project(plain, "alpha").source == plain / "sources"
 empty = kilin.prepare_sources_workspace([], "alpha", root / "empty")
 assert empty.profile.type_id == "alpha"
 assert empty.source.name == "sources"

@@ -71,8 +71,8 @@ updates in both:
   Removed or deselected originals never remove previous copies implicitly.
   `remove_workspace_sources()` deletes selected managed copies, not originals.
 - `prepare_project_workspace(source_directory, type_id, workspace_root)`
-  always creates a fresh single-source mirror. To compare source manifests
-  and synchronize a saved copy, call
+  always creates a fresh single-source mirror in `sources/`. To compare
+  source manifests and synchronize a saved copy, call
   `synchronize_project_workspace(source_directory, project_directory)`.
   This explicit operation may restore edits to the mirror and remove files
   deleted from the original, preserving the established mirroring policy.
@@ -191,7 +191,7 @@ Related: [Project workspaces](project_workspaces.md),
 `prepare_sources_workspace([], type_id, workspace_directory)` initializes
 a valid managed `sources/` tree without importing files. The destination
 must be explicit and unoccupied. Adding sources later uses the explicit
-`add_project_sources()` API with the same selection validation. In contrast,
-`initialize_project()` creates the configured `source_directory` subfolder in
-a fresh destination. Existing profile source settings remain authoritative
-when the project is opened explicitly.
+`add_project_sources()` API with the same selection validation.
+`initialize_project()` creates the same empty `sources/` folder in a fresh
+destination. Existing profile source settings remain authoritative when the
+project is opened explicitly.

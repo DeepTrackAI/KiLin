@@ -250,7 +250,7 @@ class TestProjectLayout(unittest.TestCase):
         profile = root / "profile.ini"
         profile.write_text(
             profile.read_text(encoding="utf-8").replace(
-                "source = repository", "source = ."
+                "source = sources", "source = ."
             ), encoding="utf-8",
         )
         project = configure_project(
@@ -319,8 +319,7 @@ class TestProjectLayout(unittest.TestCase):
         root = self._project("literature")
         profile = root / "profile.ini"
         text = profile.read_text(encoding="utf-8")
-        text = text.replace("source = documents", "source = .")
-        text = text.replace("source = repository", "source = .")
+        text = text.replace("source = sources", "source = .")
         profile.write_text(text, encoding="utf-8")
         opened = open_project(root)
         self.assertEqual(opened.source.resolve(), root.resolve())

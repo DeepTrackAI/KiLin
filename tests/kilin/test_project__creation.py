@@ -219,7 +219,7 @@ class TestExclusiveProjectCreation(unittest.TestCase):
                         self.assertEqual(after[key], value)
 
     def test_mirror_source_cannot_alias_workspace_state(self):
-        """Never replace the creation marker or core folders with a mirror."""
+        """A mirror copies into sources/, never over core folders."""
         for name in (
             "indexes", "logs", "outputs", "templates", "profile.ini",
             "sources.json", "source_snapshot.json", ".kilin-creating",
@@ -229,17 +229,22 @@ class TestExclusiveProjectCreation(unittest.TestCase):
                 source.mkdir(parents=True)
                 original = source / "data.py"
                 original.write_text("value = 1\n", encoding="utf-8")
-                parent = self.root / "projects"
-                with self.assertRaisesRegex(ValueError, "managed workspace"):
-                    kilin.prepare_project_workspace(source, "code", parent)
-                self.assertFalse(parent.exists())
+                mirror = kilin.prepare_project_workspace(
+                    source, "code", self.root / f"projects-{name}"
+                )
+                self.assertEqual(mirror.source, mirror.root / "sources")
+                self.assertEqual(
+                    (mirror.source / "data.py").read_text(), "value = 1\n"
+                )
+                self.assertFalse((mirror.root / name / "data.py").exists())
                 self.assertEqual(original.read_text(), "value = 1\n")
         with patch("kilin.project.scan_repository") as scan:
-            with self.assertRaisesRegex(ValueError, "managed workspace"):
+            with self.assertRaisesRegex(ValueError, "not the drive"):
                 kilin.prepare_project_workspace(
                     Path(self.root.anchor), "code", self.root / "projects"
                 )
         scan.assert_not_called()
+        self.assertFalse((self.root / "projects").exists())
 
     def test_source_can_already_contain_an_independent_project(self):
         """Copy an existing project as a source without mutating its owner."""

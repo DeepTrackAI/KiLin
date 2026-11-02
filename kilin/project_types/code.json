@@ -1,7 +1,6 @@
 {
   "display_name": "Code repository",
   "description": "A software repository with source code and documentation.",
-  "source_directory": "repository",
   "extensions": [
     ".py",
     ".ipynb",

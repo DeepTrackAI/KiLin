@@ -257,7 +257,7 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         profile = external / "profile.ini"
         profile.write_text(
             profile.read_text(encoding="utf-8").replace(
-                "source = repository", "source = ."
+                "source = sources", "source = ."
             ),
             encoding="utf-8",
         )

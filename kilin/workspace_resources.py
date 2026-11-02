@@ -26,6 +26,11 @@ Module Structure
 
     Names of the shared user-editable workspace directories.
 
+- ``PROJECT_SOURCES_DIRECTORY``
+
+    Name of the source directory every new project creates, whatever its
+    project type.
+
 - ``templates_folder``
 
     Return the project-owned templates path without creating files.
@@ -49,6 +54,7 @@ from typing import Final
 
 __all__ = [
     "OUTPUTS_FOLDER",
+    "PROJECT_SOURCES_DIRECTORY",
     "TEMPLATES_FOLDER",
     "WorkspaceResource",
     "templates_folder",
@@ -56,6 +62,9 @@ __all__ = [
 
 OUTPUTS_FOLDER: Final[str] = "outputs"
 TEMPLATES_FOLDER: Final[str] = "templates"
+# Every new project keeps its sources here. Existing projects keep the
+# source folder recorded in their profile.ini.
+PROJECT_SOURCES_DIRECTORY: Final[str] = "sources"
 
 
 def templates_folder(project_root: Path) -> Path:
