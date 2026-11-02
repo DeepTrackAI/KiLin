@@ -17,7 +17,10 @@ import unittest
 from unittest.mock import Mock, patch
 
 from kilin import rag
-from kilin._model_completion import IncompleteModelResponse
+from kilin._model_completion import (
+    GenerationCancelled,
+    IncompleteModelResponse,
+)
 from kilin.answering import RouteDecision
 from kilin.project_type import RETRIEVAL_MODE_NONE
 from kilin.tools import ToolResult, ToolUse
@@ -55,6 +58,22 @@ class TestRAGCompletion(unittest.TestCase):
         self.assertIn("usage", turn.parameters)
         self.assertIn("</think>", "".join(streamed))
         session.chat_session.reply.assert_called_once()
+
+    def test_stopped_answer_saves_nothing(self) -> None:
+        """Stop ends the answer, keeps no turn, and restores the history."""
+
+        session = _session()
+        before = [dict(message) for message in session.chat_session.messages]
+        session.chat_session.reply.side_effect = GenerationCancelled(
+            "The answer was stopped."
+        )
+        stop = Mock(return_value=True)
+        with _answer_patches(session, _intent()):
+            with self.assertRaises(GenerationCancelled):
+                session.ask("Question", use_router=False, stop_requested=stop)
+        self.assertEqual(session.turns, [])
+        self.assertIs(session.chat_session.stop_requested, stop)
+        session.chat_session.restore_history.assert_called_with(before)
 
     def test_failed_tool_does_not_publish_a_negative_result(self) -> None:
         """Stop at the first incomplete internal call without extra calls."""

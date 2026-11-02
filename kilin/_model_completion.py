@@ -27,6 +27,10 @@ Module Structure
 
     An operation has no complete, usable model result.
 
+- ``GenerationCancelled``
+
+    The user stopped the answer before the model finished.
+
 - ``strip_thinking`` and ``thinking_is_open``
 
     Separate final text from model-specific thinking delimiters.
@@ -48,11 +52,22 @@ from __future__ import annotations
 import re
 
 __all__ = [
+    "GenerationCancelled",
     "IncompleteModelResponse",
     "require_complete_reply",
     "strip_thinking",
     "thinking_is_open",
 ]
+
+
+class GenerationCancelled(BaseException):
+    """Report that the user stopped the answer before the model finished.
+
+    It derives from ``BaseException`` so that handlers turning ordinary
+    errors into answers or notes never mistake a Stop for a result; callers
+    that end an answer on Stop catch it by name.
+
+    """
 
 
 class IncompleteModelResponse(RuntimeError):
