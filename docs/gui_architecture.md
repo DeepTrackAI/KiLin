@@ -111,16 +111,30 @@ a `reference_error` if the reference cannot be resolved.
 
 `ConversationStore` manages the local conversation catalog and metadata.
 The engine can select, create, branch, rename, archive/delete or reset a
-conversation. Existing answer-model sessions and indexes are reused when
+conversation. A branch copies the whole conversation, or only its first
+turns. Each message's **Branch from here** keeps the turns up to that answer;
+on a question it keeps the turns before it and puts the question back in the
+message box. Empty chats are not listed, so New chat, or a branch from the
+first question, reopens an unused empty chat instead of adding another file.
+While an answer runs, another chat can be read: the busy engine is not
+asked, `ChatBridge.viewConversation()` reads the chat's saved file and sends
+`conversation_viewed`, and the page shows it read-only, keeping the running
+answer in its own chat. An answer that finishes meanwhile marks its chat
+unread in the sidebar until it is opened.
+Existing answer-model sessions and indexes are reused when
 switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.
 
-**Stop is forceful.** `window.py` kills the child process to interrupt a
-blocking backend call; this unloads models and discards unsaved partial
-output. Qt starts a new engine, the frontend reloads settings and can
-resume the earlier project. The `resume` command can include the active
-`conversation_id` so the engine restores **that** conversation; without an
+**Stop ends an answer cleanly.** The page sends `cancel_answer`; the engine
+ends the answer at the model's next token, saves no turn, and keeps the
+project and models loaded. Only if no answer event follows within
+`CANCEL_GRACE_MS` (30 seconds), and for Stop during other work such as
+downloads, does `window.py` kill the child process; this unloads models and
+discards unsaved partial output. Qt starts a new engine, the frontend
+reloads settings and can resume the earlier project. The `resume` command
+can include the active `conversation_id` so the engine restores **that**
+conversation; without an
 ID it uses the most recently modified conversation. Invalid requested
 IDs raise an error and do not silently open another chat. This is
 conversation recovery, **not** continuation of interrupted generation.

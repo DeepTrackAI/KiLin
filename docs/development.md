@@ -123,6 +123,20 @@ hardware; optional skips must be counted explicitly rather than described
 as passes. A checked-in ZIP must not include transient caches, the contents
 of local `sandbox/`, user secrets or weights.
 
+### Debugging tests in VS Code
+
+The shared `.vscode/` settings run tests from the repository root, so
+imports such as `from tests.kilin...` resolve. In **Run and Debug**, choose:
+
+- **Debug tests in this file**: runs every test in the open test file and
+  stops at its breakpoints.
+- **Debug the selected test**: select a test method's name on its `def`
+  line first; runs only that test.
+
+Start these from the Run and Debug panel, not the editor's "Run Python
+File" button, which runs a test file as a plain script outside the
+repository's import path. The Testing panel discovers the same tests.
+
 ### Qt-specific warning
 
 A Qt test that creates a `QCoreApplication` in the same process can prevent

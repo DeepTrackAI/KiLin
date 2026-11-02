@@ -76,12 +76,14 @@ from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import math
+from queue import Queue
 import re
 import sys
 from threading import Event, Lock, Thread
 from time import perf_counter
 from typing import Callable, Final
 
+from kilin._model_completion import GenerationCancelled
 from kilin.atomic_writes import atomic_write_text
 from kilin.gui._paths import default_workspace_directory
 from kilin.gui.preferences import (
@@ -292,6 +294,8 @@ class ChatEngine:
         Add selected sources and open one KíLín workspace.
     ask(question, retrieval_count=None, generation_settings=None)
         Ask the loaded project and return its saved answer and evidence.
+    cancel_answer()
+        Stop the running answer at its next generated token.
     preview_reference(turn_index, citation)
         Show nearby source lines for one saved answer citation.
     create_conversation(*, branch=False)
@@ -351,6 +355,9 @@ class ChatEngine:
             raise ValueError("trace_enabled must be True or False.")
         self.trace_enabled = trace_enabled
         self.read_command = read_command
+        # Set from the input thread by Stop; checked by every model call.
+        self._answer_stop = Event()
+        self._answering = False
         self.project_trace: TraceSink = NullTraceLogger()
         self.session: RAGSession | None = None
         self.conversation_store: ConversationStore | None = None
@@ -2477,8 +2484,15 @@ class ChatEngine:
                 options["choice_callback"] = self._choose_option
             # Reports such as research briefings also get a one-page PDF.
             options["pdf_writer"] = write_report_pdf
-            with self._live_usage():
-                self.session.ask(question, **options)
+            options["stop_requested"] = self._answer_stop.is_set
+            self._answer_stop.clear()
+            self._answering = True
+            try:
+                with self._live_usage():
+                    self.session.ask(question, **options)
+            finally:
+                self._answering = False
+                self._answer_stop.clear()
             stream.flush()
             if (
                 self.conversation_store is not None
@@ -2501,6 +2515,15 @@ class ChatEngine:
                 usage=self._usage_totals(),
                 workspace_files=list_project_files(self.session.project),
             )
+        except GenerationCancelled:
+            # Stop: no turn is saved, and models and project stay loaded.
+            self.active_trace.emit(
+                "gui.answer.cancelled",
+                component="gui_engine",
+                data={"reason": "Stopped by the user."},
+            )
+            self._send("answer_cancelled", usage=self._usage_totals())
+            return
         except Exception as error:
             self._report_error(
                 "gui.question.failed",
@@ -2520,6 +2543,21 @@ class ChatEngine:
                     component="gui_engine",
                     data={"error": str(error)},
                 )
+
+    def cancel_answer(self) -> None:
+        """Stop the running answer at its next generated token.
+
+        Notes
+        -----
+        Called from the input thread, so it works while ``ask`` is busy.
+        Without a running answer it does nothing. The answer ends with an
+        ``answer_cancelled`` event; no turn is saved and loaded models stay
+        in memory.
+
+        """
+
+        if self._answering:
+            self._answer_stop.set()
 
     @contextmanager
     def _live_usage(self) -> Iterator[None]:
@@ -2676,6 +2714,8 @@ class ChatEngine:
             command = self.read_command()
             if command is None:
                 return PLAN_CHOICE_CANCEL
+            if command.get("action") == "cancel_answer":
+                raise GenerationCancelled("Stopped by the user.")
             if command.get("action") == "plan_choice":
                 choice = command.get("choice")
                 if choice in PLAN_CHOICE_CHOICES:
@@ -2718,6 +2758,8 @@ class ChatEngine:
             command = self.read_command()
             if command is None:
                 return None
+            if command.get("action") == "cancel_answer":
+                raise GenerationCancelled("Stopped by the user.")
             if command.get("action") == "plan_choice":
                 choice = str(command.get("choice") or "")
                 number = choice.removeprefix("option:")
@@ -2817,7 +2859,9 @@ class ChatEngine:
             **preview,
         )
 
-    def create_conversation(self, *, branch: bool = False) -> None:
+    def create_conversation(
+        self, *, branch: bool = False, turn_count: int | None = None
+    ) -> None:
         """Create an empty conversation or branch the selected conversation.
 
         Parameters
@@ -2825,12 +2869,17 @@ class ChatEngine:
         branch: bool, optional
             Whether to copy resumable state from the active conversation
             instead of creating an empty conversation. Defaults to ``False``.
+        turn_count: int | None, optional
+            Number of the active conversation's first turns a branch keeps.
+            None keeps every turn. Defaults to ``None``.
 
         Notes
         -----
         Creates a new or branched store record, then activates it while reusing
-        loaded models. The previous conversation remains available. Errors are
-        reported through the frontend error channel.
+        loaded models. A new empty conversation reopens an unused empty one
+        instead, if any, so empty files do not pile up. The previous
+        conversation remains available. Errors are reported through the
+        frontend error channel.
 
         """
 
@@ -2841,11 +2890,17 @@ class ChatEngine:
                 or self.active_conversation is None
             ):
                 raise RuntimeError("Open a project first.")
+            unused = None if branch else self._unused_empty_conversation()
+            if unused is not None:
+                self.conversation_store.select(unused.conversation_id)
+                self._switch_with_store_rollback(unused)
+                return
             parent_id = (
                 self.active_conversation.conversation_id if branch else None
             )
             conversation = self.conversation_store.create(
                 branch_from=parent_id,
+                turn_count=turn_count,
                 ownership=(
                     self._store_ownership(parent_id)
                     if parent_id is not None
@@ -2859,6 +2914,29 @@ class ChatEngine:
                 error,
                 str(error),
             )
+
+    def _unused_empty_conversation(self) -> ConversationInfo | None:
+        """Find an empty conversation other than the active one.
+
+        Returns
+        -------
+        ConversationInfo | None
+            The first such conversation in creation order, or None. Empty
+            conversations are not listed, so one left unused is reopened
+            rather than a new file created.
+
+        """
+
+        active = self.active_conversation.conversation_id
+        for item in self.conversation_store.conversations():
+            if item.conversation_id == active:
+                continue
+            try:
+                if self.conversation_store.is_empty(item.conversation_id):
+                    return item
+            except ValueError:
+                continue
+        return None
 
     def select_conversation(self, conversation_id: str) -> None:
         """Switch conversations while retaining loaded project resources.
@@ -3842,9 +3920,26 @@ def main() -> None:
             protocol_output.flush()
 
     sandbox = default_workspace_directory()
-    # One iterator over stdin, so a tool plan waiting for the user's choice
-    # reads the next command from the same stream.
-    lines = iter(sys.stdin)
+    # A reader thread passes stdin lines on through this queue (None ends
+    # input), so Stop reaches a busy answer at once. One iterator over the
+    # queue lets a tool plan waiting for the user's choice read the next
+    # command from the same stream.
+    commands: Queue[str | None] = Queue()
+
+    def queued_lines() -> Iterator[str]:
+        """Yield queued input lines until input ends.
+
+        Yields
+        ------
+        str
+            One raw command line.
+
+        """
+
+        while (line := commands.get()) is not None:
+            yield line
+
+    lines = queued_lines()
 
     def read_command() -> dict[str, object] | None:
         """Return the next JSON command, or None when input ended.
@@ -3869,6 +3964,31 @@ def main() -> None:
     engine = ChatEngine(
         sandbox, emit, trace_enabled=True, read_command=read_command
     )
+
+    def read_input() -> None:
+        """Queue stdin lines; apply Stop at once, even during an answer.
+
+        Notes
+        -----
+        ``cancel_answer`` is also queued: a wait for a plan choice ends on
+        it, and the main loop ignores it.
+
+        """
+
+        for line in sys.stdin:
+            try:
+                command = json.loads(line)
+            except ValueError:
+                command = None
+            if (
+                isinstance(command, dict)
+                and command.get("action") == "cancel_answer"
+            ):
+                engine.cancel_answer()
+            commands.put(line)
+        commands.put(None)
+
+    Thread(target=read_input, name="kilin-input", daemon=True).start()
     standard_output = TraceTextStream(
         lambda: engine.active_trace,
         stream_name="backend.stdout",
@@ -3888,7 +4008,10 @@ def main() -> None:
                     redirect_stderr(standard_error),
                 ):
                     action = command.get("action")
-                    if action == "open":
+                    if action == "cancel_answer":
+                        # Applied by the input thread when it arrived.
+                        pass
+                    elif action == "open":
                         engine.open_project(
                             command["sources"],
                             command["type_id"],
@@ -3946,7 +4069,9 @@ def main() -> None:
                     elif action == "new_conversation":
                         engine.create_conversation()
                     elif action == "branch_conversation":
-                        engine.create_conversation(branch=True)
+                        engine.create_conversation(
+                            branch=True, turn_count=command.get("turn_count")
+                        )
                     elif action == "select_conversation":
                         engine.select_conversation(command["conversation_id"])
                     elif action == "rename_conversation":

@@ -98,7 +98,10 @@ import re
 from time import perf_counter
 from typing import Any, cast, Final, Literal, TYPE_CHECKING, TypeAlias
 
-from kilin._model_completion import IncompleteModelResponse
+from kilin._model_completion import (
+    GenerationCancelled,
+    IncompleteModelResponse,
+)
 from kilin.defaults import (
     load_defaults_section,
     require_default_lowercase_words,
@@ -278,6 +281,9 @@ class ChatSession:
     last_finish_reason: str | None
         Why the latest generation stopped, such as ``"stop"`` or
         ``"length"``. Set by the first reply; MLX can also report None.
+    stop_requested: Callable[[], bool] | None
+        Checked after every generated token; when it returns True the reply
+        raises ``GenerationCancelled``. None, the default, never stops.
     trace: TraceSink
         Trace sink used by the session.
 
@@ -347,6 +353,8 @@ class ChatSession:
     # Token totals start at zero; replies add to them on the instance.
     input_token_total: int = 0
     output_token_total: int = 0
+    # Set for one answer by its caller, so Stop can end any reply.
+    stop_requested: Callable[[], bool] | None = None
 
     def __init__(
         self: ChatSession,
@@ -1030,10 +1038,24 @@ class ChatSession:
             self.last_finish_reason = response.finish_reason
             if token_callback is not None and response.text:
                 token_callback(response.text)
+            if self._stopped():
+                raise GenerationCancelled("Stopped by the user.")
 
         self._last_generation_output_token_count = generated
         self._last_generation_token_count_source = "generated_tokens"
         return "".join(parts)
+
+    def _stopped(self: ChatSession) -> bool:
+        """Return whether the caller asked to stop the current reply.
+
+        Returns
+        -------
+        bool
+            True once ``stop_requested`` returns True.
+
+        """
+
+        return self.stop_requested is not None and bool(self.stop_requested())
 
     def _torch_reply(
         self: ChatSession,
@@ -1081,8 +1103,37 @@ class ChatSession:
         blocked = self._blocked_token_ids()
         if blocked:
             options["suppress_tokens"] = list(blocked)
+        if self.stop_requested is not None:
+
+            def stop(input_ids, scores, **kwargs):
+                """End generation for every sequence once Stop is pressed.
+
+                Parameters
+                ----------
+                input_ids: torch.Tensor
+                    Prompt and generated token IDs, one row per sequence.
+                scores: torch.Tensor
+                    Next-token scores; not used.
+                **kwargs: object
+                    Further arguments from ``generate``; not used.
+
+                Returns
+                -------
+                torch.Tensor
+                    One Boolean per sequence, True once stopped.
+
+                """
+
+                return torch.full(
+                    (input_ids.shape[0],), self._stopped(),
+                    dtype=torch.bool, device=input_ids.device,
+                )
+
+            options["stopping_criteria"] = [stop]
         with torch.inference_mode():
             output = model.generate(**options)
+        if self._stopped():
+            raise GenerationCancelled("Stopped by the user.")
         generated = output[0, len(tokens) :].tolist()
         self.output_token_total += len(generated)
 

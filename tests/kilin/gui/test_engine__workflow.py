@@ -11,11 +11,14 @@ The fake session exposes the project and conversation fields used by the GUI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
 import unittest
 
+from kilin._model_completion import GenerationCancelled
+from kilin.conversation_format import conversation_state
 from kilin.gui.engine import ChatEngine
 from kilin.gui.model_catalog import MODEL_CHOICES
 from kilin.workspace import prepare_sources_workspace
@@ -68,6 +71,7 @@ class TestEngineWorkflow(unittest.TestCase):
             token_callback=ANY,
             phase_callback=ANY,
             pdf_writer=ANY,
+            stop_requested=ANY,
             **options,
         )
         options = session.ask.call_args.kwargs
@@ -170,6 +174,37 @@ class TestEngineWorkflow(unittest.TestCase):
 
         self.assert_question_forwarded(session, "Question", retrieval_count=8)
         self.assertEqual(events[-1]["event"], "answered")
+
+    def test_stop_ends_the_answer_and_keeps_the_project_open(self) -> None:
+        """Stop reaches the running answer; nothing reloads or fails."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        engine.cancel_answer()
+        seen = []
+
+        def answer(question, **options):
+            """Stop part-way, as the input thread does on Stop."""
+
+            # A Stop pressed before the answer started does not end it.
+            seen.append(options["stop_requested"]())
+            engine.cancel_answer()
+            seen.append(options["stop_requested"]())
+            raise GenerationCancelled("The answer was stopped.")
+
+        session.ask.side_effect = answer
+        engine.ask("Question")
+
+        self.assertEqual(seen, [False, True])
+        self.assertEqual(events[-1]["event"], "answer_cancelled")
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertIs(engine.session, session)
+        session.close.assert_not_called()
+        # After the answer, Stop does nothing until the next one.
+        engine.cancel_answer()
+        self.assertFalse(session.ask.call_args.kwargs["stop_requested"]())
 
     def test_generation_settings_are_passed_with_the_question(self) -> None:
         """Chat controls affect answers without editing the project profile."""
@@ -274,6 +309,67 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertFalse(any(event["event"] == "error" for event in events))
         self.assertFalse(path.exists())
         self.assertFalse(shown(path))
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_new_chat_reopens_an_unused_empty_chat(self, rag):
+        """Empty chats are not listed, so one left unused is reused."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        store = engine.conversation_store
+        first = engine.active_conversation
+        path = store.state_path(first)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conversation_state(payload)["turns"] = [{"question": "Asked"}]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation()
+        empty = engine.active_conversation
+        engine.select_conversation(first.conversation_id)
+        engine.create_conversation()
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertEqual(
+            engine.active_conversation.conversation_id, empty.conversation_id
+        )
+        self.assertEqual(len(list(path.parent.glob("conversation_*.json"))), 2)
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_branch_from_a_message_keeps_its_first_turns(self, rag):
+        """The engine branches the active chat at the requested turn."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        parent = engine.active_conversation
+        path = engine.conversation_store.state_path(parent)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conversation_state(payload)["turns"] = [
+            {"question": "First"}, {"question": "Second"},
+        ]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation(branch=True, turn_count=1)
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        branch = engine.active_conversation
+        self.assertEqual(branch.parent_conversation_id,
+                         parent.conversation_id)
+        self.assertEqual(branch.origin_turn_count, 1)
+        saved = json.loads(
+            engine.conversation_store.state_path(branch).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(conversation_state(saved)["turns"],
+                         [{"question": "First"}])
 
     @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):

@@ -203,9 +203,16 @@ conversation resume takes an optional `conversation_id`; without one it
 opens the most recently updated record. Unknown explicit IDs must fail,
 not silently choose an unrelated conversation.
 
-`reset()` archives and clears the active conversation. A GUI Stop terminates
-the child process and therefore may discard an incomplete, uncheckpointed
-answer; it does **not** resume partially generated tokens. Locking, trace
+`reset()` archives and clears the active conversation. `ask(...,
+stop_requested=...)` lets a caller stop an answer: every model call of the
+answer checks it after each generated token (MLX between tokens, PyTorch as a
+stopping criterion), and the answer ends with `GenerationCancelled` before
+any checkpoint, so no turn is saved and the model history is restored. The
+`turn` span records it as `turn.failed` with that type; the GUI engine adds
+`gui.answer.cancelled`. `GenerationCancelled` derives from `BaseException`
+so handlers that turn ordinary errors into notes never treat a Stop as a
+result. A forceful GUI Stop that kills the child process also discards the
+incomplete answer; neither resumes partially generated tokens. Locking, trace
 ownership and failure recovery are specified in
 [Conversation ownership](conversation_ownership.md) and
 [Trace recording](trace_recording.md).

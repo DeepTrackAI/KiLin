@@ -148,6 +148,7 @@ from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
 from kilin._model_completion import (
+    GenerationCancelled,
     IncompleteModelResponse,
     require_complete_reply,
     thinking_is_open,
@@ -1192,6 +1193,7 @@ class RAGSession:
         choice_callback: (
             Callable[[str, tuple[str, ...]], int | None] | None
         ) = None,
+        stop_requested: Callable[[], bool] | None = None,
     ) -> str:
         """Retrieve evidence, generate an answer, and save the turn.
 
@@ -1263,6 +1265,11 @@ class RAGSession:
             when they cannot tell what the user means (for example which
             paper to summarize). None lets tools fall back to their best
             guess. Defaults to ``None``.
+        stop_requested: Callable[[], bool] | None, optional
+            Checked after every token of every model call of this answer,
+            including routing and tools. Once it returns True the answer
+            ends with ``GenerationCancelled`` and nothing is saved. Defaults
+            to ``None``.
 
         Returns
         -------
@@ -1271,6 +1278,8 @@ class RAGSession:
 
         Raises
         ------
+        GenerationCancelled
+            If ``stop_requested`` returned True before the turn was saved.
         RuntimeError
             If the session is closed.
         ValueError
@@ -1341,6 +1350,12 @@ class RAGSession:
                 phase_callback(phase, details)
 
         question = question.strip()
+        # Every model this answer may call checks the same Stop request.
+        for session in (
+            self.chat_session, getattr(self, "_router_session", None)
+        ):
+            if session is not None:
+                session.stop_requested = stop_requested
         # Keep the committed model history available if saving fails after
         # generation temporarily changes its message list.
         committed_messages = [
@@ -1755,6 +1770,11 @@ class RAGSession:
                         answer,
                         getattr(self.chat_session, "last_finish_reason", None),
                     )
+                except GenerationCancelled:
+                    # Stopped: nothing is saved, and the next question
+                    # starts from the committed history.
+                    self.chat_session.restore_history(committed_messages)
+                    raise
                 except IncompleteModelResponse as error:
                     effective["completion"] = error.to_dict()
                     trace.emit(
