@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import MagicMock, Mock, patch
 
 from kilin import chat
+from kilin._model_completion import GenerationCancelled
 from kilin.trace_logging import (
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
@@ -989,6 +990,35 @@ class TestTorchGeneration(unittest.TestCase):
             session._torch_reply([4], 2)
         self.assertEqual(session.last_finish_reason, "stop")
 
+    def test_stop_ends_generation_without_a_reply(self) -> None:
+        """Stop is a stopping criterion; a stopped reply is not returned."""
+
+        session = _session()
+        torch, model, _ = self._torch_inputs([7, 8])
+        session._model = model
+        stopped = False
+        session.stop_requested = lambda: stopped
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4], 2)
+            (criterion,) = model.generate.call_args.kwargs[
+                "stopping_criteria"
+            ]
+            criterion(Mock(shape=(1, 3)), None)
+            self.assertEqual(torch.full.call_args.args[1], False)
+            stopped = True
+            with self.assertRaises(GenerationCancelled):
+                session._torch_reply([4], 2)
+
+    def test_no_stopping_criterion_without_stop(self) -> None:
+        """Generation options are unchanged when Stop is not offered."""
+
+        session = _session()
+        torch, model, _ = self._torch_inputs([7, 8])
+        session._model = model
+        with patch.object(chat, "import_module", return_value=torch):
+            session._torch_reply([4], 2)
+        self.assertNotIn("stopping_criteria", model.generate.call_args.kwargs)
+
     def test_generation_failure_propagates(self) -> None:
         """Do not account for tokens when model.generate raises."""
 
@@ -1069,6 +1099,26 @@ class TestMlxGeneration(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "callback"):
                 session._mlx_reply([4], 3, token_callback=callback)
+        self.assertEqual(session.output_token_total, 1)
+
+
+    def test_stop_ends_the_stream_at_the_next_token(self) -> None:
+        """Stop after the first token: it is shown, then the reply ends."""
+
+        session = _session()
+        responses = [
+            SimpleNamespace(text="A", finish_reason=None),
+            SimpleNamespace(text="B", finish_reason=None),
+        ]
+        mlx_lm = Mock()
+        mlx_lm.stream_generate.return_value = iter(responses)
+        modules = {"mlx_lm": mlx_lm, "mlx_lm.sample_utils": Mock()}
+        shown: list[str] = []
+        session.stop_requested = lambda: bool(shown)
+        with patch.object(chat, "import_module", side_effect=modules.get):
+            with self.assertRaises(GenerationCancelled):
+                session._mlx_reply([4], 3, token_callback=shown.append)
+        self.assertEqual(shown, ["A"])
         self.assertEqual(session.output_token_total, 1)
 
 

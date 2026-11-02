@@ -79,6 +79,7 @@ paths and source paths remain subject to downstream core validation.
 | `open` | `sources`, `type_id`, `workspace` | Create only; `selected_files`, `settings` default to `None`. Blank workspace allocates a fresh default name. |
 | `preview_reference` | `turn_index`, `citation` | Look up one citation of a saved turn |
 | `ask` | `question` | `retrieval_count`, `generation_settings`, `effort` default to `None` |
+| `cancel_answer` | None | **Special:** applied by the input thread as soon as it arrives, so it stops a running `ask` at the model's next token; ends a wait for a tool plan or option; otherwise ignored |
 | `new_conversation` | None | Create an empty conversation |
 | `branch_conversation` | None | Create a branch of the active conversation; optional `turn_count` keeps only its first turns (default: all) |
 | `select_conversation` | `conversation_id` | Switch to a saved conversation |
@@ -159,7 +160,7 @@ can accompany an event.
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`) |
-| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `progress` (core progress record) |
+| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`); `backend_failed` (`message`) |
@@ -263,7 +264,8 @@ and a final `answered` event with the saved turn. The exact number of phase
 updates and intermediate order **depend on intent, tools, model switches,
 and retrieval paths**. `answer_delta` reports batched model text; the
 browser's further character-by-character reveal is a presentation effect.
-An error may terminate the answer path without `answered`.
+An error may terminate the answer path without `answered`; a `cancel_answer`
+ends it with `answer_cancelled` instead.
 
 `opened` establishes an active project and the initial conversation state;
 `conversation_opened` switches the visible saved conversation. Catalog
@@ -282,10 +284,16 @@ partial visible stream.
 - `ChatWindow._read_events()` silently ignores malformed stdout lines or
   dictionaries without an `event` key; the bridge only forwards recognized
   frames. `onEvent()` has no branch for unknown event names.
-- Stop is **not** an engine `cancel` command. `ChatBridge.stopOperation()`
-  emits `stopRequested`; the Qt window clears queued commands, kills its
-  child using `QProcess.kill()`, starts a new child, and emits `stopped`.
-  Loaded models are lost. Any unsaved partial answer is not committed as a
+- An answer is stopped with the `cancel_answer` command. A thread in the
+  engine reads input while `ask` runs and sets the Stop request that every
+  model call of the answer checks after each token, including routing and
+  tools. The answer ends with `answer_cancelled`; no turn is saved, and the
+  project and loaded models stay open.
+- `ChatBridge.stopOperation()` is the forceful Stop for other operations,
+  and the fallback when an engine does not respond: it emits
+  `stopRequested`; the Qt window clears queued commands, kills its child
+  using `QProcess.kill()`, starts a new child, and emits `stopped`. Loaded
+  models are lost. Any unsaved partial answer is not committed as a
   completed turn.
 - On unexpected child exit, Qt prepares a `backend_restarted` message and
   starts a replacement child. The page requests settings/readiness again
