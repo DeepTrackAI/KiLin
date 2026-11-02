@@ -1039,7 +1039,7 @@ class ChatSession:
             if token_callback is not None and response.text:
                 token_callback(response.text)
             if self._stopped():
-                raise GenerationCancelled("The answer was stopped.")
+                raise GenerationCancelled("Stopped by the user.")
 
         self._last_generation_output_token_count = generated
         self._last_generation_token_count_source = "generated_tokens"
@@ -1133,7 +1133,7 @@ class ChatSession:
         with torch.inference_mode():
             output = model.generate(**options)
         if self._stopped():
-            raise GenerationCancelled("The answer was stopped.")
+            raise GenerationCancelled("Stopped by the user.")
         generated = output[0, len(tokens) :].tolist()
         self.output_token_total += len(generated)
 
