@@ -116,6 +116,11 @@ turns. Each message's **Branch from here** keeps the turns up to that answer;
 on a question it keeps the turns before it and puts the question back in the
 message box. Empty chats are not listed, so New chat, or a branch from the
 first question, reopens an unused empty chat instead of adding another file.
+While an answer runs, another chat can be read: the busy engine is not
+asked, `ChatBridge.viewConversation()` reads the chat's saved file and sends
+`conversation_viewed`, and the page shows it read-only, keeping the running
+answer in its own chat. An answer that finishes meanwhile marks its chat
+unread in the sidebar until it is opened.
 Existing answer-model sessions and indexes are reused when
 switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the

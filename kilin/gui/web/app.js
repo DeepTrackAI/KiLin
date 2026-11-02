@@ -108,6 +108,14 @@ let pendingTurn = null;
 let stoppedTurn = null;
 // The question put back in the message box once a branch or new chat opens.
 let branchDraft = null;
+// The chat being answered while an answer runs; other chats can be read
+// meanwhile.
+let answeringConversationId = "";
+// A chat read while another one is answered: its id and name, and the
+// answering chat's own content, put back by returnToAnswer().
+let reading = null;
+// Chats whose answer finished while the user was reading another one.
+const unreadConversations = new Set();
 let phaseTimer = null;
 let answerTimer = null;
 // Tokens used by the open chat and the project, from the engine; the
@@ -2375,6 +2383,20 @@ byId("source-add-confirm").addEventListener("click", () => {
 });
 
 /**
+ * Show Send, or Stop while an answer is generated. A chat read meanwhile
+ * shows a disabled Send: Stop belongs to the chat being answered.
+ */
+function updateSendButton() {
+  const answering = busy && ready && activity.classList.contains("answer-progress");
+  const stop = answering && !reading;
+  byId("send").disabled = !ready || (busy && !stop);
+  byId("send").classList.toggle("stopping", stop);
+  byId("send").querySelector("span").textContent = stop ? "■" : "↑";
+  byId("send").setAttribute("aria-label", stop ? "Stop generation" : "Send message");
+  byId("send").title = byId("send").getAttribute("aria-label");
+}
+
+/**
  * Gate operation controls and update the visible activity state.
  *
  * @param value Whether a backend operation is active.
@@ -2392,6 +2414,7 @@ function setBusy(value, message = "") {
   if (!value) {
     activity.classList.remove("answer-progress");
     byId("send").classList.remove("waiting");
+    answeringConversationId = "";
   }
   byId("open").disabled = value || !bridge;
   const answering = value && ready && activity.classList.contains("answer-progress");
@@ -2408,14 +2431,12 @@ function setBusy(value, message = "") {
     byId("attach-menu").classList.add("hidden");
     byId("effort-menu").classList.add("hidden");
   }
-  byId("send").disabled = !ready || (value && !answering);
-  byId("send").classList.toggle("stopping", answering);
-  byId("send").querySelector("span").textContent = answering ? "■" : "↑";
-  byId("send").setAttribute("aria-label", answering ? "Stop generation" : "Send message");
-  byId("send").title = byId("send").getAttribute("aria-label");
+  updateSendButton();
   byId("stop").classList.toggle("hidden", !value || answering);
   byId("new-chat").disabled = value || !ready;
-  document.querySelectorAll(".conversation-item, .conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
+  // While an answer runs, other chats can still be read, not changed.
+  document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
+  document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
   byId("stop").disabled = !value;
@@ -2598,6 +2619,11 @@ function openReference(item, source, button, holder) {
   holder.classList.add("expanded");
   button.classList.add("active");
   activeReference = { turnIndex, citation, button, holder, ...nodes };
+  if (reading) {
+    // The engine looks up lines in the chat it has open, not this one.
+    nodes.note.textContent = "Open this chat to see the source lines.";
+    return;
+  }
   bridge?.previewReference(turnIndex, activeReference.citation);
   nodes.preview.scrollIntoView({ block: "nearest" });
 }
@@ -3251,7 +3277,8 @@ function openEmptyChat(draft) {
  * @param draft Question to put back in the message box, or "".
  */
 function branchFromMessage(item, withAnswer, draft) {
-  if (busy) return;
+  // A chat being read is not the one the engine has open.
+  if (busy || reading) return;
   // Count saved turns only: a stopped answer on screen was never saved.
   const saved = [...conversation.querySelectorAll(".turn:not(.pending):not(.stopped)")];
   const index = saved.indexOf(item);
@@ -3413,11 +3440,13 @@ function renderConversations(data) {
     row.className = "conversation-row";
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `conversation-item${item.conversation_id === activeConversationId ? " active" : ""}${provisional ? " provisional" : ""}`;
+    const shown = reading ? reading.id : activeConversationId;
+    button.className = `conversation-item${item.conversation_id === shown ? " active" : ""}${provisional ? " provisional" : ""}${unreadConversations.has(item.conversation_id) ? " unread" : ""}`;
     button.dataset.conversationId = item.conversation_id;
     button.textContent = name;
     let opening = null;
     button.addEventListener("click", () => {
+      if (readConversation(item)) return;
       if (busy || item.conversation_id === activeConversationId) return;
       // Wait briefly so a double-click renames instead of opening.
       clearTimeout(opening);
@@ -3467,9 +3496,79 @@ function renderConversations(data) {
       });
     }
   }
-  byId("conversation-name").textContent = activeEmpty ? "" : activeName;
-  byId("conversation-name").classList.toggle("hidden", activeEmpty);
+  const heading = reading ? reading.name : activeEmpty ? "" : activeName;
+  byId("conversation-name").textContent = heading;
+  byId("conversation-name").classList.toggle("hidden", !heading);
   updateChatSummary();
+}
+
+/**
+ * Show a chat read-only while another one is answered, or go back to the
+ * answering chat.
+ *
+ * @param item The clicked chat's record from the backend.
+ * @returns Whether the click was handled here; false opens the chat as
+ *   usual.
+ */
+function readConversation(item) {
+  const id = item.conversation_id;
+  if (reading && id === activeConversationId) {
+    returnToAnswer();
+    return true;
+  }
+  if (!answeringConversationId || id === activeConversationId) return false;
+  if (reading?.id !== id) {
+    // The engine is busy answering, so Qt reads the saved file.
+    reading = { ...reading, id, name: item.name };
+    bridge.viewConversation(id);
+  }
+  return true;
+}
+
+/**
+ * Show the saved turns of the chat being read, keeping the answering chat's
+ * content aside.
+ *
+ * @param turns Saved turns from ``conversation_viewed``, or null when the
+ *   chat could not be read.
+ */
+function showReadConversation(turns) {
+  if (!reading.live) {
+    reading.live = [...conversation.childNodes];
+    reading.scroll = conversationScroll.scrollTop;
+    reading.count = currentTurnCount;
+  }
+  conversation.replaceChildren();
+  clearReferences();
+  if (turns) {
+    turns.forEach(addTurn);
+  } else {
+    const note = document.createElement("p");
+    note.className = "reading-failed";
+    note.textContent = "KíLín could not read this conversation.";
+    conversation.append(note);
+  }
+  renderConversations(lastConversationData);
+  updateChatSummary(turns?.length || 0);
+  updateSendButton();
+}
+
+/**
+ * Leave the chat being read and show the answering chat again.
+ */
+function returnToAnswer() {
+  if (!reading) return;
+  const { live, scroll, count } = reading;
+  reading = null;
+  if (live) {
+    conversation.replaceChildren(...live);
+    clearReferences();
+    conversationScroll.scrollTop = scroll;
+    updateChatSummary(count);
+  }
+  unreadConversations.delete(activeConversationId);
+  renderConversations(lastConversationData);
+  updateSendButton();
 }
 
 /**
@@ -4264,7 +4363,13 @@ function bindAnswerSelection(answer, item, turn) {
 function completePendingTurn(turn) {
   stopPhaseAnimation();
   resetAnswerStages();
-  updateChatSummary(currentTurnCount + 1);
+  if (reading?.live) {
+    // Finished while another chat is read: mark the answering chat unread.
+    reading.count += 1;
+    unreadConversations.add(activeConversationId);
+  } else {
+    updateChatSummary(currentTurnCount + 1);
+  }
   const current = pendingTurn;
   if (!current) {
     addTurn(turn);
@@ -4288,8 +4393,12 @@ function completePendingTurn(turn) {
   bindAnswerSelection(current.answer, current.item, turn);
   renderAnswer(current.answer, turn, current.item, current.thinkingMs);
   addMessageActions(current.item, turn);
-  selectTurn(current.item, turn);
-  conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  if (reading?.live) {
+    renderConversations(lastConversationData);
+  } else {
+    selectTurn(current.item, turn);
+    conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  }
   setBusy(false);
 }
 
@@ -4429,7 +4538,8 @@ function appendAnswerText(text) {
   renderMarkdown(current.body, parts.answer);
   const nearBottom = conversationScroll.scrollHeight - conversationScroll.scrollTop
     - conversationScroll.clientHeight < 120;
-  if (nearBottom) conversationScroll.scrollTop = conversationScroll.scrollHeight;
+  // The chat being read keeps its own scroll position.
+  if (nearBottom && !reading?.live) conversationScroll.scrollTop = conversationScroll.scrollHeight;
 }
 
 /**
@@ -4698,6 +4808,7 @@ function onEvent(raw) {
     showProgress(data);
   } else if (data.event === "opened") {
     finishStopping();
+    reading = null;
     // An error from an earlier attempt no longer applies to this project.
     clearError();
     usageTotals = data.usage || usageTotals;
@@ -4755,6 +4866,8 @@ function onEvent(raw) {
     }
   } else if (data.event === "conversation_opened") {
     finishStopping();
+    reading = null;
+    unreadConversations.delete(data.active_conversation_id);
     // An error from an earlier attempt no longer applies to this conversation.
     clearError();
     usageTotals = data.usage || usageTotals;
@@ -4815,6 +4928,8 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+  } else if (data.event === "conversation_viewed") {
+    if (reading?.id === data.conversation_id) showReadConversation(data.turns);
   } else if (data.event === "answer_cancelled") {
     // Stopped cleanly: nothing was saved, and the project stays open.
     resumeAfterStop = false;
@@ -5060,6 +5175,8 @@ byId("question-form").addEventListener("submit", (event) => {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
   byId("question").value = "";
+  // A question goes to the chat the engine has open.
+  returnToAnswer();
   const ask = {
     question, attachments: messageAttachments, files: [], leftOut: [],
     effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
@@ -5140,6 +5257,7 @@ function changeProjectsFolder(useDefault) {
  */
 function sendQuestion(ask) {
   unansweredQuestion = ask.question;
+  answeringConversationId = activeConversationId;
   const listed = ask.files.map((path) => `- ${path}`).join("\n");
   const text = listed ? `${ask.question}\n\nAttached files:\n${listed}` : ask.question;
   addPendingTurn(text);

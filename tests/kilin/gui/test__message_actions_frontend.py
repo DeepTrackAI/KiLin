@@ -88,6 +88,7 @@ const byId = (id) => {
 };
 let busy = false;
 let branchDraft = null;
+let reading = null;
 const busyCalls = [];
 const setBusy = (value, message) => {
   busy = value;

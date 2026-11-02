@@ -265,6 +265,7 @@ const conversationScroll = {
   scrollHeight: 0, scrollTop: 0, clientHeight: 0,
 };
 let pendingTurn = null;
+let reading = null;
 """
         for name in ("formatDuration", "splitThinking", "appendAnswerText"):
             script += _function(source, name)

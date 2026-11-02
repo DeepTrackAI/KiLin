@@ -88,6 +88,8 @@ const error = {
   classList: { remove() { error.hidden = false; } },
 };
 let attachedAsk = null;
+let activeConversationId = "c1";
+let answeringConversationId = "";
 function element(tag) {
   return {
     tag, children: [], className: "", title: "", type: "", listeners: {},

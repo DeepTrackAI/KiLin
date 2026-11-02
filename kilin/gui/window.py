@@ -83,6 +83,7 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
+from kilin.conversation_format import conversation_state
 from kilin.gui._paths import (
     default_workspace_directory,
     saved_workspace_folder,
@@ -94,6 +95,7 @@ __all__ = [
     "ChatBridge",
     "SourceDropView",
     "ChatWindow",
+    "saved_conversation_turns",
 ]
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -157,6 +159,8 @@ class ChatBridge(QObject):
         Branch the active conversation, keeping its first turns.
     selectConversation(conversation_id)
         Open a saved conversation without reloading project resources.
+    viewConversation(conversation_id)
+        Show a saved conversation read-only while an answer is generated.
     renameConversation(conversation_id, name)
         Rename a saved conversation in the project catalog.
     deleteConversation(conversation_id)
@@ -639,6 +643,38 @@ class ChatBridge(QObject):
         )
 
     @Slot(str)
+    def viewConversation(self, conversation_id: str) -> None:
+        """Show a saved conversation read-only while an answer is generated.
+
+        Parameters
+        ----------
+        conversation_id: str
+            Saved conversation to read.
+
+        Notes
+        -----
+        The engine is busy answering, so the conversation file is read here,
+        without the engine. Emits ``conversation_viewed`` with its saved
+        turns, or with ``turns`` None when it cannot be read.
+
+        """
+
+        turns = (
+            None if self.project_root is None
+            else saved_conversation_turns(self.project_root, conversation_id)
+        )
+        # Not an ``error`` event, which would end the running answer.
+        self.event.emit(
+            json.dumps(
+                {
+                    "event": "conversation_viewed",
+                    "conversation_id": conversation_id,
+                    "turns": turns,
+                }
+            )
+        )
+
+    @Slot(str)
     def selectConversation(self, conversation_id: str) -> None:
         """Open a saved conversation without reloading project resources.
 
@@ -1044,6 +1080,68 @@ class ChatBridge(QObject):
         """
 
         self.stopRequested.emit()
+
+
+def saved_conversation_turns(
+    root: Path, conversation_id: str
+) -> list[dict[str, object]] | None:
+    """Read one saved conversation's turns, as the page shows them.
+
+    Parameters
+    ----------
+    root: pathlib.Path
+        Open project folder.
+    conversation_id: str
+        Saved conversation to read.
+
+    Returns
+    -------
+    list[dict[str, object]] | None
+        Its saved turns, each with its saved timing under ``timeline`` when
+        there is one, or None when no readable conversation has that ID.
+
+    Notes
+    -----
+    Reads files only, so it never waits for the busy engine. Symbolic links
+    and unreadable files are skipped, as conversation discovery does.
+
+    """
+
+    try:
+        timelines = json.loads(
+            (root / "logs" / "answer_timelines.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        timelines = {}
+    if not isinstance(timelines, dict):
+        timelines = {}
+    for path in sorted((root / "logs" / "traces").glob("conversation_*.json")):
+        if path.is_symlink() or not path.is_file():
+            continue
+        try:
+            state = conversation_state(
+                json.loads(path.read_text(encoding="utf-8"))
+            )
+        except (OSError, ValueError):
+            continue
+        turns = state.get("turns", [])
+        if state.get("conversation_id") != conversation_id:
+            continue
+        if not isinstance(turns, list):
+            return None
+        shown = []
+        for turn in turns:
+            if not isinstance(turn, dict):
+                return None
+            timeline = timelines.get(turn.get("timestamp"))
+            shown.append(
+                {**turn, "timeline": timeline}
+                if isinstance(timeline, dict) else turn
+            )
+        return shown
+    return None
 
 
 class SourceDropView(QWebEngineView):
