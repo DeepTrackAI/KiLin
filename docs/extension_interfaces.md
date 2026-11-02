@@ -25,8 +25,7 @@ snapshot.
 The shipped examples are `code.json` and `literature.json`. A new type is a
 packaged `<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
-optional `source_directory`, `answer_guidance`, `capabilities`, history
-settings, a valid
+optional `answer_guidance`, `capabilities`, history settings, a valid
 `default_intent`, an `intents` object and optional empty-chat prompts. The
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
@@ -39,12 +38,12 @@ each definition. Adding a packaged type needs no built-in-specific branch.
 External directories accepted by `load_project_types(directory)` are for
 explicit validation; they are not automatically registered or hot-loaded.
 
-`source_directory` controls the source folder created by initialize_project
-inside a fresh directory (default `sources`). It does not change the managed
-multi-source layout. See
-[configuration](configuration.md#new-project-source-convention) for validation
-and the current schema. A new type cannot bypass the core's creation-only
-ownership rules or authorize reuse of an occupied workspace. Empty projects are
+A project type does not name the source folder: every new project uses
+`sources/`. See
+[configuration](configuration.md#new-project-source-convention) for the
+convention and how existing projects keep theirs. A new type cannot bypass
+the core's creation-only ownership rules or authorize reuse of an occupied
+workspace. Empty projects are
 supported for every type. Missing welcome content has generic fallbacks;
 project-type prompts, tools and retrieval policies still control answers.
 

@@ -39,11 +39,11 @@ folder.** This rule is enforced in the core, independently of the GUI.
 
 | Operation | Contract |
 | --- | --- |
-| `kilin.initialize_project(path, type_id)` | Create in a nonexistent or empty directory; create the type's configured `source_directory` subfolder. |
+| `kilin.initialize_project(path, type_id)` | Create in a nonexistent or empty directory, with an empty `sources/` folder. |
 | `kilin.prepare_sources_workspace(...)` | Create a new managed `sources/` tree and record imports in `sources.json`. Never resume a saved workspace. |
 | `kilin.open_project(path)` | Read and validate a saved profile and source path without changing files or creating missing folders. |
 | `kilin.add_project_sources(path, source_paths, ...)` | Explicit cumulative import using the saved profile. Preserve existing snapshots unless `replace_existing=True` is requested. |
-| `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror and record `source_snapshot.json`. |
+| `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror in `sources/` and record `source_snapshot.json`. |
 | `kilin.synchronize_project_workspace(source, path)` | Explicitly synchronize that saved mirror. May replace local snapshot edits or remove copies deleted from the original. |
 | `kilin.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
 

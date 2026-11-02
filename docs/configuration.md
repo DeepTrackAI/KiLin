@@ -190,21 +190,21 @@ The unrelated `kind` fields on source entities and chunks are unchanged.
 
 ### New-project source convention
 
-`source_directory` is an optional project-type JSON string with default
-`"sources"`. It must be a nonempty relative POSIX directory path: no
-absolute or drive paths, backslashes, colons, control characters, empty,
-`.` or `..` components, surrounding whitespace, trailing dots, Windows
-reserved device names or characters, or the INI interpolation marker `%`. The
-managed `indexes`, `logs`, `outputs`, and `templates` folders cannot be
-selected as a source convention. Nested relative paths are allowed.
+Every new project keeps its sources in `sources/`, whatever its project type
+and however it is created: `initialize_project()`,
+`prepare_project_workspace()`, and `prepare_sources_workspace()` all create
+it. The name is the core constant
+`kilin.workspace_resources.PROJECT_SOURCES_DIRECTORY`; it is not a setting.
+Project types decide how sources are read, indexed, and answered, not the
+folder name, so a project-type JSON file has no `source_directory` field and
+one that still names it is rejected as an unknown setting.
 
-The standard code definition specifies `"repository"`; literature specifies
-`"documents"`. `initialize_project()` creates this subdirectory inside a
-nonexistent or empty destination. It no longer adopts nonempty source folders
-or reopens saved projects. `open_project()` reads a saved profile's explicit
-`source` unchanged and performs no filesystem writes. The convention creates
-no example files. Managed multi-source workspaces always use `sources/`,
-including when created empty; their layout is independent of this setting.
+Existing projects keep the `source` recorded in their `profile.ini`, for
+example `documents/` or `repository/` from before this convention.
+`open_project()` reads that path unchanged and performs no filesystem writes;
+no folder is renamed or moved. A single-source mirror made before the
+convention keeps its copy under the original's name, and
+`synchronize_project_workspace()` updates it there.
 
 ## GUI defaults and writable preferences
 
