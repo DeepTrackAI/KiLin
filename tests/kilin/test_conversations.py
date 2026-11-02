@@ -384,6 +384,7 @@ class TestStoreDiscovery(ConversationStoreFixture):
                 False, 42, [], {}, "", "bad parent", "bad/id"
             ),
             "origin_checkpoint_id": (False, 2, [], {}, ""),
+            "origin_turn_count": (False, True, -1, 1.5, "2", [], {}),
         }
         number = 0
         for field, values in invalid_fields.items():
@@ -739,6 +740,79 @@ class TestStoreBranching(ConversationStoreFixture):
         branch = self.store.create(branch_from=parent.conversation_id)
         self.assertIsNone(branch.origin_checkpoint_id)
         self.assertEqual(self._state(branch)["turns"], [1])
+
+    def test_branch_keeps_only_the_first_turns(self):
+        parent = self.store.create()
+        turns = [{"question": f"Q{index}"} for index in range(1, 4)]
+        self._persist(parent, {
+            "turns": turns,
+            "checkpoint_id": "checkpoint-3",
+            "checkpoint": {"turn_count": 3},
+            "system_prompt": "Do science",
+        })
+        branch = self.store.create(
+            branch_from=parent.conversation_id, turn_count=2
+        )
+        self.assertEqual(branch.origin_checkpoint_id, "checkpoint-3")
+        self.assertEqual(branch.origin_turn_count, 2)
+        saved = self._state(branch)
+        self.assertEqual(saved["turns"], turns[:2])
+        self.assertEqual(saved["system_prompt"], "Do science")
+        self.assertEqual(saved["origin_turn_count"], 2)
+        # The parent's checkpoint covers all three turns, not these two.
+        self.assertNotIn("checkpoint_id", saved)
+        self.assertNotIn("checkpoint", saved)
+        self.assertEqual(self._state(parent)["turns"], turns)
+        reopened = module.ConversationStore(self.store.project_directory)
+        reopened.ensure()
+        self.assertEqual(
+            reopened.select(branch.conversation_id).origin_turn_count, 2
+        )
+
+    def test_branch_turn_count_from_none_to_all_turns(self):
+        parent = self.store.create()
+        turns = [{"question": "Q1"}, {"question": "Q2"}]
+        self._persist(parent, {"turns": turns, "checkpoint_id": "two"})
+        for turn_count, kept in ((0, []), (2, turns), (None, turns)):
+            with self.subTest(turn_count=turn_count):
+                branch = self.store.create(
+                    branch_from=parent.conversation_id,
+                    turn_count=turn_count,
+                )
+                self.assertEqual(branch.origin_turn_count, len(kept))
+                self.assertEqual(self._state(branch)["turns"], kept)
+        # Keeping every turn keeps the parent's checkpoint, as before.
+        self.assertEqual(self._state(branch)["checkpoint_id"], "two")
+
+    def test_branch_turn_count_outside_saved_turns_creates_nothing(self):
+        parent = self.store.create()
+        self._persist(parent, {"turns": [1, 2]})
+        before = set(self.store.root.iterdir())
+        for value in (-1, 3, True, 1.5, "1"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "turn_count"):
+                    self.store.create(
+                        branch_from=parent.conversation_id,
+                        turn_count=value,
+                    )
+                self.assertEqual(set(self.store.root.iterdir()), before)
+                self.assertEqual(self.store.active(), parent)
+
+    def test_only_a_branch_can_keep_a_number_of_turns(self):
+        self.store.create()
+        before = set(self.store.root.iterdir())
+        with self.assertRaisesRegex(ValueError, "Only a branch"):
+            self.store.create(turn_count=1)
+        self.assertEqual(set(self.store.root.iterdir()), before)
+
+    def test_records_saved_before_branch_points_still_load(self):
+        self._candidate(
+            "conversation_older.json", parent_conversation_id="parent_01"
+        )
+        item = self.store.ensure()
+        self.assertEqual(item.conversation_id, "conversation_older")
+        self.assertIsNone(item.origin_turn_count)
+        self.assertIsNone(self.store.create().origin_turn_count)
 
 
 class TestStoreMetadata(ConversationStoreFixture):

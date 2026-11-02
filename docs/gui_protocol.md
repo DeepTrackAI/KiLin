@@ -80,7 +80,7 @@ paths and source paths remain subject to downstream core validation.
 | `preview_reference` | `turn_index`, `citation` | Look up one citation of a saved turn |
 | `ask` | `question` | `retrieval_count`, `generation_settings`, `effort` default to `None` |
 | `new_conversation` | None | Create an empty conversation |
-| `branch_conversation` | None | Create a branch of the active conversation |
+| `branch_conversation` | None | Create a branch of the active conversation; optional `turn_count` keeps only its first turns (default: all) |
 | `select_conversation` | `conversation_id` | Switch to a saved conversation |
 | `rename_conversation` | `conversation_id`, `name` | Rename the registered conversation |
 | `delete_conversation` | `conversation_id` | Archive/remove it from the visible catalog |

@@ -25,7 +25,7 @@ from kilin.conversation_format import (
     conversation_state,
     new_conversation_session,
 )
-from kilin.rag import RAGSession, _conversation_trace
+from kilin.rag import ConversationTurn, RAGSession, _conversation_trace
 from kilin.conversations import ConversationStore
 from kilin.trace_logging import (
     NullTraceLogger,
@@ -481,6 +481,44 @@ class TestConversationStoreIntegration(unittest.TestCase):
         )
         session.chat_session.close.assert_not_called()
         session.embedding_session.close.assert_not_called()
+
+    def test_branch_from_a_message_resumes_its_first_turns(self):
+        parent = self.store.ensure()
+        parent_path = self.store.state_path(parent)
+        old_trace = _logger(parent_path)
+        self.addCleanup(old_trace.close)
+        session = _session(self.root, old_trace)
+        session.conversation_path = parent_path
+        session._checkpoint_id = None
+        for number in range(1, 4):
+            session._save_conversation(pending_turn=ConversationTurn(
+                timestamp="2026-11-02T10:00:00Z",
+                question=f"Question {number}",
+                answer=f"Answer {number}",
+                evidence=(),
+                parameters={},
+            ))
+        old_trace.close()
+
+        branch = self.store.create(
+            branch_from=parent.conversation_id, turn_count=1
+        )
+        path = self.store.state_path(branch)
+        new_trace = _logger(path)
+        self.addCleanup(new_trace.close)
+        result = session.switch_conversation(path, trace=new_trace)
+        self.assertEqual(
+            [turn.question for turn in result], ["Question 1"]
+        )
+        # The branch starts a new checkpoint chain for its own turns.
+        self.assertIsNone(session._checkpoint_id)
+        session._save_conversation()
+        state = conversation_state(_read(path))
+        self.assertEqual(state["checkpoint"]["turn_count"], 1)
+        self.assertIsNone(state["checkpoint"]["parent_checkpoint_id"])
+        self.assertEqual(state["origin_turn_count"], 1)
+        self.assertEqual(len(conversation_state(_read(parent_path))["turns"]),
+                         3)
 
     def test_store_rename_and_trace_metadata_can_be_kept_in_sync(self):
         item = self.store.ensure()

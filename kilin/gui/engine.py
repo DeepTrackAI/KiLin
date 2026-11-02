@@ -2817,7 +2817,9 @@ class ChatEngine:
             **preview,
         )
 
-    def create_conversation(self, *, branch: bool = False) -> None:
+    def create_conversation(
+        self, *, branch: bool = False, turn_count: int | None = None
+    ) -> None:
         """Create an empty conversation or branch the selected conversation.
 
         Parameters
@@ -2825,6 +2827,9 @@ class ChatEngine:
         branch: bool, optional
             Whether to copy resumable state from the active conversation
             instead of creating an empty conversation. Defaults to ``False``.
+        turn_count: int | None, optional
+            Number of the active conversation's first turns a branch keeps.
+            None keeps every turn. Defaults to ``None``.
 
         Notes
         -----
@@ -2846,6 +2851,7 @@ class ChatEngine:
             )
             conversation = self.conversation_store.create(
                 branch_from=parent_id,
+                turn_count=turn_count,
                 ownership=(
                     self._store_ownership(parent_id)
                     if parent_id is not None
@@ -3946,7 +3952,9 @@ def main() -> None:
                     elif action == "new_conversation":
                         engine.create_conversation()
                     elif action == "branch_conversation":
-                        engine.create_conversation(branch=True)
+                        engine.create_conversation(
+                            branch=True, turn_count=command.get("turn_count")
+                        )
                     elif action == "select_conversation":
                         engine.select_conversation(command["conversation_id"])
                     elif action == "rename_conversation":

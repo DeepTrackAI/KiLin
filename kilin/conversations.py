@@ -2,9 +2,10 @@
 
 ``ConversationStore`` maintains a registry of ``conversation_*.json`` files
 under ``logs/traces``. It discovers saved metadata, chooses an active record,
-creates empty conversations, and branches by copying a saved resumable state.
-A branch records its parent's identifier and checkpoint reference; it does
-not duplicate the parent's complete trace-event history.
+creates empty conversations, and branches by copying a saved resumable state,
+or only its first turns. A branch records its parent's identifier, checkpoint
+reference, and the number of turns it kept; it does not duplicate the
+parent's complete trace-event history.
 
 Files use only the canonical grouped conversation-session record through
 the shared internal conversation-format contract. Writes use unique
@@ -23,8 +24,8 @@ Key Features
 
 - **Branch metadata**
 
-    Record parent identity and the saved checkpoint from which a branch was
-    created.
+    Record parent identity, the saved checkpoint from which a branch was
+    created, and how many of its turns the branch kept.
 
 - **Canonical storage**
 
@@ -117,6 +118,9 @@ class ConversationInfo:
         Creation timestamp as an ISO 8601 UTC string.
     updated_at_utc: str
         Last metadata-update timestamp as an ISO 8601 UTC string.
+    origin_turn_count: int | None
+        Number of the parent's turns a branch kept, or None for a new
+        independent conversation and records saved before branch points.
 
     Attributes
     ----------
@@ -136,6 +140,9 @@ class ConversationInfo:
         Creation timestamp as an ISO 8601 UTC string.
     updated_at_utc: str
         Last metadata-update timestamp as an ISO 8601 UTC string.
+    origin_turn_count: int | None
+        Number of the parent's turns a branch kept, or None for a new
+        independent conversation and records saved before branch points.
 
     """
 
@@ -145,6 +152,7 @@ class ConversationInfo:
     origin_checkpoint_id: str | None
     created_at_utc: str
     updated_at_utc: str
+    origin_turn_count: int | None = None
 
 
 class ConversationStore:
@@ -177,7 +185,7 @@ class ConversationStore:
         Return the registered conversations in creation order.
     select(conversation_id)
         Select a registered conversation without loading model history.
-    create(*, branch_from=None)
+    create(*, branch_from=None, turn_count=None)
         Create an empty conversation or a resumable copy of a parent.
     rename(conversation_id, name)
         Normalize and persist a conversation display name.
@@ -321,6 +329,7 @@ class ConversationStore:
         self,
         *,
         branch_from: str | None = None,
+        turn_count: int | None = None,
         ownership: ConversationFileLock | None = None,
     ) -> ConversationInfo:
         """Create an empty conversation or a resumable copy of a parent.
@@ -331,6 +340,10 @@ class ConversationStore:
             Identifier of a registered parent to copy resumable state from, or
             None to create an empty independent conversation. Defaults to
             ``None``.
+        turn_count: int | None, optional
+            Number of the parent's first turns to keep, from 0 to all of
+            them. None keeps every turn. Requires ``branch_from``. Defaults
+            to ``None``.
         ownership: ConversationFileLock | None, optional
             Borrowed lock for the parent conversation when branching. The
             new destination always acquires its own short-lived lock.
@@ -343,21 +356,25 @@ class ConversationStore:
         Raises
         ------
         ValueError
-            If a requested parent is unknown or its saved JSON/state is
-            invalid.
+            If a requested parent is unknown, its saved JSON/state is
+            invalid, or ``turn_count`` is outside its saved turns.
         OSError
             If the new conversation cannot be written.
 
         Notes
         -----
         A branch copies non-metadata fields from the parent resume state and
-        records parent/checkpoint identity. Old trace operations are not
+        records parent/checkpoint identity and the number of turns kept. A
+        branch that keeps fewer turns omits the parent's checkpoint fields,
+        which describe all of its turns. Old trace operations are not
         copied. The new filename avoids existing paths at the moment it is
         chosen; each candidate path is locked and checked before creation.
         A collision detected after selection raises rather than overwriting.
 
         """
 
+        if turn_count is not None and branch_from is None:
+            raise ValueError("Only a branch can keep a number of turns.")
         parent = (
             self._require(branch_from) if branch_from is not None else None
         )
@@ -392,13 +409,33 @@ class ConversationStore:
                     if isinstance(checkpoint, str) and checkpoint
                     else None
                 )
+                turns = saved.get("turns", [])
+                if not isinstance(turns, list):
+                    raise ValueError("The saved conversation is invalid.")
+                kept = len(turns) if turn_count is None else turn_count
+                if (
+                    isinstance(kept, bool)
+                    or not isinstance(kept, int)
+                    or not 0 <= kept <= len(turns)
+                ):
+                    raise ValueError(
+                        f"turn_count must be from 0 to {len(turns)}."
+                    )
                 metadata = ConversationInfo.__dataclass_fields__
                 copied_state = {
                     key: value
                     for key, value in saved.items()
                     if key not in metadata
                 }
-            item = replace(item, origin_checkpoint_id=checkpoint)
+                if kept < len(turns):
+                    # The parent's checkpoint describes all of its turns,
+                    # not the ones this branch keeps.
+                    copied_state["turns"] = turns[:kept]
+                    copied_state.pop("checkpoint_id", None)
+                    copied_state.pop("checkpoint", None)
+            item = replace(
+                item, origin_checkpoint_id=checkpoint, origin_turn_count=kept
+            )
         with conversation_write_ownership(path):
             if path.exists():
                 raise FileExistsError(
@@ -888,6 +925,7 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
     Notes
     -----
     Extra fields belong to saved RAG state and are retained in the JSON.
+    Records saved before branch points have no ``origin_turn_count``.
     Validation never rewrites, repairs, or deletes an invalid file. Discovery
     skips invalid records so other conversations remain accessible.
 
@@ -897,6 +935,7 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
         metadata = {
             field: record[field]
             for field in ConversationInfo.__dataclass_fields__
+            if field != "origin_turn_count"
         }
     except KeyError as error:
         raise ValueError(
@@ -932,9 +971,17 @@ def _validated_metadata(record: dict[str, object]) -> ConversationInfo:
     if origin is not None and (not isinstance(origin, str) or not origin):
         raise ValueError("The saved conversation checkpoint is invalid.")
 
+    turn_count = record.get("origin_turn_count")
+    if turn_count is not None and (
+        isinstance(turn_count, bool)
+        or not isinstance(turn_count, int)
+        or turn_count < 0
+    ):
+        raise ValueError("The saved conversation branch point is invalid.")
+
     _utc_datetime(metadata["created_at_utc"])
     _utc_datetime(metadata["updated_at_utc"])
-    return ConversationInfo(**metadata)
+    return ConversationInfo(**metadata, origin_turn_count=turn_count)
 
 
 def _read_json(path: Path) -> dict[str, object]:

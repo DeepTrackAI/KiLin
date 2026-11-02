@@ -11,11 +11,13 @@ The fake session exposes the project and conversation fields used by the GUI.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
 import unittest
 
+from kilin.conversation_format import conversation_state
 from kilin.gui.engine import ChatEngine
 from kilin.gui.model_catalog import MODEL_CHOICES
 from kilin.workspace import prepare_sources_workspace
@@ -274,6 +276,39 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertFalse(any(event["event"] == "error" for event in events))
         self.assertFalse(path.exists())
         self.assertFalse(shown(path))
+
+    @patch("kilin.gui.engine.RAGSession")
+    def test_branch_from_a_message_keeps_its_first_turns(self, rag):
+        """The engine branches the active chat at the requested turn."""
+
+        session = self.model_session()
+        rag.return_value = session
+        events = []
+        engine = ChatEngine(self.root, events.append)
+        self.addCleanup(engine.close)
+        engine.resume_project(str(session.project.root))
+        parent = engine.active_conversation
+        path = engine.conversation_store.state_path(parent)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        conversation_state(payload)["turns"] = [
+            {"question": "First"}, {"question": "Second"},
+        ]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+
+        engine.create_conversation(branch=True, turn_count=1)
+
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        branch = engine.active_conversation
+        self.assertEqual(branch.parent_conversation_id,
+                         parent.conversation_id)
+        self.assertEqual(branch.origin_turn_count, 1)
+        saved = json.loads(
+            engine.conversation_store.state_path(branch).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(conversation_state(saved)["turns"],
+                         [{"question": "First"}])
 
     @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):

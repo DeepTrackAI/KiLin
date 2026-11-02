@@ -239,6 +239,21 @@ class TestGUIProtocolCommands(unittest.TestCase):
             unittest.mock.call("/project", None),
         ])
 
+    def test_branch_forwards_the_number_of_turns_to_keep(self) -> None:
+        """Branch from a message, or keep every turn as before."""
+
+        worker, events = self._run([
+            json.dumps({"action": "branch_conversation", "turn_count": 2}),
+            json.dumps({"action": "branch_conversation"}),
+            json.dumps({"action": "new_conversation"}),
+        ])
+        self.assertEqual(events, [])
+        self.assertEqual(worker.create_conversation.call_args_list, [
+            unittest.mock.call(branch=True, turn_count=2),
+            unittest.mock.call(branch=True, turn_count=None),
+            unittest.mock.call(),
+        ])
+
     def test_sync_forwards_the_users_choices(self) -> None:
         """Pass per-file sync choices through; none means the defaults."""
 

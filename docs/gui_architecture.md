@@ -111,7 +111,8 @@ a `reference_error` if the reference cannot be resolved.
 
 `ConversationStore` manages the local conversation catalog and metadata.
 The engine can select, create, branch, rename, archive/delete or reset a
-conversation. Existing answer-model sessions and indexes are reused when
+conversation. A branch copies the whole conversation, or only its first
+turns. Existing answer-model sessions and indexes are reused when
 switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.
