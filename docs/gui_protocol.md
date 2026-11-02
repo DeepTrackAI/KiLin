@@ -289,6 +289,10 @@ partial visible stream.
   model call of the answer checks after each token, including routing and
   tools. The answer ends with `answer_cancelled`; no turn is saved, and the
   project and loaded models stay open.
+- The page's answer Stop calls `ChatBridge.cancelAnswer()`, which sends
+  `cancel_answer` and starts a `CANCEL_GRACE_MS` timer in the window; an
+  `answered`, `answer_cancelled` or `error` event stops it, otherwise the
+  window kills the engine as below.
 - `ChatBridge.stopOperation()` is the forceful Stop for other operations,
   and the fallback when an engine does not respond: it emits
   `stopRequested`; the Qt window clears queued commands, kills its child

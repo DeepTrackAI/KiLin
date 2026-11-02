@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import MagicMock, patch
 
+from kilin._model_completion import GenerationCancelled
 from kilin.gui import engine
 from kilin.rag import ANSWER_PHASE_CHOICES
 
@@ -238,6 +239,17 @@ class TestGUIProtocolCommands(unittest.TestCase):
             unittest.mock.call("/project", "conversation_earlier"),
             unittest.mock.call("/project", None),
         ])
+
+    def test_stop_is_applied_when_it_arrives(self) -> None:
+        """The input thread stops the answer; the loop then ignores it."""
+
+        worker, events = self._run([
+            json.dumps({"action": "cancel_answer"}),
+            json.dumps({"action": "readiness"}),
+        ])
+        self.assertEqual(events, [])
+        worker.cancel_answer.assert_called_once_with()
+        worker.readiness.assert_called_once_with()
 
     def test_branch_forwards_the_number_of_turns_to_keep(self) -> None:
         """Branch from a message, or keep every turn as before."""
@@ -576,6 +588,25 @@ class TestGUIProtocolEvents(unittest.TestCase):
         self.assertIn("Continue, Quick, or Cancel", events[0]["message"])
         self.assertIs(events[0]["pending_choice"], True)
 
+    def test_stop_ends_a_wait_for_the_users_choice(self) -> None:
+        """Stop while a plan or option is shown ends the answer."""
+
+        with TemporaryDirectory() as temporary:
+            events: list[dict[str, object]] = []
+            commands = iter([{"action": "cancel_answer"}] * 2)
+            worker = engine.ChatEngine(
+                Path(temporary), events.append,
+                read_command=lambda: next(commands),
+            )
+            try:
+                with self.assertRaises(GenerationCancelled):
+                    worker._confirm_plan(None)
+                with self.assertRaises(GenerationCancelled):
+                    worker._choose_option("Choose", ("one", "two"))
+            finally:
+                worker.close()
+        self.assertEqual(events, [])
+
     def test_pending_tool_option_accepts_only_valid_indices(self) -> None:
         """Convert option choice strings only within their valid range."""
 
@@ -654,7 +685,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
         ).read_text(encoding="utf-8")
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
-            "answer_delta", "answer_phase", "answered", "backend_failed",
+            "answer_cancelled", "answer_delta", "answer_phase", "answered",
+            "backend_failed",
             "backend_restarted", "conversation_delete_started",
             "conversation_opened", "conversations", "error",
             "workspace_conflict",
@@ -734,6 +766,18 @@ class TestGUIProtocolBridge(unittest.TestCase):
             [json.loads(event) for event in self.events],
             [{"event": "error", "message": "Invalid sources."}],
         )
+
+    def test_answer_stop_is_a_command_with_a_last_resort(self) -> None:
+        """Stop an answer by command; the window may still restart."""
+
+        cancels: list[bool] = []
+        self.bridge.answerCancelRequested.connect(
+            lambda: cancels.append(True)
+        )
+        self.bridge.cancelAnswer()
+        self.assertEqual(self.commands, [{"action": "cancel_answer"}])
+        self.assertEqual(cancels, [True])
+        self.assertEqual(self.stops, [])
 
     def test_stop_is_a_signal_not_a_child_command(self) -> None:
         """Preserve out-of-band process termination via Qt signal."""

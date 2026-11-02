@@ -62,6 +62,7 @@ from PySide6.QtCore import (
     QProcess,
     QRectF,
     Qt,
+    QTimer,
     QUrl,
     Signal,
     Slot,
@@ -96,6 +97,9 @@ __all__ = [
 ]
 
 ROOT = Path(__file__).resolve().parents[2]
+# How long Stop waits for the engine to end an answer before restarting it,
+# as a last resort for an engine that no longer responds.
+CANCEL_GRACE_MS = 30_000
 ICONS = Path(__file__).resolve().parent / "icons"
 
 
@@ -117,6 +121,8 @@ class ChatBridge(QObject):
         Backend command handed to the window process controller.
     stopRequested: Signal()
         Request to terminate the active engine process.
+    answerCancelRequested: Signal()
+        Stop was pressed for a running answer.
 
     Methods
     -------
@@ -163,6 +169,8 @@ class ChatBridge(QObject):
         Reopen a saved project at one exact conversation.
     closeProject()
         Release models when the user chooses a different project.
+    cancelAnswer()
+        Stop the running answer while the engine and models stay loaded.
     stopOperation()
         Terminate the active backend process immediately.
 
@@ -181,6 +189,7 @@ class ChatBridge(QObject):
     folderFilesSelected = Signal(str, str, list)
     commandRequested = Signal(dict)
     stopRequested = Signal()
+    answerCancelRequested = Signal()
     sourceDropTargetChanged = Signal(str)
     sourceDragChanged = Signal(bool)
     appearanceChanged = Signal(str)
@@ -1009,6 +1018,21 @@ class ChatBridge(QObject):
             QDesktopServices.openUrl(target)
 
     @Slot()
+    def cancelAnswer(self) -> None:
+        """Stop the running answer while the engine and models stay loaded.
+
+        Notes
+        -----
+        Sends ``cancel_answer``, which the engine applies at the model's next
+        token. The window restarts the engine only if no answer event follows
+        within ``CANCEL_GRACE_MS``.
+
+        """
+
+        self.commandRequested.emit({"action": "cancel_answer"})
+        self.answerCancelRequested.emit()
+
+    @Slot()
     def stopOperation(self) -> None:
         """Terminate the active backend process immediately.
 
@@ -1258,6 +1282,12 @@ class ChatWindow(QMainWindow):
         self.bridge = ChatBridge(self)
         self.bridge.commandRequested.connect(self._send_command)
         self.bridge.stopRequested.connect(self._stop_operation)
+        # A Stop the engine does not answer in time restarts it instead.
+        self._cancel_timer = QTimer(self)
+        self._cancel_timer.setSingleShot(True)
+        self._cancel_timer.setInterval(CANCEL_GRACE_MS)
+        self._cancel_timer.timeout.connect(self._stop_operation)
+        self.bridge.answerCancelRequested.connect(self._cancel_timer.start)
 
         # The saved appearance until the page reports its choice; "system"
         # follows the OS.
@@ -1434,6 +1464,12 @@ class ChatWindow(QMainWindow):
                     and isinstance(event, dict)
                     and "event" in event
                 ):
+                    if event["event"] in {
+                        "answered", "answer_cancelled", "error"
+                    }:
+                        # The answer ended, so a pending Stop needs no
+                        # restart.
+                        self._cancel_timer.stop()
                     if event["event"] == "opened" and isinstance(
                         event.get("project"), str
                     ):
@@ -1463,6 +1499,7 @@ class ChatWindow(QMainWindow):
         if self._stopping:
             return
         self._stopping = True
+        self._cancel_timer.stop()
         self._pending.clear()
         if self.process.state() == QProcess.ProcessState.NotRunning:
             self._process_finished()

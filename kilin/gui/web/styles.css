@@ -389,6 +389,8 @@ button:disabled { opacity: .62; cursor: default; }
 .send-button:hover:not(:disabled) { background: #d86529; }
 .send-button span { display: block; transform: translateY(-1px); }
 .send-button.stopping span { font-size: 12px; transform: none; }
+.send-button.waiting span { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; font-size: 0; transform: none; animation: send-waiting .8s linear infinite; }
+@keyframes send-waiting { to { transform: rotate(360deg); } }
 .attach-picker, .effort-picker { position: relative; }
 .attach-menu { position: absolute; z-index: 12; left: 0; bottom: calc(100% + 8px); width: 150px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); box-shadow: 0 12px 30px rgb(25 36 44 / 18%); }
 .attach-menu button { display: block; width: 100%; min-height: 36px; padding: 6px 9px; border: 0; color: var(--text); background: transparent; text-align: left; }

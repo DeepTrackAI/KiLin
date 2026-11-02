@@ -121,11 +121,15 @@ switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.
 
-**Stop is forceful.** `window.py` kills the child process to interrupt a
-blocking backend call; this unloads models and discards unsaved partial
-output. Qt starts a new engine, the frontend reloads settings and can
-resume the earlier project. The `resume` command can include the active
-`conversation_id` so the engine restores **that** conversation; without an
+**Stop ends an answer cleanly.** The page sends `cancel_answer`; the engine
+ends the answer at the model's next token, saves no turn, and keeps the
+project and models loaded. Only if no answer event follows within
+`CANCEL_GRACE_MS` (30 seconds), and for Stop during other work such as
+downloads, does `window.py` kill the child process; this unloads models and
+discards unsaved partial output. Qt starts a new engine, the frontend
+reloads settings and can resume the earlier project. The `resume` command
+can include the active `conversation_id` so the engine restores **that**
+conversation; without an
 ID it uses the most recently modified conversation. Invalid requested
 IDs raise an error and do not silently open another chat. This is
 conversation recovery, **not** continuation of interrupted generation.

@@ -88,6 +88,37 @@ events cannot undo a rename or timestamp change from an obsolete snapshot.
 These are single-file guarantees, not transactions across metadata, model
 state, or multiple files; no power-loss durability is claimed.
 
+## Stopped and failed answers
+
+**Stop** sends the `cancel_answer` command. Every model call of the answer
+checks it after each generated token, so the answer ends at the next token
+while the engine keeps running, and the project and models stay loaded. No
+turn is saved: the conversation's `resume_state.turns`, which the chat shows
+and the model remembers, only gains a turn at its checkpoint. The page keeps
+the partial answer on screen, with its steps ending in "Stopped at your
+request", and puts the question back in the message box.
+
+A Stop is easy to find in the trace file. Under
+`sessions["05_conversations"]["turns"]`, the turn's operation has `"status":
+"failed"`, and its `result` has `"error_type": "GenerationCancelled"` and
+`"message": "Stopped by the user."`. `sessions["06_runtime"]` also gets a
+`gui_answer_cancelled` operation with `"reason": "Stopped by the user."`,
+timed when the answer ended. Any other failure has a different
+`error_type`.
+
+Only if the engine does not end the answer within 30 seconds does the
+window restart it as a last resort. The trace then keeps every event written
+before the restart (each event except throttled progress updates rewrites
+the file at once) as a turn that ends without a completion or failure
+event, and the reopened file numbers later turns above it.
+
+An answer that **fails** with an error records the failure in the trace and
+adds no turn; the GUI shows the error and puts the question back. An answer
+the model could not finish (for example, it reached its token limit) is
+different: the trace records `generation.incomplete`, and the turn **is**
+saved, with an answer explaining that no reliable result was produced and
+the details under its `completion` parameter.
+
 ## Migration from earlier trace configurations
 
 Remove any `mode=...` argument from `TraceConfig` construction and any imports

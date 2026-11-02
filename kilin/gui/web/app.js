@@ -125,6 +125,9 @@ let messageAttachments = [];
 // A question whose attached files are being added to sources; it is asked
 // once the index is refreshed.
 let attachedAsk = null;
+// The question being answered, put back in the message box if the answer
+// fails or is stopped.
+let unansweredQuestion = "";
 // Set while Qt restarts the engine to use another projects folder.
 let switchingProjectsFolder = false;
 let currentTurnCount = 0;
@@ -1944,6 +1947,16 @@ async function openWorkspaceFile(path) {
 }
 
 /**
+ * Put a question whose answer failed or was stopped back in the message
+ * box, unless the user has already started typing another one.
+ */
+function restoreUnansweredQuestion() {
+  const question = unansweredQuestion;
+  unansweredQuestion = "";
+  if (question && !byId("question").value.trim()) byId("question").value = question;
+}
+
+/**
  * Restore the interface after an engine failure and display the error.
  *
  * @param message Error message for the user.
@@ -1960,6 +1973,7 @@ function showError(message, tracePath = "") {
     pendingTurn.answer.textContent = "Could not complete this answer.";
     pendingTurn.item.classList.add("failed");
     pendingTurn = null;
+    restoreUnansweredQuestion();
   }
   error.textContent = tracePath ? `${message} Trace: ${tracePath}` : message;
   error.classList.remove("hidden");
@@ -2375,7 +2389,10 @@ function setBusy(value, message = "") {
   byId("close-models").disabled = false;
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
-  if (!value) activity.classList.remove("answer-progress");
+  if (!value) {
+    activity.classList.remove("answer-progress");
+    byId("send").classList.remove("waiting");
+  }
   byId("open").disabled = value || !bridge;
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
@@ -3489,8 +3506,8 @@ function askKilin(title, message, action, other = "") {
 /**
  * Keep the text an answer had generated when the user pressed Stop.
  *
- * Stop restarts the engine, so the partial answer is never saved; it stays
- * on screen, marked as stopped, until the user opens another chat.
+ * A stopped answer is never saved; it stays on screen, marked as stopped,
+ * until the user opens another chat.
  *
  * @param current The pending turn that was stopped.
  */
@@ -3505,12 +3522,37 @@ function keepStoppedTurn(current) {
   current.item.classList.remove("pending");
   current.item.classList.add("stopped");
   current.answer.classList.remove("answer-phase", "streaming");
-  const line = document.createElement("div");
-  line.className = "answer-duration";
-  line.textContent = `Stopped after ${formatDuration(elapsed)} · not saved`;
+  // Keep the steps it went through, ending with the Stop, like "Took …".
+  const record = {
+    elapsed_ms: elapsed,
+    steps: timelineSteps(current.timeline || [], current.started + elapsed),
+  };
+  const line = renderTimeline(record, { parameters: { usage: current.usage } });
+  const stop = document.createElement("li");
+  stop.className = "timeline-stopped";
+  stop.textContent = "Stopped at your request";
+  // The last step, before the token count.
+  const list = line.querySelector(".answer-timeline");
+  list.insertBefore(stop, list.querySelector(".timeline-usage"));
+  const tokens = usageSum(current.usage);
+  line.querySelector("summary").textContent = [
+    `Stopped after ${formatDuration(elapsed)}`,
+    tokens ? `${formatTokens(tokens)} tokens` : "",
+  ].filter(Boolean).join(" · ");
   current.durationLine.replaceWith(line);
   current.durationLine = line;
   stoppedTurn = { item: current.item, conversationId: activeConversationId };
+}
+
+/**
+ * Once the answer has ended, or a restarted engine is ready, turn the answer
+ * showing "Stopping…" into a stopped one, kept on screen when it had text.
+ */
+function finishStopping() {
+  if (!pendingTurn?.stopping) return;
+  stopPhaseAnimation();
+  keepStoppedTurn(pendingTurn);
+  pendingTurn = null;
 }
 
 /**
@@ -3897,6 +3939,7 @@ function renderTimeline(record, turn) {
  * @param turn Completed answer and saved conversation metadata.
  */
 function completeAfterAnswerStages(turn) {
+  unansweredQuestion = "";
   // Freeze the timer when the answer arrives, not after the stage animation.
   if (pendingTurn && pendingTurn.elapsedMs === null) {
     pendingTurn.elapsedMs = performance.now() - pendingTurn.started;
@@ -3913,7 +3956,8 @@ function completeAfterAnswerStages(turn) {
  * @param detail Optional supporting status text.
  */
 function showTurnPhase(label, detail = "") {
-  if (!pendingTurn) return;
+  // Steps reported just before Stop took effect do not undo "Stopping".
+  if (!pendingTurn || pendingTurn.stopping) return;
   pendingTurn.phase = label;
   pendingTurn.detail.textContent = detail;
   pendingTurn.detail.classList.toggle("hidden", !detail);
@@ -3989,6 +4033,11 @@ function paintPendingTurn() {
   if (!pendingTurn) return;
   const dots = Math.floor(performance.now() / 400) % 4;
   pendingTurn.label.textContent = `${pendingTurn.phase}${".".repeat(dots)}`;
+  if (pendingTurn.stopping) {
+    // Shown above a streamed answer too, where the phase label is gone.
+    pendingTurn.timer.textContent = `Stopping${".".repeat(dots)}`;
+    return;
+  }
   const tokens = usageSum(pendingTurn.usage);
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
@@ -4365,11 +4414,15 @@ function appendAnswerText(text) {
     const body = current.thoughts.querySelector(".answer-thoughts-text");
     body.textContent = parts.thinking;
     body.scrollTop = body.scrollHeight;
-    if (!parts.thinkingOpen && current.thinkingMs == null) {
-      current.thinkingMs = performance.now() - current.thinkingStarted;
+    if (parts.thinkingOpen) current.thinkingSeen = true;
+    if (!parts.thinkingOpen && !current.thinkingDone) {
+      current.thinkingDone = true;
+      // Thinking that arrives finished in one piece, as from a tool's
+      // model calls, took an unknown time: it is not "Thought for 0s".
+      if (current.thinkingSeen) current.thinkingMs = performance.now() - current.thinkingStarted;
       current.thoughts.open = false;
-      current.thoughts.querySelector("summary").textContent =
-        `Thought for ${formatDuration(current.thinkingMs)}`;
+      current.thoughts.querySelector("summary").textContent = current.thinkingMs == null
+        ? "Show thinking" : `Thought for ${formatDuration(current.thinkingMs)}`;
     }
   }
   current.body.replaceChildren();
@@ -4644,6 +4697,7 @@ function onEvent(raw) {
   } else if (data.event === "progress") {
     showProgress(data);
   } else if (data.event === "opened") {
+    finishStopping();
     // An error from an earlier attempt no longer applies to this project.
     clearError();
     usageTotals = data.usage || usageTotals;
@@ -4677,7 +4731,8 @@ function onEvent(raw) {
     renderConversations(data);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) renderConversationEmpty();
+    // A stopped first answer stays on screen instead of the welcome.
+    if (!conversation.children.length) renderConversationEmpty();
     byId("workspace-location").textContent = data.project;
     renderSidebarProjects(savedProjects, openProjectPath);
     if (bridge) bridge.listSavedProjects("");
@@ -4699,6 +4754,7 @@ function onEvent(raw) {
       sendQuestion(ask);
     }
   } else if (data.event === "conversation_opened") {
+    finishStopping();
     // An error from an earlier attempt no longer applies to this conversation.
     clearError();
     usageTotals = data.usage || usageTotals;
@@ -4716,7 +4772,8 @@ function onEvent(raw) {
     if (data.workspace_files) renderWorkspace(data.workspace_files);
     data.turns.forEach(addTurn);
     restoreStoppedTurn();
-    if (!data.turns.length) renderConversationEmpty();
+    // A stopped first answer stays on screen instead of the welcome.
+    if (!conversation.children.length) renderConversationEmpty();
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
@@ -4758,6 +4815,17 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+  } else if (data.event === "answer_cancelled") {
+    // Stopped cleanly: nothing was saved, and the project stays open.
+    resumeAfterStop = false;
+    if (data.usage) usageTotals = data.usage;
+    renderUsage();
+    finishStopping();
+    // The stopped answer is already on screen; there is no restart to
+    // show it again after.
+    stoppedTurn = null;
+    restoreUnansweredQuestion();
+    setBusy(false);
   } else if (data.event === "reset") {
     renderConversationEmpty();
     clearReferences();
@@ -4765,6 +4833,7 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
+    restoreUnansweredQuestion();
     setupCompletionVisible = false;
     byId("readiness-meter").classList.add("hidden");
     byId("readiness-meter").classList.remove("indeterminate");
@@ -4775,12 +4844,11 @@ function onEvent(raw) {
     }
     if (resumeAfterStop) {
       resumeAfterStop = false;
-      stopPhaseAnimation();
       resetAnswerStages();
-      keepStoppedTurn(pendingTurn);
-      pendingTurn = null;
       ready = false;
-      setBusy(true, "Reopening project after interruption…");
+      // The answer keeps showing "Stopping…" while the project reopens; the
+      // reopening steps stay hidden, as during the answer.
+      setBusy(true, "Reopening the chat after Stop…");
       bridge.resumeProjectConversation(openProjectPath, activeConversationId);
       return;
     }
@@ -4808,6 +4876,7 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
+    restoreUnansweredQuestion();
     const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
     setupCompletionVisible = true;
@@ -4888,8 +4957,21 @@ byId("send").addEventListener("click", (event) => {
   event.preventDefault();
   resumeAfterStop = true;
   byId("send").disabled = true;
+  // The button spins until KíLín is ready again, so Stop never looks frozen.
+  byId("send").classList.add("waiting");
   byId("activity-text").textContent = "Stopping generation…";
-  bridge.stopOperation();
+  if (pendingTurn) {
+    pendingTurn.elapsedMs ??= performance.now() - pendingTurn.started;
+    // "Stopping…" shows once, in the summary line; the phase lines go.
+    resetAnswerStages();
+    pendingTurn.label.closest(".answer-phase-header")?.remove();
+    pendingTurn.detail.remove();
+    pendingTurn.stopping = true;
+    paintPendingTurn();
+  }
+  // The engine ends the answer and stays loaded (answer_cancelled); only an
+  // engine that does not respond is restarted (stopped).
+  bridge.cancelAnswer();
 });
 byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
@@ -5057,6 +5139,7 @@ function changeProjectsFolder(useDefault) {
  *   that could not be added (``leftOut``), and the answer settings.
  */
 function sendQuestion(ask) {
+  unansweredQuestion = ask.question;
   const listed = ask.files.map((path) => `- ${path}`).join("\n");
   const text = listed ? `${ask.question}\n\nAttached files:\n${listed}` : ask.question;
   addPendingTurn(text);

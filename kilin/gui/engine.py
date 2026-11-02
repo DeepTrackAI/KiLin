@@ -2518,7 +2518,9 @@ class ChatEngine:
         except GenerationCancelled:
             # Stop: no turn is saved, and models and project stay loaded.
             self.active_trace.emit(
-                "gui.answer.cancelled", component="gui_engine"
+                "gui.answer.cancelled",
+                component="gui_engine",
+                data={"reason": "Stopped by the user."},
             )
             self._send("answer_cancelled", usage=self._usage_totals())
             return
@@ -2713,7 +2715,7 @@ class ChatEngine:
             if command is None:
                 return PLAN_CHOICE_CANCEL
             if command.get("action") == "cancel_answer":
-                raise GenerationCancelled("The answer was stopped.")
+                raise GenerationCancelled("Stopped by the user.")
             if command.get("action") == "plan_choice":
                 choice = command.get("choice")
                 if choice in PLAN_CHOICE_CHOICES:
@@ -2757,7 +2759,7 @@ class ChatEngine:
             if command is None:
                 return None
             if command.get("action") == "cancel_answer":
-                raise GenerationCancelled("The answer was stopped.")
+                raise GenerationCancelled("Stopped by the user.")
             if command.get("action") == "plan_choice":
                 choice = str(command.get("choice") or "")
                 number = choice.removeprefix("option:")

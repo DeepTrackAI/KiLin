@@ -17,6 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import ANY, MagicMock, patch
 import unittest
 
+from kilin._model_completion import GenerationCancelled
 from kilin.conversation_format import conversation_state
 from kilin.gui.engine import ChatEngine
 from kilin.gui.model_catalog import MODEL_CHOICES
@@ -70,6 +71,7 @@ class TestEngineWorkflow(unittest.TestCase):
             token_callback=ANY,
             phase_callback=ANY,
             pdf_writer=ANY,
+            stop_requested=ANY,
             **options,
         )
         options = session.ask.call_args.kwargs
@@ -172,6 +174,37 @@ class TestEngineWorkflow(unittest.TestCase):
 
         self.assert_question_forwarded(session, "Question", retrieval_count=8)
         self.assertEqual(events[-1]["event"], "answered")
+
+    def test_stop_ends_the_answer_and_keeps_the_project_open(self) -> None:
+        """Stop reaches the running answer; nothing reloads or fails."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        engine.cancel_answer()
+        seen = []
+
+        def answer(question, **options):
+            """Stop part-way, as the input thread does on Stop."""
+
+            # A Stop pressed before the answer started does not end it.
+            seen.append(options["stop_requested"]())
+            engine.cancel_answer()
+            seen.append(options["stop_requested"]())
+            raise GenerationCancelled("The answer was stopped.")
+
+        session.ask.side_effect = answer
+        engine.ask("Question")
+
+        self.assertEqual(seen, [False, True])
+        self.assertEqual(events[-1]["event"], "answer_cancelled")
+        self.assertFalse(any(event["event"] == "error" for event in events))
+        self.assertIs(engine.session, session)
+        session.close.assert_not_called()
+        # After the answer, Stop does nothing until the next one.
+        engine.cancel_answer()
+        self.assertFalse(session.ask.call_args.kwargs["stop_requested"]())
 
     def test_generation_settings_are_passed_with_the_question(self) -> None:
         """Chat controls affect answers without editing the project profile."""
