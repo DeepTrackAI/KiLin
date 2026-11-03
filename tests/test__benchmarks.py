@@ -257,7 +257,8 @@ class TestBenchmarkArtifacts(unittest.TestCase):
             project = prepare_project_workspace(
                 source, PROJECT_TYPE_ID_CODE, base / "workspaces"
             )
-            self.assertFalse((project.source / "config.json").exists())
+            self.assertTrue((project.source / "config.json").is_file())
+            self.assertFalse((project.source / "large.py").exists())
             project = configure_project(
                 project.root,
                 {
