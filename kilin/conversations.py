@@ -84,6 +84,9 @@ __all__ = ["ConversationInfo", "ConversationStore"]
 # imported conversations may use other alphanumeric identifiers.
 _ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
 
+# A branch's name, "Branch: <name>" or "Branch 2: <name>", starts with this.
+_BRANCH_PREFIX_PATTERN = re.compile(r"Branch(?: \d+)?: ")
+
 # Saved metadata uses UTC ISO 8601 timestamps, with optional fractions.
 # Both the current ``Z`` spelling and historical ``+00:00`` are accepted.
 _UTC_TIMESTAMP_PATTERN = re.compile(
@@ -798,22 +801,26 @@ class ConversationStore:
         Parameters
         ----------
         parent_name: str
-            Display name of the parent used as the prefix for a unique branch
-            name.
+            Display name of the parent conversation.
 
         Returns
         -------
         str
-            Parent name followed by "branch" and the first available positive
-            integer.
+            ``Branch: <name>``, or ``Branch 2: <name>``, ``Branch 3:
+            <name>``, ... when taken. A branch of a branch is named after
+            the original conversation. Names are cut to fit 80 characters.
 
         """
 
+        name = _BRANCH_PREFIX_PATTERN.sub("", parent_name, count=1)
         used = {item.name for item in self._items.values()}
         number = 1
-        while f"{parent_name} branch {number}" in used:
+        while True:
+            label = "Branch" if number == 1 else f"Branch {number}"
+            candidate = f"{label}: {name}"[:80]
+            if candidate not in used:
+                return candidate
             number += 1
-        return f"{parent_name} branch {number}"
 
     def _require(self, conversation_id: str | None) -> ConversationInfo:
         """Find a registered conversation or reject the identifier.

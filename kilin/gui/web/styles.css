@@ -211,13 +211,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .side-panels { display: none; min-width: 0; max-height: 100vh; overflow: auto; border-left: 1px solid var(--line); background: var(--surface-soft); }
 .sidebar-open .side-panels { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .conversations-panel { position: sticky; top: 0; display: flex; flex-direction: column; min-width: 0; height: 100vh; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--surface-soft); }
-.sidebar-logo { display: block; width: 100%; max-width: 190px; margin: 0 auto 14px; padding: 10px; border: 0; border-radius: 14px; background: transparent; }
+.sidebar-logo { display: block; flex: none; width: 100%; max-width: 190px; margin: 0 auto 14px; padding: 10px; border: 0; border-radius: 14px; background: transparent; }
 .sidebar-logo:hover:not(:disabled) { background: var(--hover); }
 .sidebar-logo:disabled { opacity: .55; }
 /* The qilin image is about 1.37 times wider than tall. */
 .sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.37; background: var(--logo-image) center / contain no-repeat; }
 .sidebar-section { display: flex; flex-direction: column; min-height: 0; }
-.sidebar-section[data-section="conversations"] { flex: 1 1 auto; }
+/* Conversations take the space left, down to three rows; only then does
+   the project list shrink. */
+.sidebar-section[data-section="conversations"] { flex: 1 1 0; }
+.sidebar-section[data-section="conversations"]:not(.collapsed) { min-height: calc(42px + 3 * 34px + 2 * 3px); }
 .sidebar-section-head { display: flex; align-items: center; gap: 2px; margin: 10px 0 4px; }
 .sidebar-section-toggle { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; margin-right: auto; padding: 2px 6px 2px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 13px; font-weight: 500; }
 .sidebar-section-toggle:hover { color: var(--text); }
@@ -234,8 +237,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .context-menu .menu-heading { padding: 5px 9px 3px; color: var(--muted); font-size: 12px; }
 .context-menu .menu-check { float: right; margin-left: 16px; }
 .conversation-list { display: grid; align-content: start; gap: 3px; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* Five 34px rows and their gaps; more projects scroll. */
-.project-list { display: grid; gap: 3px; flex: none; max-height: calc(5 * 34px + 4 * 3px); overflow-y: auto; }
+/* Five 34px rows and their gaps; more projects scroll. In a short window
+   the list shrinks, and scrolls, down to one row below its 42px header,
+   instead of spilling under Conversations. */
+.sidebar-section[data-section="projects"]:not(.collapsed) { min-height: calc(42px + 34px); }
+.project-list { display: grid; gap: 3px; flex: 0 1 auto; min-height: 0; max-height: calc(5 * 34px + 4 * 3px); overflow-y: auto; }
 .project-list [draggable="true"], .conversation-list [draggable="true"] { cursor: grab; }
 .dragging { opacity: .4; }
 /* A row's highlight spans the panel, like a project's; on hover it shortens

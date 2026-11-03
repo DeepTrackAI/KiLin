@@ -178,6 +178,30 @@ console.log("thinking models passed");
         )
         self.assertNotIn("SIDEBAR_PROJECTS", source)
 
+    def test_short_window_never_overlaps_the_sidebar_lists(self):
+        """Projects shrink and scroll; they never spill under Conversations.
+
+        Regression: the projects section could shrink while its list kept
+        five rows, so rows were drawn under the Conversations header.
+        """
+
+        styles = (_WEB / "styles.css").read_text(encoding="utf-8")
+        projects = _rule(styles, ".project-list")
+        self.assertIn("flex: 0 1 auto", projects)
+        self.assertIn("min-height: 0", projects)
+        self.assertIn(
+            "min-height: calc(42px + 34px)",
+            _rule(
+                styles,
+                '.sidebar-section[data-section="projects"]:not(.collapsed)',
+            ),
+        )
+        self.assertIn(
+            "flex: 1 1 0",
+            _rule(styles, '.sidebar-section[data-section="conversations"]'),
+        )
+        self.assertIn("flex: none", _rule(styles, ".sidebar-logo"))
+
 
 if __name__ == "__main__":
     unittest.main()
