@@ -2432,6 +2432,8 @@ class TestRAGRoutingAndTools(unittest.TestCase):
             data={
                 "name": "project_inventory",
                 "settings": asdict(ran.settings),
+                # The tool's own fixed values, from its defaults.json.
+                "internal": {"MODEL_CALLS": {"THINKING": "inherit"}},
             },
             turn_id="t",
         )

@@ -101,6 +101,7 @@ from kilin.tools import (
     suggest_reference,
 )
 from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
+from kilin.tools._defaults import load_tool_defaults
 from kilin.tools._model_calls import (
     ModelCallSettings,
     load_model_call_settings,
@@ -219,6 +220,27 @@ class Tool:
         return load_model_call_settings(
             Path(__file__).parent / self.name / "defaults.json"
         )
+
+    @property
+    def internal_defaults(self) -> dict[str, object]:
+        """Return the tool's packaged defaults other than ``SETTINGS``.
+
+        These sections, such as ``MODEL_CALLS`` or ``ESTIMATES``, belong to
+        the tool: project types and users cannot change them.
+
+        Returns
+        -------
+        dict[str, object]
+            The sections by name, empty when the tool has no defaults file.
+
+        """
+
+        path = Path(__file__).parent / self.name / "defaults.json"
+        if not path.is_file():
+            return {}
+        defaults = load_tool_defaults(path)
+        defaults.pop("SETTINGS", None)
+        return defaults
 
 
 @dataclass(frozen=True, slots=True)

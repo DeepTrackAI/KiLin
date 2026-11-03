@@ -3713,7 +3713,8 @@ class RAGSession:
             earlier=self._earlier_turns(decision),
         )
         # Every tool run is recorded: the tool, the settings it ran with,
-        # how long it took, and whether it completed or failed.
+        # its own fixed values, how long it took, and whether it completed
+        # or failed.
         with trace.span(
             "tool.run",
             component="tool",
@@ -3723,6 +3724,7 @@ class RAGSession:
                     asdict(use.settings) if is_dataclass(use.settings)
                     else repr(use.settings)
                 ),
+                "internal": TOOL_REGISTRY[use.name].internal_defaults,
             },
             turn_id=trace_turn_id,
         ):
