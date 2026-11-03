@@ -74,7 +74,9 @@ checkpoint is introduced for an intent override.
 
 Every tool run is recorded as a `tool.run` span in the turn: its `name`, the
 `settings` it ran with (including any the project changed in Settings →
-Tools), how long it took, and whether it completed or failed. Saving tool
+Tools), its `internal` values (the other sections of its `defaults.json`,
+such as `MODEL_CALLS`, which only the tool sets), how long it took, and
+whether it completed or failed. Saving tool
 settings records `project.tool_settings.saved` with the tool and its changed
 values.
 
