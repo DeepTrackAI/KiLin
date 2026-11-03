@@ -127,6 +127,7 @@ from kilin.workspace import (
     remove_workspace_sources,
     sync_project_sources,
 )
+from kilin.tool_settings import project_tool_settings, save_tool_settings
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 from kilin.project_files import (
     add_project_files,
@@ -296,6 +297,8 @@ class ChatEngine:
         Ask the loaded project and return its saved answer and evidence.
     cancel_answer()
         Stop the running answer at its next generated token.
+    tool_settings(), save_tool_settings(name, settings)
+        List the open project's tools, or save one tool's settings.
     preview_reference(turn_index, citation)
         Show nearby source lines for one saved answer citation.
     create_conversation(*, branch=False)
@@ -1924,6 +1927,75 @@ class ChatEngine:
                 "gui.answer_settings.failed",
                 error,
                 f"Could not save the answer settings: {error}",
+            )
+
+    def tool_settings(self) -> None:
+        """Send the tools the open project can use, with their settings.
+
+        Notes
+        -----
+        Emits ``tool_settings`` with one record per tool, as
+        ``project_tool_settings`` describes them.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            self._send(
+                "tool_settings",
+                tools=project_tool_settings(self.session.project.root),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.tool_settings.failed",
+                error,
+                f"Could not read the tool settings: {error}",
+            )
+
+    def save_tool_settings(self, name: str, settings: object) -> None:
+        """Save one tool's settings for the open project.
+
+        Parameters
+        ----------
+        name: str
+            Tool the project type uses.
+        settings: object
+            Mapping of the tool's changeable settings to new values.
+
+        Notes
+        -----
+        Emits ``tool_settings`` with every tool and ``tool`` set to ``name``:
+        with ``saved`` True, or with ``error`` when the tool rejects a value,
+        so the page shows the reason next to the tool. The next tool run
+        uses the saved values; nothing is reloaded.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            if not isinstance(settings, dict):
+                raise ValueError("Tool settings must be an object.")
+            root = self.session.project.root
+            try:
+                tools = save_tool_settings(
+                    root, name, settings, trace=self.active_trace
+                )
+            except ValueError as error:
+                self._send(
+                    "tool_settings",
+                    tools=project_tool_settings(root),
+                    tool=name,
+                    error=str(error),
+                )
+                return
+            self._send("tool_settings", tools=tools, tool=name, saved=True)
+        except Exception as error:
+            self._report_error(
+                "gui.tool_settings.failed",
+                error,
+                f"Could not save the tool settings: {error}",
             )
 
     def check_sources(self, sources: list[str]) -> None:
@@ -4103,6 +4175,12 @@ def main() -> None:
                         engine.rename_project(command["name"])
                     elif action == "save_answer_settings":
                         engine.save_answer_settings(command.get("settings"))
+                    elif action == "tool_settings":
+                        engine.tool_settings()
+                    elif action == "save_tool_settings":
+                        engine.save_tool_settings(
+                            command["tool"], command.get("settings")
+                        )
                     elif action == "save_answer_timeline":
                         engine.save_answer_timeline(
                             str(command.get("timestamp", "")),

@@ -175,6 +175,8 @@ class ChatBridge(QObject):
         Release models when the user chooses a different project.
     cancelAnswer()
         Stop the running answer while the engine and models stay loaded.
+    requestToolSettings(), saveToolSettings(name, settings_json)
+        List the open project's tools, or save one tool's settings.
     stopOperation()
         Terminate the active backend process immediately.
 
@@ -828,6 +830,33 @@ class ChatBridge(QObject):
         self.commandRequested.emit(
             {
                 "action": "save_answer_settings",
+                "settings": json.loads(settings_json),
+            }
+        )
+
+    @Slot()
+    def requestToolSettings(self) -> None:
+        """Ask for the open project's tools and their settings."""
+
+        self.commandRequested.emit({"action": "tool_settings"})
+
+    @Slot(str, str)
+    def saveToolSettings(self, name: str, settings_json: str) -> None:
+        """Save one tool's settings for the open project.
+
+        Parameters
+        ----------
+        name: str
+            Tool the project type uses.
+        settings_json: str
+            JSON object of the tool's changeable settings.
+
+        """
+
+        self.commandRequested.emit(
+            {
+                "action": "save_tool_settings",
+                "tool": name,
                 "settings": json.loads(settings_json),
             }
         )

@@ -177,6 +177,7 @@
           <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
           <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
           <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
           <button class="settings-tab" type="button" role="tab" data-tab="project">Project</button>
         </div>
         <section class="settings-section" data-settings-tab="general">
@@ -203,6 +204,10 @@
             <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
             <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
           </div>
+        </section>
+        <section id="settings-tools" class="settings-section" data-settings-tab="tools">
+          <p class="hint">The tools this project can use. Changes apply to this project only.</p>
+          <div id="tool-settings"></div>
         </section>
         <section id="settings-project" class="settings-section" data-settings-tab="project">
           <div class="advanced-fields">

@@ -135,7 +135,7 @@ dependencies must already be suitable for its profile.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -254,6 +254,7 @@ from kilin.tools import (
 )
 from kilin.tools._shared.model_results import incomplete_notice
 from kilin.tools._shared.choose_document import document_scope
+from kilin.tool_settings import with_project_settings
 from kilin.trace_logging import (
     TRACE_EVENT_PROGRESS_UPDATED,
     NullTraceLogger,
@@ -3534,6 +3535,8 @@ class RAGSession:
         """
 
         trace = getattr(self, "trace", NullTraceLogger())
+        # The project may have changed the tool's settings in profile.ini.
+        use = with_project_settings(Path(self.project.root), use)
         language_context = (
             *(
                 turn.question
@@ -3709,18 +3712,34 @@ class RAGSession:
             guidance=answer_guidance,
             earlier=self._earlier_turns(decision),
         )
-        try:
-            result = run_tool(use, request, context)
-        except IncompleteModelResponse as error:
-            trace.emit(
-                "tool.generation.incomplete", component="tool",
-                data={"name": use.name, **error.to_dict()},
-                turn_id=trace_turn_id,
-            )
-            result = ToolResult(
-                _incomplete_answer(error), (),
-                {"name": use.name, **error.to_dict()},
-            )
+        # Every tool run is recorded: the tool, the settings it ran with,
+        # its own fixed values, how long it took, and whether it completed
+        # or failed.
+        with trace.span(
+            "tool.run",
+            component="tool",
+            data={
+                "name": use.name,
+                "settings": (
+                    asdict(use.settings) if is_dataclass(use.settings)
+                    else repr(use.settings)
+                ),
+                "internal": TOOL_REGISTRY[use.name].internal_defaults,
+            },
+            turn_id=trace_turn_id,
+        ):
+            try:
+                result = run_tool(use, request, context)
+            except IncompleteModelResponse as error:
+                trace.emit(
+                    "tool.generation.incomplete", component="tool",
+                    data={"name": use.name, **error.to_dict()},
+                    turn_id=trace_turn_id,
+                )
+                result = ToolResult(
+                    _incomplete_answer(error), (),
+                    {"name": use.name, **error.to_dict()},
+                )
         if result.streamed and token_callback is not None:
             failures = result.summary.get("incomplete_items", [])
             if failures:

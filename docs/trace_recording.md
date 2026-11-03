@@ -72,6 +72,14 @@ answers and older turns. These values describe the requested template
 policy, not proof that a particular model complied. No extra event or
 checkpoint is introduced for an intent override.
 
+Every tool run is recorded as a `tool.run` span in the turn: its `name`, the
+`settings` it ran with (including any the project changed in Settings →
+Tools), its `internal` values (the other sections of its `defaults.json`,
+such as `MODEL_CALLS`, which only the tool sets), how long it took, and
+whether it completed or failed. Saving tool
+settings records `project.tool_settings.saved` with the tool and its changed
+values.
+
 ## Persistence and write failures
 
 Each trace update writes through a uniquely created temporary file in the

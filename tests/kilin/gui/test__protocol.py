@@ -80,6 +80,12 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ({"action": "close"}, "close"),
             ({"action": "reset"}, "reset"),
             ({"action": "new_conversation"}, "create_conversation"),
+            ({"action": "tool_settings"}, "tool_settings"),
+            (
+                {"action": "save_tool_settings", "tool": "find_fact",
+                 "settings": {"part_tokens": 8000}},
+                "save_tool_settings",
+            ),
             ({"action": "branch_conversation"}, "create_conversation"),
             (
                 {"action": "resume", "project": "/project"},
@@ -699,7 +705,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "progress", "projects", "projects_folder", "readiness",
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
-            "sources_checked", "status", "stopped", "trace_ready",
+            "sources_checked", "status", "stopped", "tool_settings",
+            "trace_ready",
             "usage_progress",
         })
 
@@ -767,6 +774,22 @@ class TestGUIProtocolBridge(unittest.TestCase):
             [json.loads(event) for event in self.events],
             [{"event": "error", "message": "Invalid sources."}],
         )
+
+    def test_tool_settings_command_payloads(self) -> None:
+        """Ask for the tools; save one tool's settings as an object."""
+
+        self.bridge.requestToolSettings()
+        self.bridge.saveToolSettings(
+            "find_fact", json.dumps({"part_tokens": 8000})
+        )
+        self.assertEqual(self.commands, [
+            {"action": "tool_settings"},
+            {
+                "action": "save_tool_settings",
+                "tool": "find_fact",
+                "settings": {"part_tokens": 8000},
+            },
+        ])
 
     def test_answer_stop_is_a_command_with_a_last_resort(self) -> None:
         """Stop an answer by command; the window may still restart."""
