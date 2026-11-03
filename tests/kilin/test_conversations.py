@@ -653,7 +653,7 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(branch.parent_conversation_id,
                          parent.conversation_id)
         self.assertEqual(branch.origin_checkpoint_id, "checkpoint-123")
-        self.assertEqual(branch.name, f"{parent.name} branch 1")
+        self.assertEqual(branch.name, f"Branch: {parent.name}")
         self.assertEqual(self.store.active(), branch)
         saved = self._state(branch)
         self.assertEqual(saved["turns"],
@@ -700,10 +700,31 @@ class TestStoreBranching(ConversationStoreFixture):
 
     def test_multiple_branches_increment_names(self):
         parent = self.store.create()
+        names = [
+            self.store.create(branch_from=parent.conversation_id).name
+            for _ in range(3)
+        ]
+        self.assertEqual(names, [
+            f"Branch: {parent.name}",
+            f"Branch 2: {parent.name}",
+            f"Branch 3: {parent.name}",
+        ])
+
+    def test_branch_of_a_branch_is_named_after_the_original(self):
+        parent = self.store.create()
+        first = self.store.create(branch_from=parent.conversation_id)
+        second = self.store.create(branch_from=first.conversation_id)
+        third = self.store.create(branch_from=second.conversation_id)
+        self.assertEqual(second.name, f"Branch 2: {parent.name}")
+        self.assertEqual(third.name, f"Branch 3: {parent.name}")
+
+    def test_long_branch_names_fit_the_name_limit(self):
+        parent = self.store.create()
+        self.store.rename(parent.conversation_id, "x" * 80)
         first = self.store.create(branch_from=parent.conversation_id)
         second = self.store.create(branch_from=parent.conversation_id)
-        self.assertEqual(first.name, f"{parent.name} branch 1")
-        self.assertEqual(second.name, f"{parent.name} branch 2")
+        self.assertEqual(first.name, "Branch: " + "x" * 72)
+        self.assertEqual(second.name, "Branch 2: " + "x" * 70)
 
     def test_branches_without_valid_checkpoint_have_no_origin(self):
         parent = self.store.create()
