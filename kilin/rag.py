@@ -4316,8 +4316,9 @@ class RAGSession:
 
         Notes
         -----
-        Returns configured project/model metadata and live chat generation
-        settings. A retrieval-count argument records an answer-specific
+        Returns configured project metadata and the active answering model
+        rather than the profile default, plus live generation settings. A
+        retrieval-count argument records an answer-specific
         override; callers omitting it record the profile count. Thinking
         remains the configured session value used for restoration;
         ``ask`` separately records ``thinking_effective`` for direct
@@ -4332,7 +4333,7 @@ class RAGSession:
             "source": str(self.project.source),
             "backend_preference": profile.backend,
             "allow_download": profile.allow_download,
-            "chat_model": profile.chat_model(self.backend),
+            "chat_model": self.chat_session.model_id,
             "retrieval_count": retrieval_count or profile.retrieval_count,
             "thinking": self.chat_session.thinking,
             "temperature": self.chat_session.temperature,

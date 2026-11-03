@@ -445,6 +445,7 @@ class ChatSession:
         )
         self._cjk_token_ids: tuple[int, ...] | None = None
         self._block_cjk = False
+        self._last_prompt_opens_thinking = False
         self.device = ""
         self._load(
             allow_download=_check_bool(allow_download, "allow_download"),
@@ -820,6 +821,7 @@ class ChatSession:
         self._last_generation_output_token_count = None
         self._last_generation_token_count_source = None
         self.last_finish_reason = None
+        self._last_prompt_opens_thinking = False
         self.input_token_total += len(tokens)
         generation_started_at = perf_counter()
         with self.trace.span(
@@ -865,6 +867,28 @@ class ChatSession:
         generation_duration_ms = (
             perf_counter() - generation_started_at
         ) * 1000
+
+        # Some templates open <think> in the assistant prompt rather than
+        # generating the opening tag. Inspect the rendered prompt only when
+        # the response has no visible thinking delimiter to disambiguate it.
+        if (
+            effective_thinking and self.last_finish_reason == "length"
+            and isinstance(answer, str)
+            and "<think>" not in answer and "</think>" not in answer
+        ):
+            if rendered_prompt is None:
+                try:
+                    rendered_prompt = self._tokenizer.apply_chat_template(
+                        messages, tokenize=False,
+                        add_generation_prompt=True,
+                        enable_thinking=effective_thinking,
+                    )
+                except (TypeError, ValueError):
+                    rendered_prompt = None
+            self._last_prompt_opens_thinking = (
+                isinstance(rendered_prompt, str)
+                and rendered_prompt.rstrip().endswith("<think>")
+            )
 
         if not isinstance(answer, str) or not answer.strip():
             raise IncompleteModelResponse(

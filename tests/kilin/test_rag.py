@@ -2224,6 +2224,13 @@ class TestRAGLifecycle(unittest.TestCase):
         parameters = session._parameters(8)
         self.assertEqual(parameters["retrieval_count"], 8)
         self.assertEqual(parameters["chat_model"], "chat-model")
+        session.chat_session.model_id = "switched-27b"
+        self.assertEqual(
+            session._parameters()["chat_model"], "switched-27b"
+        )
+        self.assertEqual(
+            session.project.profile.chat_model("mlx"), "chat-model"
+        )
         self.assertEqual(parameters["temperature"], 0.2)
         self.assertEqual(session._parameters()["retrieval_count"], 5)
         session.project.profile.extensions = (".pdf",)
