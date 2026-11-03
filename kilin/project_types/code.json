@@ -2,10 +2,13 @@
   "display_name": "Code repository",
   "description": "A software repository with source code and documentation.",
   "extensions": [
-    ".py",
-    ".ipynb",
-    ".m",
-    ".md"
+      ".py",
+      ".ipynb",
+      ".m",
+      ".md",
+      ".json",
+      ".js",
+      ".html"
   ],
   "max_file_bytes": 1048576,
   "retrieval_instruction": "Given a question about a software repository, retrieve relevant code and documentation that help answer the question.",
