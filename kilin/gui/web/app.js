@@ -1213,6 +1213,8 @@ function restoreDefaultModels(role) {
  */
 function showSettingsTab(name) {
   settingsTab = name;
+  // The open project's tools, read fresh each time the tab is shown.
+  if (name === "tools") requestToolSettings();
   for (const tab of document.querySelectorAll(".settings-tab")) {
     const selected = tab.dataset.tab === name;
     tab.classList.toggle("active", selected);
@@ -1226,6 +1228,162 @@ function showSettingsTab(name) {
 }
 
 /**
+ * Ask for the open project's tools, or say that a project must be open.
+ */
+function requestToolSettings() {
+  if (bridge && openProjectPath) {
+    bridge.requestToolSettings();
+    return;
+  }
+  const hint = document.createElement("p");
+  hint.className = "hint";
+  hint.textContent = "Open a project to see its tools.";
+  byId("tool-settings").replaceChildren(hint);
+}
+
+/**
+ * Turn a setting name such as "max_model_calls" into "Max model calls".
+ *
+ * @param key Setting name from a tool's defaults.json.
+ * @returns Label for the setting.
+ */
+function settingLabel(key) {
+  const words = key.replaceAll("_", " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/**
+ * Build the field for one tool setting, chosen by its value's type.
+ *
+ * @param key Setting name.
+ * @param value Current value: a Boolean, number, string, or list.
+ * @returns Label element holding the field.
+ */
+function toolSettingField(key, value) {
+  const label = document.createElement("label");
+  const input = document.createElement("input");
+  input.dataset.key = key;
+  if (typeof value === "boolean") {
+    label.className = "check-row";
+    input.type = "checkbox";
+    input.checked = value;
+    input.dataset.kind = "boolean";
+    label.append(input, ` ${settingLabel(key)}`);
+    return label;
+  }
+  if (typeof value === "number") {
+    input.type = "number";
+    input.step = Number.isInteger(value) ? "1" : "any";
+    input.value = String(value);
+    input.dataset.kind = "number";
+  } else if (Array.isArray(value)) {
+    input.type = "text";
+    input.value = value.join(", ");
+    input.placeholder = "Comma-separated";
+    input.dataset.kind = "list";
+  } else {
+    input.type = "text";
+    input.value = String(value ?? "");
+    input.dataset.kind = "text";
+  }
+  label.append(settingLabel(key), input);
+  return label;
+}
+
+/**
+ * Read a tool's fields back into setting values.
+ *
+ * @param fields Container of the tool's setting fields.
+ * @returns Setting names and values to save.
+ */
+function toolSettingValues(fields) {
+  const values = {};
+  for (const input of fields.querySelectorAll("input[data-key]")) {
+    const kind = input.dataset.kind;
+    values[input.dataset.key] = kind === "boolean" ? input.checked
+      : kind === "number" ? Number(input.value)
+        : kind === "list" ? input.value.split(",").map((item) => item.trim()).filter(Boolean)
+          : input.value;
+  }
+  return values;
+}
+
+/**
+ * Show the project's tools, each with its settings built from the tool's
+ * defaults.json as fields.
+ *
+ * @param data The ``tool_settings`` event: ``tools``, and for a save the
+ *   ``tool`` with ``saved`` or ``error``.
+ */
+function renderToolSettings(data) {
+  const holder = byId("tool-settings");
+  const open = new Set([...holder.querySelectorAll("details.tool-settings[open]")].map((item) => item.dataset.tool));
+  if (data.tool) open.add(data.tool);
+  // Saving redraws the list; keep the field the user moved to.
+  const focused = document.activeElement?.closest?.("#tool-settings") && document.activeElement.dataset.key
+    ? [document.activeElement.closest("details.tool-settings").dataset.tool, document.activeElement.dataset.key]
+    : null;
+  holder.replaceChildren();
+  if (!data.tools.length) {
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = "This project type uses no tools.";
+    holder.append(hint);
+    return;
+  }
+  for (const tool of data.tools) {
+    const item = document.createElement("details");
+    item.className = "tool-settings";
+    item.dataset.tool = tool.name;
+    item.open = open.has(tool.name);
+    const summary = document.createElement("summary");
+    const name = document.createElement("code");
+    name.textContent = tool.name;
+    summary.append(name, ` ${tool.summary}`);
+    const fields = document.createElement("div");
+    fields.className = "tool-fields";
+    for (const [key, value] of Object.entries(tool.settings)) fields.append(toolSettingField(key, value));
+    item.append(summary, fields);
+    // Settings each use sets differently, such as a template, stay as set.
+    const perIntent = Object.entries(tool.per_intent);
+    if (perIntent.length) {
+      const fixed = document.createElement("p");
+      fixed.className = "hint";
+      fixed.textContent = `Set by each use: ${perIntent.map(([intent, values]) =>
+        `${settingLabel(intent)} (${Object.entries(values).map(([key, value]) => `${key} ${value}`).join(", ")})`).join("; ")}`;
+      item.append(fixed);
+    }
+    const status = document.createElement("p");
+    status.className = "hint tool-status";
+    status.setAttribute("role", "status");
+    if (data.tool === tool.name) status.textContent = data.error || (data.saved ? "Saved." : "");
+    status.classList.toggle("tool-error", Boolean(data.tool === tool.name && data.error));
+    // Like the other settings, a change is saved as soon as it is made.
+    fields.addEventListener("change", () => {
+      status.textContent = "Saving…";
+      status.classList.remove("tool-error");
+      bridge.saveToolSettings(tool.name, JSON.stringify(toolSettingValues(fields)));
+    });
+    const actions = document.createElement("div");
+    actions.className = "tool-actions";
+    const restore = document.createElement("button");
+    restore.type = "button";
+    restore.className = "secondary restore-defaults";
+    restore.textContent = "Restore defaults";
+    restore.setAttribute("aria-label", `Restore the default ${tool.name} settings`);
+    restore.disabled = JSON.stringify(tool.settings) === JSON.stringify(tool.type_settings);
+    restore.addEventListener("click", () => {
+      status.textContent = "Saving…";
+      bridge.saveToolSettings(tool.name, JSON.stringify(tool.type_settings));
+    });
+    actions.append(restore);
+    item.append(actions, status);
+    holder.append(item);
+  }
+  if (focused) holder.querySelector(`details[data-tool="${focused[0]}"] input[data-key="${focused[1]}"]`)?.focus();
+}
+
+/**
  * Render and open the models panel, then focus its close control.
  */
 function openModels() {
@@ -1236,6 +1394,8 @@ function openModels() {
     modelsBaseline = currentModelSettings();
   }
   renderModelsPanel();
+  // The Tools tab may still be selected from another project.
+  if (settingsTab === "tools") requestToolSettings();
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
 }
@@ -4928,6 +5088,8 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+  } else if (data.event === "tool_settings") {
+    renderToolSettings(data);
   } else if (data.event === "conversation_viewed") {
     if (reading?.id === data.conversation_id) showReadConversation(data.turns);
   } else if (data.event === "answer_cancelled") {

@@ -20,7 +20,7 @@ import subprocess
 import unittest
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-_TABS = ["general", "models", "answers", "project"]
+_TABS = ["general", "models", "answers", "tools", "project"]
 
 
 def _function(source: str, name: str) -> str:
@@ -34,7 +34,7 @@ class TestSettingsTabsFrontend(unittest.TestCase):
     """Show Settings one category at a time."""
 
     def test_every_section_belongs_to_one_tab(self):
-        """Setup above four tabs; each section names an existing tab."""
+        """Setup above five tabs; each section names an existing tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         start = page.index('id="models-panel"')
@@ -46,7 +46,7 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             panel,
         )
         # KíLín setup plus one section per tab.
-        self.assertEqual(len(sections), 5)
+        self.assertEqual(len(sections), 6)
         # KíLín setup covers the whole app, so it sits above the tabs.
         self.assertLess(
             panel.index('id="first-run-setup"'),
