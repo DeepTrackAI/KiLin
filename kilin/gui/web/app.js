@@ -58,7 +58,9 @@ let workspacePaths = new Set();
 // The user's last show/hide choice for the side panels; null before any.
 let sidePanelChoice = null;
 // The Settings tab shown when Settings open; kept while KíLín runs.
-let settingsTab = "general";
+let settingsTab = "project";
+// The last projects_folder event, to redraw the folder's note.
+let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -1209,7 +1211,7 @@ function restoreDefaultModels(role) {
 /**
  * Show one Settings tab and hide the sections of the others.
  *
- * @param name Tab name: general, models, answers, or project.
+ * @param name Tab name: project, models, answers, or tools.
  */
 function showSettingsTab(name) {
   settingsTab = name;
@@ -1394,6 +1396,7 @@ function openModels() {
     modelsBaseline = currentModelSettings();
   }
   renderModelsPanel();
+  showProjectSettings();
   // The Tools tab may still be selected from another project.
   if (settingsTab === "tools") requestToolSettings();
   byId("models-panel").classList.remove("hidden");
@@ -5006,6 +5009,8 @@ function onEvent(raw) {
     if (!conversation.children.length) renderConversationEmpty();
     byId("workspace-location").textContent = data.project;
     renderSidebarProjects(savedProjects, openProjectPath);
+    // A renamed project keeps Settings open: show its new name.
+    showProjectSettings();
     if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
@@ -5213,6 +5218,18 @@ function onEvent(raw) {
 // UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("project-title").addEventListener("change", renameProjectFromSettings);
+byId("project-title").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  if (event.key === "Escape") {
+    // Escape puts the name back; it does not close Settings here.
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.value = projectName(openProjectPath);
+    event.target.blur();
+  }
+});
+byId("delete-project").addEventListener("click", deleteOpenProject);
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
 dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -5360,12 +5377,11 @@ byId("question-form").addEventListener("submit", (event) => {
  *   choice ("" for the default), and whether that choice is ``missing``.
  */
 function showProjectsFolder(data) {
+  projectsFolderInfo = data;
   byId("workspace-path").value = data.folder;
   byId("workspace-path").title = data.folder;
   byId("default-workspace").disabled = !data.saved;
-  byId("workspace-note").textContent = data.missing
-    ? `${data.saved} is not available, so KíLín uses the default folder.`
-    : "The folder that holds your projects; KíLín remembers it.";
+  showProjectSettings();
   if (!switchingProjectsFolder) return;
   // The engine restarted with the new folder: list the projects there.
   switchingProjectsFolder = false;
@@ -5373,6 +5389,66 @@ function showProjectsFolder(data) {
   bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
   refreshSavedProject();
+}
+
+/**
+ * Show what Settings can change: the workspace folder only on the start
+ * screen (read-only from a project); the project's name and Delete only
+ * with a project open.
+ */
+function showProjectSettings() {
+  byId("browse-workspace").classList.toggle("hidden", ready);
+  byId("default-workspace").classList.toggle("hidden", ready);
+  const note = projectsFolderInfo?.missing
+    ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
+    : "The folder that holds your projects.";
+  byId("workspace-note").textContent = ready ? `${note} Change it from the start screen.` : note;
+  byId("project-identity").classList.toggle("hidden", !ready);
+  if (ready) byId("project-title").value = projectName(openProjectPath);
+}
+
+/**
+ * Return a project's name: the last part of its folder path.
+ *
+ * @param path The project folder.
+ */
+function projectName(path) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+/**
+ * Rename the open project from Settings: Enter or leaving the field saves,
+ * Escape puts the name back.
+ */
+function renameProjectFromSettings() {
+  const input = byId("project-title");
+  const current = projectName(openProjectPath);
+  const name = input.value.trim();
+  if (!name || name === current || busy || !ready) {
+    input.value = current;
+    return;
+  }
+  setBusy(true, "Renaming project…");
+  bridge.renameProject(name);
+}
+
+/**
+ * Confirm, then close the open project and move it to the deleted folder
+ * in the workspace folder.
+ */
+async function deleteOpenProject() {
+  if (!bridge || !ready || busy) return;
+  const folder = openProjectPath;
+  const name = projectName(folder);
+  if (!await askKilin(
+    `Delete ${name}?`,
+    "KíLín closes it and moves it to the deleted folder in the workspace folder, so it can still be recovered.",
+    "Delete",
+  )) return;
+  hideModels();
+  returnToLaunch();
+  // Sent after closing: the engine refuses to delete an open project.
+  bridge.deleteProject(folder);
 }
 
 /**
@@ -5495,6 +5571,7 @@ function returnToLaunch() {
   renderPreview();
   showWorkspace(false);
   clearReferences();
+  showProjectSettings();
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();

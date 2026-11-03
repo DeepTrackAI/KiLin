@@ -147,6 +147,7 @@ from kilin.project import (
     QAProject,
     configure_project,
     default_project_profile,
+    delete_project,
     open_project,
 )
 from kilin.repository import DEFAULT_EXTENSIONS, scan_repository
@@ -323,6 +324,8 @@ class ChatEngine:
         Delegate editing outputs/ and templates/ to the core API.
     rename_project(name)
         Rename the active workspace folder, then reopen the same chat.
+    delete_project(directory)
+        Move a closed project into the deleted folder beside it.
 
     **Answering and evidence.**
 
@@ -3264,6 +3267,34 @@ class ChatEngine:
                 f"Could not rename the project: {error}",
             )
 
+    def delete_project(self, directory: str) -> None:
+        """Move a closed project into the deleted folder beside it.
+
+        Sends the updated projects list, without the deleted project.
+
+        Parameters
+        ----------
+        directory: str
+            Folder containing the project's profile.ini.
+
+        """
+
+        try:
+            folder = Path(directory).expanduser()
+            if (
+                self.session is not None
+                and self.session.project.root == folder.resolve()
+            ):
+                raise RuntimeError("Close the project before deleting it.")
+            delete_project(folder)
+            self.list_saved_projects("")
+        except Exception as error:
+            self._report_error(
+                "gui.project.delete.failed",
+                error,
+                f"Could not delete the project: {error}",
+            )
+
     def _switch_with_store_rollback(
         self,
         conversation: ConversationInfo,
@@ -4225,6 +4256,8 @@ def main() -> None:
                         )
                     elif action == "rename_project":
                         engine.rename_project(command["name"])
+                    elif action == "delete_project":
+                        engine.delete_project(command["project"])
                     elif action == "save_answer_settings":
                         engine.save_answer_settings(command.get("settings"))
                     elif action == "tool_settings":

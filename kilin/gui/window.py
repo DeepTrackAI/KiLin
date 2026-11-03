@@ -222,6 +222,8 @@ class ChatBridge(QObject):
         Reopen a project at the exact conversation active before a stop.
     closeProject()
         Release models when the user chooses a different project.
+    deleteProject(directory)
+        Move a closed project into the deleted folder beside it.
 
     **Answering and conversation management.**
 
@@ -1136,6 +1138,21 @@ class ChatBridge(QObject):
         """Release models when the user chooses a different project."""
 
         self.commandRequested.emit({"action": "close"})
+
+    @Slot(str)
+    def deleteProject(self, directory: str) -> None:
+        """Move a closed project into the deleted folder beside it.
+
+        Parameters
+        ----------
+        directory: str
+            Folder containing the project's profile.ini.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "delete_project", "project": directory}
+        )
 
     @Slot(str)
     def openExternalLink(self, url: str) -> None:

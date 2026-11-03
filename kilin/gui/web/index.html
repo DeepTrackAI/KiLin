@@ -173,17 +173,20 @@
             <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
           </div>
         </details>
+        <!-- App-wide, not per project, so above the tabs. -->
+        <section id="settings-app" class="settings-section">
+          <label for="appearance">Appearance</label>
+          <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+          <label for="workspace-path">Workspace folder</label>
+          <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
+          <p id="workspace-note" class="hint">The folder that holds your projects.</p>
+        </section>
         <div class="settings-tabs" role="tablist" aria-label="Settings categories">
-          <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
+          <button class="settings-tab" type="button" role="tab" data-tab="project">Project</button>
           <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
           <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
           <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
-          <button class="settings-tab" type="button" role="tab" data-tab="project">Project</button>
         </div>
-        <section class="settings-section" data-settings-tab="general">
-          <label for="appearance">Appearance</label>
-          <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-        </section>
         <section class="settings-section models-section" data-settings-tab="models">
             <!-- Kept hidden: the rows below edit these values. -->
             <div class="hidden" aria-hidden="true">
@@ -211,9 +214,11 @@
         </section>
         <section id="settings-project" class="settings-section" data-settings-tab="project">
           <div class="advanced-fields">
-            <label for="workspace-path">Workspace folder</label>
-            <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
-            <p id="workspace-note" class="hint">The folder that holds your projects; KíLín remembers it.</p>
+            <!-- Only for an open project. -->
+            <div id="project-identity" class="project-identity hidden">
+              <label for="project-title">Project name</label>
+              <div class="folder-row"><input id="project-title" type="text" autocomplete="off"><button id="delete-project" type="button" class="secondary danger">Delete project</button></div>
+            </div>
             <label for="backend">Computation backend</label>
             <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
             <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">

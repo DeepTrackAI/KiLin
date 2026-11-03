@@ -198,6 +198,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .tool-actions { display: flex; gap: 8px; margin-top: 10px; }
 .tool-actions .restore-defaults { min-height: 0; padding: 4px 10px; font-size: 12px; }
 .tool-error { color: var(--error-text); }
+/* App-wide settings above the tabs: Appearance and the workspace folder. */
+#settings-app { display: grid; gap: 7px; }
+#settings-app > select { margin-top: 0; }
+#settings-app > label:not(:first-child) { margin-top: 9px; }
+.project-identity { display: grid; gap: 7px; }
+.secondary.danger { color: var(--error-text); }
 .check-row { display: flex; align-items: center; gap: 9px; font-weight: 400; }
 .check-row input { min-width: auto; }
 .scope { border: 1px solid var(--line); border-radius: 9px; padding: 12px; max-height: 330px; overflow: auto; }
