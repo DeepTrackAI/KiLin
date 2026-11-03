@@ -159,7 +159,7 @@ Examples
 --------
 >>> from kilin.tools import TOOL_REGISTRY, TOOL_SCAN_AND_LIST
 >>> print(TOOL_REGISTRY[TOOL_SCAN_AND_LIST].summary)
-List and count every exact mention of the question's terms.
+List every exact mention of a word or phrase.
 
 """
 

@@ -206,6 +206,38 @@ class TestEngineWorkflow(unittest.TestCase):
         engine.cancel_answer()
         self.assertFalse(session.ask.call_args.kwargs["stop_requested"]())
 
+    def test_tool_settings_are_listed_and_saved_for_the_project(self):
+        """Save a tool's settings; a rejected value comes back by tool."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(Path("/sandbox"), events.append)
+        session = self.model_session()
+        engine.session = session
+        engine.tool_settings()
+        tools = events[-1]["tools"]
+        self.assertEqual(events[-1]["event"], "tool_settings")
+        name = tools[0]["name"]
+        key, value = next(
+            (key, value) for key, value in tools[0]["settings"].items()
+            if type(value) is int
+        )
+
+        engine.save_tool_settings(name, {key: value + 1})
+        self.assertIs(events[-1]["saved"], True)
+        saved = next(item for item in events[-1]["tools"]
+                     if item["name"] == name)
+        self.assertEqual(saved["settings"][key], value + 1)
+        profile = (session.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"[tool.{name}]", profile)
+
+        engine.save_tool_settings(name, {key: "not a number"})
+        self.assertEqual(events[-1]["event"], "tool_settings")
+        self.assertEqual(events[-1]["tool"], name)
+        self.assertIn(key, events[-1]["error"])
+        self.assertFalse(any(event["event"] == "error" for event in events))
+
     def test_generation_settings_are_passed_with_the_question(self) -> None:
         """Chat controls affect answers without editing the project profile."""
 

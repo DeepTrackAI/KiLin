@@ -45,6 +45,7 @@ from kilin.retrievals import DocumentSelection, ContextExpansionPlan
 from kilin.retrievals.code_graph import CodeGraph
 from kilin.runtime import BACKEND_MLX
 from kilin.tools import ToolResult, ToolUse
+from kilin.tools._registry import TOOL_REGISTRY
 from kilin.trace_logging import (
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
@@ -2400,6 +2401,40 @@ class TestRAGRoutingAndTools(unittest.TestCase):
                          rag.ANSWER_PHASE_EVIDENCE_READY)
         self.assertEqual(phases.call_args_list[1].kwargs["tool"],
                          use.name)
+
+    def test_tool_runs_with_project_settings_and_is_traced(self) -> None:
+        """Saved tool settings apply; each run is recorded with them."""
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "profile.ini").write_text(
+                "[tool.project_inventory]\nmax_listed = 7\n",
+                encoding="utf-8",
+            )
+            session = _session(root)
+            session._earlier_turns = Mock(return_value=())
+            trace = MagicMock()
+            session.trace = trace
+            settings = TOOL_REGISTRY["project_inventory"].parse_settings(
+                {}, "test"
+            )
+            use = ToolUse("project_inventory", settings)
+            result = ToolResult("result", (), {"ok": True})
+            with patch.object(rag, "run_tool", return_value=result) as runner:
+                session._run_tool(
+                    use, "Inventory", RouteDecision("test_intent", True),
+                    trace_turn_id="t", report_phase=Mock(),
+                )
+        ran = runner.call_args.args[0]
+        self.assertEqual(ran.settings.max_listed, 7)
+        trace.span.assert_any_call(
+            "tool.run",
+            component="tool",
+            data={
+                "name": "project_inventory",
+                "settings": asdict(ran.settings),
+            },
+            turn_id="t",
+        )
 
     def test_tool_side_question_and_writer_use_isolated_reply(self) -> None:
         """Keep auxiliary tool replies separate from conversation history."""

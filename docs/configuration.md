@@ -249,6 +249,22 @@ The main tool configuration reference is
 [Tool packages](tool_packages.md); the full installed resource ownership
 contract is [Project workspaces](project_workspaces.md).
 
+### Tool settings per project
+
+A project can change the settings of the tools its type uses, for all of
+that tool's intents (`kilin.tool_settings`; in the app, Settings → Tools).
+The settings offered for a tool are exactly the `SETTINGS` keys of its
+`defaults.json`, so a new tool appears without extra code. A setting the
+type's intents set differently, such as `generate_paper_summary`'s
+`template`, stays with each intent. The tool's other `defaults.json`
+sections are internal to the tool and are not shown or changed.
+
+Changes are saved in the project's `profile.ini`, one `[tool.<name>]`
+section per tool, as JSON values, and only where they differ from the
+project type's values; saving the type's values removes the section.
+The tool's own `parse_settings` checks every change when it is saved and
+again before each run, so an invalid value never reaches a tool.
+
 ## File-selection protocol constants
 
 Repository scan reason identifiers live in one validated

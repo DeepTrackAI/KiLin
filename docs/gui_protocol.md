@@ -92,6 +92,8 @@ paths and source paths remain subject to downstream core validation.
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
+| `tool_settings` | None | List the open project's tools and their settings |
+| `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
 
@@ -157,7 +159,7 @@ can accompany an event.
 | --- | --- |
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |

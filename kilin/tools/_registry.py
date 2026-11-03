@@ -241,88 +241,75 @@ class ToolUse:
 TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
     TOOL_PROJECT_INVENTORY: Tool(
         TOOL_PROJECT_INVENTORY,
-        "Count and list the project's files by type and folder, with "
-        "which have searchable text.",
+        "Count and list the project's files.",
         project_inventory.parse_settings,
         project_inventory.run,
     ),
     TOOL_SCAN_AND_LIST: Tool(
         TOOL_SCAN_AND_LIST,
-        "List and count every exact mention of the question's terms.",
+        "List every exact mention of a word or phrase.",
         scan_and_list.parse_settings,
         scan_and_list.run,
     ),
     TOOL_BATCH_CLASSIFY: Tool(
         TOOL_BATCH_CLASSIFY,
-        "Sort every exact mention into categories with the answering "
-        "model, and count each category.",
+        "Sort mentions into categories and count them.",
         batch_classify.parse_settings,
         batch_classify.run,
     ),
     TOOL_BATCH_REVIEW: Tool(
         TOOL_BATCH_REVIEW,
-        "Read one whole document in parts, taking notes with passage "
-        "numbers, then answer from the notes.",
+        "Read one whole document, then answer from notes.",
         batch_review.parse_settings,
         batch_review.run,
     ),
     TOOL_FILTER_RESULTS: Tool(
         TOOL_FILTER_RESULTS,
-        "Judge each item an earlier answer listed and keep those that match "
-        "a follow-up.",
+        "Keep the items of an earlier list that match.",
         filter_results.parse_settings,
         filter_results.run,
         follows_up=True,
     ),
     TOOL_FIND_FACT: Tool(
         TOOL_FIND_FACT,
-        "Find a specific fact in one paper or every paper by reading every "
-        "passage; the user can choose a quick answer instead.",
+        "Find a specific fact in the papers.",
         find_fact.parse_settings,
         find_fact.run,
     ),
     TOOL_FIND_PASSAGES: Tool(
         TOOL_FIND_PASSAGES,
-        "Read every sentence in scope and list the ones about a topic, "
-        "copied word for word.",
+        "List the sentences about a topic.",
         find_passages.parse_settings,
         find_passages.run,
     ),
     TOOL_PAPER_OVERVIEW: Tool(
         TOOL_PAPER_OVERVIEW,
-        "Summarize one paper in the chat; ask which paper when it is "
-        "unclear.",
+        "Give a short overview of one paper.",
         paper_overview.parse_settings,
         paper_overview.run,
     ),
     TOOL_REFERENCE_CHECK: Tool(
         TOOL_REFERENCE_CHECK,
-        "Check one paper's reference list against the project's files, "
-        "find where each reference is cited, optionally check claims, "
-        "and give offline or explicitly authorized online links for "
-        "missing works; save the report to outputs/.",
+        "Check a paper's references against the project.",
         reference_check.parse_settings,
         reference_check.run,
     ),
     TOOL_SUGGEST_REFERENCE: Tool(
         TOOL_SUGGEST_REFERENCE,
-        "Find the papers in the project that could be cited for a "
-        "statement, judging each with a quote from its own passages.",
+        "Suggest papers to cite for a statement.",
         suggest_reference.parse_settings,
         suggest_reference.run,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,
-        "Show the sentence an earlier answer cited, with the sentences "
-        "around it, and explain it without searching again.",
+        "Show and explain a cited sentence.",
         show_source.parse_settings,
         show_source.run,
         follows_up=True,
     ),
     TOOL_GENERATE_PAPER_SUMMARY: Tool(
         TOOL_GENERATE_PAPER_SUMMARY,
-        "Summarize one paper with a report template, check the structure, "
-        "and save the Markdown to outputs/.",
+        "Write a report on one paper from a template.",
         generate_paper_summary.parse_settings,
         generate_paper_summary.run,
         workspace_resources=generate_paper_summary.workspace_resources,
