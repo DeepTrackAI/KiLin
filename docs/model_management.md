@@ -95,6 +95,22 @@ RAG passes an explicit intent override through this interface; see
 Tracing records the effective thinking request, timing, token statistics,
 and the requested/effective CJK token policy.
 
+### Context, history and streaming
+
+A tokenizer template, model context length, thinking tags, EOS behavior and
+backend streaming granularity can vary across models. A `max_new_tokens`
+cap truncates generation; it does not increase the model's context window.
+`reset()` clears conversational messages while preserving the loaded model;
+`restore_history()` replaces messages with validated records; `close()`
+releases model/tokenizer references and requests backend cache cleanup.
+
+**Streaming distinction:** MLX supports tokenwise incremental callbacks.
+The current PyTorch path is blocking, so its first delivered text is not an
+independent backend first-token timestamp. The GUI can further reveal a
+completed answer over time as a presentation effect; do not treat that as
+evidence of live model token generation. See [Performance](performance.md)
+for which timings can actually be measured.
+
 ### Best-effort suppression of unsolicited CJK output
 
 Suppression is enabled by default. It aims to prevent unsolicited Chinese,
@@ -148,20 +164,6 @@ character can appear. `ChatSession(block_unrequested_cjk=False)`, or
 disables suppression. Existing profiles retain explicit values; profiles
 without the setting use the packaged default.
 
-A tokenizer template, model context length, thinking tags, EOS behavior and
-backend streaming granularity can vary across models. A `max_new_tokens`
-cap truncates generation; it does not increase the model's context window.
-`reset()` clears conversational messages while preserving the loaded model;
-`restore_history()` replaces messages with validated records; `close()`
-releases model/tokenizer references and requests backend cache cleanup.
-
-**Streaming distinction:** MLX supports tokenwise incremental callbacks.
-The current PyTorch path is blocking, so its first delivered text is not an
-independent backend first-token timestamp. The GUI can further reveal a
-completed answer over time as a presentation effect; do not treat that as
-evidence of live model token generation. See [Performance](performance.md)
-for which timings can actually be measured.
-
 ## Embeddings and retrieval
 
 `EmbeddingSession` owns the embedding model and its tokenizer and provides
@@ -212,6 +214,24 @@ network access and model choice; see [Security](security.md).
 
 ## Validation and tests
 
+### Change impact
+
+Separating model identity, loaded session state and saved project settings
+allows conversation switches without rebuilding the whole project. A new
+backend or generation control must preserve temporary reply overrides,
+restored side-call histories, explicit download policy and cleanup on partial
+initialization; it must not silently alter the user's saved configuration.
+
+Review chat rendering, tokenization, completion metadata and callbacks
+together. Embedding changes also require the
+[index-identity contract](retrieval_pipeline.md#index-persistence-and-identity),
+while tool generation policy belongs to
+[Tool packages](tool_packages.md#generation-settings-for-tools). Compare both
+supported backends rather than assuming identical streaming or template
+support.
+
+### Regression coverage
+
 Relevant suites cover `runtime`, `huggingface`, `chat`, `embeddings`, `rag`,
 `model_defaults` and GUI model settings/catalogs. Test substitutes cannot
 prove that native MLX and PyTorch models load or produce equivalent results.
@@ -219,7 +239,9 @@ Real model trials should record exact model revision, device, backend,
 profile and tracing state. Performance and backend compatibility must be
 confirmed separately on the target macOS/Python 3.12 environment.
 
-Related: [Configuration](configuration.md),
+## Related
+
+[Configuration](configuration.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [Answering pipeline](answering_pipeline.md),
 [GUI architecture](gui_architecture.md).

@@ -105,9 +105,39 @@ library, without importing the application or loading models. It checks
 local links and Markdown heading fragments, SVG metadata, module coverage
 and owner totals, GUI action/event inventories, workspace API exports,
 registered-tool references, JSON snippets and documented core defaults.
+Organization checks also guard terminal related-links sections, evergreen
+prose/diagram labels, complete index navigation and actionable change-impact
+links. They are not a semantic deduplication or factual-proof engine.
 These checks detect structural drift; they do not prove prose semantics or
 native GUI behavior. Review the implementation and focused runtime tests
 when changing a contract.
+
+### Maintaining an integrated reference
+
+Choose the [primary contract](README.md#contract-ownership) before editing.
+Read its source implementation, validators, callers and failure tests;
+resolve discrepancies in favor of the executable code and log suspected
+implementation defects separately. Comments, an earlier PR description or a
+passing structural test do not override the current behavior.
+
+Integrate a new rule where the lifecycle reaches it: configuration with
+precedence, recovery with failure handling, and persistence with commitment.
+Do not append a feature below the final related-links section. Preserve the
+conditions, exclusions, failure residue and compatibility action when moving
+text; a shorter summary is not a substitute for a lost edge case.
+
+Keep detailed normative rules in one owner page and use short local context
+plus a link elsewhere. Mutable values belong beside their actual validated
+resource, not in repeated global tables. State why a boundary matters, what
+must remain true and which producers/consumers/tests change together. Label
+proposals and unsupported guarantees separately from implemented behavior;
+keep historical notes only when they tell a current caller what to do.
+
+After restructuring, check heading anchors and inbound references, examples,
+module ownership, tests and editable diagrams. Inspect the diff for deleted
+conditions, not just broken links. Human/agent reviewers should use the
+[change-impact navigator](README.md#change-impact-navigator) as a starting
+point, then confirm the current tree rather than treating the map as exhaustive.
 
 ## Test runners and expected isolation
 
@@ -242,19 +272,11 @@ runtime incompatibilities before expanding the supported range.
 
 ## Focused test map
 
-| Changed subsystem | Focused tests (representative) |
-| --- | --- |
-| Project and user files | `test_project.py`, `test_project_transaction.py`, `test_project_layout.py`, `test_project_files.py`, `test_workspace*.py` |
-| Sources and scanning | `test_repository__scan.py`, `test_repository__changes.py`, `sources/`, `test_chunking.py` |
-| Retrieval and indexes | `retrievals/`, `test_rag__index_provenance.py`, `test_rag.py` |
-| Routing and answering | `test_answering.py`, `test_rag.py`, `test_chat__unit.py` |
-| Models | `test_huggingface.py`, `test_runtime.py`, `test_embeddings__unit.py`, `test_chat__models.py` |
-| Conversation ownership | `test_conversation_ownership.py`, `test_conversations.py`, `test_trace_logging.py`, GUI ownership tests |
-| Tools | `tools/test__architecture.py`, package-specific `tools/<name>/test_tool.py`, `_shared/` tests |
-| GUI/protocol | `gui/test__protocol.py`, `gui/test_engine__*.py`, `gui/test_preferences.py`, optional Qt smoke |
-
-This is an orientation list; use the actual test tree and test docstrings for
-full coverage, including failure/recovery and invalid-input cases.
+The [change-impact navigator](README.md#change-impact-navigator) pairs common
+changes with their primary contract and concrete regression suites. Each
+owner page gives narrower invariants and failure checks. Use the actual test
+tree and test docstrings to expand that selection; neither the navigator nor
+a passing focused subset establishes complete coverage.
 
 ## Packaging and source exports
 
@@ -267,10 +289,10 @@ with a local checkout import. Optional native dependencies are split into
 the core dependencies merely to make a test run.
 
 For reproducible PR review, compare against the **actual** last approved
-archive/commit, not an earlier working directory. Provide a clean full
-repository ZIP containing the selected top-level source entries, `.gitignore`
-and an explicit empty `sandbox/`, plus (1) a Git patch and (2) a changed-files
-ZIP with repository paths and a deletion manifest if necessary.
+archive/commit, not an earlier working directory. Provide a Git patch and a
+ZIP of only changed/new files in repository-relative paths, with explicit
+deletions when needed. A separate full source export is useful when requested
+for release or transfer; it is not needed to apply a focused revision.
 
 A source export is not a user-data backup. It should exclude `.DS_Store`,
 `__MACOSX`, AppleDouble files, caches, model weights, `sandbox/` contents,
@@ -293,13 +315,14 @@ workflows in its default top-level selection; export should not overwrite an exi
    diagrams and executable examples against the actual final tree.
 7. Build the patch against the exact baseline, apply it in a fresh tree and
    compare the resulting files byte-for-byte.
-8. Verify changed-only and full ZIP inventories; report native integrations
-   that were not executed rather than claiming universal success.
+8. Verify the changed-files ZIP against the patch and baseline; verify any
+   separately requested full export too. Report unexecuted native checks.
 
-For a **documentation-only PR**, no production or test assertions should
-change. Newly discovered defects belong in review notes or separately
-approved corrective PRs. The root README need not be expanded merely
-because new technical pages exist.
+For a **documentation-only PR**, preserve executable production behavior and
+every existing test/assertion. Add focused documentation regressions where
+useful, without weakening behavioral tests to fit the prose. Newly discovered
+runtime defects belong in review notes or separately approved corrective PRs.
+The root README need not expand merely because technical pages change.
 
 ## Performance and reproducibility
 
@@ -307,11 +330,13 @@ Trace-based benchmarking uses `assets/benchmark_traces.ipynb`, with
 supporting analysis in `assets/trace_benchmark.py`. The production trace
 system remains as documented in [Trace recording](trace_recording.md).
 Measurements need model revision, hardware, backend, project state,
-question set, warm/cold session distinction and tracing mode. No arbitrary
-CI wall-clock threshold should be used as a functional correctness test.
-Optimization work on trace persistence or retrieval remains deferred until
-evidence and invariance checks justify it.
+question set, warm/cold session distinction, diagnostic tracing enabled or
+disabled, and any embedding-vector opt-in. There is no selectable trace mode.
+Do not use arbitrary CI wall-clock thresholds as correctness tests. Further
+trace/retrieval optimization requires measurements and invariance checks.
 
-Related: [Architecture](architecture.md),
+## Related
+
+[Architecture](architecture.md),
 [Configuration](configuration.md), [Security](security.md),
 [Performance](performance.md), [Module map](module_map.md).

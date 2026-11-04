@@ -222,4 +222,9 @@ defaults remain under `kilin/gui/defaults.json`. Tool parameters remain
 in each registered package's `defaults.json`, with its own validation and
 README. They are not consolidated into `kilin_defaults.json`. Tool defaults,
 intent settings and saved project overrides are described in
-[Tool configuration precedence](tool_packages.md#configuration-precedence).
+[Tool configuration precedence](configuration.md#tool-configuration-and-resources).
+
+## Related
+
+[Configuration and precedence](configuration.md), [Tool packages](tool_packages.md),
+[Development](development.md).

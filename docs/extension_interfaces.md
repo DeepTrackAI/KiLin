@@ -40,8 +40,8 @@ explicit validation; they are not automatically registered or hot-loaded.
 
 A project type does not name the source folder: every new project uses
 `sources/`. See
-[configuration](configuration.md#new-project-source-convention) for the
-convention and how existing projects keep theirs. A new type cannot bypass
+[workspace source convention](project_workspaces.md#source-directory-convention)
+for the layout and how existing projects keep theirs. A new type cannot bypass
 the core's creation-only ownership rules or authorize reuse of an occupied
 workspace. Empty projects are
 supported for every type. Missing welcome content has generic fallbacks;
@@ -101,26 +101,30 @@ require source-unit conventions, graph entity typing and retrieval tests.
 
 *Figure: The tool registry, request/context contract, optional confirmation callbacks and answer persistence are explicitly owned interfaces.*
 
-All tools are registered under `kilin/tools/`. Existing packages demonstrate
-the expected structure:
+The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
+the package, configuration and resource files. `tools/_registry.py` pairs a
+canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
+behavior and optional `workspace_resources` callback. Project-type JSON can
+select an existing entry, not load another implementation by string.
 
-```text
-kilin/tools/<name>/
-    __init__.py
-    tool.py                 # Settings dataclass, parse_settings(), run()
-    _configuration.py       # Validate owned defaults
-    defaults.json
-    README.md
-    [templates/ or other packaged assets, if needed]
-```
+Implement an extension in this order:
 
-`tools/_registry.py` defines canonical `TOOL_*` identifiers and an entry for
-each tool. Registration pairs the ID with its parser and runner, optional
-`follows_up` behavior and optional `workspace_resources` callback. A project
-type may **select** an existing registered tool, but cannot register another
-implementation from JSON. Each package owns its settings validation and
-its own documentation; shared services belong in `tools/_shared/` rather
-than imports from a sibling tool.
+1. Create the package, validated settings/parser and `run()` implementation.
+   Document every owned default and supported request in its README.
+2. Reuse private shared services where semantics match; do not import an
+   executable sibling tool to reuse its policy.
+3. Register the parser/runner and optional resources, then select the tool
+   in an intended project-type intent. Registration and selection differ.
+4. Add deterministic tests under `tests/kilin/tools/<name>/test_tool.py`
+   for parsing, invalid inputs, results, registry selection and optional
+   resource declarations. Shared helpers have their own `_shared/` tests.
+5. Include JSON, README and resources in `pyproject.toml` package data and
+   verify an installed wheel. Source-checkout imports alone miss this step.
+
+The request/result contract below defines the integration boundary;
+[tool generation settings](tool_packages.md#generation-settings-for-tools)
+define the supplied model services. Extend the smallest necessary boundary
+rather than building a parallel settings, retry or filesystem subsystem.
 
 ### Request and context
 
@@ -172,20 +176,16 @@ assuming reusable behavior.
 
 ## Workspace resources are declared, not blindly copied
 
-A tool may declare a tuple of `WorkspaceResource` records from
-`workspace_resources(settings)`. The project layout planner validates the
-owning package, source regular-file status, destination, containment and
-conflicting declarations. The core creates `templates/` and copies only
-missing declared resources for a **new** project. Existing user files are
-not overwritten on reopening. The `generate_paper_summary` tool currently
-ships Markdown templates installed according to active literature intents;
-other current tools do not require installed workspace files.
+Register `workspace_resources(settings)` when a tool needs packaged files.
+It returns `WorkspaceResource` declarations; the tool does not install them.
+The [resource contract](project_workspaces.md#tool-resource-contract) owns
+package containment, safe destinations, conflict detection and preservation
+of existing files.
 
-A new optional report template must not be copied into every project simply
-because it is shipped in a package. The configured tool/intent should
-request it, and an opt-in repair operation can restore a missing file without
-silently overwriting an edited one. See
-[Project workspaces](project_workspaces.md).
+A new template must be requested by the configured intent/tool, not copied
+to every project merely because it ships in a package. Test both fresh
+creation and reopening after a user edits or deletes the installed resource.
+Explicit repair remains distinct from ordinary opening.
 
 ## Shared private services
 
@@ -226,11 +226,19 @@ an index file format.
 - Test both project creation and reopened profiles; no unintended migration.
 - Update tool README, local module docstrings and the module map.
 
-The tool architecture tests are under `tests/kilin/tools/`; each tool also
-has dedicated tests. For platform-specific GUI adapters, run appropriate
-Qt smoke tests separately. See [Development](development.md).
+Use [tool dependency checks](../tests/kilin/tools/test__architecture.py),
+[resource contracts](../tests/kilin/tools/test__resources.py),
+[project-type contracts](../tests/kilin/test__project_type_contract.py) and
+the affected package's tests. Update the consuming intent, module docstrings,
+local README, package-data declaration and [module map](module_map.md)
+together. Source-format changes also require coordinate/citation and cache
+checks, as described in [Source pipeline](source_pipeline.md#change-impact-and-verification).
+For optional GUI adapters, run supported-host Qt smoke tests separately.
+See [Development](development.md) for full verification.
 
-Related: [Tool packages](tool_packages.md),
+## Related
+
+[Tool packages](tool_packages.md),
 [Answering pipeline](answering_pipeline.md),
 [Source pipeline](source_pipeline.md),
 [Configuration](configuration.md).

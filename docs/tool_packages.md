@@ -47,9 +47,9 @@ remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
 to the tool as a callback. The tool does not import the GUI, and it
 saves validated Markdown even without a PDF backend. Other tools can add private
 modules as needed.
-All registered built-in tools use packages, not flat `.py` modules.
-No compatibility aliases are maintained for the old flat file locations;
-KíLín is a prerelease package.
+All registered built-in tools use packages, not flat `.py` modules. Use
+their documented package exports; obsolete flat-file import paths have no
+compatibility aliases.
 
 ## Generated output safety
 
@@ -74,97 +74,167 @@ Markdown report remains available.
 
 ## Configuration precedence
 
-For each registered tool, the validated `SETTINGS` values in the packaged
-`defaults.json` initialize its settings dataclass. A project type may
-specify a subset of those settings in its intent's `tool` object; the
-settings parser validates those overrides with the same bounds. Saved
-project-level overrides in `profile.ini` under `[tool.<name>]` are applied
-last by `kilin.tool_settings.with_project_settings` before execution and
-validated by the tool's parser. The precedence is therefore packaged
-`SETTINGS`, then the selected intent's tool settings, then saved project
-overrides. An omitted setting retains the value from the preceding layer.
+A tool's effective settings are resolved before `run()` through the
+[configuration layers](configuration.md#tool-configuration-and-resources).
+That page owns packaged/intent/project precedence, `[tool.<name>]`
+persistence, reset behavior and the restriction on differing per-intent
+values. The tool remains responsible for validating all accepted settings.
 
-The project-settings API offers only settings with the same effective value
-across all intents using that tool. Differing per-intent values, such as
-report templates, cannot be changed through that API. Saved values apply
-to all of the project's intents using the tool. See
-[Tool settings per project](configuration.md#tool-settings-per-project)
-for persistence, reset and validation rules.
-
-Other sections, such as `MODEL_CALLS`, `ESTIMATES` and `HEURISTICS`, define
-internal parameters and are not project-type or saved tool-setting
-overrides. `kilin_defaults.json` remains a separate owner of core defaults;
-tool declarations do not override that resource.
-
-Configuration files are loaded once per process. Changing a packaged
-file requires restarting KíLín. Incorrect JSON, missing/unknown keys,
-invalid types, and values outside the documented constraints fail early.
+Internal sections such as `MODEL_CALLS` and `ESTIMATES` are tool-owned,
+process-cached resources, not settings that a project can override. Their
+exact values and constraints belong in the tool's README and
+`_configuration.py`. Invalid JSON or missing, unknown, mistyped or
+out-of-range values must fail validation rather than change policy silently.
 
 ## Creating a tool
 
-1. Create the package and add its `defaults.json` and `README.md`.
-2. Implement validated settings and `run` in `tool.py`.
-3. Reuse only the private shared services necessary for the tool.
-4. Register the package in `_registry.py`, including a resource provider
-   if workspace files must be copied during project creation.
-5. Add the tool to a project type intent to make it selectable.
-6. Add `tests/kilin/tools/<tool_name>/test_tool.py` with deterministic unit
-   tests for settings, rejection of invalid overrides, the registry entry,
-   and logic that does not require live language models. Test resource
-   declarations if applicable.
-7. Include tool-owned JSON, documentation, and resource files in the
-   relevant package-data section of `pyproject.toml`. Verify a wheel build.
-
-Tests for shared services belong in `tests/kilin/tools/_shared/`. They
-can be exercised independently from every registered tool. Full KíLín
-regression tests must pass after changes to shared services. KíLín's coding
-and DeepTrack-style documentation conventions apply to all Python modules.
+Follow the [registration and extension checklist](extension_interfaces.md#implementing-a-built-in-tool)
+for the parser, runner, registry entry, project intent, packaging and tests.
+The layout and shared-service boundary above remain part of that contract.
+A tool needing workspace files declares resources; it does not copy them
+from a GUI handler. Tool-specific parameters, outputs and confirmation cost
+belong in its own README rather than in a second global tool manual.
 
 ## Generation settings for tools
 
-The `ask_model` and `write` adapters use the active session's model,
-temperature and output allowance. `write` inherits session thinking;
-`ask_model` uses the tool's explicit `MODEL_CALLS.THINKING` policy.
-Thinking requests always inherit the user-selected token limit. Only
-nonthinking requests may supply a smaller cap, which cannot exceed the
-user's maximum. Pass `None` for ordinary analysis, prose, or variable-length
-structured output; reserve explicit caps for genuinely brief responses.
-Do not infer thinking from the cap or use duration estimates as limits.
+The implementation owners are `tools/_model_calls.py`,
+`answering.side_reply()` and the adapters in `RAGSession._run_tool()`.
+The policy separates internal judgments from final visible writing while
+preserving the active answering model, temperature and user allowance.
 
-The allowance is per model call, includes thinking and final output, and is
-not a target response length. Source-input budgets and template word limits
-serve different purposes. See [configuration](configuration.md#internal-tool-thinking)
-for defaults, retained exceptions, and removed configuration keys.
+| Adapter | Thinking policy | Returned and displayed text |
+| --- | --- | --- |
+| `ToolContext.ask_model` | Tool-owned `MODEL_CALLS.THINKING` | Returns thinking-free text for parsers; completed thinking is captured separately for display and persistence. |
+| `ToolContext.write` | Inherits the active session setting | Streams and returns the full user-visible reply, including thinking. |
+| `ToolContext.ask_router` | Separate deterministic, nonthinking router policy | Isolated router reply; not controlled by the tool's answering-model policy. |
 
-The returned text differs intentionally: `ask_model` removes thinking
-from the value it passes to tool logic, so classification, reference
-selection, and other structured parsing remain reliable. The coordinator
-captures any thinking from these calls separately, shows it in the answer's
-collapsible thinking section, and saves it with the turn. The captured
-thinking is also forwarded to the answer callback after each call completes.
-A tool using `write` preserves and streams the model's full final reply.
-The internal adapter may retry an exhausted, unfinished thinking call once
-without thinking. It keeps the original prompt and user allowance and records
-both attempts. Final streaming `write` calls are not retried automatically.
+Side calls restore isolated conversation history on success and failure;
+internal temporary thinking overrides are restored as well. Their replies
+are not inserted as extra persistent conversation turns. Models still need
+to support the existing template control; a policy request does not guarantee
+that an unsupported model obeys it.
 
-The `ask_router` adapter is unaffected: router side questions remain
-nonthinking, deterministic, and isolated from the conversation. All tool
-side calls restore the original conversation history after success or
-failure.
+### Internal thinking policy
+
+Each tool declares one `MODEL_CALLS` section in its packaged `defaults.json`:
+
+```json
+{
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
+  }
+}
+```
+
+This is a valid excerpt, not a complete replacement defaults file.
+`THINKING` accepts `inherit`, `on` or `off` for internal `ask_model` calls.
+There is no short-reply threshold or token-based thinking switch, and `write`
+is unaffected. See each tool's README/defaults for its chosen policy: the
+selection tools and document-processing tools can deliberately opt out of
+thinking for machine-readable requests without changing the user's main
+session. Changing the packaged policy requires a process/kernel restart.
+
+### Output-limit resolution
+
+The allowance is **per call**, includes thinking and final output together,
+and incorporates the active per-question `generation_settings`. It is not
+a target prose length or an aggregate allowance for a complete tool run.
+Input passage/batch/reading budgets and report-template word limits have
+different purposes.
+
+1. A thinking call uses the active session maximum, ignoring a local cap.
+2. A nonthinking call without a local cap also inherits that maximum.
+3. A nonthinking call with a cap uses the smaller of that cap and the
+   session maximum. It cannot silently raise the user's selected maximum.
+
+With a session maximum of `None`, inherited calls keep the backend/context-
+derived budget; an explicit nonthinking local cap still applies. Caps must
+be positive integers, excluding booleans. User limits are not rounded or
+restricted to powers of two, and no minimum generation length is imposed.
+
+Use `None` for ordinary analysis, source explanations, document notes,
+report sections, reference judgments and variable-length selection lists.
+A small cap is reserved for genuinely short metadata. The report tool's
+`WRITING.HEADLINE_TOKENS` and `WRITING.REFERENCES_TOKENS` are such exceptions:
+they apply only when thinking is off and are documented in its
+[README](../kilin/tools/generate_paper_summary/README.md).
+
+Router intent decisions, document selection, term/topic extraction,
+category/statement extraction and GUI conversation titles have separate
+nonthinking limits; they are not capped by the answering session's maximum.
+Their owners are the [answering defaults](package_defaults.md#answering--routing-and-conversation-heuristics),
+shared tool services and the GUI title helper. Do not copy these limits into
+a new universal tool budget. A tool's `ESTIMATES.*_REPLY_TOKENS` values are
+planning estimates only, particularly approximate when thinking is enabled.
+
+### Completion, display and accounting
+
+Output-limit resolution itself never retries a call. The core's separate
+[completion and recovery contract](answering_pipeline.md#model-output-completion-and-bounded-recovery)
+permits one narrowly eligible internal thinking recovery; it excludes final
+streaming `write`, direct answers and routers. Both attempts count toward
+actual usage, even though planning and existing `model_calls` counters count
+logical requests.
+
+Successful internal replies are stripped of thinking before tool parsers
+consume them. The coordinator emits captured thinking after each completed
+call, not the intermediate structured reply, and saves it before the tool's
+composed answer. Failed/truncated text remains diagnostic, never parser
+input or successful thinking displayed to the user. `write` retains the
+full streamed reply. The tool summary records `internal_generation.policy`
+and `internal_generation.calls` with requested thinking, caps, attempts and
+completion status; model traces record the effective allowance. See
+[trace records](trace_recording.md#recorded-data) for diagnostic ownership.
+
+### Compatibility notes for customized tool configuration
+
+Customized intent tool objects must not retain `answer_tokens`,
+`note_tokens` or `section_tokens`. The corresponding packaged `SETTINGS`
+keys `ANSWER_TOKENS`, `NOTE_TOKENS` and `SECTION_TOKENS` are not accepted.
+Unknown settings fail validation rather than overriding the user allowance
+or becoming ineffective settings.
+
+`MODEL_CALLS` accepts only `THINKING`; remove `SHORT_REPLY_THINKING` and
+`SHORT_REPLY_MAX_TOKENS` from older customized files. The old selection caps
+`find_passages.JUDGE_REPLY_TOKENS`, `filter_results.REPLY_TOKENS` and
+`batch_classify.REPLY_TOKEN_LIMIT_PER_ITEM` must also be removed from
+customized estimate groups; their validators no longer accept those keys.
+Use the current validated defaults and restart the process/kernel after
+edits. These settings changes require neither source reindexing nor
+rewriting historical answers.
 
 ## Partial tool completion
 
-Keep recovery at two existing boundaries: `RAGSession` owns the single
-nonthinking retry for an internal `ask_model` request; each tool owns whether
-independent items can continue after `IncompleteModelResponse`. Do not add
-per-tool generation retries or parse truncated text. Use the shared
-`partial_result` helper to retain valid results with safe item labels, reasons,
-and a visible **Incomplete items** notice. The summary is partial when useful
-work remains, incomplete otherwise. Never turn a failed read into `NOTHING`, a
-failed selection into `NONE`, or a failed evidence judgment into a negative.
+A tool may catch `IncompleteModelResponse` at an independent item boundary
+and retain checked successes using the shared `partial_result` helper. The
+[completion contract](answering_pipeline.md#independent-work-and-partial-results)
+owns status meanings, dependency failure, history reuse and partial-report
+publication. Tools must not add another generation retry, parse truncated
+text or turn an unassessed item into a negative finding.
 
-Report placeholders are visible omissions, not source findings, and must not
-feed later model requests. Partial reports have distinct Markdown filenames,
-no PDF and explicit invalid/partial status. Keep normal template and evidence
-checks. See [completion and recovery](answering_pipeline.md#model-output-completion-and-bounded-recovery)
-for exact retry eligibility, accounting, persistence and dependency behavior.
+Keep the normal evidence/template checks in that path. Output publication
+still follows [generated output safety](#generated-output-safety); a partial
+result does not authorize overwriting a completed report.
+
+## Change impact and verification
+
+The adapter boundary keeps model-policy changes out of individual tools.
+When changing it, review `ToolContext`, `_model_calls.py`, `side_reply` and
+`RAGSession._run_tool` together, then inspect each affected tool parser.
+New caps, retries or model calls change user cost and completion behavior;
+they are not merely implementation cleanups.
+
+Run [model-call policy tests](../tests/kilin/tools/test__model_calls.py),
+[budget inheritance](../tests/kilin/test_rag__tool_budgets.py),
+[thinking capture](../tests/kilin/test_rag__tool_thinking.py),
+[bounded recovery](../tests/kilin/test_rag__tool_recovery.py),
+[partial results](../tests/kilin/tools/test__partial_recovery.py) and
+[output publication](../tests/kilin/tools/_shared/test_outputs.py), plus the
+affected tool's tests. Shared-service tests live under
+`tests/kilin/tools/_shared/`; native PDF acceptance remains a separate GUI
+check. Preserve a useful headless path without Qt.
+
+## Related
+
+[Extension interfaces](extension_interfaces.md), [Configuration](configuration.md),
+[Answering pipeline](answering_pipeline.md), [Project workspaces](project_workspaces.md).

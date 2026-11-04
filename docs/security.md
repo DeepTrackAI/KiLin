@@ -66,6 +66,12 @@ prevents built-in tools from silently installing a packaged file outside
 safe destinations. None of these checks fully prevents concurrent local
 filesystem modification by another process.
 
+New-project reservation protects existing and partially created destinations
+from cooperating creators; stale markers require deliberate recovery. The
+[creation failure contract](project_workspaces.md#failure-behavior-and-limitations)
+owns that procedure. It is not protection against arbitrary hostile
+filesystem mutation, and it does not serialize later source updates.
+
 ## External access and third-party components
 
 Running KíLín locally does not imply every action is offline:
@@ -104,23 +110,20 @@ implemented in this repository snapshot.
 
 ## Persistence, concurrency and failure
 
-KíLín acquires per-conversation companion-file advisory locks; macOS/Linux
-use `flock`, Windows uses `msvcrt.locking`, and a process-local registry
-rejects competing same-process writers. Canonical paths prevent distinct
-owners through `/var` versus `/private/var` aliases on macOS. Locks are
-released when a process exits, but `.lock` companions remain. Do not delete
-an active lock companion, as doing so can break coordination.
+[Conversation ownership](conversation_ownership.md) specifies canonical paths,
+companion-file advisory locking and atomic single-file writes. These guards
+coordinate participating writers; they do not stop a program that ignores
+them, create a transaction across indexes/manifests/traces or guarantee
+power-loss durability. A persistent `.lock` file alone is not an active
+lease, and removing an active companion can break coordination.
 
-`atomic_write_text` writes a unique temporary file then replaces one target;
-it is not a transactional database across manifests, indexes and traces and
-does not guarantee durable flush after power loss. Unexpected failure may
-leave previously committed source imports while subsequent imports are
-unfinished. For a running answer, GUI Stop first requests cooperative
-cancellation: an acknowledged cancellation saves no answer turn and keeps
-the project and models loaded. Forceful Stop or an expired cancellation
-grace period kills and restarts the engine. Neither path resumes unsaved
-partial generation. Stop is not a rollback of earlier file operations;
-see the [GUI Stop contract](gui_protocol.md#errors-stop-and-restart).
+Unexpected failure can leave previously completed source operations in
+place. GUI Stop is likewise not rollback of earlier filesystem work or a
+way to resume interrupted generation. The
+[Stop protocol](gui_protocol.md#errors-stop-and-restart) distinguishes
+cooperative cancellation from forced process replacement; the
+[answer lifecycle](answering_pipeline.md#persistence-and-exactly-one-committed-turn)
+distinguishes displayed partial output from a checkpointed result.
 
 ## Safe deployment and review checklist
 
@@ -145,20 +148,26 @@ services or stronger isolation requires a separate threat model and a
 separately approved design. Do not market workspace organization as a
 security guarantee.
 
-Related: [Project workspaces](project_workspaces.md),
+
+### Change impact and verification
+
+A new external action, executable capability or writable location changes the
+trust boundary, even when the UI calls it a convenience. Identify the actor,
+input, destination and failure residue first; review the owning subsystem's
+validation instead of inventing parallel GUI policy. Stronger guarantees
+require an explicit design, not stronger wording in this reference.
+
+Start with [workspace transactions](../tests/kilin/test_project_transaction.py),
+[resource containment](../tests/kilin/test_workspace_resources.py),
+[atomic writes](../tests/kilin/test_atomic_writes.py),
+[conversation ownership](../tests/kilin/test_conversation_ownership.py) and
+[safe generated outputs](../tests/kilin/tools/_shared/test_outputs.py).
+These are concrete boundary regressions, not a comprehensive security audit.
+
+## Related
+
+[Project workspaces](project_workspaces.md),
 [Source pipeline](source_pipeline.md),
 [Model management](model_management.md),
 [Trace recording](trace_recording.md),
 [Development](development.md).
-
-## Creation ownership
-
-Core creation accepts only nonexistent or empty explicit destinations and
-allocates independent folders on default-name collisions. An exclusive
-`.kilin-creating` marker coordinates cooperating processes; profile publication
-fails rather than replacing any existing entry. Nonempty or partial folders
-are protected, including stale creation markers. Recovery is deliberate, not
-an automatic deletion policy. These guards are not a defense against arbitrary
-hostile filesystem mutation; explicit imports and synchronization retain their
-separate update and partial-failure contracts. See
-[Project workspaces](project_workspaces.md).

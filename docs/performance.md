@@ -137,5 +137,12 @@ For a baseline comparison, record all individual samples rather than just
 medians. Use the same fixed project snapshot and questions, repeat each
 configuration, and report the observed spread. A small number of repeats is
 sufficient for exploratory diagnostics, **not** statistical significance.
-The user's native macOS/Python 3.12 execution is needed for representative
-MLX measurements. The test suite cannot substitute for hardware benchmarking.
+Native macOS/Python 3.12 execution with real models is needed for
+representative MLX measurements. Unit tests cannot substitute for hardware
+benchmarking. When changing trace layout, update the parser and its fixtures
+together; missing or failed spans must not silently become zero timings.
+
+## Related
+
+[Trace recording](trace_recording.md), [Model management](model_management.md),
+[Development](development.md), [Security](security.md).

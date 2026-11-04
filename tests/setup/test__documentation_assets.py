@@ -477,5 +477,95 @@ class TestDocumentationContracts(unittest.TestCase):
         self.assertGreater(checked, 0)
 
 
+class TestDocumentationOrganization(unittest.TestCase):
+    """Guard navigation and integration without pretending to prove prose."""
+
+    def test_related_navigation_is_terminal(self) -> None:
+        """Reject substantive sections appended after final cross-links."""
+
+        for document in sorted(DOCS.glob("*.md")):
+            body = _without_fences(document.read_text(encoding="utf-8"))
+            markers = list(re.finditer(
+                r"^(?:Related:|## Related\s*$)", body, re.MULTILINE
+            ))
+            with self.subTest(document=document.name):
+                self.assertLessEqual(len(markers), 1)
+                if markers:
+                    remainder = body[markers[0].end():]
+                    self.assertIsNone(re.search(
+                        r"^#{1,6}\s+", remainder, re.MULTILINE
+                    ))
+
+    def test_top_level_sections_are_unique(self) -> None:
+        """Require distinct second-level topics in each reference page."""
+
+        for document in sorted(DOCS.glob("*.md")):
+            body = _without_fences(document.read_text(encoding="utf-8"))
+            headings = re.findall(r"^## (.+)$", body, re.MULTILINE)
+            with self.subTest(document=document.name):
+                self.assertEqual(len(headings), len(set(headings)))
+
+    def test_reference_prose_is_not_pr_relative(self) -> None:
+        """Keep evergreen descriptions independent of an unidentified PR."""
+
+        pattern = re.compile(
+            r"\bthis\s+(?:PR|refactor|simplification)\b", re.IGNORECASE
+        )
+        for document in sorted(DOCS.glob("*.md")):
+            body = _without_fences(document.read_text(encoding="utf-8"))
+            with self.subTest(document=document.name):
+                self.assertIsNone(pattern.search(body))
+
+    def test_diagram_labels_are_not_pr_stamps(self) -> None:
+        """Inspect SVG text rather than flattened or rendered images."""
+
+        for figure in sorted((DOCS / "figures").glob("*.svg")):
+            diagram = ElementTree.parse(figure).getroot()
+            text = " ".join(diagram.itertext())
+            with self.subTest(figure=figure.name):
+                self.assertIsNone(re.search(r"\bPR\s*#?\d+[a-z]*\b", text))
+
+    def test_index_links_to_every_reference_page(self) -> None:
+        """Keep a newly added reference discoverable from the docs index."""
+
+        index = DOCS / "README.md"
+        body = _without_fences(index.read_text(encoding="utf-8"))
+        destinations = {
+            (index.parent / unquote(target.split("#", 1)[0])).resolve()
+            for target in LINK_PATTERN.findall(body)
+            if not target.startswith(("https://", "http://", "mailto:"))
+        }
+        expected = {
+            path.resolve() for path in DOCS.glob("*.md") if path != index
+        }
+        self.assertFalse(expected - destinations, expected - destinations)
+
+    def test_change_impact_rows_link_contracts_and_tests(self) -> None:
+        """Require actionable local references, not unverified test names."""
+
+        text = (DOCS / "README.md").read_text(encoding="utf-8")
+        navigator = _section(text, "Change-impact navigator")
+        rows = [
+            line for line in navigator.splitlines()
+            if line.startswith("| ") and "[" in line
+        ]
+        self.assertTrue(rows)
+        for row in rows:
+            targets = LINK_PATTERN.findall(row)
+            contracts = []
+            tests = []
+            for target in targets:
+                path = (DOCS / unquote(target.split("#", 1)[0])).resolve()
+                with self.subTest(row=row, target=target):
+                    self.assertTrue(path.exists())
+                if path.parent == DOCS.resolve() and path.suffix == ".md":
+                    contracts.append(path)
+                if path.is_relative_to((ROOT / "tests").resolve()):
+                    tests.append(path)
+            with self.subTest(row=row):
+                self.assertTrue(contracts, "Missing primary contract link")
+                self.assertTrue(tests, "Missing regression test link")
+
+
 if __name__ == "__main__":
     unittest.main()

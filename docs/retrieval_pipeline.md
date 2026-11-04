@@ -196,6 +196,15 @@ cached weights. `retrievals/model_identity.py` resolves embedding-model
 identity as used by cache validation. For downloads and explicit local
 snapshots see [Model management](model_management.md).
 
+### Projects without indexed passages
+
+A project with no selected sources, or no extractable chunks, has index
+status `empty`. RAG keeps an empty retrieval container and the current
+source inventory in memory; it does not persist a dummy index or call the
+query embedder. Previously saved caches are not served as evidence in this
+state. Adding sources invokes normal indexing on refresh. Existing model
+loading and the selected type's prompt/tool policies are unchanged.
+
 ## Retrieval versus generation
 
 `RAGSession.ask()` maps retrieved chunks or selected documents to `Evidence`
@@ -204,8 +213,8 @@ answer-generation prompt or a registered tool. It may append evidence cited
 by related prior turns as configured. Retrieval **does not guarantee** that
 the model uses, cites or correctly interprets its evidence; KíLín performs a
 fast deterministic check for citation identifiers that do not correspond to
-available evidence, records the invalid identifiers, and does not retry or
-rewrite the answer solely to repair citations.
+available evidence. [Answering](answering_pipeline.md#citation-checks-and-answer-truthfulness)
+owns that diagnostic and its limitations.
 
 No universal evidence-token budget guarantees every retrieval result fits
 in a model's context. Full-document reading has its own configured budget.
@@ -217,28 +226,32 @@ that an answer is scientifically valid.
 The RAG and retrieval paths emit timed spans/events for preparation,
 retrieval and generation; trace details can be expensive and sensitive.
 [Performance](performance.md) analyzes existing diagnostic traces without
-changing the retrieval implementation. Proposed retrieval optimization is
-**deferred** until reproducible measurements and evidence-order invariance
-checks justify it.
-
-Relevant sources: `retrievals/persistence.py`, `strategies/retrieval_*`,
-`code_graph/`, `document_reading.py`, `context_expansion.py`, `rag.py`.
-Relevant regression suites are those matching `retrieval`, `rag`,
-`embeddings`, `chunking` and `project` in `tests/kilin/`.
-
-Related: [Source pipeline](source_pipeline.md),
-[Answering pipeline](answering_pipeline.md),
-[Package defaults](package_defaults.md), [Model management](model_management.md).
-
-## Projects without indexed passages
-
-A project with no selected sources, or no extractable chunks, has index
-status `empty`. RAG keeps an empty retrieval container and the current
-source inventory in memory; it does not persist a dummy index or call the
-query embedder. Previously saved caches are not served as evidence in this
-state. Adding sources invokes normal indexing on refresh. Existing model
-loading and the selected type's prompt/tool policies are unchanged.
+changing retrieval. Further optimization requires reproducible measurements
+and evidence-order invariance checks, not only fewer model calls.
 
 Progress wording describes actual work, not project IDs. Relationship
 search is announced only when the graph has entities, with actual result
 counts; otherwise the message explicitly reports that it was skipped.
+
+## Change impact and verification
+
+Rank fusion deliberately compares channel order rather than incompatible
+raw score scales. A change to indexing text, tokenizer, embedding identity,
+context expansion or rank depth can therefore alter evidence without changing
+the final answer API. Review persistence identity, RAG orchestration and
+evidence labels alongside the specific ranking algorithm.
+
+Run [retrieval algorithms and persistence](../tests/kilin/retrievals/),
+[index provenance](../tests/kilin/test_rag__index_provenance.py),
+[retrieval corrections](../tests/kilin/test_rag__retrieval_corrections.py)
+and [empty workspaces](../tests/kilin/test_rag__empty_workspace.py).
+Check stable source coordinates, tie ordering, direct/related/alternative
+labels, old-cache rejection and explicit failure cases. A deterministic
+unit substitute validates structure, not live embedding quality; evaluate
+ranking quality separately before claiming a retrieval improvement.
+
+## Related
+
+[Source pipeline](source_pipeline.md),
+[Answering pipeline](answering_pipeline.md),
+[Package defaults](package_defaults.md), [Model management](model_management.md).

@@ -49,6 +49,7 @@ ask(question, options)
    +-- choose exactly one answer producer
    |     +-- configured built-in tool -> ToolResult
    |     `-- ChatSession.reply() with history + evidence prompt
+   +-- validate completion or retain an explicitly incomplete result
    +-- deterministic citation-ID check; collect token usage
    +-- form ConversationTurn + compact representation
    +-- persist checkpoint; append committed turn
@@ -135,8 +136,8 @@ turns and project/intent system prompts, constructs an evidence prompt and
 calls `ChatSession.reply()`. Generation settings permit validated
 `thinking`, `temperature` and `max_new_tokens`. The implementation restores
 chat history if a pre-commit failure would otherwise leave uncommitted
-messages in memory. A model's `finish_reason = length` may be stored to
-indicate output truncated by its generation cap.
+messages in memory. A model's `finish_reason = length` is checked by the completion contract
+below; truncated text is not accepted as a successful final answer.
 
 An intent can override thinking for this direct model answer only. A
 missing or null policy inherits the session setting; an explicit boolean
@@ -146,12 +147,10 @@ session. The configured `thinking` remains resumable state, while
 intents cannot declare explicit overrides. See
 [Per-intent thinking policy](configuration.md#per-intent-thinking-policy).
 
-All tool answering-model calls inherit the active per-question output
-allowance. Thinking-enabled calls never use a smaller tool-local cap;
-nonthinking calls can do so only for explicitly bounded short responses.
-Internal thinking is configured independently by the tool's `MODEL_CALLS`
-policy, not inferred from its token budget. See
-[tool generation settings](tool_packages.md#generation-settings-for-tools).
+Tool internal judgments and streamed final writing are separate adapters.
+Their thinking, output-limit, parser/display and history-restoration contract
+is owned by [tool generation settings](tool_packages.md#generation-settings-for-tools).
+The completion checks below apply after those settings have been resolved.
 
 For a tool intent, `tools/_registry.run_tool()` invokes the registered
 package with a `ToolRequest` and a `ToolContext`. It returns `ToolResult`
@@ -172,97 +171,6 @@ See [Extension interfaces](extension_interfaces.md) and
 `pdf_writer` supplied by the GUI. The core tool cannot presume PySide6 or
 Qt is installed. Any PDF page-count and metadata validation should be
 performed by the writer/tool according to their own documented contracts.
-
-## Citation checks and answer truthfulness
-
-After model/tool output, `_invalid_citations()` checks whether cited numeric
-identifiers correspond to supplied evidence. Invalid references are recorded
-in turn parameters. This is a **diagnostic**, not semantic verification of
-scientific claims, and it does not trigger a second generation attempt or
-auto-correction of the text. An answer may contain unsupported or mistaken
-claims even if all citation indices resolve.
-
-The GUI's citation previews are derived from saved exact evidence and source
-coordinates. They must not silently substitute a different file or invent
-supporting text if the source has changed since indexing.
-
-## Persistence and exactly one committed turn
-
-`_save_conversation()` writes resumable state using the active trace sink or
-a dedicated atomic file writer when tracing is disabled. A successfully
-committed turn is appended once to the session; a failure before commitment
-must not be misreported as an answer. Enabled traces and saved conversation
-state share the `conversation_*.json` representation; tracing-disabled
-sessions still write their checkpoints and own the conversation lock.
-
-`ConversationStore` manages multiple named conversations (create, select,
-rename, touch, archive). `RAGSession.switch_conversation()` loads a different
-conversation without intentionally reloading models/indexes; it acquires and
-validates the next file before releasing the previous owner. The GUI's exact
-conversation resume takes an optional `conversation_id`; without one it
-opens the most recently updated record. Unknown explicit IDs must fail,
-not silently choose an unrelated conversation.
-
-`reset()` archives and clears the active conversation. `ask(...,
-stop_requested=...)` lets a caller stop an answer: every model call of the
-answer checks it after each generated token (MLX between tokens, PyTorch as a
-stopping criterion), and the answer ends with `GenerationCancelled` before
-any checkpoint, so no turn is saved and the model history is restored. The
-`turn` span records it as `turn.failed` with that type; the GUI engine adds
-`gui.answer.cancelled`. `GenerationCancelled` derives from `BaseException`
-so handlers that turn ordinary errors into notes never treat a Stop as a
-result. A forceful GUI Stop that kills the child process also discards the
-incomplete answer; neither resumes partially generated tokens. Locking, trace
-ownership and failure recovery are specified in
-[Conversation ownership](conversation_ownership.md) and
-[Trace recording](trace_recording.md).
-
-## Instrumentation and failure boundaries
-
-Trace spans cover routing, retrieval, model loading and generation; content
-traces can include prompts and source excerpts. Model backend failures,
-missing dependencies, invalid tool results, source errors and checkpoint
-I/O errors propagate through the core API. Do not add automatic retries or
-additional router/model calls just to hide these failures: that would
-change both results and latency.
-
-Relevant regression areas: `test_rag.py`, `test_answering.py`,
-`test_conversations.py`, `test_trace_logging.py`, tool-package tests and
-`tests/kilin/gui/` protocol/recovery tests. Exact test filenames should be
-confirmed against the current tree before running an isolated subset.
-
-Related: [Architecture](architecture.md),
-[Retrieval pipeline](retrieval_pipeline.md),
-[Model management](model_management.md),
-[Tool packages](tool_packages.md), [GUI architecture](gui_architecture.md).
-
-### Tool model-call inheritance
-
-Registered tools use `ToolContext.ask_model` for internal judgments and
-`ToolContext.write` for streamed final answers. Both preserve the current
-answering model and temperature. Internal requests resolve thinking from
-the tool-owned `MODEL_CALLS` policy; final `write` requests inherit the
-session thinking setting unchanged. Thinking calls use the session's
-output allowance even if the tool supplies a local cap. Only nonthinking
-calls can use a smaller explicit cap; uncapped calls inherit the session
-allowance. This is a per-call limit, not an aggregate tool budget. The
-router keeps its separate deterministic nonthinking behavior. See
-[Generation settings for tools](tool_packages.md#generation-settings-for-tools)
-for the adapter contract. Isolated tool replies never enter persistent
-chat history.
-
-Internal `ask_model` calls still return thinking-free text for tool
-parsers, but the tool coordinator collects any model thinking and presents
-it in the conversation's thinking section. When an answer callback is
-provided, each completed side call emits only its thinking, not its
-intermediate structured reply. The saved answer contains the same thinking
-followed by the tool's composed answer. `write` continues to stream and
-return the full user-visible model response. Router calls remain nonthinking.
-Internal overrides are temporary and restored even when completion fails.
-The tool summary records `internal_generation.policy` and actual request
-thinking, budgets and completion status in `internal_generation.calls`.
-Existing tool-specific `model_calls` counters keep their original meaning.
-See [internal tool thinking](configuration.md#internal-tool-thinking).
 
 ## Model-output completion and bounded recovery
 
@@ -337,3 +245,92 @@ Completion validation and partial recovery do not prove factual correctness,
 citation support, correct routing or exhaustive retrieval. A backend without
 termination metadata or visible thinking delimiters may not provide enough
 information to trigger the conservative recovery condition.
+
+## Citation checks and answer truthfulness
+
+After model/tool output, `_invalid_citations()` checks whether cited numeric
+identifiers correspond to supplied evidence. Invalid references are recorded
+in turn parameters. This is a **diagnostic**, not semantic verification of
+scientific claims, and it does not trigger a second generation attempt or
+auto-correction of the text. An answer may contain unsupported or mistaken
+claims even if all citation indices resolve.
+
+The GUI's citation previews are derived from saved exact evidence and source
+coordinates. They must not silently substitute a different file or invent
+supporting text if the source has changed since indexing.
+
+## Persistence and exactly one committed turn
+
+`_save_conversation()` writes resumable state using the active trace sink or
+a dedicated atomic file writer when tracing is disabled. A successfully
+committed turn is appended once to the session; an exception that aborts
+before commitment must not be misreported as a saved turn. Enabled traces and saved conversation
+state share the `conversation_*.json` representation; tracing-disabled
+sessions still write their checkpoints and own the conversation lock.
+
+An explicitly incomplete result is different from an aborted operation.
+`ask()` converts an unrecoverable `IncompleteModelResponse` into a visible
+incomplete-answer notice with safe `parameters.completion` metadata; that
+notice can be checkpointed. A tool can similarly publish a labelled partial
+result from independent successful items. Neither case makes truncated text
+a reliable answer. Cancellation and unrelated propagated exceptions do not
+follow this incomplete-result path. The completion section above defines
+what later history may reuse.
+
+`ConversationStore` manages multiple named conversations (create, select,
+rename, touch, archive). `RAGSession.switch_conversation()` loads a different
+conversation without intentionally reloading models/indexes; it acquires and
+validates the next file before releasing the previous owner. The GUI's exact
+conversation resume takes an optional `conversation_id`; without one it
+opens the most recently updated record. Unknown explicit IDs must fail,
+not silently choose an unrelated conversation.
+
+`reset()` archives and clears the active conversation. `ask(...,
+stop_requested=...)` lets a caller stop an answer: every model call of the
+answer checks it after each generated token (MLX between tokens, PyTorch as a
+stopping criterion), and the answer ends with `GenerationCancelled` before
+any checkpoint, so no turn is saved and the model history is restored. The
+`turn` span records it as `turn.failed` with that type; the GUI engine adds
+`gui.answer.cancelled`. `GenerationCancelled` derives from `BaseException`
+so handlers that turn ordinary errors into notes never treat a Stop as a
+result. A forceful GUI Stop that kills the child process also discards the
+incomplete answer; neither resumes partially generated tokens. Locking, trace
+ownership and failure recovery are specified in
+[Conversation ownership](conversation_ownership.md) and
+[Trace recording](trace_recording.md).
+
+## Instrumentation and failure boundaries
+
+Trace spans cover routing, retrieval, model loading and generation; content
+traces can include prompts and source excerpts. Model backend failures,
+missing dependencies, invalid tool results, source errors and checkpoint
+I/O errors propagate through the core API. Do not add automatic retries or
+additional router/model calls just to hide these failures: that would
+change both results and latency.
+
+### Change impact and verification
+
+The important boundary is between generated text, a validated result and a
+committed turn. Keeping them separate prevents a failed callback, cancelled
+request or truncated model response from masquerading as successful work.
+When changing that boundary, inspect `RAGSession.ask`, `_run_tool`,
+`answering.side_reply` and `_model_completion.py` together. Preserve
+single-turn commitment, isolated tool histories and explicit partial status.
+
+Exercise [RAG completion](../tests/kilin/test_rag__completion.py),
+[tool recovery](../tests/kilin/test_rag__tool_recovery.py),
+[answering completion](../tests/kilin/test_answering__completion.py),
+[partial tools](../tests/kilin/tools/test__partial_recovery.py) and
+[conversation lifecycle](../tests/kilin/test_conversation__lifecycle.py).
+A changed visible outcome also requires review of the
+[GUI protocol](gui_protocol.md#answer-phases-and-event-ordering) and
+[trace records](trace_recording.md#stopped-and-failed-answers), not a new
+uncoordinated retry in each tool. Model substitutes do not establish native
+backend termination or token-callback behavior.
+
+## Related
+
+[Architecture](architecture.md),
+[Retrieval pipeline](retrieval_pipeline.md),
+[Model management](model_management.md),
+[Tool packages](tool_packages.md), [GUI architecture](gui_architecture.md).

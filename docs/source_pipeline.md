@@ -61,34 +61,31 @@ also set selection rules; see [Configuration](configuration.md).
 
 ## 2. Snapshot and provenance alternatives
 
-KíLín retains two source-management workflows, with creation separated from
-updates in both:
+Source processing can read managed copies from two distinct workflows:
 
-- `prepare_sources_workspace(...)` creates a fresh managed `sources/` tree.
-  `add_project_sources(project_directory, source_paths, ...)` subsequently
-  imports cumulatively using the saved profile and `sources.json` provenance.
-  Existing snapshots are preserved unless `replace_existing=True` is chosen.
-  Removed or deselected originals never remove previous copies implicitly.
-  `remove_workspace_sources()` deletes selected managed copies, not originals.
-- `prepare_project_workspace(source_directory, type_id, workspace_root)`
-  always creates a fresh single-source mirror in `sources/`. To compare
-  source manifests and synchronize a saved copy, call
-  `synchronize_project_workspace(source_directory, project_directory)`.
-  This explicit operation may restore edits to the mirror and remove files
-  deleted from the original, preserving the established mirroring policy.
+| Workflow | Creation API and provenance | Explicit update path |
+| --- | --- | --- |
+| Cumulative imports | `prepare_sources_workspace()`; `sources.json` records imported copies. | `add_project_sources()`, managed removal and `sync_project_sources()`. |
+| Single-source mirror | `prepare_project_workspace()`; `source_snapshot.json` records the mirror. | `synchronize_project_workspace()`. |
 
-`initialize_project()` creates a new project in a nonexistent or empty folder
-using the type's source-directory convention. It never adopts nonempty source
-folders or reopens a project. `open_project()` reads saved profiles without
-creating folders. The GUI uses explicit import/removal operations and requests
-index refresh afterward. `project_files.py` separately manages `outputs/` and
-`templates/`; those folders are not newly indexed as ordinary source material.
+Their replacement/deletion semantics are not interchangeable. The complete
+[workspace contract](project_workspaces.md#explicit-imports-and-source-selection)
+owns those semantics, collision handling, original-file protection and
+partial-failure behavior. Source readers should consume the resulting
+validated selection, not perform another implicit import or synchronization.
 
-Source additions/removals are **not** a multi-file atomic transaction. In the
-cumulative route an earlier successful source remains even if a later import
-fails. The source-provenance file is updated as successful operations are
-completed. Project initialization has a separate rollback journal and
-creates its profile last; see [Project workspaces](project_workspaces.md).
+An empty newly created managed workspace is valid. It uses the same
+[core source-directory convention](project_workspaces.md#source-directory-convention)
+as a populated project; no example corpus is invented. Creation eligibility
+and later import APIs are documented with
+[workspace creation](project_workspaces.md#creation-opening-and-explicit-updates).
+Opening a saved profile retains its source path. Outputs/templates are
+separately managed user files, not automatically added to source indexing.
+
+After explicit source changes, the GUI asks the core to refresh indexes.
+Imports and indexing are not a single multi-file transaction: successful
+copies can remain when a later import or index refresh fails. Do not infer
+that a valid source manifest proves a completed retrieval rebuild.
 
 ## 3. Reading files and retaining source coordinates
 
@@ -149,18 +146,16 @@ projects; the active RAG pipeline passes its project's saved values.
 ## 5. Refreshing sources and avoiding unnecessary embeddings
 
 A repository manifest records selected file fingerprints for change
-comparison. `RAGSession.refresh_sources(project)` updates chunk/index state
-after source changes. Where saved indexing settings and the embedding model
-snapshot match, changed source content can be re-extracted and re-embedded
-while unchanged chunk vectors are reused. Removed source files are dropped.
-The lexical statistics and global code graph are rebuilt to represent the
-new complete set of chunks. Incompatible settings, missing snapshot
-identity, corrupt indexes or other mismatches trigger a full rebuild.
+comparison. After a source update, `RAGSession.refresh_sources(project)`
+connects the new inventory to extraction, chunking and index reuse. Changes
+to a reader's text or coordinates can change chunk identity even when the
+original file is unchanged, so reader changes need cache/evidence tests too.
 
-`retrievals.persistence` stores validated index data and a content
-fingerprint/checksum; do not confuse source manifest equality with index
-payload integrity. The exact reindex/reuse contract is described in
-[Retrieval pipeline](retrieval_pipeline.md).
+The [incremental-index contract](retrieval_pipeline.md#incremental-updates)
+owns reuse eligibility, model identity, full-rebuild fallback and which
+indexes are rebuilt. Source manifest equality is not index-payload integrity;
+`retrievals.persistence` validates that separate boundary. A refresh should
+not silently reuse vectors merely because a path or model ID looks familiar.
 
 ## Errors, boundaries and validation
 
@@ -175,23 +170,27 @@ payload integrity. The exact reindex/reuse contract is described in
 - Changing extraction or chunk identity affects cache reuse, evidence
   coordinates and citation reproducibility; test these together.
 
-## Relevant tests and cross-references
+## Change impact and verification
 
-Start with the test files matching `repository`, `sources`, `chunking`,
-`workspace`, `project` and `rag` under `tests/kilin/`. The GUI selection
-contract is additionally tested under `tests/kilin/gui/`. The latter also
-covers reason-code independence from human-readable messages.
+Selection, decoding and structural extraction are separate so a policy change
+does not silently become a content transformation. When adding a reader,
+follow the [extension checklist](extension_interfaces.md#source-readerextractor-contract)
+and preserve exact text, stable ordering and the declared coordinate system.
+Changes to unit boundaries or chunk IDs require review of cache reuse,
+code graphs and citation previews together.
 
-Related: [Project workspaces](project_workspaces.md),
+Run [scanner tests](../tests/kilin/test_repository__scan.py),
+[source reader tests](../tests/kilin/sources/),
+[chunking](../tests/kilin/test_chunking.py),
+[index provenance](../tests/kilin/test_rag__index_provenance.py) and
+[reference previews](../tests/kilin/gui/test_engine__references.py).
+The [source-selection suite](../tests/kilin/gui/test__source_selection.py)
+checks reason-code independence from human-readable wording. Real malformed
+PDFs and optional readers may require additional format-specific fixtures;
+no reader should execute notebook or source code to obtain text.
+
+## Related
+
+[Project workspaces](project_workspaces.md),
 [Retrieval pipeline](retrieval_pipeline.md),
 [GUI protocol](gui_protocol.md), [Security](security.md).
-
-## Empty initial source collections
-
-`prepare_sources_workspace([], type_id, workspace_directory)` initializes
-a valid managed `sources/` tree without importing files. The destination
-must be explicit and unoccupied. Adding sources later uses the explicit
-`add_project_sources()` API with the same selection validation.
-`initialize_project()` creates the same empty `sources/` folder in a fresh
-destination. Existing profile source settings remain authoritative when the
-project is opened explicitly.

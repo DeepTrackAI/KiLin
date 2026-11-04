@@ -56,17 +56,26 @@ individual tools and language-specific readers) to a document. Module
 imports and `__all__` declarations define actual callable boundaries;
 architecture tables are explanatory, not an alternate API specification.
 
+### Project-type identity
+
+`ProjectTypeId` identifies a validated `ProjectType` configuration;
+`ProjectProfile.type_id` selects it for a workspace. All packaged type
+definitions are available in deterministic filename order, including in
+the GUI. Standard code/literature IDs are not mandatory. See
+[configuration](configuration.md#canonical-identifiers-and-schemas) for
+field names and [project workspaces](project_workspaces.md) for empty
+creation and later source import.
+
 ## Lifecycle of a project
 
 1. **Select sources.** The scanner previews a directory with packaged and
    caller-supplied filters. Explicit individual-file imports have separate
    eligibility rules and must not be inferred from directory preview alone.
-2. **Create workspace.** Creation APIs exclusively claim a nonexistent or
-   empty destination, validate settings and resources, and publish a new
-   `profile.ini` last without replacement. Default collisions receive a fresh
-   numbered name; explicit collisions raise core errors. `open_project` only
-   validates saved state. Imports and mirror synchronization are explicit
-   update operations, never accidental consequences of creating a project.
+2. **Create workspace.** Core creation validates and reserves a fresh
+   destination, initializes resources and sources, and publishes the profile
+   last. Opening saved state and later imports/synchronization are separate
+   operations. See [workspace ownership](project_workspaces.md#creation-opening-and-explicit-updates)
+   for collision and rollback rules, including empty projects.
 3. **Open session.** `RAGSession` resolves paths, acquires exclusive
    conversation ownership, opens a trace or disabled-trace equivalent,
    inspects source changes and builds or reuses indexes, then constructs
@@ -91,10 +100,11 @@ fails.
 
 A workspace is an organizational directory, **not a process security
 sandbox**. Core folders include `profile.ini`, `indexes/`, `logs/`,
-`outputs/`, and `templates/`, plus a source location depending on the
-creation API. In cumulative managed imports, `sources/` and `sources.json`
-track selected copies; the single-origin mirror instead uses
-`source_snapshot.json`. Source originals should not be modified by import.
+`outputs/`, and `templates/`. All new projects use `sources/`; saved
+profiles retain their recorded source path. Cumulative imports use
+`sources.json` and single-origin mirrors use `source_snapshot.json` for
+provenance. [Project workspaces](project_workspaces.md) owns the differences
+between their update operations. Imports do not modify source originals.
 
 A saved project's `profile.ini` takes precedence over new-project defaults.
 The desktop's immutable `gui/defaults.json` is combined with per-user
@@ -136,34 +146,35 @@ should fail validation instead of being silently reinterpreted. Missing
 models or optional dependencies can prevent session construction; initial
 cleanup attempts to release acquired locks and partially loaded sessions.
 Index integrity mismatches cause a rebuild rather than trusting unchecked
-vectors. Generation failure should not commit a successful answer turn.
+vectors. A propagated generation failure does not commit a successful
+answer. A handled incomplete result can instead save an explicit notice or
+partial result under the [completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery).
 
-For an active answer, desktop Stop first requests cooperative cancellation
-through `cancel_answer`. When cancellation is acknowledged, no answer turn
-is committed and the project and loaded models remain open. The Qt window
-kills and restarts the engine only if that request does not finish within
-the grace period, or for forceful Stop during other operations. Neither
-path suspends generation for later continuation. After restart, the page
-can request the exact previous conversation ID, not an unsaved partial
-answer. The frontend activity timeline and diagnostic trace are different
-records. See the authoritative [Stop and restart contract](gui_protocol.md#errors-stop-and-restart),
-[GUI architecture](gui_architecture.md), and [Trace recording](trace_recording.md).
+Cooperative answer cancellation retains loaded models without committing a
+partial answer; forced process replacement loses that live state. Neither
+continues an interrupted generation. The
+[GUI protocol](gui_protocol.md#errors-stop-and-restart) owns the exact Stop,
+restart and resume behavior, while [Answering](answering_pipeline.md)
+owns completion and checkpoint outcomes. Frontend timing and diagnostic
+traces are separate records, not alternative sources of committed truth.
 
 ## Architectural checks before changes
 
-For every PR touching these boundaries, verify: core import without Qt,
-existing-profile precedence, source-original protection, index matching,
-answer/citation/checkpoint semantics, lock ownership, and both test runners.
-A performance optimization must additionally measure latency and preserve
-observable results. The verification procedure is in
-[Development](development.md).
+The core/adapter split allows the same ownership and validation rules to
+serve Python clients and the desktop. Preserve that direction when extracting
+shared code; moving a GUI helper into the core must not import Qt implicitly.
 
-## Project-type identity
+Use the [change-impact navigator](README.md#change-impact-navigator) to find
+the primary contract and tests. Cross-layer changes must check core imports,
+saved-profile precedence, source-original protection, index identity,
+answer/checkpoint semantics and writer ownership together. Start with
+[public API checks](../tests/test__public_api.py) and
+[tool dependency boundaries](../tests/kilin/tools/test__architecture.py),
+then the affected subsystem suites. The verification procedure belongs to
+[Development](development.md); performance changes additionally require
+measurements and observable-result invariance.
 
-`ProjectTypeId` identifies a validated `ProjectType` configuration;
-`ProjectProfile.type_id` selects it for a workspace. All packaged type
-definitions are available in deterministic filename order, including in
-the GUI. Standard code/literature IDs are not mandatory. See
-[configuration](configuration.md#canonical-identifiers-and-schemas) for
-field names and [project workspaces](project_workspaces.md) for empty
-creation and later source import.
+## Related
+
+[Documentation index](README.md), [Module map](module_map.md),
+[Extension interfaces](extension_interfaces.md), [Security](security.md).

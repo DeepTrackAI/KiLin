@@ -40,6 +40,22 @@ independent and controls optional event-write errors (`"warn"` or `"raise"`);
 checkpoint write failures always propagate. Output location and tracing
 activation also remain configurable.
 
+### Project-creation ordering
+
+The engine creates a project before opening its trace/conversation files;
+precreating a trace inside a fresh destination would make that destination
+occupied. Core preparation can use a caller-owned external sink and emits
+preparation events only after reservation. For a later import, create/open
+the project first, start the trace, then call
+`add_project_sources(..., trace=trace)`.
+
+GUI creation conflicts and preparation failures before session switching
+do not append errors to the previous project's trace. The
+[GUI activation lifecycle](gui_architecture.md#creation-conflicts-and-activation)
+owns session-switch ordering and the
+[workspace contract](project_workspaces.md#failure-behavior-and-limitations)
+owns filesystem recovery.
+
 ## Recorded data
 
 An enabled logger always makes its `include_content` and `include_token_ids`
@@ -60,8 +76,8 @@ stored events are preserved when reopening, without retroactive filtering.
 Tracing only captures information that the execution components expose:
 external backends and custom tools may not offer every diagnostic detail.
 Token IDs are included when available; embeddings are included only when
-explicitly enabled. The JSON format and existing event identifiers are
-otherwise unchanged by this simplification.
+explicitly enabled. Diagnostic coverage follows the producing component;
+the logger does not synthesize missing backend details.
 
 For a direct model answer, `llm.call.input` records the resolved request
 in both `thinking` and `chat_template.enable_thinking`, matching prompt
@@ -80,13 +96,19 @@ whether it completed or failed. Saving tool
 settings records `project.tool_settings.saved` with the tool and its changed
 values.
 
+### Project-type metadata
+
+The [identifier schema](configuration.md#canonical-identifiers-and-schemas)
+distinguishes profile `type_id` from qualified `project_type_id` in turn and
+intent metadata; former project-kind keys are not emitted. An empty source collection reports
+`index.empty` and index status `empty` without fabricating passages or
+saving a retrieval bundle. Source-entity `kind` metadata is unchanged.
+
 ## Persistence and write failures
 
-Each trace update writes through a uniquely created temporary file in the
-same directory as its destination. Successful updates atomically replace the
-existing JSON. Failed writes leave the earlier JSON in place and remove the
-temporary file; this avoids collisions with predictable `.tmp` names and
-pre-existing temporary-file symlinks.
+Trace updates use the [atomic-write and ownership contract](conversation_ownership.md#atomic-writes-and-cleanup),
+not an independent persistence mechanism. The distinction here is between
+optional diagnostic events and mandatory resumable-state checkpoints.
 
 Optional diagnostic event writes use the configured `failure_policy`. Required
 conversation checkpoint writes propagate failures and restore the logger's
@@ -98,13 +120,11 @@ state, or multiple files; no power-loss durability is claimed.
 
 ## Stopped and failed answers
 
-**Stop** sends the `cancel_answer` command. Every model call of the answer
-checks it after each generated token, so the answer ends at the next token
-while the engine keeps running, and the project and models stay loaded. No
-turn is saved: the conversation's `resume_state.turns`, which the chat shows
-and the model remembers, only gains a turn at its checkpoint. The page keeps
-the partial answer on screen, with its steps ending in "Stopped at your
-request", and puts the question back in the message box.
+An acknowledged cooperative cancellation saves no turn: the conversation's
+`resume_state.turns` gains a turn only at its checkpoint. The GUI can retain
+partial text and show "Stopped at your request" without that text becoming
+resumable history. The [Stop protocol](gui_protocol.md#errors-stop-and-restart)
+owns the request, token-boundary checks, completion race and forced fallback.
 
 A Stop is easy to find in the trace file. Under
 `sessions["05_conversations"]["turns"]`, the turn's operation has `"status":
@@ -114,18 +134,21 @@ A Stop is easy to find in the trace file. Under
 timed when the answer ended. Any other failure has a different
 `error_type`.
 
-Only if the engine does not end the answer within 30 seconds does the
-window restart it as a last resort. The trace then keeps every event written
-before the restart (each event except throttled progress updates rewrites
-the file at once) as a turn that ends without a completion or failure
-event, and the reopened file numbers later turns above it.
+If the window must terminate the engine, the trace retains events already
+written before termination. A mid-turn exit can leave an operation without
+a completion/failure event; reopening numbers later turns above it. Events
+other than throttled progress updates rewrite the file as they are emitted,
+but unwritten events cannot be recovered. Do not infer a successful answer
+from the mere presence of a traced turn operation.
 
 An answer that **fails** with an error records the failure in the trace and
 adds no turn; the GUI shows the error and puts the question back. An answer
 the model could not finish (for example, it reached its token limit) is
 different: the trace records `generation.incomplete`, and the turn **is**
 saved, with an answer explaining that no reliable result was produced and
-the details under its `completion` parameter.
+the details under its `completion` parameter. The
+[completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery)
+owns incomplete versus partial outcomes and their use in later history.
 
 ## Migration from earlier trace configurations
 
@@ -151,6 +174,13 @@ remain after deletion. Ordinary file deletion is not guaranteed secure
 physical erasure. For the GUI's archival and lock rules, see
 [conversation-file ownership](conversation_ownership.md).
 
+## Performance analysis
+
+For read-only timing analysis of existing conversation traces, and an optional
+standardized-question notebook, see [Performance analysis](performance.md).
+The analysis does not require a new trace mode or change the persistence
+behavior described above. Raw traces remain sensitive project data.
+
 ## Tests
 
 The tracing contract is tested without network or model dependencies:
@@ -165,32 +195,24 @@ python -m pytest -q \
 The project targets Python 3.12; run these tests under that interpreter and
 verify the OS-specific file-lock behavior on supported platforms.
 
-## Performance analysis
 
-For read-only timing analysis of existing conversation traces, and an optional
-standardized-question notebook, see [Performance analysis](performance.md).
-The analysis does not require a new trace mode or change the persistence
-behavior described above. Raw traces remain sensitive project data.
+### Change impact and verification
 
-## Project-type metadata
+Diagnostic writes can fail without the same policy as a required checkpoint.
+Preserve that distinction when changing trace event names, projection or
+write frequency. Review `trace_logging.py`, `conversation_format.py`, the
+producer and any consumer such as `assets/trace_benchmark.py` together;
+trace layout changes can break analysis even when the visible answer works.
 
-Profile snapshots use `type_id`; qualified type identifiers in turn
-parameters and intent metadata use `project_type_id`. The prerelease
-project-kind keys are not emitted. An empty source collection reports
-`index.empty` and index status `empty` without fabricating passages or
-saving a retrieval bundle. Source-entity `kind` metadata is unchanged.
+Run the suites above and [benchmark parsing](../tests/test__trace_benchmark.py).
+Use fault injection to check checkpoint failures, optional write failures,
+reopen and active metadata updates. When the shared conversation structure
+or lock ownership changes, also follow
+[conversation verification](conversation_ownership.md#regression-testing).
+Timing optimization must not silently weaken checkpoint or diagnostic
+visibility guarantees.
 
-## Project-creation ordering
+## Related
 
-The desktop engine creates a project before opening its conversation and
-trace files. This prevents diagnostic setup from making an empty destination
-nonempty or writing into an existing project before a collision is rejected.
-A creation conflict produces the GUI `workspace_conflict` event without
-changing the existing trace. Preparation failures before session switching
-are displayed without appending an error to the previous project's trace.
-
-Core creation can still receive a caller-owned external trace sink; it emits
-preparation events only after obtaining the destination reservation. Do not
-precreate a trace inside a destination intended for a new project. To trace
-later source imports inside the project, create/open it first, start the
-trace, and call `add_project_sources(..., trace=trace)`.
+[Conversation ownership](conversation_ownership.md), [Answering](answering_pipeline.md),
+[Performance](performance.md), [Security](security.md).

@@ -58,8 +58,12 @@ the two managed source-import APIs.
    with any modified figure to avoid contradictory architecture claims.
 5. Render each changed SVG at ordinary documentation size, inspect text and
    arrow placement, parse SVG/XML and check all local Markdown references.
-6. Do not infer a runtime guarantee merely from a diagram; the detailed
+6. Keep labels about the current architecture, not the PR that introduced
+   it. Put review history in the change record rather than a diagram footer.
+7. Do not infer a runtime guarantee merely from a diagram; the detailed
    documented contracts and source tests determine actual behavior.
 
-Related: [Documentation index](README.md) and
+## Related
+
+[Documentation index](README.md) and
 [Development and verification](development.md).

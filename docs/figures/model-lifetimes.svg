@@ -28,6 +28,6 @@
 <rect x="0" y="760" width="1280" height="50" fill="#F8FAFC"/>
 <line x1="44" y1="760" x2="1236" y2="760" stroke="#E2E8F0"/>
 <text x="45" y="790" font-size="13" fill="#475569" font-family="Inter,Arial,sans-serif">Acknowledged answer cancellation keeps models loaded; no turn is committed. Forceful Stop loses live sessions.</text>
-<text x="1235" y="790" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín · PR9b</text>
+<text x="1235" y="790" text-anchor="end" font-size="12" fill="#64748B" font-family="Inter,Arial,sans-serif">KíLín</text>
 
 </svg>

@@ -11,11 +11,12 @@ without adding tool-specific conditions to project creation.
 
 *Figure: Defaults, preferences, default workspace locations and persisted project state are intentionally different ownership layers.*
 
-Every initialized project has the following core entries:
+Every newly initialized project has the following core entries:
 
 ```text
 project/
     profile.ini
+    sources/
     indexes/
     logs/
     outputs/
@@ -31,6 +32,24 @@ source directory by default. When a project's source is its own root
 folders and the project-owned metadata files `profile.ini`, `sources.json`,
 and `source_snapshot.json`; ordinary external source directories and files
 with these names are not globally excluded.
+
+### Source-directory convention
+
+Every new project keeps its sources in `sources/`, whatever its project type
+and however it is created: `initialize_project()`,
+`prepare_project_workspace()`, and `prepare_sources_workspace()` all create
+it. The name is the core constant
+`kilin.workspace_resources.PROJECT_SOURCES_DIRECTORY`; it is not a setting.
+Project types decide how sources are read, indexed, and answered, not the
+folder name, so a project-type JSON file has no `source_directory` field and
+one that still names it is rejected as an unknown setting.
+
+Existing projects keep the `source` recorded in their `profile.ini`, for
+example `documents/` or `repository/` from before this convention.
+`open_project()` reads that path unchanged and performs no filesystem writes;
+no folder is renamed or moved. A single-source mirror made before the
+convention keeps its copy under the original's name, and
+`synchronize_project_workspace()` updates it there.
 
 ## Creation, opening, and explicit updates
 
@@ -106,6 +125,16 @@ folders are copied into a new destination rather than adopted in place.
 Previously saved root-as-source or external-source profiles remain readable;
 opening them does not reinterpret their source layout. Model loading is a
 separate session operation.
+
+### Callers updating existing projects
+
+Callers that use preparation as an implicit reopen must choose an
+operation explicitly. Replace repeated cumulative preparation with
+`add_project_sources(existing_path, sources)`, and repeated mirror preparation
+with `synchronize_project_workspace(original, existing_path)`. Use
+`open_project(existing_path)` for read-only opening. No compatibility switch
+reintroduces implicit reuse. Existing project files and schemas need no
+migration for this creation-safety change.
 
 ## Initial project creation
 
@@ -372,12 +401,33 @@ managing project-owned files.
 The GUI reads the core file inventory. Empty directories are represented
 with a trailing `/` rather than invented by the frontend.
 
-## Prerelease API change
 
-Old calls that used preparation as an implicit reopen must now choose an
-operation explicitly. Replace repeated cumulative preparation with
-`add_project_sources(existing_path, sources)`, and repeated mirror preparation
-with `synchronize_project_workspace(original, existing_path)`. Use
-`open_project(existing_path)` for read-only opening. No compatibility switch
-reintroduces implicit reuse. Existing project files and schemas need no
-migration for this creation-safety change.
+## Change impact and verification
+
+Creation, read-only opening, explicit updates and generated output publication
+are distinct operations because they protect different user-owned state.
+A layout change must account for both newly initialized projects and saved
+profiles with older source locations; installing a new default is not an
+implicit repair or migration.
+
+Review `project._preparing_project`, `project_transaction.py`,
+`project_layout.py`, `workspace_resources.py` and the affected `workspace.py`
+operation together. Changes to sources must also update provenance, source
+selection and [index refresh](retrieval_pipeline.md#incremental-updates).
+Changes to outputs/templates must preserve their non-source status and
+[tool output publication](tool_packages.md#generated-output-safety).
+
+Exercise [creation](../tests/kilin/test_project__creation.py),
+[reservation and rollback](../tests/kilin/test_project_transaction.py),
+[resource planning](../tests/kilin/test_project_layout.py),
+[source management](../tests/kilin/test_workspace_source_management.py),
+[synchronization](../tests/kilin/test_workspace__source_changes.py) and
+[user files](../tests/kilin/test_project_files.py). Check the
+[GUI creation adapter](../tests/kilin/gui/test_engine__creation.py) as well;
+Qt-free tests cannot prove native file-dialog or filesystem-platform behavior.
+
+## Related
+
+[Configuration](configuration.md), [Source pipeline](source_pipeline.md),
+[Tool packages](tool_packages.md), [Conversation ownership](conversation_ownership.md),
+[Security](security.md).

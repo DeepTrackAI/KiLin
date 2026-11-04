@@ -158,6 +158,21 @@ companion file and modifying the JSON. They do not provide encryption,
 resistance to hostile local processes, a durable disk-flush guarantee, or a
 transaction spanning multiple files or the store's in-memory registry.
 
+## Change impact and verification
+
+The persistent companion exists because atomically replacing the JSON would
+replace the inode on which a direct file lock was held. Borrowed ownership
+and delegated active-state writing prevent the store and trace logger from
+becoming competing writers within one session. Do not replace those
+mechanisms with an existence check on `.lock` or a second metadata writer.
+
+For a format or ownership change, inspect `conversation_format.py`,
+`conversation_ownership.py`, `atomic_writes.py`, `ConversationStore`,
+`TraceLogger` and the RAG/GUI callers together. Preserve validation before
+switch-away and correct cleanup for owned versus borrowed leases. Update
+saved-state fixtures, trace consumers and the corresponding diagram; a
+format-compatible reader does not prove correct writer coordination.
+
 ## Regression testing
 
 The following suites cover the main ownership guarantees:
@@ -179,3 +194,8 @@ with isolated local files and no model downloads.
 
 The project requires Python 3.12. Verify platform-specific locking on macOS
 and Windows in addition to any local CI environment.
+
+## Related
+
+[Answering lifecycle](answering_pipeline.md), [Trace recording](trace_recording.md),
+[GUI protocol](gui_protocol.md), [Security](security.md).

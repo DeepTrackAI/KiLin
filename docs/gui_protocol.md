@@ -55,6 +55,24 @@ For orientation, a command and an event look like:
 {"event": "answer_delta", "text": "The file defines..."}
 ```
 
+## Project-type identifiers
+
+Project selection uses `type_id` in `startup`, `projects`, `saved_project`,
+`opened` and `settings.project_types` entries. The cross-layer identifier
+schema is owned by [Configuration](configuration.md#canonical-identifiers-and-schemas). The
+`open` command accepts `sources: []` for a new empty workspace only when
+`workspace` is explicit; no example paths are inferred. Despite its command
+name, `open` creates a new project and never reuses an existing one. `resume`
+is the separate operation for opening saved state. On `workspace_conflict`,
+`existing_project` is true for any existing profile entry, even an invalid one.
+The page may ask whether to resume; confirmation sends `resume` without any
+creation settings or pending sources. Cancellation keeps the new-project
+inputs available for choosing another destination. Non-project occupied
+folders are not offered for resume. The final allocated path is reported by
+`opened.project`, not guaranteed by a prior preview. The old project
+`kind` protocol key is not accepted. Source-preview rows still use `kind`
+for file/folder/link classification; that is a distinct contract.
+
 ## Engine command inventory
 
 The following are the *existing engine dispatcher* actions. Required fields
@@ -323,9 +341,9 @@ partial visible stream.
 
 1. **Frontend event and phase identifiers are not generated from Python.**
    The test suite characterizes current names and checks phase agreement,
-   but a shared schema/code generator is not proposed in this PR.
+   but no shared runtime schema or identifier generator is implemented.
 2. **Structured scan codes do not cover all diagnostics.** Source preview
-   eligibility now uses the validated JSON `reason_code` vocabulary, but
+   eligibility uses the validated JSON `reason_code` vocabulary, but
    general `error` event messages and some other diagnostic text remain
    human-readable strings without a universal structured error schema.
 3. **Malformed payload validation is distributed.** Qt slots, the dispatcher,
@@ -336,25 +354,23 @@ partial visible stream.
    isolated `test__webengine_smoke.py` can be enabled on a supported GUI
    installation; it is not a default full native acceptance suite.
 
-Implementation owners: `kilin/gui/window.py`, `kilin/gui/engine.py`,
-`kilin/gui/web/app.js`; core phases in `kilin/rag.py`. Regression tests:
-`tests/kilin/gui/test__protocol.py` and
-`tests/kilin/gui/test_engine__resume.py`.
+## Change impact and verification
 
-## Project-type identifiers
+The transport separates Qt-local actions, ordinary engine commands and
+commands accepted during an active answer. Preserve that distinction when
+adding an action; a handler working in isolation does not prove that the
+input thread, interactive wait and frontend agree about when it is usable.
 
-Project selection consistently uses `type_id`, including `startup`,
-`projects`, `saved_project`, `opened`, and `settings.project_types` entries.
-Serialized `ProjectProfile` snapshots likewise contain `type_id`. The
-`open` command accepts `sources: []` for a new empty workspace only when
-`workspace` is explicit; no example paths are inferred. Despite its command
-name, `open` creates a new project and never reuses an existing one. `resume`
-is the separate operation for opening saved state. On `workspace_conflict`,
-`existing_project` is true for any existing profile entry, even an invalid one.
-The page may ask whether to resume; confirmation sends `resume` without any
-creation settings or pending sources. Cancellation keeps the new-project
-inputs available for choosing another destination. Non-project occupied
-folders are not offered for resume. The final allocated path is reported by
-`opened.project`, not guaranteed by a prior preview. The old project
-`kind` protocol key is not accepted. Source-preview rows still use `kind`
-for file/folder/link classification; that is a distinct contract.
+Review `kilin/gui/window.py`, `kilin/gui/engine.py`, `kilin/gui/web/app.js`
+and the core phase definitions in `kilin/rag.py` together. Update the command
+or event inventory in this page, the affected lifecycle description and
+[protocol tests](../tests/kilin/gui/test__protocol.py). Exercise
+[exact resume](../tests/kilin/gui/test_engine__resume.py) and relevant
+frontend recovery/confirmation tests. The
+[source-backed inventory check](../tests/setup/test__documentation_assets.py)
+detects missing names, not complete payload validation or native acceptance.
+
+## Related
+
+[GUI architecture](gui_architecture.md), [Configuration](configuration.md),
+[Answering lifecycle](answering_pipeline.md), [Development](development.md).

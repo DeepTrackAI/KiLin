@@ -33,15 +33,10 @@ use its README and `_configuration.py`.
 
 A new project's `type_id` selects a validated `ProjectType`; the core then
 constructs and validates a `ProjectProfile` using `PROJECT_PROFILE` defaults
-and the type's source defaults. `initialize_project()` installs declared
-tool resources and commits the new `profile.ini` **last**. It must not
-rewrite an existing profile when the packaged defaults change. All creation
-APIs reject explicit occupied destinations; default naming allocates a new
-folder. Neither settings overrides nor matching project types authorize reuse.
-`open_project()` validates the saved profile and the resolved source path;
-it does not opportunistically copy/replace templates based on a new
-version of a tool. These invariants are detailed in
-[Project workspaces](project_workspaces.md).
+and the type's file-selection defaults. This initializes saved state; it is
+not permission to overwrite an existing profile or reinstall user resources.
+Creation, read-only reopening and explicit updates are different operations,
+owned by [Project workspaces](project_workspaces.md#creation-opening-and-explicit-updates).
 
 `kilin.project.configure_project()` is the core API for validated project
 settings. GUI-specific project settings (effort levels, search-depth steps,
@@ -101,8 +96,7 @@ changes.
 The type loader reads `project_types/*.json` in filename order, uses each
 filename stem as its type ID and caches validated records. An invalid
 project type is an error, not silently skipped. The top-level object defines
-its display metadata, source-folder convention, extensions, size limit,
-base prompts,
+its display metadata, extensions, size limit, base prompts,
 retrieval instruction, code-graph policy, history defaults, default intent,
 intents, welcome prompts and suggestions.
 
@@ -182,29 +176,18 @@ The current representations are:
 | Index settings, turn parameters and intent trace metadata | `project_type_id` |
 | Project-type JSON files | Filename stem; no duplicate ID field |
 
-This is a clean prerelease change. Former Python project-kind names and
-old profile/protocol/metadata keys have no aliases or migration readers.
-Recreate development workspaces that use the previous profile schema;
-do not expect old index or trace metadata to match the new contracts.
-The unrelated `kind` fields on source entities and chunks are unchanged.
+Former Python project-kind names and old profile/protocol/metadata keys
+have no compatibility aliases or migration readers. Workspaces using that
+previous profile schema must be recreated; old index or trace metadata
+must not be assumed to match this schema. This restriction is distinct from
+opening a current-schema profile with an older source-folder name. The
+unrelated `kind` fields on source entities and chunks retain their meaning.
 
 ### New-project source convention
 
-Every new project keeps its sources in `sources/`, whatever its project type
-and however it is created: `initialize_project()`,
-`prepare_project_workspace()`, and `prepare_sources_workspace()` all create
-it. The name is the core constant
-`kilin.workspace_resources.PROJECT_SOURCES_DIRECTORY`; it is not a setting.
-Project types decide how sources are read, indexed, and answered, not the
-folder name, so a project-type JSON file has no `source_directory` field and
-one that still names it is rejected as an unknown setting.
-
-Existing projects keep the `source` recorded in their `profile.ini`, for
-example `documents/` or `repository/` from before this convention.
-`open_project()` reads that path unchanged and performs no filesystem writes;
-no folder is renamed or moved. A single-source mirror made before the
-convention keeps its copy under the original's name, and
-`synchronize_project_workspace()` updates it there.
+Source-folder ownership is fixed by the core, not a project-type setting.
+See the [source-directory convention](project_workspaces.md#source-directory-convention)
+for new projects and the handling of previously saved source paths.
 
 ## GUI defaults and writable preferences
 
@@ -238,32 +221,56 @@ permission to reinterpret an existing project's saved sources or tools.
 
 ## Tool configuration and resources
 
-`tools/_registry.parse_tool()` reads a project-type tool declaration,
-resolves a **registered built-in name**, and calls that tool's own
-`parse_settings()` implementation. `tools/_defaults.py` validates
-`defaults.json` owned by the package. Unknown settings should fail early.
-Tool resource declarations are planned by the core and installed only for a
-new workspace (or upon explicit restoration), preserving user-edited files.
+Tool settings have three ordered layers:
 
-The main tool configuration reference is
-[Tool packages](tool_packages.md); the full installed resource ownership
-contract is [Project workspaces](project_workspaces.md).
+| Layer, lowest to highest precedence | Validation and scope |
+| --- | --- |
+| Packaged `SETTINGS` in the tool's `defaults.json` | The tool initializes and validates its settings dataclass. |
+| The selected project-type intent's `tool` object | `tools._registry.parse_tool()` resolves a registered name and validates overrides through that tool's `parse_settings()`. |
+| Saved `[tool.<name>]` values in the project profile | `tool_settings.with_project_settings()` applies and validates project overrides before execution. |
+
+An omitted setting keeps the preceding layer's value. The implementation
+owners are `tools/_registry.py`, the tool's `_configuration.py`/`tool.py`,
+and `tool_settings.py`; the GUI exposes these core operations rather than
+inventing a fourth settings layer.
 
 ### Tool settings per project
 
-A project can change the settings of the tools its type uses, for all of
-that tool's intents (`kilin.tool_settings`; in the app, Settings → Tools).
-The settings offered for a tool are exactly the `SETTINGS` keys of its
-`defaults.json`, so a new tool appears without extra code. A setting the
-type's intents set differently, such as `generate_paper_summary`'s
-`template`, stays with each intent. The tool's other `defaults.json`
-sections are internal to the tool and are not shown or changed.
+A project can change settings shared by all intents using a tool
+(`kilin.tool_settings`; in the app, Settings -> Tools). Only keys in the
+tool's packaged `SETTINGS` whose effective values agree across those intents
+are offered. A value that differs by intent, such as a report template,
+stays with that intent. Saved changes therefore apply to all eligible uses
+of that tool, not just the currently selected question.
 
-Changes are saved in the project's `profile.ini`, one `[tool.<name>]`
-section per tool, as JSON values, and only where they differ from the
-project type's values; saving the type's values removes the section.
-The tool's own `parse_settings` checks every change when it is saved and
-again before each run, so an invalid value never reaches a tool.
+Changes are JSON-encoded in `[tool.<name>]` sections of `profile.ini`, and
+only differences from the project type's values are stored. Saving all of
+those values removes the tool's override section; resetting a subset removes
+only those overrides and preserves the others. The tool parser validates
+updates when saved and again before execution. Unknown keys and invalid
+types or bounds fail rather than being silently ignored.
+
+### Internal tool thinking
+
+`MODEL_CALLS`, `ESTIMATES`, `HEURISTICS` and other non-`SETTINGS` sections are
+internal packaged configuration, not per-intent or saved project overrides.
+They are not offered by the tool-settings API. The exact thinking policy,
+output-limit resolution, retained short-response exceptions and customized
+configuration compatibility notes belong to
+[Generation settings for tools](tool_packages.md#generation-settings-for-tools).
+
+Packaged files are cached; restart the application or notebook kernel after
+editing them. Timing estimates do not configure generation limits. Core
+`kilin_defaults.json` and a tool's defaults are separate resources: a tool
+setting cannot override the core JSON.
+
+### Tool resources
+
+A validated tool declaration may request packaged workspace resources.
+Planning and installation belong to the core, not the GUI or settings form.
+The [workspace resource contract](project_workspaces.md#tool-resource-contract)
+defines safe destinations, creation-time installation and explicit repair
+without replacing user edits.
 
 ## File-selection protocol constants
 
@@ -291,111 +298,24 @@ Unit tests should validate each ownership/precedence boundary and refusal
 of malformed configuration. Include an installed-wheel test when adding a
 new packaged JSON resource.
 
-Related: [Package defaults](package_defaults.md),
+### Change impact and verification
+
+The separation of creation defaults, saved settings and per-call policy is
+what makes a reopened project reproducible. A configuration edit must identify
+which lifetime it affects, whether a restart is needed, and whether index
+identity changes. Do not treat a new default as an implicit migration.
+
+Inspect the owning validator and every profile/GUI consumer together. Test
+[project defaults and profiles](../tests/kilin/test_project.py),
+[project-type contracts](../tests/kilin/test__project_type_contract.py),
+[tool overrides](../tests/kilin/test_tool_settings.py) and
+[GUI generation settings](../tests/kilin/gui/test__generation_settings.py).
+The [packaged-default documentation check](../tests/setup/test__documentation_assets.py)
+covers literal values, not all precedence behavior. New resources also need
+[installed-wheel verification](development.md#packaging-and-source-exports).
+
+## Related
+
+[Package defaults](package_defaults.md),
 [Model management](model_management.md), [Project workspaces](project_workspaces.md),
 [Tool packages](tool_packages.md), [Development](development.md).
-
-### Internal tool thinking
-
-Every tool inherits the active answering session's output allowance. This
-includes per-question `generation_settings`, whether supplied through the
-GUI or the Python API. The allowance is **per call**, includes thinking and
-final output together, and is not a target length or an aggregate tool budget.
-Tool prompts and report templates still control the requested prose length.
-
-Each tool owns one explicit `MODEL_CALLS` policy in
-`kilin/tools/<tool>/defaults.json`:
-
-```json
-{
-  "MODEL_CALLS": {
-    "THINKING": "inherit"
-  }
-}
-```
-
-This is a valid JSON excerpt, not a complete replacement `defaults.json`;
-retain the tool's other required sections.
-
-`THINKING` accepts `inherit`, `on`, or `off`. It controls internal
-`context.ask_model` requests; `context.write` uses main-session thinking.
-The structured selection tools (`find_passages`, `filter_results`,
-`batch_classify`) and the two document-processing tools (`batch_review`,
-`generate_paper_summary`) default to `off`. Other tools default to
-`inherit`.
-Changing this value to `inherit` or `on` is sufficient to reset or force
-thinking. There is no short-reply threshold and no token-based mode switch.
-
-Output-limit resolution is deliberately independent:
-
-1. A thinking call uses the active session's maximum, ignoring any local cap.
-2. A nonthinking call with no explicit cap also uses the session maximum.
-3. A nonthinking call with a cap uses the smaller of that cap and the user's
-   maximum. A tool never silently raises the user's selected maximum.
-
-When the session maximum is `None`, inherited calls retain the existing
-backend/context-derived budget; a nonthinking local cap still applies.
-Invalid caps (including booleans, zero and negative values) are rejected.
-No minimum generation length is imposed. Output-limit resolution itself
-does not retry a call. Separately, the internal `ask_model` adapter can
-retry once without thinking after output-budget exhaustion leaves an
-unclosed thinking block. See the [completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery)
-for exact eligibility, accounting and exclusions; final streaming `write`
-calls are not automatically retried.
-
-Paper overviews, source explanations, document notes, report sections and
-reference judgments no longer have separate local output ceilings. Variable-
-length lists from the three selection tools also inherit the user limit,
-even though these tools default to nonthinking. Input chunk, passage, batch
-and reading budgets are unchanged and must not be confused with output caps.
-
-The retained short-response exceptions use powers of two:
-
-| Request | Local output cap | When it applies |
-| --- | ---: | --- |
-| Report headline | 128 | Only when effective thinking is off |
-| Report reference identifiers | 128 | Only when effective thinking is off |
-| Router intent decision | 64 | Separate nonthinking router |
-| Router document selection | 8 | Separate nonthinking router |
-| Router term/topic extraction | 128 | Separate nonthinking router |
-| Router category or statement extraction | 256 | Separate nonthinking router |
-| GUI conversation title | 32 | Separate nonthinking router |
-
-User-supplied limits are not rounded or restricted to powers of two. Router
-limits remain separate from the answering model's session ceiling. The
-report metadata caps are configurable in its `WRITING` section, and are
-bypassed automatically when thinking is enabled.
-
-Output-limit resolution does not change temperature or model selection.
-A qualifying recovery adds one actual inference to the logical request;
-completion checks still apply to both attempts. Internal replies remain
-thinking-free for parsers; generated thinking is retained separately for
-display as before. All temporary settings
-and isolated histories are restored on success or failure. Models still need
-to support the existing thinking control. An exhausted user budget remains
-an explicit incomplete result, not a false negative or a successful report.
-
-Duration estimates describe expected output, not maximum generation. The
-new `*_REPLY_TOKENS` entries under `ESTIMATES` are used only in plan timing;
-they do not control the model. Estimates remain approximate, particularly
-when thinking uses more of the selected allowance.
-
-#### Migration from the previous tool budgets
-
-The packaged files are updated together. Customized project-type tool
-objects must remove `answer_tokens`, `note_tokens`, and `section_tokens`.
-The corresponding `SETTINGS` defaults (`ANSWER_TOKENS`, `NOTE_TOKENS`,
-`SECTION_TOKENS`) are removed. They are rejected as unknown settings rather
-than silently overriding the interface or becoming ineffective settings.
-
-Remove `SHORT_REPLY_THINKING` and `SHORT_REPLY_MAX_TOKENS` from `MODEL_CALLS`.
-Only `THINKING` remains. Selection output caps `find_passages`'
-`JUDGE_REPLY_TOKENS`, `filter_results`' `REPLY_TOKENS`, and `batch_classify`'s
-`REPLY_TOKEN_LIMIT_PER_ITEM` are removed from those tools' old estimate groups.
-Restart KíLín or the notebook kernel to clear the existing configuration
-cache. No source reindexing or rewriting of historical answers is needed.
-
-The saved tool summary retains `internal_generation` with the resolved
-thinking policy, requested cap and completion status for each internal call.
-The model trace records the actual effective generation allowance. See the
-[completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery).

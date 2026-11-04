@@ -43,47 +43,65 @@ necessarily reflect a backend's incremental token generation.
 
 ## Initial setup and project selection
 
-Startup retrieves available model choices, backend readiness, project types
-and the preferred/default settings. `gui/model_catalog.py` describes the
-suggested catalog; `huggingface.py` checks the cache. A cached distribution
-is not proof it will load. Model downloads are explicit GUI actions and
-have progress and error events; previewing source files or creating a
-workspace does not silently download inference models.
+Startup retrieves model choices, backend readiness, project types and
+preferred/default settings. `gui/model_catalog.py` supplies the suggested
+catalog and `huggingface.py` inspects the cache; a cached distribution is not
+proof it will load. Model downloads are explicit GUI operations. Source
+preview and the core workspace-creation stage do not load inference models;
+subsequent session activation is a separate stage.
 
-The user chooses a validated project type supplied by the core registry;
-`code` and `literature` are the currently packaged choices, not a GUI
-allowlist. The initial selection is the first registry entry in filename
-order. Source selections may be empty when an explicit workspace is chosen.
-The engine uses the core repository scanner to preview directory selections
-and the explicit-file path to preview individual files. Entry rows have structured
-`reason_code` from core JSON plus human-readable `reason`; JavaScript uses
-the former when making opt-in eligibility decisions. `file_too_large` can
-be selected explicitly; protected/linked scanner entries stay unavailable.
-The GUI then passes confirmed copies and project settings to core workspace
-creation and indexing.
+The page receives validated `type_id` entries from the core registry, selects
+the first in filename order and keeps prompt-selection state for each type.
+Labels and welcome content come from the type definition, with generic
+source-independent fallbacks. Packaged `code` and `literature` definitions
+are examples, not a GUI allowlist.
 
-A project already saved under the selected workspace can be listed and
-resumed without recopying original sources. Managed projects normally
-contain `sources/`, `outputs/`, `templates/`, `indexes/`, `logs/` and
-`profile.ini`. Output/template editing is delegated through `project_files`
-APIs and does not reindex sources. Adding/removing confirmed `sources/`
-copies does refresh the retrieval index, without deleting originals.
+The engine previews directories through the core scanner and individual files
+through the explicit-file path. The page uses `reason_code`, not display
+wording, for selection decisions; exact eligibility and payload fields are
+owned by the [source-preview protocol](gui_protocol.md#source-preview-contract).
+Confirmed sources and settings are passed to core creation and indexing.
+An explicit workspace permits an empty source selection; the engine never
+substitutes an example repository.
+
+### Creation, conflicts and activation
+
+The core allocates fresh default destination names. An explicit occupied
+destination yields `workspace_conflict`; the page may offer a separate
+`resume` operation for an existing project or retain the new-project inputs
+while the user chooses another location. The
+[protocol contract](gui_protocol.md#project-type-identifiers) defines the
+reported fields and which conflicts can be resumed. Filesystem reservation
+and rollback belong to [Project workspaces](project_workspaces.md), not Qt.
+
+Creation and profile/resource preparation finish before the engine closes
+its current session or opens the new project's conversation and trace files.
+A conflict leaves the current session and protected destination unchanged,
+including trace bytes. Failures before switching are displayed without
+writing an error to the previous project's trace. After creation, ordinary
+session activation loads models and tracing; a model-load failure does not
+delete the valid newly created project.
+
+Saved projects are listed and resumed without recopying their original
+sources. Later additions use `add_project_sources`, not a creation function.
+Adding/removing confirmed managed sources refreshes retrieval; editing
+outputs/templates through `project_files` does not. These are core operations
+with different ownership, even when adjacent in the interface.
 
 ## Workspace ownership and paths
 
-Packaged `gui/defaults.json` is **immutable** during normal operation.
-`gui/preferences.py` merges its validated values with sparse per-user
-preferences; `gui/_paths.py` resolves config/data locations independently
-of Qt. In a validated development checkout, the GUI's default workspace
-parent remains its root `sandbox/`; in an installed distribution it is a
-platform-specific per-user data directory. `KILIN_WORKSPACES_DIR` and an
-explicit workspace selection override that suggested parent.
+`gui/_paths.py` resolves writable config/data locations independently of Qt;
+`gui/preferences.py` never treats the installed defaults file as writable
+user state. A development checkout and an installed distribution can have
+different suggested workspace parents. The exact path overrides and
+preferences rules are owned by
+[Configuration](configuration.md#gui-defaults-and-writable-preferences).
 
-An existing project's `profile.ini` remains authoritative for backend,
-models, search depth, effort and router settings. `gui/model_settings.py`
-stores GUI-specific options in sections of that same profile. Its controlled
-legacy migration is different from a general project data migration. See
-[Configuration](configuration.md) for all precedence rules.
+An existing project's profile remains authoritative. `gui/model_settings.py`
+stores GUI-specific effort/search/router choices there rather than replacing
+them from current global defaults. Its controlled legacy import is not a
+general project migration. For changes to the saved source tree or resources,
+use the [workspace APIs](project_workspaces.md#creation-opening-and-explicit-updates).
 
 ## Operation lifecycle and answer display
 
@@ -129,19 +147,12 @@ switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.
 
-**Answer Stop first requests cooperative cancellation.** The page sends
-`cancel_answer`; model calls check the request at token boundaries. An
-acknowledged cancellation saves no turn and keeps the project and models
-loaded. Only if no terminal answer event follows within the grace period
-specified in the [GUI protocol](gui_protocol.md#errors-stop-and-restart),
-or for forceful Stop during other work such as downloads, does `window.py`
-kill the child process; this unloads models and
-discards unsaved partial output. Qt starts a new engine, the frontend
-reloads settings and can resume the earlier project. The `resume` command
-can include the active `conversation_id` so the engine restores **that**
-conversation; without an ID it uses the most recently modified conversation. Invalid requested
-IDs raise an error and do not silently open another chat. This is
-conversation recovery, **not** continuation of interrupted generation.
+Answer Stop requests cooperative cancellation first. An acknowledged
+cancellation retains the project and loaded models without committing the
+partial answer. Forceful Stop or an unresponsive engine loses live sessions;
+the page reloads settings and can resume the prior conversation, not the
+interrupted generation. The [Stop and restart protocol](gui_protocol.md#errors-stop-and-restart)
+owns the command, terminal events, grace period and exact resume-ID behavior.
 
 The UI may show a remembered partial answer after Stop, but such display
 state does not imply a committed `ConversationTurn`. Closing the desktop
@@ -180,36 +191,25 @@ does not authenticate untrusted source content.
   `QApplication` can crash native PDF tests; isolate optional Qt/WebEngine
   smoke tests in a **subprocess**.
 
-Focused regression tests are under `tests/kilin/gui/`, including protocol,
-model, project, source-selection, reference preview, PDF and optional native
-smoke suites. General persistence and source-management guarantees are
-covered by tests under `tests/kilin/` independent of Qt.
+### Change impact and verification
 
-Related: [Architecture](architecture.md),
+Keep presentation state separate from committed backend state. A new control
+may require a bridge slot, dispatcher action, event consumer and protocol
+documentation, but must not move project policy into Qt. Inspect all three
+transport participants before changing operation order or recovery.
+
+Run the [protocol](../tests/kilin/gui/test__protocol.py),
+[creation](../tests/kilin/gui/test_engine__creation.py),
+[resume](../tests/kilin/gui/test_engine__resume.py),
+[read-while-answering](../tests/kilin/gui/test__read_while_answering.py) and
+[frontend recovery](../tests/kilin/gui/test__answer_recovery_frontend.py)
+suites, plus the relevant source/model/reference tests. Native dialogs,
+rendering and PDF behavior still require isolated supported-host checks,
+including the opt-in [WebEngine smoke suite](../tests/kilin/gui/test__webengine_smoke.py).
+
+## Related
+
+[Architecture](architecture.md),
 [GUI protocol](gui_protocol.md),
 [Conversation ownership](conversation_ownership.md),
 [Security](security.md), [Development](development.md).
-
-## Registry-driven project creation
-
-Project-type choices arrive from the core registry as `type_id` entries.
-The browser initially selects the first entry in filename order and keeps
-prompt-selection state dynamically for each type. Welcome content comes
-from the configuration, with source-independent generic fallbacks.
-
-New projects may have no sources when an explicit workspace is selected.
-The engine delegates empty creation to `prepare_sources_workspace`; it
-never substitutes an example repository. The core, not the GUI, allocates
-fresh names for default destinations. Explicit occupied destinations produce
-`workspace_conflict`: the page offers a separate resume command for an
-existing project or lets the user choose another destination.
-
-Creation and profile/resource preparation finish before the engine closes
-its current session or opens conversation/trace files for the new project.
-A conflict leaves the current session and protected destination unchanged,
-including trace bytes. Failures before switching are displayed without
-writing an error into the previous project's trace. After a successful
-creation, session switching, model loading, and diagnostic tracing follow
-the ordinary activation path; model-load failure does not delete the newly
-created valid project. Later imports use `add_project_sources`, not a
-creation function.
