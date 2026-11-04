@@ -108,15 +108,28 @@ ICONS = Path(__file__).resolve().parent / "icons"
 class ChatBridge(QObject):
     """Expose Qt signals and slots connecting the page to backend commands.
 
+    Parameters
+    ----------
+    parent: QObject | None, optional
+        Parent Qt object for the bridge. Defaults to ``None``.
+
     Attributes
     ----------
     event: Signal(str)
         Serialized engine event sent back to the web page.
     pathsSelected: Signal(list)
         Local source paths chosen using native dialogs.
+    attachmentsSelected: Signal(list)
+        Local chat attachment paths chosen in native dialogs.
     folderFilesSelected: Signal(str, str, list)
         Editable folder (outputs or templates), purpose ("add" or the path
         to replace), and the chosen files.
+    sourceDropTargetChanged: Signal(str)
+        Serialized bounds used to align native source drop targets.
+    sourceDragChanged: Signal(bool)
+        Whether a local source is being dragged over the drop region.
+    appearanceChanged: Signal(str)
+        Requested ``system``, ``light``, or ``dark`` appearance mode.
     projectsFolderChosen: Signal(str)
         Folder chosen to hold the projects, or "" for the standard one.
     commandRequested: Signal(dict)
@@ -125,30 +138,97 @@ class ChatBridge(QObject):
         Request to terminate the active engine process.
     answerCancelRequested: Signal()
         Stop was pressed for a running answer.
+    project_root: pathlib.Path | None
+        Active project root used by desktop file-opening slots, or None.
 
     Methods
     -------
+
+    **Native dialogs, files, and desktop integration.**
+
     chooseSources()
         Offer files and folders through one browse control.
     chooseFolder()
         Show the native folder picker on the GUI thread.
     chooseFiles()
         Add one or more individual files.
-    chooseProjectsFolder(), useDefaultProjectsFolder()
-        Choose the workspace folder that holds the projects, or go back to
-        the standard one.
+    chooseAttachmentFolder()
+        Choose one folder for the current chat message.
+    chooseAttachmentFiles()
+        Choose one or more files for the current chat message.
+    chooseFolderFiles(folder, purpose)
+        Choose files for ``outputs/`` or ``templates/``.
+    folderDropped(folder, paths)
+        Offer files dropped on ``outputs`` or ``templates`` to the page.
+    editFolder(request_json)
+        Add, replace, or delete files in outputs or templates.
+    chooseProjectsFolder()
+        Choose the folder where KíLín keeps its projects.
+    useDefaultProjectsFolder()
+        Go back to the standard projects folder.
     requestProjectsFolder()
-        Report the workspace folder in use.
+        Report the projects folder in use and the one saved in Settings.
+    setSourceDropTarget(bounds_json)
+        Align the native drop region with the visible sources tree.
+    openWorkspaceFile(relative_path)
+        Open a validated project file in its desktop app.
+    copyText(text)
+        Put text on the system clipboard for the page's Copy buttons.
+    openExternalLink(url)
+        Open an approved HTTPS link only after the user clicks it.
+
+    **Preferences and model availability.**
+
     requestSettings(type_id, workspace)
         Read the existing profile or new-project defaults.
+    requestReadiness()
+        Ask the backend to check runtime and required model availability.
+    installRequiredModels()
+        Ask the backend to download all missing default models.
     downloadModel(model_id)
         Download one suggested model only after the user chooses it.
-    previewSources(sources_json, extensions_json, max_file_bytes, workspace)
+    useInstalledModels()
+        Use installed models in place of missing preferred ones.
+    applyModelSettings(settings_json)
+        Send the JSON-decoded model settings to the backend.
+    setAppearance(mode)
+        Report the page's color mode: system, light, or dark.
+    saveAnswerSettings(settings_json)
+        Save answer settings to the open project right away.
+
+    **Projects and source management.**
+
+    previewSources(sources_json, extensions_json, ...)
         Scan selected roots without copying them.
-    openProject(sources_json, type_id, workspace, selected_json, settings_json)
-        Request project preparation in the backend process.
+    openProject(sources_json, type_id, workspace, ...)
+        Request exclusive new-project creation in the backend process.
+    checkProjectSources(sources_json)
+        Ask what adding these sources would copy, before adding.
+    addProjectSources(sources_json, decisions_json)
+        Import sources after the user confirmed the check.
+    removeProjectSources(paths_json)
+        Delete confirmed workspace source copies and reindex.
+    syncProjectSources(decisions_json)
+        Apply the user's choice for each changed source and reindex.
+    renameProject(name)
+        Ask the backend to rename the active project directory.
+    findSavedProject(type_id, workspace)
+        Refresh Resume for the selected project type and workspace.
+    listSavedProjects(workspace)
+        List all valid saved projects without loading their models.
+    resumeProject(directory)
+        Open a saved project without changing its source snapshot.
+    resumeProjectConversation(directory, conversation_id)
+        Reopen a project at the exact conversation active before a stop.
+    closeProject()
+        Release models when the user chooses a different project.
+
+    **Answering and conversation management.**
+
     askQuestion(question, effort, settings_json)
-        Request one answer with the selected GUI effort preset.
+        Request one answer with the current conversation settings.
+    choosePlan(choice)
+        Answer a tool plan that waits for the user's choice.
     previewReference(turn_index, citation)
         Request source context for one saved answer citation.
     resetConversation()
@@ -157,28 +237,27 @@ class ChatBridge(QObject):
         Create and open a separate empty conversation.
     branchConversation(turn_count)
         Branch the active conversation, keeping its first turns.
-    selectConversation(conversation_id)
-        Open a saved conversation without reloading project resources.
     viewConversation(conversation_id)
         Show a saved conversation read-only while an answer is generated.
+    selectConversation(conversation_id)
+        Open a saved conversation without reloading project resources.
     renameConversation(conversation_id, name)
         Rename a saved conversation in the project catalog.
+    saveAnswerTimeline(timestamp, timeline_json)
+        Keep how long an answer took, so a resumed chat shows it again.
     deleteConversation(conversation_id)
-        Archive a conversation and remove it from the project catalog.
-    listSavedProjects(workspace)
-        List valid saved projects of all registered types.
-    resumeProject(directory)
-        Open a saved project without changing its source snapshot.
-    resumeProjectConversation(directory, conversation_id)
-        Reopen a saved project at one exact conversation.
-    closeProject()
-        Release models when the user chooses a different project.
+        Archive a conversation and remove it from the visible catalog.
     cancelAnswer()
         Stop the running answer while the engine and models stay loaded.
-    requestToolSettings(), saveToolSettings(name, settings_json)
-        List the open project's tools, or save one tool's settings.
     stopOperation()
         Terminate the active backend process immediately.
+
+    **Tool settings.**
+
+    requestToolSettings()
+        Ask for the open project's tools and their settings.
+    saveToolSettings(name, settings_json)
+        Save one tool's settings for the open project.
 
     Notes
     -----

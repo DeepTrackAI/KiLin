@@ -1103,6 +1103,12 @@ def run(
         the paper cannot be used, or the user cancels, a message saying so
         and no evidence.
 
+    Raises
+    ------
+    IncompleteModelResponse
+        If no usable cited notes can be produced for a report. The
+        normal template and paper-selection errors return ToolResult.
+
     """
 
     trace = context.trace

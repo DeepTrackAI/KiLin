@@ -73,6 +73,17 @@ class GenerationCancelled(BaseException):
 class IncompleteModelResponse(RuntimeError):
     """Report a model reply that must not be interpreted as a result.
 
+    Parameters
+    ----------
+    message: str
+        Human-readable description of the rejected generation.
+    reason: str
+        Machine-readable failure category.
+    finish_reason: str | None, optional
+        Backend termination reason. Defaults to ``None``.
+    raw_text: str, optional
+        Rejected model response. Defaults to ``""``.
+
     Attributes
     ----------
     reason: str

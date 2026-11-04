@@ -685,7 +685,13 @@ class ChatSession:
         Raises
         ------
         RuntimeError
-            If the session is closed or the model returns no usable text.
+            If the session is closed or generation fails at runtime.
+        IncompleteModelResponse
+            If generation ends without a usable model response. This
+            exception subclasses RuntimeError.
+        GenerationCancelled
+            If generation is stopped by the caller. This exception
+            subclasses BaseException, not Exception.
         ValueError
             If ``message`` is empty, ``max_new_tokens`` is invalid, the model
             context size is unavailable when needed, or the conversation has

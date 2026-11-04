@@ -400,6 +400,11 @@ def template_names(directory: Path) -> list[str]:
     list[str]
         Template IDs (file names without ``.md``), sorted.
 
+    Raises
+    ------
+    ValueError
+        If the template directory itself is a symbolic link.
+
     """
 
     folder = Path(directory)

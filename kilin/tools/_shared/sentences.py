@@ -97,9 +97,9 @@ def split_sentences(
     Returns
     -------
     list[Sentence]
-        Sentences of at least four words, not split after abbreviations
-        such as "Ref.", "Fig." or "Eq.". A sentence that overlapping
-        passages share is kept once, from its first passage. A passage
+        Sentences of at least ``min_words`` words; abbreviations such
+        as "Ref.", "Fig." or "Eq." are not sentence boundaries. A sentence
+        shared by overlapping passages is kept once, from the first passage.
         that begins inside a sentence completes the previous passage's
         unfinished last sentence (their overlap counted once); its broken
         start is otherwise left out.

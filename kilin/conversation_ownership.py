@@ -286,7 +286,23 @@ class ConversationFileLock:
                     _ACTIVE_PATHS.discard(self.path)
 
     def __enter__(self) -> ConversationFileLock:
-        """Acquire and return this ownership token."""
+        """Acquire and return this ownership token.
+
+        Returns
+        -------
+        ConversationFileLock
+            This token, with exclusive write ownership acquired.
+
+        Raises
+        ------
+        ConversationLockedError
+            If another writer owns the conversation file.
+        RuntimeError
+            If this token has already acquired its lock.
+        OSError
+            If the operating system cannot acquire the file lock.
+
+        """
 
         self.acquire()
         return self

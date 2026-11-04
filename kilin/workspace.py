@@ -180,6 +180,13 @@ SourceAction: TypeAlias = Literal[
 class _CopyStamp(TypedDict):
     """Size and modification time of one source copy when imported.
 
+    Attributes
+    ----------
+    size: int
+        File size in bytes when the managed copy was imported.
+    mtime_ns: int
+        Modification time in nanoseconds at that import.
+
     """
 
     size: int
@@ -206,7 +213,16 @@ class SourceVersion(TypedDict):
 
 
 class _StoredVersion(TypedDict):
-    """Persisted version path and its original relative filename.
+    """Persisted path and digest for one retained source version.
+
+    Attributes
+    ----------
+    file: str
+        Relative filename within the corresponding imported source.
+    path: str
+        Saved version path relative to the managed ``sources/`` directory.
+    sha256: str
+        Lowercase SHA-256 digest of the retained source snapshot.
 
     """
 
@@ -216,12 +232,21 @@ class _StoredVersion(TypedDict):
 
 
 class SourceChanges(TypedDict):
-    """Copies that differ from their originals, as workspace-relative paths.
+    """Classify differences between imported copies and their original sources.
 
-    ``added`` files can be imported from tracked original directories.
-    ``changed`` copies can be updated from their originals and ``deleted``
-    copies removed; ``edited`` copies were changed in the project and are
-    kept even though their originals changed or were deleted.
+    The four lists contain workspace-relative paths. ``edited`` copies are
+    retained even when their originals changed or disappeared.
+
+    Attributes
+    ----------
+    added: list[str]
+        Newly discovered files that can be imported from tracked folders.
+    changed: list[str]
+        Existing copies whose original files have changed.
+    deleted: list[str]
+        Tracked copies whose originals no longer exist.
+    edited: list[str]
+        Managed copies edited locally and therefore protected from replacement.
 
     """
 
@@ -232,7 +257,22 @@ class SourceChanges(TypedDict):
 
 
 class _SourceRecord(TypedDict):
-    """Persisted ownership and imported-file inventory of one source.
+    """Persist ownership and the imported-file inventory for one source.
+
+    Attributes
+    ----------
+    original: str
+        Recorded path of the external source selected for import.
+    name: str
+        Unique name allocated inside the managed ``sources/`` directory.
+    files: list[str], optional
+        Imported files relative to the source directory; absent in old records.
+    stamps: dict[str, _CopyStamp], optional
+        Copy-time file metadata keyed by imported relative filename.
+    kind: "file" | "folder", optional
+        Source type; absent in older manifests.
+    versions: list[_StoredVersion], optional
+        Versions retained from earlier imports, with paths and digests.
 
     """
 
@@ -2083,6 +2123,13 @@ def include_explicit_imports(
     dict[str, object]
         Scan report that additionally selects safe, explicitly imported files
         irrespective of their filename suffix or protected-name pattern.
+
+    Raises
+    ------
+    ValueError
+        If the source manifest or scan entries are malformed.
+    OSError
+        If an existing source manifest or snapshot cannot be read.
 
     Notes
     -----

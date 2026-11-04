@@ -257,6 +257,12 @@ def take_notes(
         when a failure collector is supplied; otherwise they raise
         ``IncompleteModelResponse``. They never imply a negative result.
 
+    Raises
+    ------
+    IncompleteModelResponse
+        If a part returns incomplete or invalid notes and ``failures``
+        is ``None``. Supplying a collector records and skips that part.
+
     """
 
     notes: list[tuple[int, list[str]]] = []

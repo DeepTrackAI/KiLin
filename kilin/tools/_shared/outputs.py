@@ -82,7 +82,7 @@ Examples
 >>> from pathlib import Path
 >>> from kilin.tools._shared.outputs import load_output, save_output_file
 >>> root = Path("/path/to/project")
->>> saved = save_output_file(root, "notes.md", "# Notes\n\nMRI results.\n")
+>>> saved = save_output_file(root, "notes.md", "# Notes\\n\\nMRI results.\\n")
 >>> document = load_output(root, saved.name)
 >>> len(document.passages)
 1
@@ -165,6 +165,13 @@ def output_folder(project_root: Path) -> Path:
     -------
     pathlib.Path
         Project-owned outputs folder, creating it when absent.
+
+    Raises
+    ------
+    ValueError
+        If the outputs folder is a symbolic link or resolves elsewhere.
+    OSError
+        If the output folder cannot be created or inspected.
 
     """
 

@@ -279,36 +279,84 @@ class ChatEngine:
 
     Methods
     -------
+
+    **Startup and model configuration.**
+
     startup()
         Suggest the most recently used valid sandbox project.
-    find_saved_project(type_id, workspace)
-        Refresh Resume for the selected type and workspace folder.
-    resume_project(directory)
-        Reopen a saved project without copying source files.
+    readiness()
+        Report runtime packages and the preferred models' availability.
+    use_installed_models()
+        Use installed models in place of missing preferred ones.
+    install_required_models()
+        Download missing GUI models with live byte progress and timing.
     settings(type_id, workspace)
-        Return saved or default settings and cached model IDs.
+        Emit saved or default settings and cached model IDs.
     download(model_id)
         Download only a model explicitly chosen from the GUI catalog.
-    preview(sources, extensions, max_file_bytes, workspace='')
+    apply_model_settings(request)
+        Apply confirmed model edits and retain the active chat.
+    save_answer_settings(settings)
+        Save answer settings changed outside a question, e.g. Thinking.
+
+    **Project discovery and sources.**
+
+    list_saved_projects(workspace)
+        Report valid projects of all registered types, newest first.
+    find_saved_project(type_id, workspace)
+        Refresh Resume for the selected type and workspace folder.
+    resume_project(directory, conversation_id=None)
+        Reopen a saved project and optionally restore its exact chat.
+    preview(sources, extensions, max_file_bytes, workspace)
         List eligible files before copying any source.
     open_project(sources, type_id, workspace, ...)
-        Add selected sources and open one KíLín workspace.
-    ask(question, retrieval_count=None, generation_settings=None)
-        Ask the loaded project and return its saved answer and evidence.
+        Create and activate a new, independently owned workspace.
+    check_sources(sources)
+        Tell the user what adding these sources would copy.
+    add_project_sources(sources, decisions)
+        Add confirmed sources and restore the active chat.
+    remove_project_sources(paths)
+        Delete managed source copies through the core and reindex.
+    sync_sources(decisions)
+        Apply the user's choice for each changed source, then reindex.
+    edit_folder(folder, operation)
+        Delegate editing outputs/ and templates/ to the core API.
+    rename_project(name)
+        Rename the active workspace folder, then reopen the same chat.
+
+    **Answering and evidence.**
+
+    ask(question, retrieval_count=None, ...)
+        Emit progress, saved answer, and evidence events.
     cancel_answer()
         Stop the running answer at its next generated token.
-    tool_settings(), save_tool_settings(name, settings)
-        List the open project's tools, or save one tool's settings.
+    save_answer_timeline(timestamp, timeline)
+        Keep how long an answer took, as the page showed it.
     preview_reference(turn_index, citation)
         Show nearby source lines for one saved answer citation.
-    create_conversation(*, branch=False)
+
+    **Tools.**
+
+    tool_settings()
+        Send the tools the open project can use, with their settings.
+    save_tool_settings(name, settings)
+        Save one tool's settings for the open project.
+
+    **Conversations.**
+
+    create_conversation(branch=False, ...)
         Create an empty conversation or branch the selected conversation.
     select_conversation(conversation_id)
         Switch conversations while retaining loaded project resources.
     rename_conversation(conversation_id, name)
         Rename one conversation without changing its saved state.
+    delete_conversation(conversation_id)
+        Archive one conversation and select a remaining conversation.
     reset()
         Create and activate a new empty conversation for the open project.
+
+    **Lifecycle.**
+
     close()
         Release the loaded backend session.
 
@@ -1092,7 +1140,7 @@ class ChatEngine:
             self._send("source_changes", **changes)
 
     def settings(self, type_id: str, workspace: str) -> None:
-        """Return saved or default settings and cached model IDs.
+        """Emit saved or default settings and cached model IDs.
 
         Parameters
         ----------
@@ -1100,6 +1148,10 @@ class ChatEngine:
             Registered project-type identifier.
         workspace: str
             Existing workspace path, or blank for new-project defaults.
+
+        Notes
+        -----
+        Sends a ``settings`` event; no value is returned to the caller.
 
         """
 
@@ -2470,7 +2522,7 @@ class ChatEngine:
         generation_settings: dict[str, object] | None = None,
         effort: dict[str, int] | str | None = None,
     ) -> None:
-        """Ask the loaded project and return its saved answer and evidence.
+        """Ask the loaded project and emit its saved answer and evidence.
 
         Conversation settings affect the next answer without rebuilding the
         project indexes or editing profile.ini.

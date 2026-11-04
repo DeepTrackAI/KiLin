@@ -59,6 +59,9 @@ sentences; they are not part of the public API.
 
 Examples
 --------
+This is an illustrative integration call, not a standalone doctest.
+KíLín supplies the required tool context and conversation state.
+
 ``context`` is the ``ToolContext`` that KíLín passes to a tool, and
 ``earlier`` holds the turns the follow-up points back to:
 

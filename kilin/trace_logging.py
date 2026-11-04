@@ -987,6 +987,11 @@ class TraceLogger:
     def reset_conversation_state(self) -> None:
         """Clear retained state for an archived conversation.
 
+        Raises
+        ------
+        RuntimeError
+            If the trace logger has already been closed.
+
         Notes
         -----
         Removes resumable conversation state, saved readable turns and
