@@ -219,6 +219,7 @@ saved project profile and, when relevant, GUI preferences. There is **no**
 Machine states, conversation roles, trace identifiers, and persistence-format
 versions remain Python contracts, not runtime preferences. GUI presentation
 defaults remain under `kilin/gui/defaults.json`. Tool parameters remain
-under their current owners; they are intentionally **not** consolidated in
-this refactor. A future independently configurable tool may have its own
-defaults file.
+in each registered package's `defaults.json`, with its own validation and
+README. They are not consolidated into `kilin_defaults.json`. Tool defaults,
+intent settings and saved project overrides are described in
+[Tool configuration precedence](tool_packages.md#configuration-precedence).

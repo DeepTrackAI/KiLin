@@ -242,10 +242,14 @@ Registered tools use `ToolContext.ask_model` for internal judgments and
 `ToolContext.write` for streamed final answers. Both preserve the current
 answering model and temperature. Internal requests resolve thinking from
 the tool-owned `MODEL_CALLS` policy; final `write` requests inherit the
-session thinking setting unchanged. The per-call output limit does not
-exceed either the tool budget or the session's `max_new_tokens` setting. The router keeps its separate deterministic
-nonthinking behavior. Isolated tool replies never enter persistent chat
-history.
+session thinking setting unchanged. Thinking calls use the session's
+output allowance even if the tool supplies a local cap. Only nonthinking
+calls can use a smaller explicit cap; uncapped calls inherit the session
+allowance. This is a per-call limit, not an aggregate tool budget. The
+router keeps its separate deterministic nonthinking behavior. See
+[Generation settings for tools](tool_packages.md#generation-settings-for-tools)
+for the adapter contract. Isolated tool replies never enter persistent
+chat history.
 
 Internal `ask_model` calls still return thinking-free text for tool
 parsers, but the tool coordinator collects any model thinking and presents

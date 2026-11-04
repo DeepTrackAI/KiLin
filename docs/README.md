@@ -62,7 +62,7 @@ These documents specify individual contracts in greater detail:
 - [Performance analysis](performance.md)
 - [Desktop GUI README](../kilin/gui/README.md)
 
-The twelve registered tools each have their own README under
+Each registered tool has its own README under
 [`kilin/tools/`](../kilin/tools/), which is the authoritative guide to
 that tool's settings, supported requests and outputs. Do not infer tool
 behavior from its identifier alone.

@@ -15,14 +15,15 @@ web/app.js
 window.py (Qt/QWebChannel, GUI process)
   | newline-delimited JSON on child stdin/stdout
   v
-engine.py (synchronous child process)
+engine.py (sequential dispatcher; separate input-reader thread)
   | core KíLín project, retrieval, model, and conversation APIs
 ```
 
 - `ChatBridge` in `kilin/gui/window.py` exposes **camelCase** Qt slots and
   typed Qt signals. Some operations, such as native file dialogs, opening a
-  workspace file, appearance, and Stop, are handled locally rather than being
-  passed to the child as commands.
+  workspace file, appearance, and forceful Stop, are handled locally rather
+  than passed to the child as commands. Answer cancellation instead sends
+  `cancel_answer` to the engine.
 - `ChatWindow._send_command()` queues dictionaries until the child runs;
   `_send_pending()` writes one JSON object followed by `\n` per command.
 - `kilin.gui.engine.main()` reads commands from stdin and emits one JSON
@@ -86,16 +87,23 @@ paths and source paths remain subject to downstream core validation.
 | `rename_conversation` | `conversation_id`, `name` | Rename the registered conversation |
 | `delete_conversation` | `conversation_id` | Archive/remove it from the visible catalog |
 | `check_sources` | `sources` | Report what adding these files and folders would copy and leave out, without copying; the page asks the user before `add_project_sources` |
-| `add_project_sources` | `sources`, optional `decisions` (`sources/` path → sync action) | Copy the sources not yet in the project, skipping folders without any file to copy; apply the user's choices to copies of sources already in the project; reindex once |
+| `add_project_sources` | `sources` | Optional `decisions` maps `sources/` paths to sync actions. Copy eligible new sources, apply supplied choices for existing copies, and reindex once. |
 | `remove_project_sources` | `paths` | Remove confirmed copied project sources |
-| `sync_sources` | `decisions` (object of `sources/` path → `import`, `replace`, `keep_both`, `delete` or `keep`) | Apply the user's choice per changed file, leave unlisted files and edited copies untouched, and reindex |
+| `sync_sources` | None | Optional `decisions` maps `sources/` paths to `import`, `replace`, `keep_both`, `delete` or `keep`; an explicit map leaves unlisted files untouched. Omitted or `null` decisions use the core automatic policy: update changed unedited copies, remove deleted unedited copies, and import no new files. Reindex afterward. |
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
+| `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `tool_settings` | None | List the open project's tools and their settings |
 | `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
+
+`save_answer_settings` updates the saved project profile and the live chat
+settings without asking a question. Successful saving emits no dedicated
+acknowledgement event; validation or persistence failure emits `error`.
+An omitted `settings` field reaches the handler as `None` and is rejected,
+not treated as a request to reset defaults.
 
 For `resume`, a supplied `conversation_id` must identify an existing
 conversation in the given project. An unknown, empty, or invalid explicit
@@ -159,6 +167,7 @@ can accompany an event.
 | --- | --- |
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
+| Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether the saved directory is unavailable) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`); `models_applied` (updated levels, models and profile); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
@@ -171,9 +180,8 @@ can accompany an event.
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
 The process-recovery events `stopped` and `backend_restarted`,
-`conversation_viewed`, and some `error` events, originate in `window.py`,
-not `engine.py`. Diagnostic trace
-event names such as `gui.project.settings.saved` are a **separate** trace
+`conversation_viewed`, `projects_folder`, and some `error` events
+originate in `window.py`, not `engine.py`. Diagnostic trace event names such as `gui.project.settings.saved` are a **separate** trace
 schema and are not browser events.
 
 ### Open-project source-add confirmation
@@ -293,9 +301,11 @@ partial visible stream.
   tools. The answer ends with `answer_cancelled`; no turn is saved, and the
   project and loaded models stay open.
 - The page's answer Stop calls `ChatBridge.cancelAnswer()`, which sends
-  `cancel_answer` and starts a `CANCEL_GRACE_MS` timer in the window; an
-  `answered`, `answer_cancelled` or `error` event stops it, otherwise the
-  window kills the engine as below.
+  `cancel_answer` and starts the window's `CANCEL_GRACE_MS` timer
+  (30,000 milliseconds). An `answered`, `answer_cancelled` or `error` event
+  stops it; otherwise the window kills the engine as below. Cancellation
+  is a request, not a guarantee that it wins a race with normal completion:
+  an already completed answer can still end with `answered`.
 - `ChatBridge.stopOperation()` is the forceful Stop for other operations,
   and the fallback when an engine does not respond: it emits
   `stopRequested`; the Qt window clears queued commands, kills its child

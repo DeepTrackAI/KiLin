@@ -138,12 +138,16 @@ cleanup attempts to release acquired locks and partially loaded sessions.
 Index integrity mismatches cause a rebuild rather than trusting unchecked
 vectors. Generation failure should not commit a successful answer turn.
 
-The desktop Stop action **kills the engine process**; it does not suspend
-and later resume inference. On restart, the page can request the exact
-previous conversation ID; it cannot recover an unsaved partial generation.
-The frontend activity timeline and diagnostic trace are different records.
-See [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md),
-and [Trace recording](trace_recording.md).
+For an active answer, desktop Stop first requests cooperative cancellation
+through `cancel_answer`. When cancellation is acknowledged, no answer turn
+is committed and the project and loaded models remain open. The Qt window
+kills and restarts the engine only if that request does not finish within
+the grace period, or for forceful Stop during other operations. Neither
+path suspends generation for later continuation. After restart, the page
+can request the exact previous conversation ID, not an unsaved partial
+answer. The frontend activity timeline and diagnostic trace are different
+records. See the authoritative [Stop and restart contract](gui_protocol.md#errors-stop-and-restart),
+[GUI architecture](gui_architecture.md), and [Trace recording](trace_recording.md).
 
 ## Architectural checks before changes
 

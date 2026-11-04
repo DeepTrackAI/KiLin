@@ -50,9 +50,12 @@ is not proof it will load. Model downloads are explicit GUI actions and
 have progress and error events; previewing source files or creating a
 workspace does not silently download inference models.
 
-The user chooses `code` or `literature` and local source paths. The engine
-uses the core repository scanner to preview directory selections and the
-explicit-file path to preview individual files. Entry rows have structured
+The user chooses a validated project type supplied by the core registry;
+`code` and `literature` are the currently packaged choices, not a GUI
+allowlist. The initial selection is the first registry entry in filename
+order. Source selections may be empty when an explicit workspace is chosen.
+The engine uses the core repository scanner to preview directory selections
+and the explicit-file path to preview individual files. Entry rows have structured
 `reason_code` from core JSON plus human-readable `reason`; JavaScript uses
 the former when making opt-in eligibility decisions. `file_too_large` can
 be selected explicitly; protected/linked scanner entries stay unavailable.
@@ -126,16 +129,17 @@ switching conversations within the same project, subject to backend state.
 The GUI stores answer timing as optional presentation metadata; it is not the
 same thing as the diagnostic trace or the core `ConversationTurn`.
 
-**Stop ends an answer cleanly.** The page sends `cancel_answer`; the engine
-ends the answer at the model's next token, saves no turn, and keeps the
-project and models loaded. Only if no answer event follows within
-`CANCEL_GRACE_MS` (30 seconds), and for Stop during other work such as
-downloads, does `window.py` kill the child process; this unloads models and
+**Answer Stop first requests cooperative cancellation.** The page sends
+`cancel_answer`; model calls check the request at token boundaries. An
+acknowledged cancellation saves no turn and keeps the project and models
+loaded. Only if no terminal answer event follows within the grace period
+specified in the [GUI protocol](gui_protocol.md#errors-stop-and-restart),
+or for forceful Stop during other work such as downloads, does `window.py`
+kill the child process; this unloads models and
 discards unsaved partial output. Qt starts a new engine, the frontend
 reloads settings and can resume the earlier project. The `resume` command
 can include the active `conversation_id` so the engine restores **that**
-conversation; without an
-ID it uses the most recently modified conversation. Invalid requested
+conversation; without an ID it uses the most recently modified conversation. Invalid requested
 IDs raise an error and do not silently open another chat. This is
 conversation recovery, **not** continuation of interrupted generation.
 

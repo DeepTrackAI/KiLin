@@ -100,6 +100,15 @@ a mutable setting or contract rather than duplicating values in every page.
 Editable SVGs are indexed in [Architecture diagrams](diagrams.md) and
 maintained alongside the technical documents that explain them.
 
+`tests/setup/test__documentation_assets.py` runs using only the standard
+library, without importing the application or loading models. It checks
+local links and Markdown heading fragments, SVG metadata, module coverage
+and owner totals, GUI action/event inventories, workspace API exports,
+registered-tool references, JSON snippets and documented core defaults.
+These checks detect structural drift; they do not prove prose semantics or
+native GUI behavior. Review the implementation and focused runtime tests
+when changing a contract.
+
 ## Test runners and expected isolation
 
 Run from the repository root in the appropriate environment:
@@ -164,7 +173,7 @@ into three independent workflows under `.github/workflows/`:
 | --- | --- | --- |
 | `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
-| `docs.yml` | Markdown links, SVG metadata, complete module map | Ubuntu / Python 3.12 |
+| `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
 
 Windows is a target platform, but support is not fully verified yet.
 Its Python 3.12 and Qt/PDF jobs run on every change and report their
@@ -173,7 +182,7 @@ remaining Windows differences (open-file deletion, home-directory lookup,
 and native Qt/PDF behavior) are checked or corrected. Windows then becomes
 a required platform.
 
-All workflows run on pull requests and pushes to `main` or `master`; they
+All workflows run on pull requests and pushes to `main` or `develop`; they
 can also be launched manually. The test matrix has `fail-fast: false`, so
 one platform failure does not cancel the other configurations. A Node.js
 runtime is installed for the JavaScript checks in the base test suite.

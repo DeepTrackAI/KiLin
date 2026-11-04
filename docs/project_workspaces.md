@@ -45,7 +45,12 @@ folder.** This rule is enforced in the core, independently of the GUI.
 | `kilin.add_project_sources(path, source_paths, ...)` | Explicit cumulative import using the saved profile. Preserve existing snapshots unless `replace_existing=True` is requested. |
 | `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror in `sources/` and record `source_snapshot.json`. |
 | `kilin.synchronize_project_workspace(source, path)` | Explicitly synchronize that saved mirror. May replace local snapshot edits or remove copies deleted from the original. |
-| `kilin.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
+| `kilin.project.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
+
+`configure_project` is exported by `kilin.project`, not by the top-level
+`kilin` facade. In Python code, import it explicitly with
+`from kilin.project import configure_project`. It updates the saved profile;
+it does not reconfigure an already loaded `RAGSession` or rebuild indexes.
 
 An explicit occupied project raises `kilin.ProjectAlreadyExistsError`, a
 subclass of `kilin.WorkspaceOccupiedError`. Other nonempty destinations,

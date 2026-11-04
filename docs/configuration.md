@@ -307,10 +307,15 @@ Each tool owns one explicit `MODEL_CALLS` policy in
 `kilin/tools/<tool>/defaults.json`:
 
 ```json
-"MODEL_CALLS": {
-  "THINKING": "inherit"
+{
+  "MODEL_CALLS": {
+    "THINKING": "inherit"
+  }
 }
 ```
+
+This is a valid JSON excerpt, not a complete replacement `defaults.json`;
+retain the tool's other required sections.
 
 `THINKING` accepts `inherit`, `on`, or `off`. It controls internal
 `context.ask_model` requests; `context.write` uses main-session thinking.
@@ -331,7 +336,12 @@ Output-limit resolution is deliberately independent:
 When the session maximum is `None`, inherited calls retain the existing
 backend/context-derived budget; a nonthinking local cap still applies.
 Invalid caps (including booleans, zero and negative values) are rejected.
-No minimum generation length is imposed, and no automatic retry is added.
+No minimum generation length is imposed. Output-limit resolution itself
+does not retry a call. Separately, the internal `ask_model` adapter can
+retry once without thinking after output-budget exhaustion leaves an
+unclosed thinking block. See the [completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery)
+for exact eligibility, accounting and exclusions; final streaming `write`
+calls are not automatically retried.
 
 Paper overviews, source explanations, document notes, report sections and
 reference judgments no longer have separate local output ceilings. Variable-
@@ -356,9 +366,11 @@ limits remain separate from the answering model's session ceiling. The
 report metadata caps are configurable in its `WRITING` section, and are
 bypassed automatically when thinking is enabled.
 
-Temperature, selected models, existing call counts and completion checks
-are unchanged. Internal replies remain thinking-free for parsers; generated
-thinking is retained separately for display as before. All temporary settings
+Output-limit resolution does not change temperature or model selection.
+A qualifying recovery adds one actual inference to the logical request;
+completion checks still apply to both attempts. Internal replies remain
+thinking-free for parsers; generated thinking is retained separately for
+display as before. All temporary settings
 and isolated histories are restored on success or failure. Models still need
 to support the existing thinking control. An exhausted user budget remains
 an explicit incomplete result, not a false negative or a successful report.
@@ -386,4 +398,4 @@ cache. No source reindexing or rewriting of historical answers is needed.
 The saved tool summary retains `internal_generation` with the resolved
 thinking policy, requested cap and completion status for each internal call.
 The model trace records the actual effective generation allowance. See the
-[completion contract](answering_pipeline.md#model-output-completion-contract).
+[completion contract](answering_pipeline.md#model-output-completion-and-bounded-recovery).

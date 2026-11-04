@@ -28,7 +28,7 @@ PDF/Hugging Face dependencies, platform-conditional `mlx` and general
 working native packages and compatible model weights, not merely a matching
 platform string.
 
-![RAGSession owns embedding and chat sessions, optionally a router, and reuses loaded models across conversation switches until close or Stop.](figures/model-lifetimes.svg)
+![RAGSession owns embedding and chat sessions, optionally a router, and reuses loaded models across conversation switches and acknowledged cancellation; close or forced process termination releases them.](figures/model-lifetimes.svg)
 
 *Figure: Live model sessions are distinct from persisted project state; backend policies and subprocess lifetime determine what can be reused.*
 
@@ -189,9 +189,12 @@ controlled auxiliary model call (for example a conversation title).
 Switching an active conversation keeps the project indexes and compatible
 loaded sessions. Switching a chat model has backend-specific constraints;
 `RAGSession.use_chat_model()` explicitly rejects unsupported switching
-situations rather than promising transparent hot swapping. The GUI engine
-remains the owner of its child process, and the Stop action unloads every
-session in that process.
+situations rather than promising transparent hot swapping. The Qt window
+owns the engine subprocess. An acknowledged answer cancellation retains
+its project and loaded models; forceful Stop, including cancellation timeout
+fallback, terminates the process and loses those live sessions. See the
+[GUI Stop contract](gui_protocol.md#errors-stop-and-restart) for the grace
+period, terminal events and restart behavior.
 
 ## Failure and cleanup
 

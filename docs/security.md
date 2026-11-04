@@ -115,8 +115,12 @@ an active lock companion, as doing so can break coordination.
 it is not a transactional database across manifests, indexes and traces and
 does not guarantee durable flush after power loss. Unexpected failure may
 leave previously committed source imports while subsequent imports are
-unfinished. The GUI Stop path kills the engine and does not recover unsaved
-partial generation.
+unfinished. For a running answer, GUI Stop first requests cooperative
+cancellation: an acknowledged cancellation saves no answer turn and keeps
+the project and models loaded. Forceful Stop or an expired cancellation
+grace period kills and restarts the engine. Neither path resumes unsaved
+partial generation. Stop is not a rollback of earlier file operations;
+see the [GUI Stop contract](gui_protocol.md#errors-stop-and-restart).
 
 ## Safe deployment and review checklist
 

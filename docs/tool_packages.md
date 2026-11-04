@@ -47,7 +47,7 @@ remains an optional private GUI adapter (`kilin/gui/_report_pdf.py`), passed
 to the tool as a callback. The tool does not import the GUI, and it
 saves validated Markdown even without a PDF backend. Other tools can add private
 modules as needed.
-All eleven built-in registered tools use packages, not flat `.py` modules.
+All registered built-in tools use packages, not flat `.py` modules.
 No compatibility aliases are maintained for the old flat file locations;
 KíLín is a prerelease package.
 
@@ -77,15 +77,24 @@ Markdown report remains available.
 For each registered tool, the validated `SETTINGS` values in the packaged
 `defaults.json` initialize its settings dataclass. A project type may
 specify a subset of those settings in its intent's `tool` object; the
-settings parser validates those overrides with the same bounds. Missing
-settings retain the packaged defaults.
+settings parser validates those overrides with the same bounds. Saved
+project-level overrides in `profile.ini` under `[tool.<name>]` are applied
+last by `kilin.tool_settings.with_project_settings` before execution and
+validated by the tool's parser. The precedence is therefore packaged
+`SETTINGS`, then the selected intent's tool settings, then saved project
+overrides. An omitted setting retains the value from the preceding layer.
 
-Other sections, such as `ESTIMATES` and `HEURISTICS`, define internal
-parameters used by the tool and are not project-type overrides.
+The project-settings API offers only settings with the same effective value
+across all intents using that tool. Differing per-intent values, such as
+report templates, cannot be changed through that API. Saved values apply
+to all of the project's intents using the tool. See
+[Tool settings per project](configuration.md#tool-settings-per-project)
+for persistence, reset and validation rules.
 
-`kilin_defaults.json` is independent of these tool-specific defaults.
-Allowing project-type definitions to override *core* KíLín defaults is
-an intended separate change and is not implemented by this refactor.
+Other sections, such as `MODEL_CALLS`, `ESTIMATES` and `HEURISTICS`, define
+internal parameters and are not project-type or saved tool-setting
+overrides. `kilin_defaults.json` remains a separate owner of core defaults;
+tool declarations do not override that resource.
 
 Configuration files are loaded once per process. Changing a packaged
 file requires restarting KíLín. Incorrect JSON, missing/unknown keys,

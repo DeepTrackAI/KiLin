@@ -152,20 +152,20 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 
 | Owner | Modules |
 | --- | ---: |
-| Answering pipeline | 2 |
+| Answering pipeline | 3 |
 | Architecture | 2 |
-| Configuration | 2 |
+| Configuration | 4 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 6 |
-| Per-tool README | 32 |
-| Project workspaces | 5 |
+| Per-tool README | 41 |
+| Project workspaces | 6 |
 | Retrieval pipeline | 15 |
 | Source pipeline | 12 |
-| Tool extension contracts | 17 |
+| Tool extension contracts | 21 |
 | Trace recording | 1 |
 
-**Total production Python modules: 108.**
+**Total production Python modules: 125.**
 
 ## Non-Python resources and UI assets
 
@@ -177,7 +177,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/gui/defaults.json`](../kilin/gui/defaults.json) | Immutable GUI initial settings | [Configuration](configuration.md), [GUI README](../kilin/gui/README.md) |
 | [`kilin/gui/web/`](../kilin/gui/web/) | HTML layout, styling and JavaScript state/events | [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/gui/icons/`](../kilin/gui/icons/) | Packaged native GUI icon assets | [GUI architecture](gui_architecture.md) |
-| [`kilin/tools/`](../kilin/tools/) | Ten tool READMEs, `defaults.json` files and summary templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
+| [`kilin/tools/`](../kilin/tools/) | Registered tools' READMEs, `defaults.json` files and summary templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
 | [`tutorials/`](../tutorials/) | Sixteen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
 | [`assets/`](../assets/) | Maintenance, benchmark and notebook-validation assets | [Development](development.md), [Performance](performance.md) |
 | [`pyproject.toml`](../pyproject.toml) | Python requirements, dependency extras, package data, tooling | [Development](development.md) |
