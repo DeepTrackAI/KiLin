@@ -91,21 +91,27 @@ recovery, and GUI metadata updates, see
 
 ## Tutorials
 
-Follow these notebooks in order, or open the one you need.
+KíLín includes 16 notebooks introducing the framework, from local models
+and source processing to retrieval, project chat, diagnostic traces, project
+types, and custom tools.
 
-- [10 · Setup](tutorials/10_setup.ipynb): Check the environment and computation backend without loading a model.
-- [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect the model cache and optionally download a chat model.
-- [30 · Model chat](tutorials/30_model_chat.ipynb): Load a model, exchange messages, and release it.
-- [40 · Repository files](tutorials/40_repository_files.ipynb): Select the files KíLín will read from a repository.
-- [50 · Source structure](tutorials/50_source_structure.ipynb): Read source files and split their structural units into searchable chunks.
-- [60 · Embeddings](tutorials/60_embeddings.ipynb): Convert chunks and questions into vectors with an embedding model.
-- [70 · Semantic retrieval](tutorials/70_semantic_retrieval.ipynb): Rank chunks by similarity in meaning.
-- [80 · Lexical retrieval](tutorials/80_lexical_retrieval.ipynb): Rank chunks by matching words and identifiers without an embedding model.
-- [90 · Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb): Find code through symbols and relationships such as calls and imports.
-- [100 · Persistent indexes](tutorials/100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
-- [110 · Hybrid ranking](tutorials/110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
-- [120 · Retrieval expansion](tutorials/120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
-- [130 · Project chat](tutorials/130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
-- [140 · Execution traces](tutorials/140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
-- [150 · Project types](tutorials/150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [160 · Custom tools](tutorials/160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+Start with the [tutorial guide](tutorials/README.md) for prerequisites,
+recommended learning paths, model requirements, example datasets, and safe
+handling of generated workspaces.
+
+For a first introduction, we recommend:
+
+1. [10 · Setup](tutorials/10_setup.ipynb): Check your environment and
+   computational backend without loading a model.
+2. [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect
+   locally cached models and download models explicitly when needed.
+3. [130 · Project chat](tutorials/130_project_chat.ipynb): Create a project
+   and ask questions about its files with citations and saved history.
+   This example requires local chat and embedding models.
+
+The other notebooks explain individual components in more depth; they are
+not prerequisites for using the graphical interface. Most examples use
+source files distributed with KíLín. Tutorials involving literature can
+optionally use the supplementary article corpus in
+`_si_article_/literature_repo/` and provide bundled PDF fallbacks when
+that corpus is unavailable.
