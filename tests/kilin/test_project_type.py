@@ -35,32 +35,7 @@ from kilin.project_type import (
     load_project_types,
     project_type,
 )
-
-
-def _type_data() -> dict[str, object]:
-    """Create an independent minimal valid custom project-type definition.
-
-    Returns
-    -------
-    dict[str, object]
-        JSON-compatible project type with a single search intent.
-
-    """
-
-    return {
-        "display_name": "Experimental type",
-        "description": "A local collection.",
-        "extensions": [".TXT", ".md"],
-        "max_file_bytes": 4096,
-        "retrieval_instruction": "Find relevant information.",
-        "system_prompt": "Ground answers in the documents.",
-        "intents": {
-            "explain": {
-                "description": "Explain a document.",
-                "system_prompt": "Explain with evidence.",
-            },
-        },
-    }
+from tests.kilin._project_type_support import _type_data
 
 
 class ProjectTypeFixture(unittest.TestCase):

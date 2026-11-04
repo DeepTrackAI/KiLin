@@ -418,9 +418,9 @@ Changes to outputs/templates must preserve their non-source status and
 [tool output publication](tool_packages.md#generated-output-safety).
 
 Exercise [creation](../tests/kilin/test_project__creation.py),
-[reservation and rollback](../tests/kilin/test_project_transaction.py),
+[reservation and rollback](../tests/kilin/test__project_transactions.py),
 [resource planning](../tests/kilin/test_project_layout.py),
-[source management](../tests/kilin/test_workspace_source_management.py),
+[source management](../tests/kilin/test_workspace__source_management.py),
 [synchronization](../tests/kilin/test_workspace__source_changes.py) and
 [user files](../tests/kilin/test_project_files.py). Check the
 [GUI creation adapter](../tests/kilin/gui/test_engine__creation.py) as well;

@@ -30,7 +30,7 @@ from kilin.project_type import (
     load_project_types,
     project_type,
 )
-from tests.kilin.test_project_types import _type_data
+from tests.kilin._project_type_support import _type_data
 from tests.kilin.test_rag import _session
 
 

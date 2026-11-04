@@ -189,7 +189,7 @@ The tracing contract is tested without network or model dependencies:
 python -m pytest -q \
     tests/kilin/test_trace_logging.py \
     tests/kilin/test_rag.py \
-    tests/kilin/test_conversation__lifecycle.py
+    tests/kilin/test__conversation_lifecycle.py
 ```
 
 The project targets Python 3.12; run these tests under that interpreter and

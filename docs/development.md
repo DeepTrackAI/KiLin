@@ -155,6 +155,12 @@ aspect, and `test__<topic>.py` for a cross-module concern. Tests under
 `tests/kilin/gui/`, `tests/kilin/retrievals/`,
 `tests/kilin/sources/` and `tests/kilin/tools/` mirror the package.
 
+Preserve a private production module's leading underscore: `_matching.py`
+is covered by `test__matching.py`. Prefer private, non-discovered support
+modules for shared fixtures rather than importing another test module.
+For example, `tests/kilin/_project_type_support.py` supplies independent
+project-type definitions to the loader and cross-module contract tests.
+
 Unit tests should use isolated temporary files, deterministic fake models
 and controlled clocks where appropriate. Never require model downloads for
 the base suite. Test model/GUI integrations separately on supported

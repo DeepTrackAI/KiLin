@@ -321,7 +321,7 @@ Exercise [RAG completion](../tests/kilin/test_rag__completion.py),
 [tool recovery](../tests/kilin/test_rag__tool_recovery.py),
 [answering completion](../tests/kilin/test_answering__completion.py),
 [partial tools](../tests/kilin/tools/test__partial_recovery.py) and
-[conversation lifecycle](../tests/kilin/test_conversation__lifecycle.py).
+[conversation lifecycle](../tests/kilin/test__conversation_lifecycle.py).
 A changed visible outcome also requires review of the
 [GUI protocol](gui_protocol.md#answer-phases-and-event-ordering) and
 [trace records](trace_recording.md#stopped-and-failed-answers), not a new

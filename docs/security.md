@@ -157,7 +157,7 @@ input, destination and failure residue first; review the owning subsystem's
 validation instead of inventing parallel GUI policy. Stronger guarantees
 require an explicit design, not stronger wording in this reference.
 
-Start with [workspace transactions](../tests/kilin/test_project_transaction.py),
+Start with [workspace transactions](../tests/kilin/test__project_transactions.py),
 [resource containment](../tests/kilin/test_workspace_resources.py),
 [atomic writes](../tests/kilin/test_atomic_writes.py),
 [conversation ownership](../tests/kilin/test_conversation_ownership.py) and
