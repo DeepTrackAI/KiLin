@@ -21,7 +21,7 @@ from kilin import rag
 from kilin.retrievals import context_expansion as expansion
 from kilin.retrievals import build_lexical_index
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph, CodeRelation
-from tests.kilin import test_rag as fixtures
+from tests.kilin import _rag_support as fixtures
 from tests.kilin.retrievals._support import chunk, ranked
 
 

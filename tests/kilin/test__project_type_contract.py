@@ -31,7 +31,7 @@ from kilin.project_type import (
     project_type,
 )
 from tests.kilin._project_type_support import _type_data
-from tests.kilin.test_rag import _session
+from tests.kilin._rag_support import _session
 
 
 class TestProjectTypeContract(unittest.TestCase):

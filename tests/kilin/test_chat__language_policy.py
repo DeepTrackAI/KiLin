@@ -20,7 +20,7 @@ import numpy as np
 from kilin import answering, chat, rag
 from kilin.trace_logging import TRACE_EVENT_LLM_CALL_INPUT
 from tests.kilin import test_chat__unit as fixtures
-from tests.kilin import test_rag as rag_fixtures
+from tests.kilin import _rag_support as rag_fixtures
 
 
 class TestUserLanguagePolicy(unittest.TestCase):

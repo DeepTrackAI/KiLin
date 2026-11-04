@@ -36,17 +36,65 @@ class TestAnswerRecoveryFrontend(unittest.TestCase):
     """Keep the question, and say only what is known about thinking."""
 
     def test_question_is_kept_until_the_answer_arrives(self):
-        """Asking remembers it; an answer forgets it."""
+        """Retain pending text while asking and clear it on completion."""
 
         source = _APP.read_text(encoding="utf-8")
-        self.assertIn(
-            "unansweredQuestion = ask.question;",
-            _function(source, "sendQuestion"),
-        )
-        self.assertIn(
-            'unansweredQuestion = "";',
-            _function(source, "completeAfterAnswerStages"),
-        )
+        if not shutil.which("node"):
+            self.assertIn(
+                "unansweredQuestion = ask.question;",
+                _function(source, "sendQuestion"),
+            )
+            self.assertIn(
+                'unansweredQuestion = "";',
+                _function(source, "completeAfterAnswerStages"),
+            )
+            return
+        script = r"""
+const assert = require("node:assert/strict");
+const calls = [];
+const activeConversationId = "conversation-1";
+let answeringConversationId = "";
+let unansweredQuestion = "";
+let pendingTurn = { started: 100, elapsedMs: null };
+const performance = { now: () => 350 };
+const bridge = {
+  askQuestion(text, effort, settings) {
+    calls.push(["ask", text, effort, JSON.parse(settings)]);
+  },
+};
+const error = { textContent: "", classList: { remove() {} } };
+function addPendingTurn(text) { calls.push(["pending", text]); }
+function showAskingConversation(text) { calls.push(["show", text]); }
+function setBusy(busy, message) { calls.push(["busy", busy, message]); }
+function resetAnswerStages() { calls.push(["reset"]); }
+function completePendingTurn(turn) { calls.push(["complete", turn]); }
+"""
+        script += _function(source, "sendQuestion")
+        script += _function(source, "completeAfterAnswerStages")
+        script += r"""
+sendQuestion({
+  question: "What changed?", files: ["sources/a.py"], leftOut: [],
+  effort: 2, settings: { temperature: 0.1 },
+});
+assert.equal(unansweredQuestion, "What changed?");
+assert.equal(answeringConversationId, "conversation-1");
+assert.deepEqual(calls[0], ["pending",
+  "What changed?\n\nAttached files:\n- sources/a.py"]);
+assert.deepEqual(calls[1], ["show", "What changed?"]);
+assert.deepEqual(calls[3], ["ask",
+  "What changed?\n\nAttached files:\n- sources/a.py", 2,
+  { temperature: 0.1, _title_question: "What changed?" },
+]);
+const turn = { answer: "Documented answer" };
+completeAfterAnswerStages(turn);
+assert.equal(unansweredQuestion, "");
+assert.equal(pendingTurn.elapsedMs, 250);
+assert.deepEqual(calls.slice(-2), [["reset"], ["complete", turn]]);
+console.log("question lifecycle passed");
+"""
+        result = _node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("question lifecycle passed", result.stdout)
 
     def test_failure_stop_and_restart_put_the_question_back(self):
         """An error, Stop, and a backend restart each restore it."""

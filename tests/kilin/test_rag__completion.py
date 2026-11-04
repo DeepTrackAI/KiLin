@@ -24,7 +24,7 @@ from kilin._model_completion import (
 from kilin.answering import RouteDecision
 from kilin.project_type import RETRIEVAL_MODE_NONE
 from kilin.tools import ToolResult, ToolUse
-from tests.kilin.test_rag import (
+from tests.kilin._rag_support import (
     _answer_patches,
     _intent,
     _session,

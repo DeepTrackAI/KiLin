@@ -181,7 +181,7 @@ The following suites cover the main ownership guarantees:
 python -m pytest -q \
     tests/kilin/test_conversation_ownership.py \
     tests/kilin/test_trace_logging.py \
-    tests/kilin/test_rag.py \
+    tests/kilin/test_rag__conversation.py \
     tests/kilin/test_conversations.py \
     tests/kilin/gui/test__conversation_ownership.py
 ```

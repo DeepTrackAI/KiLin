@@ -24,7 +24,7 @@ from kilin.tools import ToolResult, ToolUse
 from kilin.tools._model_calls import ModelCallSettings
 from kilin.tools._shared.model_results import partial_result
 from tests.kilin.test_answering import _FakeChat
-from tests.kilin.test_rag import _answer_patches, _intent, _session
+from tests.kilin._rag_support import _answer_patches, _intent, _session
 from tests.kilin.test_rag__tool_thinking import _run
 
 

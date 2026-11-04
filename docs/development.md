@@ -172,12 +172,52 @@ checks when a future frontend refactor is considered.
 packaged-default assertions; each package retains its own tests for
 invalid settings and tool-specific behavior.
 
+The large RAG coordinator tests are organized by contract:
+`test_rag.py` retains records, evidence, and coordinator helpers;
+`test_rag__retrieval.py`, `test_rag__answering.py`,
+`test_rag__conversation.py`, and `test_rag__trace.py` exercise focused
+subsystems. The private `tests/kilin/_rag_support.py` holds deterministic
+session, evidence, intent, and model-patching fixtures used by those tests
+and the existing focused RAG suites. Do not import fixtures from
+`test_rag.py`: discoverable test modules are not fixture libraries.
+
+Frontend behavior checks should run the actual JavaScript function or
+handler with a minimal Node-based Qt/DOM substitute when practical. Source
+text checks remain appropriate for structural contracts, such as event
+registration, but should not stand in for observable behavior. Neither
+isolated Node tests nor mocked engine tests replace the optional native
+WebEngine smoke test.
+
 Unit tests should use isolated temporary files, deterministic fake models
 and controlled clocks where appropriate. Never require model downloads for
 the base suite. Test model/GUI integrations separately on supported
 hardware; optional skips must be counted explicitly rather than described
 as passes. A checked-in ZIP must not include transient caches, the contents
 of local `sandbox/`, user secrets or weights.
+
+### Selecting tests and diagnosing slow runs
+
+For a short local change cycle, select the directly affected module and
+its integration boundary, for example:
+
+```sh
+python -m pytest -q tests/kilin/test_rag__retrieval.py
+python -m pytest -q tests/kilin/gui/test__source_add_frontend.py
+```
+
+Run **both complete runners** before delivering a PR; a selected subset is
+not a substitute for their discovery and integration checks. To identify
+slow individual tests in a given environment, run:
+
+```sh
+python -m pytest -q --durations=20
+```
+
+Inspect the reported test names and any optional backend skips before
+changing setup or introducing caches. Duration results are measurements,
+not stable pass/fail thresholds. For macOS and Python 3.12, rerun the
+full suite and native/real-model gates separately; Linux measurements and
+mocked GUI tests do not establish native platform performance.
 
 ### Debugging tests in VS Code
 

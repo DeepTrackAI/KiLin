@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 from kilin import rag
 from kilin.project_type import RETRIEVAL_MODE_NONE
 from kilin.tools import TOOL_REGISTRY, ToolResult, ToolUse
-from tests.kilin.test_rag import _answer_patches, _intent, _session
+from tests.kilin._rag_support import _answer_patches, _intent, _session
 from tests.kilin.test_rag__tool_thinking import _run
 from tests.kilin.test_answering import _FakeChat
 

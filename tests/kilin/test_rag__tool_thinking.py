@@ -22,7 +22,7 @@ from kilin.answering import RouteDecision
 from kilin.tools import Tool, ToolResult, ToolUse
 from kilin.tools._model_calls import load_model_call_settings
 from tests.kilin.test_answering import _FakeChat
-from tests.kilin.test_rag import _session
+from tests.kilin._rag_support import _session
 
 
 def _run(name, budgets, *, chat=None, write=False):

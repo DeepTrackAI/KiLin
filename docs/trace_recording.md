@@ -188,7 +188,7 @@ The tracing contract is tested without network or model dependencies:
 ```sh
 python -m pytest -q \
     tests/kilin/test_trace_logging.py \
-    tests/kilin/test_rag.py \
+    tests/kilin/test_rag__trace.py \
     tests/kilin/test__conversation_lifecycle.py
 ```
 
