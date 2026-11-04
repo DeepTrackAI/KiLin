@@ -93,7 +93,7 @@ Module Structure
 
 - ``delete_project``
 
-    Move a project into the ``deleted`` folder beside it.
+    Move a project into the ``.deleted`` folder beside it.
 
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
@@ -198,7 +198,7 @@ PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
 PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
 
 # Deleted projects are moved here, beside the projects themselves.
-DELETED_PROJECTS_FOLDER: Final[str] = "deleted"
+DELETED_PROJECTS_FOLDER: Final[str] = ".deleted"
 
 # Loading rejects an empty or invalid registry before projects can open.
 PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
@@ -1280,7 +1280,7 @@ def open_project(directory: str | Path) -> QAProject:
 
 
 def delete_project(directory: str | Path) -> Path:
-    """Move a project into the ``deleted`` folder beside it.
+    """Move a project into the ``.deleted`` folder beside it.
 
     Deletion keeps the files, like deleting a conversation: the project
     leaves the projects list but can be moved back by hand. A project of the
@@ -1302,7 +1302,7 @@ def delete_project(directory: str | Path) -> Path:
     FileNotFoundError
         If the folder or its profile.ini is missing.
     ValueError
-        If the folder or the ``deleted`` folder is a link, or ``deleted`` is
+        If the folder or the ``.deleted`` folder is a link, or ``.deleted`` is
         itself a project.
     OSError
         If the folder cannot be created or the project cannot be moved.

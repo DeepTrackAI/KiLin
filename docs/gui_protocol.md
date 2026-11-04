@@ -110,7 +110,7 @@ paths and source paths remain subject to downstream core validation.
 | `sync_sources` | None | Optional `decisions` maps `sources/` paths to `import`, `replace`, `keep_both`, `delete` or `keep`; an explicit map leaves unlisted files untouched. Omitted or `null` decisions use the core automatic policy: update changed unedited copies, remove deleted unedited copies, and import no new files. Reindex afterward. |
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
-| `delete_project` | `project` | Move that closed project to `deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
+| `delete_project` | `project` | Move that closed project to `.deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
 | `apply_indexing` | `settings` | Save the open project's file types, file size limit or chunk sizes in `profile.ini` and reopen it, which rebuilds the index; then send `indexing_applied` with the `profile` |
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. Then sends `answer_settings_saved`. |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |

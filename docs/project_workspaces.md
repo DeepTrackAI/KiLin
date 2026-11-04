@@ -65,7 +65,7 @@ folder.** This rule is enforced in the core, independently of the GUI.
 | `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror in `sources/` and record `source_snapshot.json`. |
 | `kilin.synchronize_project_workspace(source, path)` | Explicitly synchronize that saved mirror. May replace local snapshot edits or remove copies deleted from the original. |
 | `kilin.project.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
-| `kilin.project.delete_project(path)` | Move a closed project into the `deleted/` folder beside it, keeping its files. A name already there gets `_2`, `_3`, ... |
+| `kilin.project.delete_project(path)` | Move a closed project into the `.deleted/` folder beside it, keeping its files. A name already there gets `_2`, `_3`, ... |
 
 `configure_project` is exported by `kilin.project`, not by the top-level
 `kilin` facade. In Python code, import it explicitly with

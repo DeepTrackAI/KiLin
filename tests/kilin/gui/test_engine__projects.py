@@ -186,7 +186,7 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.engine.delete_project(str(self.project.root))
         self.assertFalse(self.project.root.exists())
         self.assertTrue(
-            (self.root / "deleted" / "project" / "profile.ini").is_file()
+            (self.root / ".deleted" / "project" / "profile.ini").is_file()
         )
         self.assertEqual(self.events, [{"event": "projects", "projects": []}])
 

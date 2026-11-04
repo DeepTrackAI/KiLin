@@ -444,7 +444,7 @@ class TestEngineWorkflow(unittest.TestCase):
             self.assertNotIn(
                 "Keep this historical trace", path.read_text(encoding="utf-8")
             )
-        archived = list((path.parent / "deleted").glob("*.json"))
+        archived = list((path.parent / ".deleted").glob("*.json"))
         self.assertEqual(len(archived), 1)
         self.assertEqual(archived[0].read_bytes(), before)
         self.assertNotEqual(

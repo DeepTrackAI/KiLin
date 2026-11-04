@@ -1044,7 +1044,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         old = self.store.ensure()
         old_path = self.store.state_path(old)
         active, archived = self.store.archive(old.conversation_id)
-        self.assertEqual(archived.parent.name, "deleted")
+        self.assertEqual(archived.parent.name, ".deleted")
         self.assertEqual(archived.name, old_path.name)
         self.assertTrue(archived.is_file())
         self.assertEqual(self.store.state_path(active).parent,
@@ -1084,7 +1084,7 @@ class TestStoreArchiving(ConversationStoreFixture):
     def test_archive_collision_appends_number_without_overwrite(self):
         item = self.store.create()
         path = self.store.state_path(item)
-        folder = self.store.root / "deleted"
+        folder = self.store.root / ".deleted"
         folder.mkdir()
         existing = folder / path.name
         existing.write_text("original archive", encoding="utf-8")
@@ -1098,10 +1098,46 @@ class TestStoreArchiving(ConversationStoreFixture):
         self.assertNotEqual(active.conversation_id,
                             item.conversation_id)
 
+    def test_archive_moves_the_lock_companion_with_the_json(self):
+        # Another conversation stays, so no replacement takes the name.
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        lock = path.with_name(path.name + ".lock")
+        lock.write_text("", encoding="utf-8")
+        _, archived = self.store.archive(item.conversation_id)
+        self.assertFalse(lock.exists())
+        self.assertTrue(
+            archived.with_name(archived.name + ".lock").is_file()
+        )
+
+    def test_restored_conversation_gets_a_new_lock_when_opened(self):
+        """A JSON dragged back from .deleted/ works without its lock."""
+        kept = self.store.create()
+        item = self.store.create()
+        _, archived = self.store.archive(item.conversation_id)
+        archived.with_name(archived.name + ".lock").unlink()
+        restored = self.store.root / archived.name
+        archived.rename(restored)
+        reopened = module.ConversationStore(self.project)
+        reopened.ensure()
+        self.assertIn(
+            item.conversation_id,
+            [x.conversation_id for x in reopened.conversations()],
+        )
+        lock = restored.with_name(restored.name + ".lock")
+        self.assertFalse(lock.exists())
+        with module.conversation_write_ownership(restored):
+            self.assertTrue(lock.is_file())
+        self.assertIn(
+            kept.conversation_id,
+            [x.conversation_id for x in reopened.conversations()],
+        )
+
     def test_archive_collision_skips_multiple_reserved_names(self):
         item = self.store.create()
         path = self.store.state_path(item)
-        folder = self.store.root / "deleted"
+        folder = self.store.root / ".deleted"
         folder.mkdir()
         (folder / path.name).write_text("1", encoding="utf-8")
         (folder / f"{path.stem}_2.json").write_text("2", encoding="utf-8")
@@ -1121,7 +1157,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         outside = self.base / "outside"
         outside.mkdir()
         try:
-            (self.store.root / "deleted").symlink_to(
+            (self.store.root / ".deleted").symlink_to(
                 outside, target_is_directory=True
             )
         except (NotImplementedError, OSError) as error:
@@ -1135,7 +1171,7 @@ class TestStoreArchiving(ConversationStoreFixture):
         item = self.store.create()
         with self.assertRaisesRegex(ValueError, "not found"):
             self.store.archive("not-there")
-        self.assertFalse((self.store.root / "deleted").exists())
+        self.assertFalse((self.store.root / ".deleted").exists())
         self.assertEqual(self.store.active(), item)
 
     def test_missing_source_archive_does_not_change_registry(self):

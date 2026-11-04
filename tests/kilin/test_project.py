@@ -1271,7 +1271,7 @@ class TestDeleteProject(ProjectFixture):
     def test_project_moves_to_deleted_and_keeps_its_files(self) -> None:
         papers = project.initialize_project(self.root / "papers", "code").root
         moved = project.delete_project(papers)
-        self.assertEqual(moved, self.root / "deleted" / "papers")
+        self.assertEqual(moved, self.root / ".deleted" / "papers")
         self.assertFalse(papers.exists())
         self.assertTrue((moved / "profile.ini").is_file())
 
@@ -1280,7 +1280,7 @@ class TestDeleteProject(ProjectFixture):
             project.initialize_project(self.root / "papers", "code")
             project.delete_project(self.root / "papers")
         self.assertEqual(
-            sorted(path.name for path in (self.root / "deleted").iterdir()),
+            sorted(path.name for path in (self.root / ".deleted").iterdir()),
             ["papers", "papers_2", "papers_3"],
         )
 
@@ -1296,10 +1296,10 @@ class TestDeleteProject(ProjectFixture):
         with self.assertRaisesRegex(ValueError, "link"):
             project.delete_project(link)
         self.assertTrue(papers.is_dir())
-        self.assertFalse((self.root / "deleted").exists())
+        self.assertFalse((self.root / ".deleted").exists())
 
     def test_a_project_named_deleted_is_not_used_as_the_bin(self) -> None:
-        project.initialize_project(self.root / "deleted", "code")
+        project.initialize_project(self.root / ".deleted", "code")
         papers = project.initialize_project(self.root / "papers", "code").root
         with self.assertRaisesRegex(ValueError, "is a project"):
             project.delete_project(papers)

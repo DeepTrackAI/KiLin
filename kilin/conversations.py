@@ -595,7 +595,7 @@ class ConversationStore:
     ) -> tuple[ConversationInfo, Path]:
         """Remove a conversation from the catalog and retain its JSON.
 
-        The record is moved into ``logs/traces/deleted`` so deletion remains
+        The record is moved into ``logs/traces/.deleted`` so deletion remains
         recoverable; an existing file of the same name there is kept, and
         the moved file gets a ``_2``, ``_3``, ... suffix. Its ``.json.lock``
         companion follows it under the same name. When the last
@@ -637,7 +637,7 @@ class ConversationStore:
 
         item = self._require(conversation_id)
         source = self.state_path(item)
-        deleted = self.root / "deleted"
+        deleted = self.root / ".deleted"
         deleted.mkdir(parents=True, exist_ok=True)
         if deleted.is_symlink():
             raise ValueError(
