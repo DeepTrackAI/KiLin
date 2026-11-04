@@ -258,6 +258,8 @@ const document = { createElement: () => element() };
 const byId = () => list;
 const localStorage = { getItem: () => null, setItem: () => {} };
 let busy = false;
+// KíLín setup is done in these tests.
+const needsSetup = () => false;
 const activeProjectTypeId = "code";
 const projectTypes = { literature: { label: "Literature" } };
 const calls = [];

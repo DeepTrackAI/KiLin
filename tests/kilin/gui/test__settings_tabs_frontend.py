@@ -1,11 +1,14 @@
 """Exercise the Settings tabs.
 
 Check that Settings list their categories as tabs, that every section
-belongs to exactly one tab, and that search depth stays with the effort
-levels in the Models tab. Run the
-production ``showSettingsTab`` function in Node with a stub DOM. Rendering
-is covered only by the Qt/WebEngine smoke test and manual checks. KíLín
-setup sits above the tabs, as it covers the whole app.
+belongs to exactly one tab, and that search depth, shown in the Answers
+tab, is still drawn with the effort levels. Run the production
+``showSettingsTab`` function in Node with a stub DOM. Rendering is
+covered only by the Qt/WebEngine smoke test and manual checks. KíLín
+setup holds the computation backend, Appearance and the projects folder
+above the tabs, since they cover the whole app; folded, it is one row.
+Below it, the Project region holds five tabs: General (the name),
+Indexing, Models, Answers and Tools. On/off settings are switches.
 
 """
 
@@ -24,14 +27,14 @@ from tests.kilin.gui._frontend_support import (
 )
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-_TABS = ["general", "models", "answers", "tools", "project"]
+_TABS = ["general", "indexing", "models", "answers", "tools"]
 
 
 class TestSettingsTabsFrontend(unittest.TestCase):
     """Show Settings one category at a time."""
 
     def test_every_section_belongs_to_one_tab(self):
-        """Setup above five tabs; each section names an existing tab."""
+        """App-wide parts above four tabs; each other section has a tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         start = page.index('id="models-panel"')
@@ -42,35 +45,58 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             r'<(?:section|details)[^>]*class="settings-section[^"]*"[^>]*>',
             panel,
         )
-        # KíLín setup plus one section per tab.
+        # The app-wide settings, then one section per tab.
         self.assertEqual(len(sections), 6)
-        # KíLín setup covers the whole app, so it sits above the tabs.
-        self.assertLess(
-            panel.index('id="first-run-setup"'),
-            panel.index('class="settings-tabs"'),
-        )
-        self.assertNotIn(
-            "data-settings-tab",
-            panel[panel.index('id="first-run-setup"') :].split(">", 1)[0],
-        )
+        self.assertNotIn("data-settings-tab", sections[0])
+        self.assertIn('id="settings-app"', sections[0])
+        # These cover the whole app, so they sit above the tabs, inside
+        # KíLín setup, which folds them away.
+        tabs_at = panel.index('class="settings-tabs"')
+        app = panel[panel.index('id="settings-app"') : tabs_at]
+        start = app.index('id="first-run-setup"')
+        setup = app[start : app.index("</details>")]
+        for part in (
+            '<label for="backend">Computation backend</label>',
+            '<label for="appearance">Appearance</label>',
+            '<label for="workspace-path">Projects folder</label>',
+        ):
+            self.assertIn(part, setup)
+        # The four tabs share the full width.
+        styles = (_WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".settings-tab { position: relative; flex: 1 1 0;",
+                      styles)
         for section in sections[1:]:
             tab = re.search(r'data-settings-tab="(\w+)"', section)
             self.assertIsNotNone(tab, section)
             self.assertIn(tab.group(1), _TABS)
         # Messages from Close sit below the tabs, visible on every tab.
         status = panel.index('id="model-download-status"')
-        self.assertGreater(status, panel.index('id="settings-project"'))
+        self.assertGreater(status, panel.index('id="settings-indexing"'))
+        # The project's tabs are in one region, after setup.
+        region = panel.index('id="settings-project-region"')
+        self.assertLess(panel.index("</details>"), region)
+        self.assertLess(region, tabs_at)
 
-    def test_search_depth_stays_with_the_models(self):
-        """The five levels and their five depths are on one tab."""
+    def test_search_depth_sits_in_answers(self):
+        """Search depth shows in Answers but applies with the models."""
 
+        page = (_WEB / "index.html").read_text(encoding="utf-8")
+        start = page.index('data-settings-tab="answers"')
+        answers = page[start : page.index("</section>", start)]
+        self.assertIn('<div id="search-depth"></div>', answers)
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         render = _function(source, "renderModelsPanel")
-        self.assertIn("host.append(depth);", render)
+        self.assertIn("depthHost.append(depth);", render)
         self.assertNotIn("search-depth-list", source)
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         self.assertIn(".settings-section.tab-hidden { display: none; }",
                       styles)
+        # The columns behind Settings cannot be resized while it is open.
+        self.assertIn(
+            "body:has(#models-panel:not(.hidden)) .panel-resizer "
+            "{ display: none; }",
+            styles,
+        )
 
     def test_every_tab_uses_one_field_style(self):
         """Labels above full-width boxes of one size, on every tab."""
@@ -85,6 +111,12 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             styles,
         )
         self.assertIn(".chat-setting { display: grid; gap: 7px; }", styles)
+        # On/off settings are switches in the send button's orange.
+        self.assertIn(
+            '.check-row input[type="checkbox"]:checked '
+            "{ background: var(--accent); }",
+            styles,
+        )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_one_tab_shows_at_a_time(self):
@@ -102,26 +134,25 @@ function element(data) {
     setAttribute(name, value) { this.attributes[name] = value; },
   };
 }
-const names = ["general", "models", "answers", "project"];
+const names = ["project", "models", "answers"];
 const tabs = names.map((tab) => element({ tab }));
-const sections = ["general", "models", "answers", "project"]
-  .map((settingsTab) => element({ settingsTab }));
+const sections = names.map((settingsTab) => element({ settingsTab }));
 const document = { querySelectorAll: (selector) =>
   selector === ".settings-tab" ? tabs : sections };
-let settingsTab = "general";
+let settingsTab = "project";
 """
         script += _function(source, "showSettingsTab")
         script += r"""
 showSettingsTab("answers");
 assert.equal(settingsTab, "answers");
 assert.deepEqual(tabs.map((tab) => tab.attributes["aria-selected"]),
-  ["false", "false", "true", "false"]);
-assert.deepEqual(tabs.map((tab) => tab.tabIndex), [-1, -1, 0, -1]);
+  ["false", "false", "true"]);
+assert.deepEqual(tabs.map((tab) => tab.tabIndex), [-1, -1, 0]);
 assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
-  [true, true, false, true]);
-showSettingsTab("general");
+  [true, true, false]);
+showSettingsTab("project");
 assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
-  [false, true, true, true]);
+  [false, true, true]);
 console.log("settings tabs passed");
 """
         result = run_node(script)

@@ -1,11 +1,11 @@
-"""Exercise the remembered workspace folder in Settings.
+"""Exercise the remembered projects folder in Settings.
 
-The Workspace folder holds the projects. Run the production page functions
+The projects folder holds the projects. Run the production page functions
 in Node with stubs: the field shows the folder in use, Use default is
 offered only when a folder was chosen, a missing folder is explained, a
-switch is allowed only on the start screen, and an empty project gets a
-free name inside it. Saving and the engine restart are tested on the Qt
-side.
+switch is offered and allowed only on the start screen (read-only from a
+project), and an empty project gets a free name inside it. Saving and the
+engine restart are tested on the Qt side.
 
 """
 
@@ -26,14 +26,14 @@ _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
 
 
 class TestProjectsFolderFrontend(unittest.TestCase):
-    """Remember the workspace folder; Use default goes back."""
+    """Remember the projects folder; Use default goes back."""
 
-    def test_workspace_folder_field_holds_the_projects(self):
-        """Read-only field with Browse and Use default; never one project."""
+    def test_projects_folder_field_holds_the_projects(self):
+        """Read-only field with Browse and Use default, in KíLín setup."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
-        start = page.index('data-settings-tab="project"')
-        project = page[start : page.index("</section>", start)]
+        start = page.index('id="first-run-setup"')
+        project = page[start : page.index("</details>", start)]
         for part in (
             '<input id="workspace-path" type="text" readonly>',
             'id="browse-workspace"',
@@ -52,9 +52,14 @@ class TestProjectsFolderFrontend(unittest.TestCase):
         )
         start = source.index('byId("project-form").addEventListener(')
         create = source[start : source.index("\n});\n", start)]
+        # A name set in Settings wins; a taken one is refused first.
         self.assertIn(
-            'const destination = included.length ? "" : emptyProjectPath();',
+            "const destination = name ? projectPath(name) : "
+            'included.length ? "" : emptyProjectPath();',
             create,
+        )
+        self.assertLess(
+            create.index("already exists"), create.index("bridge.openProject(")
         )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
@@ -67,7 +72,12 @@ const assert = require("node:assert/strict");
 const parts = {};
 const byId = (id) => (parts[id] = parts[id] || {
   id, value: "", title: "", textContent: "", disabled: false,
+  hidden: new Set(),
+  classList: { toggle(name, on) {
+    parts[id].hidden[on ? "add" : "delete"](name);
+  } },
 });
+const shown = (id) => !byId(id).hidden.has("hidden");
 const calls = [];
 const bridge = new Proxy({}, {
   get: (target, name) => (...args) => calls.push(name),
@@ -80,13 +90,18 @@ let busy = false;
 let ready = false;
 let switchingProjectsFolder = false;
 let savedProjects = [];
+let projectsFolderInfo = null;
+let openProjectPath = "";
 const setBusy = (value) => { busy = value; };
 const refreshSavedProject = () => calls.push("refreshSavedProject");
 """
         for name in (
             "showProjectsFolder",
+            "showProjectSettings",
+            "projectName",
             "changeProjectsFolder",
             "emptyProjectPath",
+            "projectPath",
         ):
             script += _function(source, name)
         script += r"""
@@ -94,7 +109,9 @@ const refreshSavedProject = () => calls.push("refreshSavedProject");
 showProjectsFolder({ folder: "/repo/sandbox", saved: "", missing: false });
 assert.equal(byId("workspace-path").value, "/repo/sandbox");
 assert.equal(byId("default-workspace").disabled, true);
-assert.match(byId("workspace-note").textContent, /holds your projects/);
+// Nothing to explain, so no note.
+assert.ok(!shown("workspace-note"));
+assert.equal(byId("browse-workspace").disabled, false);
 assert.deepEqual(calls, []);
 
 // A chosen folder that is not mounted is explained.
@@ -104,6 +121,7 @@ showProjectsFolder({
 assert.equal(byId("default-workspace").disabled, false);
 assert.equal(byId("workspace-note").textContent,
   "/Cloud/Projects is not available, so KíLín uses the default folder.");
+assert.ok(shown("workspace-note"));
 
 // Use default on the start screen: Qt saves and restarts the engine.
 changeProjectsFolder(true);
@@ -121,20 +139,28 @@ changeProjectsFolder(false);
 assert.deepEqual(calls, ["chooseProjectsFolder"]);
 assert.equal(busy, false);
 
-// With a project open the switch is refused with a notice.
+// With a project open the folder is read-only: the buttons stay but are
+// disabled, saying where to change it; a switch is refused with a notice.
 calls.length = 0;
 switchingProjectsFolder = false;
 ready = true;
+showProjectSettings();
+assert.equal(byId("browse-workspace").disabled, true);
+assert.equal(byId("default-workspace").disabled, true);
+assert.equal(byId("browse-workspace").title,
+  "Change it from the start screen.");
 changeProjectsFolder(true);
 assert.deepEqual(calls, []);
 assert.equal(error.hidden, false);
 assert.match(error.textContent, /start screen/);
-// An empty project gets a free name inside the workspace folder.
+// An empty project gets a free name inside the projects folder.
 byId("workspace-path").value = "/Users/me/Desktop/";
 savedProjects = [{ name: "TestKiLin" }, { name: "new-project" }];
 assert.equal(emptyProjectPath(), "/Users/me/Desktop/new-project-2");
 savedProjects = [];
 assert.equal(emptyProjectPath(), "/Users/me/Desktop/new-project");
+// A name set in Settings goes in the same folder.
+assert.equal(projectPath("review"), "/Users/me/Desktop/review");
 console.log("projects folder passed");
 """
         result = run_node(script)

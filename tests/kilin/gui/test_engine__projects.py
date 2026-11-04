@@ -1,4 +1,4 @@
-"""Exercise GUI project rename and source-import recovery.
+"""Exercise GUI project rename, delete and source-import recovery.
 
 Use real project and conversation files with a fake RAG session.
 
@@ -174,6 +174,51 @@ class TestEngineProjectRecovery(unittest.TestCase):
         self.assertFalse((self.root / "renamed").exists())
         self.assert_chat_preserved(self.project.root)
         self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_delete_moves_the_closed_project_to_deleted(self):
+        """Refuse while open; once closed, move it and list the rest."""
+        self.engine.delete_project(str(self.project.root))
+        self.assertTrue(self.project.root.is_dir())
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIn("Close the project", self.events[-1]["message"])
+        self.engine.close()
+        self.events.clear()
+        self.engine.delete_project(str(self.project.root))
+        self.assertFalse(self.project.root.exists())
+        self.assertTrue(
+            (self.root / ".deleted" / "project" / "profile.ini").is_file()
+        )
+        self.assertEqual(self.events, [{"event": "projects", "projects": []}])
+
+    def test_indexing_change_saves_and_reopens_the_project(self):
+        """Save to profile.ini, then reopen, which rebuilds the index."""
+        old_session = self.engine.session
+        self.engine.apply_indexing_settings({"target_tokens": 350})
+        self.assertTrue(old_session.closed)
+        self.assert_chat_preserved(self.project.root)
+        profile = self.engine.session.project.profile
+        self.assertEqual(profile.target_tokens, 350)
+        saved = open_project(self.project.root).profile
+        self.assertEqual(saved.target_tokens, 350)
+        self.assertEqual(self.events[-1]["event"], "indexing_applied")
+        self.assertEqual(self.events[-1]["profile"]["target_tokens"], 350)
+
+    def test_invalid_indexing_change_keeps_the_session(self):
+        """Refuse other keys or bad sizes before touching profile.ini."""
+        profile = (self.project.root / "profile.ini").read_text(
+            encoding="utf-8"
+        )
+        old_session = self.engine.session
+        for settings in ({"backend": "torch"}, {"overlap_tokens": 10_000}):
+            self.events.clear()
+            self.engine.apply_indexing_settings(settings)
+            self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIs(self.engine.session, old_session)
+        self.assertFalse(old_session.closed)
+        self.assertEqual(
+            (self.project.root / "profile.ini").read_text(encoding="utf-8"),
+            profile,
+        )
 
     def test_add_file_and_folder_preserves_sources_and_chat(self):
         """Add new sources without reloading the active chat."""

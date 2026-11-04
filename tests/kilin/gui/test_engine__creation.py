@@ -84,6 +84,28 @@ class TestEngineCreation(unittest.TestCase):
         self.assertTrue(conflict["existing_project"])
         self.assertEqual(conflict["workspace"], str(self.project.root))
 
+    def test_start_screen_choices_go_into_the_new_project(self):
+        """The intent model and search depth chosen before creation."""
+        target = self.root / "chosen"
+        self.engine.open_project(
+            [str(self.source)], "literature", str(target),
+            settings={
+                "_gui_search_depth": [3, 4, 5, 6, 7],
+                "_gui_router_models": {"mlx": "Qwen/Qwen3-1.7B-MLX-4bit"},
+            },
+        )
+        self.assertEqual(self.events[-1]["event"], "opened")
+        # Reported before indexing, so a Stop then can remove it again.
+        names = [event["event"] for event in self.events]
+        created = names.index("project_created")
+        self.assertLess(created, names.index("opened"))
+        self.assertEqual(
+            self.events[created]["workspace"], str(target.resolve())
+        )
+        profile = (target / "profile.ini").read_text(encoding="utf-8")
+        self.assertIn("depth = 3, 4, 5, 6, 7", profile)
+        self.assertIn("mlx = Qwen/Qwen3-1.7B-MLX-4bit", profile)
+
     def test_partial_destination_is_not_resumed_or_modified(self):
         """Unrelated contents do not become an existing-project candidate."""
         target = self.root / "partial"

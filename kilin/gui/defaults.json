@@ -1,5 +1,6 @@
 {
   "appearance": "system",
+  "backend": "auto",
   "effort_levels": {
     "mlx": [
       {"name": "Instant", "model": "Qwen/Qwen3-1.7B-MLX-4bit"},

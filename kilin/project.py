@@ -91,6 +91,10 @@ Module Structure
 
     Validate and save settings without changing source ownership.
 
+- ``delete_project``
+
+    Move a project into the ``.deleted`` folder beside it.
+
 Private helpers implement the normalization, validation, and bookkeeping
 used by these operations; they are not added to the package-level API.
 
@@ -186,11 +190,15 @@ __all__ = [
     "prepare_project_workspace",
     "default_project_profile",
     "configure_project",
+    "delete_project",
 ]
 
 # Standard identifiers do not require their definitions to be installed.
 PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
 PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
+
+# Deleted projects are moved here, beside the projects themselves.
+DELETED_PROJECTS_FOLDER: Final[str] = ".deleted"
 
 # Loading rejects an empty or invalid registry before projects can open.
 PROJECT_TYPE_IDS: Final[tuple[ProjectTypeId, ...]] = tuple(
@@ -1269,6 +1277,62 @@ def open_project(directory: str | Path) -> QAProject:
         logs=logs,
         profile=profile,
     )
+
+
+def delete_project(directory: str | Path) -> Path:
+    """Move a project into the ``.deleted`` folder beside it.
+
+    Deletion keeps the files, like deleting a conversation: the project
+    leaves the projects list but can be moved back by hand. A project of the
+    same name already there is kept, and the moved one gets a ``_2``,
+    ``_3``, ... suffix.
+
+    Parameters
+    ----------
+    directory: str | pathlib.Path
+        Folder containing profile.ini.
+
+    Returns
+    -------
+    pathlib.Path
+        Where the project now is.
+
+    Raises
+    ------
+    FileNotFoundError
+        If the folder or its profile.ini is missing.
+    ValueError
+        If the folder or the ``.deleted`` folder is a link, or ``.deleted`` is
+        itself a project.
+    OSError
+        If the folder cannot be created or the project cannot be moved.
+
+    Notes
+    -----
+    The caller closes the project first; nothing here checks whether it is
+    open.
+
+    """
+
+    given = Path(directory).expanduser()
+    if given.is_symlink():
+        raise ValueError(f"Project folder must not be a link: {given}")
+    root = given.resolve(strict=True)
+    if not (root / "profile.ini").is_file():
+        raise FileNotFoundError(f"Missing project profile: {root}")
+    deleted = root.parent / DELETED_PROJECTS_FOLDER
+    if deleted.is_symlink():
+        raise ValueError(f"The deleted folder must not be a link: {deleted}")
+    if (deleted / "profile.ini").exists():
+        raise ValueError(f"{deleted} is a project, so nothing is moved there.")
+    deleted.mkdir(exist_ok=True)
+    destination = deleted / root.name
+    number = 2
+    while destination.exists() or destination.is_symlink():
+        destination = deleted / f"{root.name}_{number}"
+        number += 1
+    root.rename(destination)
+    return destination
 
 
 def _read_json_if_possible(path: Path) -> dict[str, object] | None:

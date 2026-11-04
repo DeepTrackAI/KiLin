@@ -59,6 +59,8 @@ let workspacePaths = new Set();
 let sidePanelChoice = null;
 // The Settings tab shown when Settings open; kept while KíLín runs.
 let settingsTab = "general";
+// The last projects_folder event, to redraw the folder's note.
+let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
 const EDITABLE_FOLDERS = ["outputs", "templates"];
 // Drag data for a workspace file dragged within the panel.
@@ -67,6 +69,8 @@ let profile = null;
 // Answer settings changed on the start screen: kept until the project is
 // created, instead of being reset by the next settings event.
 let answerSettingsEdited = false;
+// The open project's saved temperature and answer-token limit.
+let savedAnswerNumbers = { temperature: 0, max_new_tokens: null };
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -84,15 +88,25 @@ let savedRouters = {};
 let defaultRouters = {};
 let draftRouter = "";
 let modelRoles = {};
+// Whether each checked model's chat template switches thinking, from the
+// engine; a model it could not check is missing (unknown).
+let thinkingSwitches = {};
 let modelsBaseline = null;
 let applyingModels = false;
 let closeAfterModelsApply = false;
+// Set while the engine saves indexing settings and rebuilds the index.
+let applyingIndexing = false;
 let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
+// Whether KíLín setup is complete; until it is, no project can be opened.
+let kilinReady = true;
+// Required models still missing, and whether they are being downloaded.
+let readinessMissingCount = 0;
+let installingModels = false;
 let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
@@ -305,7 +319,7 @@ function renderSavedProjects(projects) {
       button.append(name, typeLabel);
       button.title = `Resume ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
-        if (busy) return;
+        if (busy || needsSetup()) return;
         setBusy(true, "Resuming project…");
         bridge.resumeProject(project.project);
       });
@@ -475,7 +489,7 @@ function renderSidebarProjects(projects, current) {
     if (active) button.setAttribute("aria-current", "true");
     button.disabled = busy;
     const open = () => {
-      if (busy || active) return;
+      if (busy || active || needsSetup()) return;
       setBusy(true, `Opening ${project.name}…`);
       bridge.resumeProject(project.project);
     };
@@ -927,7 +941,7 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
- * @param markThinking Whether to add "· thinks" to models that can think.
+ * @param markThinking Whether to add each model's verified thinking mark.
  */
 function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
@@ -936,7 +950,7 @@ function modelSelect(ids, value, label, markThinking = false) {
   for (const id of ids) {
     const option = document.createElement("option");
     option.value = id;
-    const name = markThinking && modelCanThink(id) ? `${id} · thinks` : id;
+    const name = markThinking ? `${id}${thinkingMark(id)}` : id;
     option.textContent = cachedModels.has(id) ? name : `${name} (not downloaded)`;
     select.append(option);
   }
@@ -946,18 +960,28 @@ function modelSelect(ids, value, label, markThinking = false) {
 }
 
 /**
- * Tell whether a language model supports thinking, judged by its name.
+ * Tell whether a language model's chat template switches thinking on and
+ * off, as the engine checked it in the downloaded files.
  *
- * Qwen3 models switch thinking on or off per answer; the 2507 "Instruct"
- * releases never think. KíLín has no other record of a model's template,
- * so other models are not marked even if they can think.
+ * Nothing is judged from the name: a model that is not downloaded, or
+ * whose template could not be checked, is unknown.
  *
  * @param id Model identifier or local path.
- * @returns Whether to mark the model as one that thinks.
+ * @returns Whether the model is verified to switch thinking.
  */
 function modelCanThink(id) {
-  const name = String(id).split("/").pop().toLowerCase();
-  return name.startsWith("qwen3") && !/embedding|reranker|instruct-2507/.test(name);
+  return thinkingSwitches[id] === true;
+}
+
+/**
+ * Return the verified thinking mark for a model list, or "" when unknown.
+ *
+ * @param id Model identifier or local path.
+ * @returns " · can think", " · no thinking switch", or "".
+ */
+function thinkingMark(id) {
+  if (thinkingSwitches[id] === true) return " · can think";
+  return thinkingSwitches[id] === false ? " · no thinking switch" : "";
 }
 
 /**
@@ -976,8 +1000,9 @@ function downloadNotice(id, installed) {
   download.className = "primary";
   download.textContent = "Download";
   download.disabled = busy || !installed;
-  // An explicit Download click authorizes this download.
-  download.addEventListener("click", () => applyModelEdits(false, id));
+  // An explicit Download click authorizes this download. On the start
+  // screen it only downloads: nothing is saved before a project exists.
+  download.addEventListener("click", () => (ready ? applyModelEdits(false, id) : downloadModelOnly(id)));
   notice.append(text, download);
   return notice;
 }
@@ -1005,12 +1030,56 @@ function modelGroupHeader(role, title) {
 }
 
 /**
+ * Remember a field's value when the user enters it, so a refused edit can
+ * be put back.
+ *
+ * @param input Text or number field.
+ */
+function rememberValue(input) {
+  input.addEventListener("focus", () => { input.dataset.before = input.value; });
+}
+
+/**
+ * Check a start-screen edit at once, as Prepare project would: a refused
+ * value is put back and explained; nothing is saved before the project
+ * exists.
+ *
+ * @param input The edited field, if known.
+ * @param problem Why the values are refused, or "".
+ */
+function keepNewProjectValue(input, problem) {
+  if (problem) {
+    if (input && input.dataset.before !== undefined) input.value = input.dataset.before;
+    byId("model-download-status").textContent = problem;
+  } else if (input && input.value !== input.dataset.before) {
+    byId("model-download-status").textContent = "Kept for the new project.";
+  }
+}
+
+/**
+ * Save a typed field when the user presses Enter or leaves it, not on each
+ * key or number-arrow click.
+ *
+ * @param input Text or number field.
+ * @param save Function that saves the field's change.
+ */
+function saveOnEnter(input, save) {
+  rememberValue(input);
+  input.addEventListener("blur", save);
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  });
+}
+
+/**
  * Build the effort-level rows, the embedding choice, and the cache listing.
  */
 function renderModelsPanel() {
   const host = byId("model-list");
   const focused = document.activeElement?.closest?.("[data-focus-key]")?.dataset.focusKey;
   host.replaceChildren();
+  const depthHost = byId("search-depth");
+  depthHost.replaceChildren();
   const installed = installedBackends[activeBackend];
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
@@ -1052,6 +1121,7 @@ function renderModelsPanel() {
       level.name = name.value;
       refreshRestoreButtons();
     });
+    saveOnEnter(name, saveModelEdits);
     // Answers think only with these models; routing never does.
     const select = modelSelect(roleModelIds("chat", level.model), level.model,
       `Language model for ${level.name || `level ${index + 1}`}`, true);
@@ -1061,6 +1131,7 @@ function renderModelsPanel() {
       for (const target of mlx ? [level] : draftLevels) target.model = select.value;
       byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
       renderModelsPanel();
+      saveModelEdits();
     });
     row.append(name, select);
     chat.append(row);
@@ -1070,7 +1141,7 @@ function renderModelsPanel() {
   host.append(chat);
 
   // Search depth: how many passages each step of the composer's second
-  // slider retrieves.
+  // slider retrieves. Shown in Answers; applied with the model changes.
   const depth = document.createElement("section");
   depth.className = "model-group";
   depth.append(modelGroupHeader("depth", "Search depth"));
@@ -1094,11 +1165,31 @@ function renderModelsPanel() {
       draftDepth[index] = Number(input.value);
       refreshRestoreButtons();
     });
+    saveOnEnter(input, saveModelEdits);
     cell.append(caption, input);
     steps.append(cell);
   });
   depth.append(steps);
-  host.append(depth);
+  depthHost.append(depth);
+
+  const router = document.createElement("section");
+  router.className = "model-group";
+  router.append(modelGroupHeader("router", "Intent model"));
+  const routerRow = document.createElement("div");
+  routerRow.className = "model-row";
+  // Marked like the levels; picking the intent runs with thinking off.
+  const routerSelect = modelSelect(roleModelIds("chat", draftRouter), draftRouter, "Intent model", true);
+  routerSelect.dataset.focusKey = "router";
+  routerSelect.addEventListener("change", () => {
+    draftRouter = routerSelect.value;
+    renderModelsPanel();
+    saveModelEdits();
+  });
+  routerRow.append(routerSelect);
+  router.append(routerRow);
+  const routerNotice = downloadNotice(draftRouter, installed);
+  if (routerNotice) router.append(routerNotice);
+  host.append(router);
 
   const embedding = document.createElement("section");
   embedding.className = "model-group";
@@ -1111,37 +1202,24 @@ function renderModelsPanel() {
   select.addEventListener("change", () => {
     byId("embedding-model").value = select.value;
     renderModelsPanel();
+    saveModelEdits();
   });
   row.append(select);
   embedding.append(row);
   const notice = downloadNotice(current, installed);
   if (notice) embedding.append(notice);
   host.append(embedding);
-
-  const router = document.createElement("section");
-  router.className = "model-group";
-  router.append(modelGroupHeader("router", "Intent model"));
-  const routerRow = document.createElement("div");
-  routerRow.className = "model-row";
-  const routerSelect = modelSelect(roleModelIds("chat", draftRouter), draftRouter, "Intent model");
-  routerSelect.dataset.focusKey = "router";
-  routerSelect.addEventListener("change", () => {
-    draftRouter = routerSelect.value;
-    renderModelsPanel();
-  });
-  routerRow.append(routerSelect);
-  router.append(routerRow);
-  const routerNotice = downloadNotice(draftRouter, installed);
-  if (routerNotice) router.append(routerNotice);
-  host.append(router);
-  if (focused) host.querySelector(`[data-focus-key="${focused}"]`)?.focus();
+  if (focused) {
+    (host.querySelector(`[data-focus-key="${focused}"]`)
+      || depthHost.querySelector(`[data-focus-key="${focused}"]`))?.focus();
+  }
 }
 
 /**
  * Enable each Restore defaults button only when it would change something.
  */
 function refreshRestoreButtons() {
-  for (const button of byId("model-list").querySelectorAll(".restore-defaults")) {
+  for (const button of document.querySelectorAll("#model-list .restore-defaults, #search-depth .restore-defaults")) {
     button.disabled = busy || !hasModelChanges(button.dataset.role);
   }
 }
@@ -1204,12 +1282,13 @@ function restoreDefaultModels(role) {
   }
   refreshModelStatus();
   renderModelsPanel();
+  saveModelEdits();
 }
 
 /**
  * Show one Settings tab and hide the sections of the others.
  *
- * @param name Tab name: general, models, answers, or project.
+ * @param name Tab name: project, models, answers, or tools.
  */
 function showSettingsTab(name) {
   settingsTab = name;
@@ -1342,7 +1421,10 @@ function renderToolSettings(data) {
     summary.append(name, ` ${tool.summary}`);
     const fields = document.createElement("div");
     fields.className = "tool-fields";
-    for (const [key, value] of Object.entries(tool.settings)) fields.append(toolSettingField(key, value));
+    // Values first, then the on/off switches together, one per row.
+    const entries = Object.entries(tool.settings);
+    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value));
+    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value));
     item.append(summary, fields);
     // Settings each use sets differently, such as a template, stay as set.
     const perIntent = Object.entries(tool.per_intent);
@@ -1388,16 +1470,29 @@ function renderToolSettings(data) {
  */
 function openModels() {
   if (byId("models-panel").classList.contains("hidden")) {
+    clearSettingsStatus();
+    // An open project's saved values, not an edit left unsaved earlier.
+    if (ready && profile) showIndexingFields();
     draftLevels = cloneLevels(currentLevels());
     draftDepth = [...currentDepth()];
     draftRouter = currentRouter();
     modelsBaseline = currentModelSettings();
   }
   renderModelsPanel();
+  showProjectSettings();
   // The Tools tab may still be selected from another project.
   if (settingsTab === "tools") requestToolSettings();
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
+}
+
+/**
+ * Clear the message under the tabs, so it only ever answers the last
+ * action; one still in progress (a download or a rebuild) is kept.
+ */
+function clearSettingsStatus() {
+  if (downloadingModel || applyingModels || applyingIndexing) return;
+  byId("model-download-status").textContent = "";
 }
 
 /**
@@ -1461,20 +1556,20 @@ function levelProblem(levels, depth) {
  * @param explicitDownload Model ID to download, or null for ordinary edits.
  */
 async function applyModelEdits(closeAfter = false, explicitDownload = null) {
-  if (busy || !bridge) return;
+  if (busy || !bridge) return false;
   const settings = currentModelSettings();
   const before = modelsBaseline || settings;
   const changed = modelEditsPending();
-  if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return; }
+  if (!changed && !explicitDownload) { if (closeAfter) hideModels(); return false; }
   const problem = levelProblem(settings.effort_levels, settings.search_depth);
   if (problem) {
     byId("model-download-status").textContent = problem;
-    return;
+    return false;
   }
   for (const level of settings.effort_levels) level.name = level.name.trim();
   if (!settings.chat_model || !settings.embedding_model) {
     byId("model-download-status").textContent = "Choose language and embedding models.";
-    return;
+    return false;
   }
   const requested = [...new Set([settings.embedding_model,
     ...settings.effort_levels.map((level) => level.model),
@@ -1486,26 +1581,206 @@ async function applyModelEdits(closeAfter = false, explicitDownload = null) {
   const warnings = [];
   if (missing.some((id) => id !== explicitDownload)) warnings.push(`KíLín downloads ${missing.join(", ")}, which may take a while.`);
   if (reindex) warnings.push("KíLín rebuilds this project's index; saved chats are kept.");
-  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return;
+  if (warnings.length && (!await askKilin("Apply model settings?", warnings.join(" "), "Apply") || busy)) return false;
   applyingModels = true;
   closeAfterModelsApply = closeAfter;
   error.classList.add("hidden");
   byId("model-download-status").textContent = reindex ? "Applying models and rebuilding the index…" : "Applying model settings…";
   setBusy(true, byId("model-download-status").textContent);
   bridge.applyModelSettings(JSON.stringify({ ...settings, download: missing.length > 0 }));
+  return true;
 }
+
 /**
- * Close Settings if possible, applying confirmed edits when idle.
+ * Save a Models or Search depth change as soon as it is made, so Settings
+ * always shows what is in effect. A refused or cancelled change (for
+ * example a download the user declines) puts the saved values back.
  */
-function closeModels() {
-  if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+async function saveModelEdits() {
+  if (!modelEditsPending()) return;
+  if (!ready) return keepNewProjectModels();
   if (busy) {
-    // Nothing to apply: just close. Edits wait until KíLín is idle.
-    if (!modelEditsPending()) hideModels();
-    else byId("model-download-status").textContent = "KíLín is busy. Close Settings again when it finishes to apply your changes.";
+    byId("model-download-status").textContent = "KíLín is busy. Change this again when it finishes.";
+  } else if (await applyModelEdits()) {
     return;
   }
-  applyModelEdits(true);
+  const problem = byId("model-download-status").textContent;
+  showSavedModels();
+  byId("model-download-status").textContent = problem;
+}
+
+/**
+ * Keep start-screen model choices on the page for the next new project,
+ * which saves them in its own profile.ini. Nothing is written before a
+ * project exists, so the next new project starts from the defaults again.
+ */
+function keepNewProjectModels() {
+  const problem = levelProblem(draftLevels, draftDepth);
+  if (problem) {
+    showSavedModels();
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
+  savedRouters = { ...savedRouters, [activeBackend]: draftRouter };
+  savedDepth = [...draftDepth];
+  saveModelFields();
+  modelsBaseline = currentModelSettings();
+  refreshRestoreButtons();
+  byId("model-download-status").textContent = "Kept for the new project.";
+}
+
+/**
+ * Download one model from the start screen, saving no settings.
+ *
+ * @param id Model identifier to download.
+ */
+function downloadModelOnly(id) {
+  if (busy || !bridge) return;
+  downloadingModel = id;
+  setBusy(true, `Downloading ${id}…`);
+  bridge.downloadModel(id);
+}
+
+/**
+ * Put the saved model choices and search depth back into Settings.
+ */
+function showSavedModels() {
+  draftLevels = cloneLevels(currentLevels());
+  draftDepth = [...currentDepth()];
+  draftRouter = currentRouter();
+  if (modelsBaseline) {
+    byId("embedding-model").value = modelsBaseline.embedding_model;
+    byId("query-format").value = modelsBaseline.query_format;
+  }
+  if (draftLevels.length) byId("chat-model").value = draftLevels[DEFAULT_LEVEL].model;
+  renderModelsPanel();
+}
+
+/**
+ * Tell whether Settings must stay open on KíLín setup: required models are
+ * missing and can be installed here. A missing runtime cannot be fixed in
+ * the app, so it does not lock Settings, but projects still cannot open.
+ */
+function setupLocked() {
+  return !kilinReady && readinessEnvironmentReady;
+}
+
+/**
+ * Show the setup buttons, Close and Prepare project for the current setup
+ * state: while the required models download, Install becomes Stop and
+ * nothing else can start; Close and Prepare project wait for setup.
+ */
+function showSetupLock() {
+  const install = byId("install-required");
+  install.textContent = installingModels ? "Stop downloading" : "Install required models";
+  install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
+  byId("use-installed").disabled = busy || !readinessEnvironmentReady;
+  byId("open").disabled = busy || !bridge || !kilinReady;
+  byId("close-models").disabled = setupLocked();
+  byId("close-models").title = setupLocked() ? "Finish KíLín setup first." : "";
+}
+
+/**
+ * Before opening a project, make sure KíLín setup is done; otherwise show
+ * it in Settings instead.
+ *
+ * @returns Whether setup still has to be finished.
+ */
+function needsSetup() {
+  if (kilinReady) return false;
+  openModels();
+  byId("first-run-setup").open = true;
+  byId("model-download-status").textContent = "Finish KíLín setup before opening a project.";
+  return true;
+}
+
+/**
+ * Close Settings; every change has been saved when it was made.
+ */
+function closeModels() {
+  if (setupLocked()) {
+    byId("first-run-setup").open = true;
+    byId("model-download-status").textContent = "Finish KíLín setup first: install the required models, or use the installed ones.";
+    return;
+  }
+  if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
+  // A save still running closes Settings once it is done.
+  if (applyingModels) closeAfterModelsApply = true;
+  else hideModels();
+}
+
+/**
+ * Return the open project's changed indexing settings, or null for none.
+ *
+ * The index records these, so changing any of them rebuilds it.
+ *
+ * @returns Changed values by profile key, or null.
+ */
+function indexingEdits() {
+  if (!ready || !profile) return null;
+  // The field lists only the types beyond the ones KíLín reads anyway.
+  const extensions = [...new Set([
+    ...profile.extensions.filter((extension) => supportedExtensions.has(extension)),
+    ...fileTypes(),
+  ])];
+  const values = {
+    extensions,
+    max_file_bytes: Number(byId("max-file-bytes").value),
+    target_tokens: Number(byId("target-tokens").value),
+    max_tokens: Number(byId("max-tokens").value),
+    overlap_tokens: Number(byId("overlap-tokens").value),
+  };
+  const same = (key, value) => (key === "extensions"
+    ? JSON.stringify([...value].sort()) === JSON.stringify([...profile[key]].sort())
+    : value === profile[key]);
+  const edits = Object.fromEntries(Object.entries(values).filter(([key, value]) => !same(key, value)));
+  return Object.keys(edits).length ? edits : null;
+}
+
+/**
+ * Explain the first invalid indexing value, or return an empty string.
+ */
+function indexingProblem() {
+  const [size, target, most, overlap] = ["max-file-bytes", "target-tokens", "max-tokens", "overlap-tokens"]
+    .map((id) => Number(byId(id).value));
+  if (!Number.isInteger(size) || size < 1) return "The maximum file size must be a whole number of bytes.";
+  if (!Number.isInteger(target) || target < 1) return "Target chunk tokens must be a whole number of at least 1.";
+  if (!Number.isInteger(most) || most < target) return "Maximum chunk tokens must be at least the target.";
+  if (!Number.isInteger(overlap) || overlap < 0 || overlap >= target) return "Overlap tokens must be below the target.";
+  return "";
+}
+
+/**
+ * Save an open project's indexing edit once it is entered and the user
+ * agrees to rebuild, so the fields always show the settings in effect.
+ * The engine reopens the project, which rebuilds its index; a refused or
+ * cancelled value is put back. On the start screen it is only checked.
+ *
+ * @param event The field's blur event.
+ */
+async function saveIndexingEdits(event) {
+  if (!ready) return keepNewProjectValue(event?.target, indexingProblem());
+  const edits = indexingEdits();
+  if (!edits) return;
+  const problem = busy ? "KíLín is busy. Change this again when it finishes." : indexingProblem();
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    showIndexingFields();
+    return;
+  }
+  if (!await askKilin(
+    "Rebuild the index?",
+    "The new value takes effect once the project's index is rebuilt from its files. That takes seconds for a few files and can take several minutes for a large project.",
+    "Rebuild",
+  )) {
+    showIndexingFields();
+    return;
+  }
+  applyingIndexing = true;
+  setBusy(true, "Rebuilding the index…");
+  byId("model-download-status").textContent = "Saved. Rebuilding the index with the new settings…";
+  bridge.applyIndexingSettings(JSON.stringify(edits));
 }
 
 /**
@@ -1619,19 +1894,21 @@ function showSettings(data) {
   else if (remembered && remembered !== "system") applyAppearance(remembered);
   renderProjectTypes(data.project_types);
   modelRoles = data.model_roles || modelRoles;
+  thinkingSwitches = data.thinking_switches || thinkingSwitches;
   automaticBackend = data.backend;
   cachedModels = new Set(data.cached_models);
   modelChoices = data.model_choices || [];
   installedBackends = data.installed_backends || {};
   supportedExtensions = new Set(data.supported_extensions);
   closeModelMenus();
-  byId("backend").value = profile.backend;
+  // New projects use the backend chosen in KíLín setup (preferences).
+  byId("backend").value = data.workspace ? profile.backend
+    : data.backend_preference || profile.backend;
   byId("query-format").value = profile.query_format;
-  byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
+  showIndexingFields();
   const keepAnswers = ready || answerSettingsEdited;
-  for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens", "temperature", "max_new_tokens"]) {
-    if (keepAnswers && ["temperature", "max_new_tokens"].includes(key)) continue;
-    byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
+  for (const key of ["temperature", "max_new_tokens"]) {
+    if (!keepAnswers) byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
   if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
@@ -1640,6 +1917,16 @@ function showSettings(data) {
     renderWorkspace(data.workspace_files);
   }
   if (selectedSources.length) previewSources();
+}
+
+/**
+ * Show the profile's indexing settings in the Indexing tab.
+ */
+function showIndexingFields() {
+  byId("extensions").value = profile.extensions.filter((extension) => !supportedExtensions.has(extension)).join(", ");
+  for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens"]) {
+    byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
+  }
 }
 
 /**
@@ -1654,6 +1941,7 @@ function collectSettings() {
     backend: byId("backend").value,
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
+    _gui_router_models: { [activeBackend]: currentRouter() },
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
@@ -1665,6 +1953,35 @@ function collectSettings() {
     // Models are downloaded from Settings, never silently while preparing.
     allow_download: false,
   };
+}
+
+/**
+ * Save the open project's temperature and answer-token limit as soon as
+ * one is entered, like Thinking, so Settings shows what is in effect. A
+ * refused value is put back; on the start screen it is only checked.
+ *
+ * @param event The field's change event.
+ */
+function saveAnswerNumbers(event) {
+  const temperature = Number(byId("temperature").value);
+  const tokens = byId("max-new-tokens").value.trim();
+  const maxNewTokens = tokens ? Number(tokens) : null;
+  const invalid = !byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0
+    ? "Choose a temperature of zero or higher."
+    : tokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)
+      ? "Choose a positive answer-token limit or leave it blank."
+      : "";
+  if (!ready) return keepNewProjectValue(event?.target, invalid);
+  if (!bridge) return;
+  const problem = invalid || (busy ? "KíLín is busy. Change this again when it finishes." : "");
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    byId("temperature").value = savedAnswerNumbers.temperature;
+    byId("max-new-tokens").value = savedAnswerNumbers.max_new_tokens ?? "";
+    return;
+  }
+  savedAnswerNumbers = { temperature, max_new_tokens: maxNewTokens };
+  bridge.saveAnswerSettings(JSON.stringify(savedAnswerNumbers));
 }
 
 /**
@@ -2153,11 +2470,9 @@ function showError(message, tracePath = "") {
     byId("cancel-model-download").classList.add("hidden");
     downloadingModel = null;
   }
+  installingModels = false;
   shownErrorStatus = byId("model-download-status").textContent;
   setBusy(false);
-  if (!byId("first-run-setup").classList.contains("hidden")) {
-    byId("install-required").disabled = !readinessEnvironmentReady;
-  }
   byId("connection").textContent = "Error";
   requestAnimationFrame(() => error.scrollIntoView({ block: "nearest" }));
 }
@@ -2567,8 +2882,8 @@ function setBusy(value, message = "") {
   busy = value;
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  // Settings can close while KíLín works; only unsaved edits must wait.
-  byId("close-models").disabled = false;
+  // Settings can close while KíLín works, but not before setup is done.
+  showSetupLock();
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
   if (!value) {
@@ -2576,7 +2891,8 @@ function setBusy(value, message = "") {
     byId("send").classList.remove("waiting");
     answeringConversationId = "";
   }
-  byId("open").disabled = value || !bridge;
+  // A project can be prepared only once KíLín setup is done.
+  byId("open").disabled = value || !bridge || !kilinReady;
   const answering = value && ready && activity.classList.contains("answer-progress");
   byId("question-form").classList.toggle("composer-disabled", value && !answering);
   byId("question-form").setAttribute("aria-busy", String(value));
@@ -4749,15 +5065,17 @@ function onEvent(raw) {
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
-    byId("install-required").disabled = !data.environment_ready || !data.missing_models.length;
+    kilinReady = Boolean(data.ready);
+    readinessMissingCount = data.missing_models.length;
     byId("install-required").classList.toggle("hidden", !data.missing_models.length);
     // Compatible models already on this computer can be used instead.
     byId("use-installed").classList.toggle("hidden", !data.can_use_installed);
-    byId("use-installed").disabled = !data.environment_ready;
+    showSetupLock();
     refreshModelStatus();
     if (!data.ready) {
+      // Setup comes first: Settings opens on it and stays until it is done.
       byId("models-panel").classList.remove("hidden");
-      byId("close-models").focus();
+      byId("first-run-setup").focus?.();
     }
   } else if (data.event === "installed_models_used") {
     savedLevels = data.effort_levels || savedLevels;
@@ -4777,7 +5095,8 @@ function onEvent(raw) {
     byId("first-run-setup").open = true;
     byId("readiness-status").textContent = "Downloading";
     byId("readiness-status").classList.remove("ready");
-    byId("install-required").disabled = true;
+    installingModels = true;
+    showSetupLock();
     byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
     updateDownloadMeter(null);
   } else if (data.event === "installation_progress") {
@@ -4795,6 +5114,7 @@ function onEvent(raw) {
     cachedModels.add(data.model_id);
     byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
   } else if (data.event === "installation_complete") {
+    installingModels = false;
     setupCompletionVisible = true;
     byId("readiness-status").textContent = "Ready";
     byId("readiness-status").classList.add("ready");
@@ -4936,6 +5256,7 @@ function onEvent(raw) {
     applyingModels = false;
     cachedModels = new Set(data.cached_models || [...cachedModels]);
     modelRoles = data.model_roles || modelRoles;
+    thinkingSwitches = data.thinking_switches || thinkingSwitches;
     // Without an open project, keep the levels for project creation.
     if (data.effort_levels) savedLevels = data.effort_levels;
     else savedLevels = { ...savedLevels, [activeBackend]: cloneLevels(draftLevels) };
@@ -4945,13 +5266,24 @@ function onEvent(raw) {
     if (data.profile) { profile = data.profile; byId("query-format").value = profile.query_format; showModelFields(); }
     else saveModelFields();
     modelsBaseline = currentModelSettings();
-    byId("model-download-status").textContent = "Model settings applied.";
+    byId("model-download-status").textContent = ready
+      ? "Saved in profile.ini. The next answer uses it."
+      : "Saved in preferences.json for new projects.";
     setBusy(false);
     renderModelsPanel();
     if (closeAfterModelsApply) hideModels();
     closeAfterModelsApply = false;
+  } else if (data.event === "answer_settings_saved") {
+    byId("model-download-status").textContent = "Saved in profile.ini. The next answer uses it.";
+  } else if (data.event === "indexing_applied") {
+    applyingIndexing = false;
+    profile = data.profile;
+    showIndexingFields();
+    byId("model-download-status").textContent = "Saved in profile.ini and the index is rebuilt. The next answer uses it.";
+    setBusy(false);
   } else if (data.event === "model_downloaded") {
     cachedModels.add(data.model_id);
+    thinkingSwitches = data.thinking_switches || thinkingSwitches;
     downloadingModel = null;
     byId("cancel-model-download").classList.add("hidden");
     byId("model-download-status").textContent = `${data.model_id} downloaded in ${seconds(data.elapsed_seconds || 0)}.`;
@@ -4980,6 +5312,9 @@ function onEvent(raw) {
       savedLevels = data.effort_levels || savedLevels;
       savedRouters = data.router_models || savedRouters;
       savedDepth = data.search_depth || savedDepth;
+      // Settings shows this project's own values, never start-screen edits.
+      byId("backend").value = profile.backend;
+      showIndexingFields();
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
@@ -5006,6 +5341,8 @@ function onEvent(raw) {
     if (!conversation.children.length) renderConversationEmpty();
     byId("workspace-location").textContent = data.project;
     renderSidebarProjects(savedProjects, openProjectPath);
+    // A renamed project keeps Settings open: show its new name.
+    showProjectSettings();
     if (bridge) bridge.listSavedProjects("");
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
@@ -5013,6 +5350,7 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
+    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5050,6 +5388,7 @@ function onEvent(raw) {
     byId("temperature").value = data.temperature;
     byId("max-new-tokens").value = data.max_new_tokens ?? "";
     byId("thinking").checked = data.thinking;
+    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5119,6 +5458,12 @@ function onEvent(raw) {
       downloadingModel = null;
       byId("cancel-model-download").classList.add("hidden");
     }
+    if (installingModels) {
+      // Check again what is installed; setup stays open until it is done.
+      installingModels = false;
+      showSetupLock();
+      bridge?.requestReadiness();
+    }
     if (resumeAfterStop) {
       resumeAfterStop = false;
       resetAnswerStages();
@@ -5138,9 +5483,13 @@ function onEvent(raw) {
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
-    byId("connection").textContent = "Stopped · reopen your project";
+    // A stopped preparation leaves no project: Qt removed what was made.
+    byId("connection").textContent = data.removed_projects?.length
+      ? "Stopped · the unfinished project was removed"
+      : "Stopped · reopen your project";
     setBusy(false);
     bridge.requestSettings(byId("type-id").value, "");
+    if (data.removed_projects?.length) bridge.listSavedProjects("");
   } else if (data.event === "backend_failed") {
     ready = false;
     updateFloatingHeader();
@@ -5190,6 +5539,11 @@ function onEvent(raw) {
       }
     });
   } else if (data.event === "error") {
+    if (applyingIndexing) {
+      // Not saved: show the settings still in effect.
+      applyingIndexing = false;
+      showIndexingFields();
+    }
     if (data.pending_choice === true) {
       // The engine rejected an unrelated command, not this answer.
       // It is still waiting; preserve the controls and busy state.
@@ -5213,6 +5567,23 @@ function onEvent(raw) {
 // UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("project-title").addEventListener("change", renameProjectFromSettings);
+byId("project-title").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
+  if (event.key === "Escape") {
+    // Escape puts the name back; it does not close Settings here.
+    event.preventDefault();
+    event.stopPropagation();
+    event.target.value = projectName(openProjectPath);
+    event.target.blur();
+  }
+});
+byId("delete-project").addEventListener("click", deleteOpenProject);
+// Enter or leaving the field saves an open project's indexing settings;
+// the number arrows only edit, so each click does not start a rebuild.
+for (const id of ["extensions", "max-file-bytes", "target-tokens", "max-tokens", "overlap-tokens"]) {
+  saveOnEnter(byId(id), saveIndexingEdits);
+}
 const dropZone = byId("drop-zone");
 dropZone.addEventListener("click", () => bridge?.chooseSources());
 dropZone.addEventListener("dragover", (event) => { event.preventDefault(); dropZone.classList.add("drag-over"); });
@@ -5254,7 +5625,7 @@ byId("open-models").addEventListener("click", openModels);
 byId("models-hint-button").addEventListener("click", openModels);
 byId("close-models").addEventListener("click", closeModels);
 for (const tab of document.querySelectorAll(".settings-tab")) {
-  tab.addEventListener("click", () => showSettingsTab(tab.dataset.tab));
+  tab.addEventListener("click", () => { clearSettingsStatus(); showSettingsTab(tab.dataset.tab); });
   tab.addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
@@ -5271,7 +5642,15 @@ byId("models-panel").addEventListener("click", (event) => {
   if (event.target === byId("models-panel")) closeModels();
 });
 byId("install-required").addEventListener("click", () => {
-  if (busy || !bridge) return;
+  if (!bridge) return;
+  // While the required models download, this button stops them.
+  if (installingModels) {
+    byId("install-required").disabled = true;
+    byId("install-required").textContent = "Stopping…";
+    bridge.stopOperation();
+    return;
+  }
+  if (busy) return;
   setBusy(true, "Checking required models…");
   bridge.installRequiredModels();
 });
@@ -5285,7 +5664,7 @@ byId("cancel-model-download").addEventListener("click", () => {
 });
 byId("project-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (busy || !bridge) return;
+  if (busy || !bridge || needsSetup()) return;
   if (!profile) return showError("Settings are still loading. Try again in a moment.");
   if (!installedBackends[activeBackend]) {
     openModels();
@@ -5312,9 +5691,17 @@ byId("project-form").addEventListener("submit", (event) => {
   const included = selectedSources.filter((path) => selected[path].length);
   if (selectedSources.length && !included.length) return showError("Select at least one file.");
   error.classList.add("hidden");
-  // With sources the engine names the project after the first one; an
-  // empty project gets a free "new-project" name in the workspace folder.
-  const destination = included.length ? "" : emptyProjectPath();
+  // A name set in Settings names the project. Otherwise the engine names
+  // it after the first source; an empty project gets a free "new-project"
+  // name in the projects folder.
+  const name = byId("project-title").value.trim();
+  if (/[\\/]/.test(name) || name.startsWith(".")) {
+    return showError("A project name cannot start with a dot or contain / or \\.");
+  }
+  if (savedProjects.some((project) => project.name === name)) {
+    return showError(`A project named ${name} already exists. Choose another name in Settings.`);
+  }
+  const destination = name ? projectPath(name) : included.length ? "" : emptyProjectPath();
   setBusy(true, "Opening project…");
   requestAnimationFrame(() => activity.scrollIntoView({ block: "nearest" }));
   bridge.openProject(
@@ -5360,12 +5747,10 @@ byId("question-form").addEventListener("submit", (event) => {
  *   choice ("" for the default), and whether that choice is ``missing``.
  */
 function showProjectsFolder(data) {
+  projectsFolderInfo = data;
   byId("workspace-path").value = data.folder;
   byId("workspace-path").title = data.folder;
-  byId("default-workspace").disabled = !data.saved;
-  byId("workspace-note").textContent = data.missing
-    ? `${data.saved} is not available, so KíLín uses the default folder.`
-    : "The folder that holds your projects; KíLín remembers it.";
+  showProjectSettings();
   if (!switchingProjectsFolder) return;
   // The engine restarted with the new folder: list the projects there.
   switchingProjectsFolder = false;
@@ -5376,16 +5761,98 @@ function showProjectsFolder(data) {
 }
 
 /**
+ * Show what Settings can change: the backend and projects folder, in KíLín
+ * setup, only on the start screen (disabled with a project open); Delete
+ * only with a project open.
+ */
+function showProjectSettings() {
+  // The buttons always show; they are disabled while a project is open,
+  // and Use default also while the default folder is in use.
+  const why = ready ? "Change it from the start screen." : "";
+  byId("browse-workspace").disabled = ready;
+  byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved;
+  byId("browse-workspace").title = why;
+  byId("default-workspace").title = why;
+  // A note only when the chosen folder is missing.
+  const missing = Boolean(projectsFolderInfo?.missing);
+  byId("workspace-note").textContent = missing
+    ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
+    : "";
+  byId("workspace-note").classList.toggle("hidden", !missing);
+  // An open project keeps the backend it was made with.
+  byId("backend").title = ready ? "Set when the project was created." : "";
+  // On the start screen the name is for the next new project.
+  byId("delete-project").classList.toggle("hidden", !ready);
+  if (ready) byId("project-title").value = projectName(openProjectPath);
+}
+
+/**
+ * Return a project's name: the last part of its folder path.
+ *
+ * @param path The project folder.
+ */
+function projectName(path) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || "";
+}
+
+/**
+ * Rename the open project from Settings: Enter or leaving the field saves,
+ * Escape puts the name back.
+ */
+function renameProjectFromSettings() {
+  const input = byId("project-title");
+  // On the start screen the name waits for the next new project.
+  if (!ready) return;
+  const current = projectName(openProjectPath);
+  const name = input.value.trim();
+  if (!name || name === current || busy) {
+    input.value = current;
+    return;
+  }
+  setBusy(true, "Renaming project…");
+  bridge.renameProject(name);
+}
+
+/**
+ * Confirm, then close the open project and move it to the deleted folder
+ * in the projects folder.
+ */
+async function deleteOpenProject() {
+  if (!bridge || !ready || busy) return;
+  const folder = openProjectPath;
+  const name = projectName(folder);
+  if (!await askKilin(
+    `Delete ${name}?`,
+    "Are you sure you want to delete this project?",
+    "Delete",
+  )) return;
+  hideModels();
+  returnToLaunch();
+  // Sent after closing: the engine refuses to delete an open project.
+  bridge.deleteProject(folder);
+}
+
+/**
  * Pick a free folder for a project created without sources.
  *
- * @returns "<workspace folder>/new-project", numbered when that name is
+ * @returns "<projects folder>/new-project", numbered when that name is
  *   taken by a listed project.
  */
 function emptyProjectPath() {
-  const root = byId("workspace-path").value.replace(/[\\/]+$/, "");
   const taken = new Set(savedProjects.map((project) => project.name));
   let name = "new-project";
   for (let number = 2; taken.has(name); number += 1) name = `new-project-${number}`;
+  return projectPath(name);
+}
+
+/**
+ * Return where a new project with this name goes.
+ *
+ * @param name Folder name of the new project.
+ * @returns "<projects folder>/<name>".
+ */
+function projectPath(name) {
+  const root = byId("workspace-path").value.replace(/[\\/]+$/, "");
   return `${root}/${name}`;
 }
 
@@ -5400,14 +5867,14 @@ function emptyProjectPath() {
 function changeProjectsFolder(useDefault) {
   if (!bridge || busy) return;
   if (ready) {
-    error.textContent = "Go back to the start screen to change the workspace folder.";
+    error.textContent = "Go back to the start screen to change the projects folder.";
     error.classList.remove("hidden");
     return;
   }
   // Set before Browse: Qt answers only once a folder is chosen.
   switchingProjectsFolder = true;
   if (!useDefault) return bridge.chooseProjectsFolder();
-  setBusy(true, "Switching to the default workspace folder…");
+  setBusy(true, "Switching to the default projects folder…");
   bridge.useDefaultProjectsFolder();
 }
 
@@ -5495,6 +5962,8 @@ function returnToLaunch() {
   renderPreview();
   showWorkspace(false);
   clearReferences();
+  byId("project-title").value = "";
+  showProjectSettings();
   bridge.requestSettings(byId("type-id").value, "");
   setBusy(false);
   refreshSavedProject();
@@ -5614,12 +6083,20 @@ byId("appearance").addEventListener("change", (event) => applyAppearance(event.t
 for (const id of ["thinking", "temperature", "max-new-tokens"]) {
   byId(id).addEventListener("change", () => { if (!ready) answerSettingsEdited = true; });
 }
+for (const id of ["temperature", "max-new-tokens"]) {
+  rememberValue(byId(id));
+  byId(id).addEventListener("change", saveAnswerNumbers);
+}
 byId("type-id").addEventListener("change", () => {
   hideResume();
   bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
-byId("backend").addEventListener("change", () => { saveModelFields(); showModelFields(); });
+byId("backend").addEventListener("change", () => {
+  if (!ready) bridge?.setBackendPreference(byId("backend").value);
+  saveModelFields();
+  showModelFields();
+});
 byId("query-format").addEventListener("change", () => {
   refreshModelStatus();
   if (!byId("models-panel").classList.contains("hidden")) renderModelsPanel();

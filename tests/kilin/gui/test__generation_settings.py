@@ -56,7 +56,7 @@ class TestGUIGenerationSettings(unittest.TestCase):
         )
         engine._report_error = Mock()
         with patch.object(
-            gui_engine, "available_models", return_value=[]
+            gui_engine, "downloaded_models", return_value=[]
         ), patch.object(
             gui_engine, "installed_backends", return_value=[]
         ), patch.object(

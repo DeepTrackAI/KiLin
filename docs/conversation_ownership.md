@@ -93,7 +93,9 @@ RAG borrows it rather than acquiring a second lock.
 `RAGSession.reset()` archives the current file while owning its path and
 continues with a fresh conversation under that same path. The GUI's
 `ConversationStore.archive()` borrows the active owner where applicable,
-then moves the JSON to `logs/traces/deleted/`. In the deletion flow, the GUI
+then moves the JSON, and afterwards its `.json.lock` companion, to
+`logs/traces/.deleted/`. A JSON moved back into `logs/traces/` by hand gets a
+new lock companion the first time it is opened. In the deletion flow, the GUI
 closes the old logger with `emit_event=False` to release ownership without
 rewriting the already archived JSON. An inactive conversation is locked
 independently during archival.

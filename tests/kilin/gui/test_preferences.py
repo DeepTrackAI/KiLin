@@ -242,6 +242,18 @@ class TestGUIPreferences(unittest.TestCase):
         saved = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertNotIn("workspace_folder", saved)
 
+    def test_backend_for_new_projects_is_a_preference(self) -> None:
+        """Save auto, mlx or torch; the default is not written."""
+
+        self.assertEqual(preferences.default_backend(), "auto")
+        preferences.write_defaults({"backend": "torch"})
+        self.assertEqual(preferences.default_backend(), "torch")
+        with self.assertRaises(ValueError):
+            preferences.write_defaults({"backend": "cuda"})
+        preferences.write_defaults({"backend": "auto"})
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertNotIn("backend", saved)
+
     def test_empty_update_does_not_write(self) -> None:
         """Do not create a preference file for a no-op update."""
 

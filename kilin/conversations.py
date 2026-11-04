@@ -62,6 +62,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import re
 from uuid import uuid4
@@ -594,9 +595,10 @@ class ConversationStore:
     ) -> tuple[ConversationInfo, Path]:
         """Remove a conversation from the catalog and retain its JSON.
 
-        The record is moved into ``logs/traces/deleted`` so deletion remains
+        The record is moved into ``logs/traces/.deleted`` so deletion remains
         recoverable; an existing file of the same name there is kept, and
-        the moved file gets a ``_2``, ``_3``, ... suffix. When the last
+        the moved file gets a ``_2``, ``_3``, ... suffix. Its ``.json.lock``
+        companion follows it under the same name. When the last
         conversation is archived, a new empty conversation is created
         automatically. When the active conversation is archived, the most
         recently updated remaining one becomes active.
@@ -626,13 +628,16 @@ class ConversationStore:
         Notes
         -----
         The source path remains exclusively owned through the rename; the
-        registry update is not part of a filesystem transaction.
+        registry update is not part of a filesystem transaction. The lock
+        companion is moved after the lock is released; where the system
+        refuses to move a file still open (Windows), it stays behind, which
+        is harmless: its presence alone does not mean ownership.
 
         """
 
         item = self._require(conversation_id)
         source = self.state_path(item)
-        deleted = self.root / "deleted"
+        deleted = self.root / ".deleted"
         deleted.mkdir(parents=True, exist_ok=True)
         if deleted.is_symlink():
             raise ValueError(
@@ -650,6 +655,11 @@ class ConversationStore:
                 )
                 number += 1
             source.rename(destination)
+        lock = source.with_name(source.name + ".lock")
+        try:
+            os.replace(lock, destination.with_name(destination.name + ".lock"))
+        except OSError:
+            pass  # Missing, or still open where it cannot be moved.
         self._items.pop(conversation_id)
         self._paths.pop(conversation_id)
 
