@@ -64,7 +64,7 @@ performing a query.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 import math
 
@@ -242,6 +242,7 @@ def semantic_search(
     backend: str = "loop",
     matrix: np.ndarray | None = None,
     trace_turn_id: str | None = None,
+    query_vector: Sequence[float] | None = None,
 ) -> list[SemanticResult]:
     """Rank indexed chunks by cosine similarity to one query.
 
@@ -273,6 +274,10 @@ def semantic_search(
     trace_turn_id: str | None, optional
         Optional identifier associating trace events with one conversation
         turn. Defaults to ``None``.
+    query_vector: Sequence[float] | None, optional
+        The query already embedded from ``query_text`` by the same model,
+        so a caller that also needs the vector embeds it once. ``None``
+        embeds the query. Defaults to ``None``.
 
     Returns
     -------
@@ -308,7 +313,9 @@ def semantic_search(
     if backend not in ("loop", "numpy"):
         raise ValueError('backend must be "loop" or "numpy".')
 
-    if trace_turn_id is None:
+    if query_vector is not None:
+        query_vector = list(query_vector)
+    elif trace_turn_id is None:
         query_vector = embedding_session.embed_query(query_text)
     else:
         query_vector = embedding_session.embed_query(

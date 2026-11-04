@@ -11,7 +11,8 @@
   "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
-    "code_graph": "auto"
+    "code_graph": "auto",
+    "paper_index": true
   },
   "history": {
     "recent_turns": 2
@@ -26,7 +27,8 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "papers",
+        "max_papers": 3,
         "include_related_evidence": true
       }
     },
@@ -54,7 +56,9 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "papers",
+        "max_papers": 8,
+        "passages_per_paper": 2,
         "include_related_evidence": true
       }
     },
@@ -262,7 +266,9 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "papers",
+        "max_papers": 8,
+        "passages_per_paper": 1,
         "include_related_evidence": true
       }
     },

@@ -665,6 +665,66 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "code_graph"):
                     self._load(f"graphbad{index}", data)
 
+    def test_paper_index_accepts_booleans_only(self) -> None:
+        """Default to no paper index and reject non-boolean settings."""
+
+        self.assertFalse(self._load("paperdefault", _type_data()).paper_index)
+        for index, value in enumerate((True, False)):
+            data = _type_data()
+            data["capabilities"] = {"paper_index": value}
+            self.assertIs(
+                self._load(f"paperok{index}", data).paper_index, value
+            )
+        for index, value in enumerate((1, 0, None, "true", [])):
+            with self.subTest(value=value):
+                data = _type_data()
+                data["capabilities"] = {"paper_index": value}
+                with self.assertRaisesRegex(ValueError, "paper_index"):
+                    self._load(f"paperbad{index}", data)
+
+    def test_papers_strategy_needs_paper_index_and_valid_limits(self) -> None:
+        """Validate the papers strategy and its paper and passage limits."""
+
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        intent["retrieval"] = {"mode": "search", "strategy": "papers"}
+        with self.assertRaisesRegex(ValueError, "paper_index"):
+            self._load("papersneedindex", data)
+        data["capabilities"] = {"paper_index": True}
+        loaded = next(iter(self._load("papersok", data).intents.values()))
+        self.assertEqual(
+            (loaded.retrieval_strategy, loaded.max_papers,
+             loaded.passages_per_paper),
+            ("papers", 3, 0),
+        )
+        for index, (key, value) in enumerate((
+            ("max_papers", 0), ("max_papers", 51), ("max_papers", True),
+            ("passages_per_paper", -1), ("passages_per_paper", 11),
+            ("passages_per_paper", 1.5),
+        )):
+            with self.subTest(key=key, value=value):
+                bad = deepcopy(data)
+                next(iter(bad["intents"].values()))["retrieval"][key] = value
+                with self.assertRaisesRegex(ValueError, key):
+                    self._load(f"paperslimit{index}", bad)
+
+    def test_packaged_literature_type_indexes_papers(self) -> None:
+        """Index papers for literature projects but not for code projects."""
+
+        literature = project_type("literature")
+        self.assertTrue(literature.paper_index)
+        self.assertFalse(project_type("code").paper_index)
+        for intent_id in ("question_answering", "compare_sources",
+                          "report_generation"):
+            with self.subTest(intent=intent_id):
+                self.assertEqual(
+                    literature.intents[intent_id].retrieval_strategy,
+                    "papers",
+                )
+        self.assertEqual(
+            literature.intents["compare_sources"].passages_per_paper, 2
+        )
+
     def test_history_recent_turns_range(self) -> None:
         """Accept zero through one hundred turns, rejecting invalid values."""
 

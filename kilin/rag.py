@@ -134,7 +134,7 @@ dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -192,6 +192,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
+    RETRIEVAL_STRATEGY_PAPERS,
     project_type,
 )
 from kilin.query_formats import (
@@ -204,6 +205,27 @@ from kilin.repository import (
     scan_repository,
 )
 from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals.strategies.retrieval_papers import (
+    card_similarities,
+    rank_papers,
+    select_paper_passages,
+)
+from kilin.retrievals.paper_cards import (
+    PaperCard,
+    card_passages,
+    card_prompt,
+    card_texts,
+    load_cards,
+    parse_card,
+    save_cards,
+)
+from kilin.retrievals.papers import (
+    DOCUMENT_HEADER_FORMAT,
+    DOCUMENT_KINDS,
+    DocumentInfo,
+    document_headers,
+    document_info,
+)
 from kilin.retrievals import (
     CodeGraph,
     DocumentSelection,
@@ -339,6 +361,10 @@ _TEXT_CACHE: Final[str] = "source_text.json"
 # How indexed text is built from passages (``_retrieval_text``); a change
 # rebuilds saved indexes.
 RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
+# Saved paper cards (``paper_cards.py``), in the index folder.
+_PAPER_CARDS: Final[str] = "paper_cards.json"
+# Longest reply for one paper card.
+_CARD_MAX_NEW_TOKENS: Final[int] = 1_200
 # Longest module summary put in front of a code passage for searching.
 _SUMMARY_MAX_CHARACTERS: Final[int] = 200
 # Opening of a module docstring, after optional comment lines.
@@ -938,6 +964,9 @@ class RAGSession:
                 trace=self.trace,
                 block_unrequested_cjk=profile.block_unrequested_cjk,
             )
+            paper_cards, paper_card_vectors = self._prepare_paper_cards(
+                chunks, chat_session, embedding_session
+            )
             self._emit_progress(
                 "loading_conversation",
                 97.0,
@@ -1000,6 +1029,8 @@ class RAGSession:
         self.embedding_session = embedding_session
         self.chat_session = chat_session
         self.chunks = chunks
+        self.paper_cards = paper_cards
+        self.paper_card_vectors = paper_card_vectors
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
@@ -1606,6 +1637,12 @@ class RAGSession:
                     ),
                     scope=scope,
                     prefer_source_code=intent.prefer_source_code,
+                    papers=(
+                        (intent.max_papers, intent.passages_per_paper)
+                        if getattr(intent, "retrieval_strategy", None)
+                        == RETRIEVAL_STRATEGY_PAPERS
+                        else None
+                    ),
                 )
                 found = len(evidence)
                 related_turns = [
@@ -2152,6 +2189,11 @@ class RAGSession:
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
+        self.paper_cards, self.paper_card_vectors = (
+            self._prepare_paper_cards(
+                chunks, self.chat_session, self.embedding_session
+            )
+        )
 
     def use_chat_model(self: RAGSession, model_id: str) -> None:
         """Switch the answering model while preserving conversation state.
@@ -2922,13 +2964,16 @@ class RAGSession:
             # Code passages are embedded with their file path and module
             # summary in front, so a function is found by what its module
             # is about even when its own name and code do not say it.
+            # Paper passages get their paper's title, author, section and
+            # page in front, so a passage is found by the paper it is in.
             summaries = _module_summaries(chunks)
+            headers = self._document_headers(chunks)
             fresh_semantic = (
                 build_semantic_index(
                     pending_chunks,
                     embedding_session,
                     texts=[
-                        _retrieval_text(chunk, summaries)
+                        _retrieval_text(chunk, summaries, headers)
                         for chunk in pending_chunks
                     ],
                     batch_size=_EMBEDDING_PROGRESS_BATCH_SIZE,
@@ -2984,7 +3029,10 @@ class RAGSession:
         ):
             lexical = build_lexical_index(
                 chunks,
-                texts=[_retrieval_text(chunk, summaries) for chunk in chunks],
+                texts=[
+                    _retrieval_text(chunk, summaries, headers)
+                    for chunk in chunks
+                ],
             )
         indexes = prepare_persistent_indexes(
             semantic,
@@ -3083,6 +3131,7 @@ class RAGSession:
         status_callback: Callable[[str], None] | None = None,
         scope: Sequence[Path] = (),
         prefer_source_code: bool = False,
+        papers: tuple[int, int] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3113,6 +3162,11 @@ class RAGSession:
             ``demote_documentation``) and keep ``SOURCE_SEARCH_RESULTS``
             fused results (at least the retrieval count). Defaults to
             ``False``.
+        papers: tuple[int, int] | None, optional
+            For the ``papers`` strategy, the most papers to choose and the
+            passages guaranteed to each (``_paper_passages``); ignored when
+            one document is named. ``None`` keeps hybrid retrieval.
+            Defaults to ``None``.
 
         Returns
         -------
@@ -3202,6 +3256,18 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
+            # Paper search compares the same query vector with the papers'
+            # cards, so the query is embedded here, once.
+            card_vectors = getattr(self, "paper_card_vectors", None) or {}
+            query_vector = None
+            if papers is not None and card_vectors:
+                query_vector = (
+                    self.embedding_session.embed_query(query_text)
+                    if trace_turn_id is None
+                    else self.embedding_session.embed_query(
+                        query_text, trace_turn_id=trace_turn_id
+                    )
+                )
             # The loop scorer already ranks every chunk. Retain its scores
             # for focused retrieval and expansion, without embedding again.
             semantic_results = semantic_search(
@@ -3210,6 +3276,11 @@ class RAGSession:
                 self.embedding_session,
                 count=max(depth, len(self.chunks)),
                 trace_turn_id=trace_turn_id,
+                **(
+                    {"query_vector": query_vector}
+                    if query_vector is not None
+                    else {}
+                ),
             )
             semantic = keep(semantic_results[:depth])
         trace.emit(
@@ -3310,9 +3381,29 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
+        # Paper search chooses papers first, unless one paper is named.
+        named = list(scope)
+        if papers is not None and len(named) != 1:
+            chosen = self._paper_passages(
+                question,
+                semantic_results,
+                query_vector,
+                card_vectors,
+                count=count,
+                max_papers=papers[0],
+                per_paper=papers[1],
+                scope=named,
+                trace_turn_id=trace_turn_id,
+            )
+            if chosen:
+                combined = chosen
+                report(
+                    f"Kept {len(combined)} passages from "
+                    f"{len({r.chunk.path for r in combined})} papers"
+                )
+
         # A named document supplies the primary passages; expansion may
         # still add useful context from elsewhere in the repository.
-        named = list(scope)
         if len(named) == 1:
             focused = [
                 result
@@ -3882,6 +3973,96 @@ class RAGSession:
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
 
+    def _paper_passages(
+        self: RAGSession,
+        question: str,
+        semantic_results: Sequence[SemanticResult],
+        query_vector: Sequence[float] | None,
+        card_vectors: Mapping[Path, Sequence[Sequence[float]]],
+        *,
+        count: int,
+        max_papers: int,
+        per_paper: int,
+        scope: Sequence[Path],
+        trace_turn_id: str | None,
+    ) -> list[HybridResult]:
+        """Choose papers for a question, then passages inside them.
+
+        Parameters
+        ----------
+        question: str
+            Search text.
+        semantic_results: Sequence[SemanticResult]
+            Complete semantic ranking for this question.
+        query_vector: Sequence[float] | None
+            Embedded question, or ``None`` when no card has vectors.
+        card_vectors: Mapping[pathlib.Path, Sequence[Sequence[float]]]
+            Search vectors of the papers' cards.
+        count: int
+            Passages to keep at least.
+        max_papers: int
+            Most papers to choose.
+        per_paper: int
+            Passages guaranteed to each chosen paper; zero guarantees one
+            to the best paper only.
+        scope: Sequence[pathlib.Path]
+            Documents the question names; when there are several, only
+            they are chosen from.
+        trace_turn_id: str | None
+            Turn identifier for trace events.
+
+        Returns
+        -------
+        list[HybridResult]
+            Passages of the chosen papers (``select_paper_passages``), best
+            first; empty when no paper was ranked.
+
+        Notes
+        -----
+        Papers are ranked by fusing the similarity of the question to their
+        cards with the rank of their best passage (``rank_papers``); papers
+        without a card are ranked by their passages only.
+
+        """
+
+        everything = self._rank_everything(
+            question, trace_turn_id, semantic_results=semantic_results
+        )
+        scores = (
+            card_similarities(query_vector, card_vectors)
+            if query_vector is not None
+            else {}
+        )
+        ranked = rank_papers(everything, scores)
+        if scope:
+            ranked = [paper for paper in ranked if paper.path in set(scope)]
+        chosen = [paper.path for paper in ranked[:max_papers]]
+        passages = select_paper_passages(
+            everything, chosen, count=count, per_paper=per_paper
+        )
+        trace = getattr(self, "trace", NullTraceLogger())
+        trace.emit(
+            "retrieval.papers.ranked",
+            component="retrieval",
+            data={
+                "papers": [
+                    {
+                        "path": paper.path,
+                        "score": paper.score,
+                        "card_rank": paper.card_rank,
+                        "passage_rank": paper.passage_rank,
+                        "chosen": paper.path in chosen,
+                    }
+                    for paper in ranked
+                ],
+                "max_papers": max_papers,
+                "passages_per_paper": per_paper,
+                "kept_count": len(passages),
+            },
+            turn_id=trace_turn_id,
+        )
+        return passages
+
     def _rank_everything(
         self: RAGSession,
         text: str,
@@ -4314,7 +4495,266 @@ class RAGSession:
         # changes; other projects are unaffected.
         if ".pdf" in profile.extensions:
             metadata["pdf_text_extractor"] = PDF_TEXT_EXTRACTOR
+        # Recorded only for paper projects, so other indexes stay valid.
+        if self._indexes_papers():
+            metadata["document_headers"] = DOCUMENT_HEADER_FORMAT
         return metadata
+
+    def _indexes_papers(self: RAGSession) -> bool:
+        """Return whether the project type indexes documents as papers.
+
+        Returns
+        -------
+        bool
+            The project type's ``paper_index`` capability; false when the
+            profile names no registered type.
+
+        """
+
+        profile = getattr(self.project, "profile", None)
+        type_id = getattr(profile, "type_id", None)
+        if type_id is None:
+            return False
+        return bool(getattr(project_type(type_id), "paper_index", False))
+
+    def _document_infos(
+        self: RAGSession, chunks: Sequence[Chunk]
+    ) -> dict[Path, DocumentInfo]:
+        """Return the title and first author of each indexed document.
+
+        Parameters
+        ----------
+        chunks: Sequence[Chunk]
+            Indexed passages.
+
+        Returns
+        -------
+        dict[pathlib.Path, DocumentInfo]
+            One entry per file with document passages; empty unless the
+            project type indexes papers (``paper_index``).
+
+        """
+
+        if not self._indexes_papers():
+            return {}
+        by_path: dict[Path, list[Chunk]] = {}
+        for chunk in chunks:
+            if chunk.kind in DOCUMENT_KINDS:
+                by_path.setdefault(chunk.path, []).append(chunk)
+        return {
+            path: document_info(self.project.source, path, passages)
+            for path, passages in by_path.items()
+        }
+
+    def _document_headers(
+        self: RAGSession, chunks: Sequence[Chunk]
+    ) -> dict[str, str]:
+        """Return the search header of each paper passage.
+
+        Parameters
+        ----------
+        chunks: Sequence[Chunk]
+            Indexed passages.
+
+        Returns
+        -------
+        dict[str, str]
+            Headers by passage identifier (``document_headers``); empty
+            unless the project type indexes papers.
+
+        """
+
+        infos = self._document_infos(chunks)
+        return document_headers(chunks, infos) if infos else {}
+
+    def _prepare_paper_cards(
+        self: RAGSession,
+        chunks: Sequence[Chunk],
+        chat_session: ChatSession,
+        embedding_session: EmbeddingSession,
+    ) -> tuple[
+        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
+    ]:
+        """Reuse or write the card of each paper, with its search vectors.
+
+        Parameters
+        ----------
+        chunks: Sequence[Chunk]
+            Indexed passages.
+        chat_session: ChatSession
+            Answering model, asked without thinking for each new card.
+        embedding_session: EmbeddingSession
+            Embedding model for the cards' search vectors.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            Cards and their search vectors by document path; empty unless
+            the project type indexes papers (``paper_index``).
+
+        Notes
+        -----
+        A saved card is reused while its file's SHA-256 and the card format
+        are unchanged and the model wrote it completely; its vectors are
+        reused while the embedding model is the same. A card that cannot be
+        written is kept with its title only, without search vectors, and
+        is written again when the file or the answering model changes.
+        Failures never stop the session from opening: without cards,
+        retrieval searches passages only.
+
+        """
+
+        if not chunks or not self._indexes_papers():
+            return {}, {}
+        try:
+            return self._build_paper_cards(
+                chunks, chat_session, embedding_session
+            )
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # Cards only guide retrieval; passage search still works.
+            self.trace.exception(
+                "paper_cards.failed", error, component="rag"
+            )
+            return {}, {}
+
+    def _build_paper_cards(
+        self: RAGSession,
+        chunks: Sequence[Chunk],
+        chat_session: ChatSession,
+        embedding_session: EmbeddingSession,
+    ) -> tuple[
+        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
+    ]:
+        """Reuse, write, embed, and save the cards of every paper.
+
+        Parameters
+        ----------
+        chunks: Sequence[Chunk]
+            Indexed passages.
+        chat_session: ChatSession
+            Answering model for new cards.
+        embedding_session: EmbeddingSession
+            Embedding model for the cards' search vectors.
+
+        Returns
+        -------
+        tuple[dict, dict]
+            Cards and search vectors by document path.
+
+        """
+
+        file = self.project.indexes / _PAPER_CARDS
+        saved, saved_vectors, saved_identity = load_cards(file)
+        manifest = getattr(self, "_current_source_manifest", None) or {}
+        hashes = {
+            Path(name): str(item.get("sha256", ""))
+            for name, item in dict(manifest.get("files", {})).items()
+        }
+        identity = getattr(
+            embedding_session, "_retrieval_model_identity", None
+        ) or str(getattr(embedding_session, "model_id", ""))
+        by_path: dict[Path, list[Chunk]] = {}
+        for chunk in chunks:
+            if chunk.kind in DOCUMENT_KINDS:
+                by_path.setdefault(chunk.path, []).append(chunk)
+        infos = self._document_infos(chunks)
+        cards: dict[Path, PaperCard] = {}
+        vectors: dict[Path, tuple[tuple[float, ...], ...]] = {}
+        model = str(getattr(chat_session, "model_id", ""))
+        # A card is written again when its file changed, or when a card
+        # the same model could not write may now succeed with another one.
+        pending = [
+            path for path in sorted(by_path)
+            if not (
+                path in saved
+                and saved[path].sha256 == hashes.get(path)
+                and (saved[path].complete or saved[path].model == model)
+            )
+        ]
+        started = perf_counter()
+        for path in sorted(by_path):
+            if path not in pending:
+                cards[path] = saved[path]
+                continue
+            self._emit_count_progress(
+                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
+                pending.index(path), len(pending), started,
+            )
+            info = infos.get(path)
+            title = (
+                info.title if info is not None and info.title != path.stem
+                else None
+            )
+            passages = card_passages(by_path[path])
+            system, prompt = card_prompt(path.name, passages)
+            try:
+                reply = side_reply(
+                    chat_session, system, prompt,
+                    max_new_tokens=_CARD_MAX_NEW_TOKENS,
+                    require_complete=True,
+                )
+            except (
+                IncompleteModelResponse, RuntimeError, ValueError
+            ) as error:
+                self.trace.exception(
+                    "paper_card.failed", error, component="rag",
+                    data={"path": path.as_posix()},
+                )
+                reply = ""
+            cards[path] = parse_card(
+                reply, passages, path=path,
+                sha256=hashes.get(path, ""), title=title, model=model,
+            )
+            self.trace.emit(
+                "paper_card.written", component="rag",
+                data={
+                    "path": path.as_posix(),
+                    "complete": cards[path].complete,
+                    "passage_count": len(passages),
+                },
+            )
+        if pending:
+            self._emit_count_progress(
+                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
+                len(pending), len(pending), started,
+            )
+        # Vectors follow the embedding model, not the card text alone. A
+        # card with its title only adds nothing to the passages' headers,
+        # so it is not embedded and its paper is found by its passages.
+        to_embed = [
+            path for path, card in cards.items()
+            if card.complete and (
+                path in pending
+                or saved_identity != identity
+                or len(saved_vectors.get(path, ())) != len(card_texts(card))
+            )
+        ]
+        texts = [text for path in to_embed for text in card_texts(cards[path])]
+        fresh = embedding_session.embed_documents(texts) if texts else []
+        position = 0
+        for path, card in cards.items():
+            if path in to_embed:
+                count = len(card_texts(card))
+                vectors[path] = tuple(
+                    tuple(vector)
+                    for vector in fresh[position:position + count]
+                )
+                position += count
+            elif card.complete:
+                vectors[path] = saved_vectors[path]
+            else:
+                vectors[path] = ()
+        if to_embed or set(saved) != set(cards):
+            save_cards(file, cards, vectors, identity)
+        self.trace.emit(
+            "paper_cards.ready", component="rag",
+            data={
+                "card_count": len(cards),
+                "written": len(pending),
+                "embedded": len(to_embed),
+            },
+        )
+        return cards, vectors
 
     def _parameters(
         self: RAGSession, retrieval_count: int | None = None
@@ -5357,8 +5797,12 @@ def _module_summaries(chunks: Sequence[Chunk]) -> dict[Path, str]:
     return summaries
 
 
-def _retrieval_text(chunk: Chunk, summaries: dict[Path, str]) -> str:
-    """Return the text indexed for one passage.
+def _retrieval_text(
+    chunk: Chunk,
+    summaries: dict[Path, str],
+    headers: Mapping[str, str] | None = None,
+) -> str:
+    """Return the text indexed for searching one passage.
 
     Parameters
     ----------
@@ -5366,13 +5810,17 @@ def _retrieval_text(chunk: Chunk, summaries: dict[Path, str]) -> str:
         Indexed passage.
     summaries: dict[pathlib.Path, str]
         First docstring lines of Python modules (``_module_summaries``).
+    headers: Mapping[str, str] | None, optional
+        Search headers of paper passages by passage identifier
+        (``document_headers``). Defaults to ``None`` (no headers).
 
     Returns
     -------
     str
         For Python and MATLAB code, the file path, then the module summary
-        when there is one, then the passage text; for other passages, the
-        passage text.
+        when there is one, then the passage text; for a paper passage with
+        a header, the header, then the passage text; for other passages,
+        the passage text.
 
     Notes
     -----
@@ -5381,6 +5829,8 @@ def _retrieval_text(chunk: Chunk, summaries: dict[Path, str]) -> str:
 
     """
 
+    if headers and chunk.identifier in headers:
+        return f"{headers[chunk.identifier]}\n\n{chunk.text}"
     if not str(chunk.kind).startswith(("python_", "matlab_")):
         return chunk.text
     header = [chunk.path.as_posix()]

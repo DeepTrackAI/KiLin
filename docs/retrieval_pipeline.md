@@ -42,6 +42,17 @@ its own name and code use other words. Evidence, citations and the answering
 model keep the passage text itself. The format is recorded in the index
 settings (`retrieval_text`); changing it rebuilds saved indexes.
 
+In project types with the `paper_index` capability (the packaged
+`literature` type), each document passage is indexed after a short header:
+the document's title, its first author and file name, and the section
+heading and page it comes from (`retrievals/papers.py`). Titles and first
+authors come from the PDF metadata when plausible, from the first `#`
+heading of a Markdown file, or else from the file name; section headings
+are recognized by name ("Methods", "Data availability") or numbering
+("3.1. Software architecture"). A methods paragraph is then found for a
+question about its paper even when it never repeats the paper's name. The
+header format is recorded in the index settings (`document_headers`).
+
 ## Lexical channel
 
 `retrieval_lexical.py` tokenizes text into lowercase words, source-oriented
@@ -132,6 +143,38 @@ This has two implications for developers: (1) changing the relative channel
 scales does not directly influence fusion, but changing **order** does;
 (2) an optimization must preserve the content and ordering of evidence,
 not just the number of embeddings or the final answer string.
+
+## Paper cards and paper retrieval
+
+In project types with `paper_index`, every document also gets a **paper
+card** (`retrievals/paper_cards.py`): title, authors, year, a short
+abstract, and one or two sentences each on its aim, methods, data, main
+findings and limitations, with the pages each field cites. The answering
+model writes a card once per document, without thinking, from the
+document's opening passages and the passages that best match each field,
+within about 5,000 estimated tokens. Citations of passages the model was
+not shown are dropped. Cards are saved in `indexes/paper_cards.json` with
+the SHA-256 of the file's bytes and are written again only when the file or
+the card format changes; a card the model could not write keeps its title
+only, gets no search vectors, and is retried when the file or the answering
+model changes. Three texts of each complete card (abstract and aim; methods
+and data; findings and limitations) are embedded and reused while the
+embedding model is the same. Card writing never stops a session from
+opening. Cards guide retrieval only: answers cite passages, never cards.
+
+Intents whose retrieval strategy is `papers` (in `literature`:
+`question_answering`, `compare_sources` and `report_generation`) choose
+papers before passages (`strategies/retrieval_papers.py`). Papers are
+ranked by reciprocal-rank fusion of two lists: the similarity of the
+question to each card's vectors, and the rank of each paper's best passage
+in the full hybrid ranking. The query is embedded once for both. The best
+`max_papers` papers are chosen; with `passages_per_paper` zero, the
+evidence is the best passages of those papers with the best paper always
+represented, and otherwise each chosen paper receives that many passages
+before the best remaining ones fill the evidence. A question that names one
+document keeps the named-document behavior below; several named documents
+limit the papers that can be chosen. Without cards, papers are ranked by
+their passages only.
 
 ## Named-document retrieval and full-document reading
 
