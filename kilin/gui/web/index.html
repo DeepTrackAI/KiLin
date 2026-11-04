@@ -162,70 +162,79 @@
     <section id="models-panel" class="models-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="models-title">
       <div class="models-card">
         <div class="models-heading"><h2 id="models-title">Settings</h2><button id="close-models" class="sidebar-toggle" type="button">Close</button></div>
-        <details id="first-run-setup" class="settings-section readiness-card hidden" aria-live="polite">
-          <summary class="readiness-heading"><h3>KíLín setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
-          <p id="readiness-summary">Checking the local environment…</p>
-          <ol id="readiness-steps" class="readiness-steps"></ol>
-          <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
-          <p id="readiness-time" class="hint"></p>
-          <div class="readiness-actions">
-            <button id="install-required" class="primary" type="button">Install required models</button>
-            <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
-          </div>
-        </details>
-        <!-- App-wide, not per project, so above the tabs. -->
+        <!-- App-wide, not per project, so above the tabs; folds into one row. -->
         <section id="settings-app" class="settings-section">
-          <label for="appearance">Appearance</label>
-          <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
-          <label for="workspace-path">Workspace folder</label>
-          <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
-          <p id="workspace-note" class="hint">The folder that holds your projects.</p>
-        </section>
-        <div class="settings-tabs" role="tablist" aria-label="Settings categories">
-          <button class="settings-tab" type="button" role="tab" data-tab="project">Project</button>
-          <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
-          <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
-          <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
-        </div>
-        <section class="settings-section models-section" data-settings-tab="models">
-            <!-- Kept hidden: the rows below edit these values. -->
-            <div class="hidden" aria-hidden="true">
-              <label for="chat-model">Default language model</label>
-              <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
-              <label for="embedding-model">Embedding model</label>
-              <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
-              <label for="query-format">Embedding query format</label>
-              <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+          <details id="first-run-setup" class="readiness-card hidden" aria-live="polite">
+            <summary class="readiness-heading"><h3>KíLín setup</h3><span id="readiness-status" class="readiness-status"></span></summary>
+            <p id="readiness-summary">Checking the local environment…</p>
+            <ol id="readiness-steps" class="readiness-steps"></ol>
+            <div id="readiness-meter" class="download-meter hidden" role="progressbar" aria-label="Model download progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+            <p id="readiness-time" class="hint"></p>
+            <div class="readiness-actions">
+              <button id="install-required" class="primary" type="button">Install required models</button>
+              <button id="use-installed" class="secondary hidden" type="button">Use installed models</button>
             </div>
+            <div class="setup-app">
+              <!-- For new projects; an open project keeps the one it was made with. -->
+              <label for="backend">Computation backend</label>
+              <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
+              <label for="appearance">Appearance</label>
+              <select id="appearance"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select>
+              <label for="workspace-path">Projects folder</label>
+              <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
+              <p id="workspace-note" class="hint hidden"></p>
+            </div>
+          </details>
+        </section>
+        <!-- The open project's settings, or the next new project's. -->
+        <div id="settings-project-region" class="project-region">
+          <h3>Project</h3>
+          <div class="settings-tabs" role="tablist" aria-label="Settings categories">
+            <button class="settings-tab" type="button" role="tab" data-tab="general">General</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="indexing">Indexing</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
+          </div>
+          <section class="settings-section models-section" data-settings-tab="models">
+              <!-- Kept hidden: the rows below edit these values. -->
+              <div class="hidden" aria-hidden="true">
+                <label for="chat-model">Default language model</label>
+                <div class="model-picker"><input id="chat-model" type="text" autocomplete="off"><button id="chat-model-options" type="button" class="secondary" aria-label="Show all cached language models" aria-controls="chat-model-menu" aria-expanded="false"></button><div id="chat-model-menu" class="model-menu hidden" role="listbox"></div></div>
+                <label for="embedding-model">Embedding model</label>
+                <div class="model-picker"><input id="embedding-model" type="text" autocomplete="off"><button id="embedding-model-options" type="button" class="secondary" aria-label="Show all cached embedding models" aria-controls="embedding-model-menu" aria-expanded="false"></button><div id="embedding-model-menu" class="model-menu hidden" role="listbox"></div></div>
+                <label for="query-format">Embedding query format</label>
+                <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
+              </div>
 
-        <p id="models-backend" class="hint hidden"></p>
-        <div id="model-list"></div>
-        </section>
-        <section id="settings-answers" class="settings-section" data-settings-tab="answers">
-          <div class="conversation-fields">
-            <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
-            <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
-            <label class="check-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
-          </div>
-        </section>
-        <section id="settings-tools" class="settings-section" data-settings-tab="tools">
-          <p class="hint">The tools this project can use. Changes apply to this project only.</p>
-          <div id="tool-settings"></div>
-        </section>
-        <section id="settings-project" class="settings-section" data-settings-tab="project">
-          <div class="advanced-fields">
-            <!-- Only for an open project. -->
-            <div id="project-identity" class="project-identity hidden">
-              <label for="project-title">Project name</label>
-              <div class="folder-row"><input id="project-title" type="text" autocomplete="off"><button id="delete-project" type="button" class="secondary danger">Delete project</button></div>
+          <p id="models-backend" class="hint hidden"></p>
+          <div id="model-list"></div>
+          </section>
+          <section id="settings-answers" class="settings-section" data-settings-tab="answers">
+            <div class="conversation-fields">
+              <label class="chat-setting" for="temperature">Temperature <input id="temperature" type="number" min="0" step="0.1"></label>
+              <label class="chat-setting" for="max-new-tokens">Maximum answer tokens <input id="max-new-tokens" type="number" min="1" placeholder="Automatic (remaining context)"></label>
             </div>
-            <label for="backend">Computation backend</label>
-            <select id="backend"><option value="auto">Automatic</option><option value="mlx">MLX</option><option value="torch">PyTorch</option></select>
-            <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
-            <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
-            <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
-          </div>
-        </section>
+            <!-- Filled with the Models tab's drafts, so it applies with them. -->
+            <div id="search-depth"></div>
+            <label class="check-row thinking-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
+          </section>
+          <section id="settings-tools" class="settings-section" data-settings-tab="tools">
+            <div id="tool-settings"></div>
+          </section>
+          <section id="settings-general" class="settings-section project-identity" data-settings-tab="general">
+            <label for="project-title">Project name</label>
+            <!-- On the start screen the name is used for the next new project. -->
+            <div class="folder-row"><input id="project-title" type="text" autocomplete="off"><button id="delete-project" type="button" class="secondary danger hidden">Delete project</button></div>
+          </section>
+          <section id="settings-indexing" class="settings-section" data-settings-tab="indexing">
+            <div class="advanced-fields">
+              <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
+              <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
+              <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+            </div>
+          </section>
+        </div>
         <!-- Below the tabs, so messages from Close show on every tab. -->
         <p id="model-download-status" class="hint" role="status"></p>
         <button id="cancel-model-download" class="secondary hidden" type="button">Stop download</button>

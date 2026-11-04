@@ -88,6 +88,7 @@ from kilin.atomic_writes import atomic_write_text
 from kilin.gui._paths import default_workspace_directory
 from kilin.gui.preferences import (
     default_appearance,
+    default_backend,
     default_effort_levels,
     default_embedding_model,
     default_query_format,
@@ -115,8 +116,10 @@ from kilin.gui.model_settings import (
 from kilin.gui.model_catalog import (
     MODEL_CHOICES,
     cached_model_roles,
+    downloaded_models,
     installed_backends,
     model_choices,
+    thinking_switches,
 )
 from kilin import RAGSession, prepare_sources_workspace
 from kilin.workspace import (
@@ -138,7 +141,7 @@ from kilin.project_files import (
 from kilin.conversation_format import conversation_state
 from kilin.conversation_ownership import ConversationFileLock
 from kilin.conversations import ConversationInfo, ConversationStore
-from kilin.huggingface import available_models, download_model
+from kilin.huggingface import download_model
 from kilin.project_type import load_project_types, project_type
 from kilin.project import (
     PROJECT_TYPE_IDS,
@@ -187,6 +190,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # The engine adds this phase to RAGSession's answer phases while it switches
 # the chat model before a question; the page shows it as its own step.
 ENGINE_PHASE_LOADING_MODEL: Final[str] = "loading_model"
+# Settings the index records: changing any of them rebuilds the index.
+_INDEXING_SETTINGS: Final[frozenset[str]] = frozenset(
+    ("extensions", "max_file_bytes", "target_tokens", "max_tokens",
+     "overlap_tokens")
+)
 EventSink = Callable[[dict[str, object]], None]
 
 
@@ -326,6 +334,8 @@ class ChatEngine:
         Rename the active workspace folder, then reopen the same chat.
     delete_project(directory)
         Move a closed project into the deleted folder beside it.
+    apply_indexing_settings(settings)
+        Save the open project's indexing settings and rebuild its index.
 
     **Answering and evidence.**
 
@@ -674,7 +684,7 @@ class ChatEngine:
         try:
             backend = choose_backend(BACKEND_AUTO)
             packages = installed_backends()
-            entries = available_models()
+            entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             required = required_models(backend)
             missing = [
@@ -713,7 +723,7 @@ class ChatEngine:
 
         try:
             backend = choose_backend(BACKEND_AUTO)
-            entries = available_models()
+            entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             missing = [
                 model_id
@@ -769,7 +779,7 @@ class ChatEngine:
                     "KíLín through "
                     f"`uv run kilin --gui --backend {backend}`."
                 )
-            cached = {str(item["model_id"]) for item in available_models()}
+            cached = {str(item["model_id"]) for item in downloaded_models()}
             missing = [
                 model_id
                 for model_id in required_models(backend)
@@ -1184,7 +1194,7 @@ class ChatEngine:
                     query_format=default_query_format(),
                 )
             )
-            entries = available_models()
+            entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             self._send(
                 "settings",
@@ -1203,6 +1213,8 @@ class ChatEngine:
                     else default_search_depth()
                 ),
                 appearance=default_appearance(),
+                # The backend chosen in KíLín setup for new projects.
+                backend_preference=default_backend(),
                 preferences=_preference_payload(),
                 default_search_depth=default_search_depth(),
                 router_models=_router_models_by_backend(
@@ -1235,6 +1247,7 @@ class ChatEngine:
                 selection_reason_codes=dict(SELECTION_REASON_CODES),
                 cached_models=sorted(cached),
                 model_roles=cached_model_roles(entries),
+                thinking_switches=thinking_switches(entries),
                 model_choices=model_choices(cached),
                 workspace_files=(
                     list_project_files(open_project(profile_path.parent))
@@ -1284,6 +1297,7 @@ class ChatEngine:
                 "model_downloaded",
                 model_id=model_id,
                 elapsed_seconds=elapsed,
+                thinking_switches=thinking_switches(downloaded_models()),
             )
         except Exception as error:
             self._report_error(
@@ -1340,7 +1354,7 @@ class ChatEngine:
                 *(str(level["model"]) for level in levels or ()),
                 *((router_model,) if router_model else ()),
             }
-            entries = available_models()
+            entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             missing = sorted(
                 model
@@ -1394,6 +1408,7 @@ class ChatEngine:
                     "model_downloaded",
                     model_id=model_id,
                     elapsed_seconds=elapsed,
+                    thinking_switches=thinking_switches(downloaded_models()),
                 )
             if root is None:
                 # No project is open: these become the defaults new
@@ -1505,7 +1520,8 @@ class ChatEngine:
                 ),
                 profile=asdict(profile) if profile is not None else None,
                 cached_models=sorted(cached | set(missing)),
-                model_roles=cached_model_roles(available_models()),
+                model_roles=cached_model_roles(downloaded_models()),
+                thinking_switches=thinking_switches(downloaded_models()),
                 reindexed=rebuilt,
             )
         except Exception as error:
@@ -1685,6 +1701,18 @@ class ChatEngine:
             settings = dict(settings or {})
             created_levels = settings.pop("_gui_effort_levels", None)
             created_depth = settings.pop("_gui_search_depth", None)
+            created_routers = settings.pop("_gui_router_models", None)
+            if created_routers is not None:
+                if not isinstance(created_routers, dict) or any(
+                    backend not in {BACKEND_MLX, BACKEND_TORCH}
+                    for backend in created_routers
+                ):
+                    raise ValueError("Invalid intent models.")
+                created_routers = {
+                    backend: validate_model_id(model)
+                    for backend, model in created_routers.items()
+                    if model
+                }
             if created_depth is not None:
                 created_depth = validate_search_depth(created_depth)
             if created_levels is not None:
@@ -1729,11 +1757,15 @@ class ChatEngine:
                 sources, type_id, workspace if workspace.strip() else None,
                 **options,
             )
+            # Until it opens, a Stop removes this new project again.
+            self._send("project_created", workspace=str(project.root))
             if created_depth is not None:
                 write_search_depth(project.root, created_depth)
             if created_levels:
                 for backend, levels in created_levels.items():
                     write_effort_levels(project.root, backend, levels)
+            for backend, model in (created_routers or {}).items():
+                write_router_model(project.root, backend, model)
             self.close()
             switched = True
             conversation = self._open_conversation_store(project)
@@ -1960,7 +1992,8 @@ class ChatEngine:
         """Save answer settings changed outside a question, e.g. Thinking.
 
         The open project's chat uses them at once, so the next answer and
-        every other chat follow the saved profile.
+        every other chat follow the saved profile. Sends
+        ``answer_settings_saved`` with the values now in effect.
 
         Parameters
         ----------
@@ -1977,6 +2010,14 @@ class ChatEngine:
                 raise ValueError("Answer settings must be an object.")
             self._save_answer_settings(settings)
             self._use_project_answer_settings()
+            profile = self.session.project.profile
+            # The page confirms that the saved values are now in effect.
+            self._send(
+                "answer_settings_saved",
+                temperature=profile.temperature,
+                thinking=profile.thinking,
+                max_new_tokens=profile.max_new_tokens,
+            )
         except Exception as error:
             self._report_error(
                 "gui.answer_settings.failed",
@@ -3295,6 +3336,69 @@ class ChatEngine:
                 f"Could not delete the project: {error}",
             )
 
+    def apply_indexing_settings(self, settings: object) -> None:
+        """Save the open project's indexing settings and rebuild its index.
+
+        The index records these settings, so reopening the project with new
+        values rebuilds it. A failure restores the previous profile.ini.
+
+        Parameters
+        ----------
+        settings: object
+            Changed values among ``extensions``, ``max_file_bytes``,
+            ``target_tokens``, ``max_tokens`` and ``overlap_tokens``.
+
+        """
+
+        root = None
+        profile_text = None
+        conversation_id = None
+        changed = False
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project before changing indexing.")
+            if (
+                not isinstance(settings, dict)
+                or not settings
+                or not set(settings) <= _INDEXING_SETTINGS
+            ):
+                raise ValueError("Invalid indexing settings.")
+            root = self.session.project.root
+            profile_text = (root / "profile.ini").read_text(encoding="utf-8")
+            conversation_id = self.active_conversation.conversation_id
+            self._send("status", message="Rebuilding the index…")
+            # Invalid values are refused before profile.ini is written.
+            project = configure_project(
+                root, settings, trace=self.active_trace
+            )
+            changed = True
+            self.close()
+            self._reopen_project_conversation(project, conversation_id)
+            self._send(
+                "indexing_applied",
+                profile=asdict(self.session.project.profile),
+            )
+        except Exception as error:
+            if changed:
+                try:
+                    (root / "profile.ini").write_text(
+                        profile_text, encoding="utf-8"
+                    )
+                    self.close()
+                    self._reopen_project_conversation(
+                        open_project(root), conversation_id
+                    )
+                except Exception:
+                    self._send(
+                        "backend_failed",
+                        message="Reload failed. Reopen the project to retry.",
+                    )
+            self._report_error(
+                "gui.indexing.change.failed",
+                error,
+                f"Could not apply indexing settings: {error}",
+            )
+
     def _switch_with_store_rollback(
         self,
         conversation: ConversationInfo,
@@ -4258,6 +4362,8 @@ def main() -> None:
                         engine.rename_project(command["name"])
                     elif action == "delete_project":
                         engine.delete_project(command["project"])
+                    elif action == "apply_indexing":
+                        engine.apply_indexing_settings(command["settings"])
                     elif action == "save_answer_settings":
                         engine.save_answer_settings(command.get("settings"))
                     elif action == "tool_settings":

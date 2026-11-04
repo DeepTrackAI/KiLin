@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 import sys
 
 from PySide6.QtCore import (
@@ -89,7 +90,11 @@ from kilin.gui._paths import (
     saved_workspace_folder,
     standard_workspace_directory,
 )
-from kilin.gui.preferences import default_appearance, write_defaults
+from kilin.gui.preferences import (
+    BACKEND_CHOICES,
+    default_appearance,
+    write_defaults,
+)
 
 __all__ = [
     "ChatBridge",
@@ -193,6 +198,8 @@ class ChatBridge(QObject):
         Send the JSON-decoded model settings to the backend.
     setAppearance(mode)
         Report the page's color mode: system, light, or dark.
+    setBackendPreference(backend)
+        Save the backend new projects are made with.
     saveAnswerSettings(settings_json)
         Save answer settings to the open project right away.
 
@@ -224,6 +231,8 @@ class ChatBridge(QObject):
         Release models when the user chooses a different project.
     deleteProject(directory)
         Move a closed project into the deleted folder beside it.
+    applyIndexingSettings(settings_json)
+        Save the open project's indexing settings and rebuild its index.
 
     **Answering and conversation management.**
 
@@ -866,6 +875,24 @@ class ChatBridge(QObject):
         self.appearanceChanged.emit(mode)
 
     @Slot(str)
+    def setBackendPreference(self, backend: str) -> None:
+        """Save the backend new projects are made with in preferences.
+
+        Parameters
+        ----------
+        backend: str
+            ``auto``, ``mlx``, or ``torch``; anything else is ignored.
+
+        """
+
+        if backend not in BACKEND_CHOICES:
+            return
+        try:
+            write_defaults({"backend": backend})
+        except OSError:
+            pass  # An unwritable preferences file keeps today's choice.
+
+    @Slot(str)
     def setSourceDropTarget(self, bounds_json: str) -> None:
         """Align the native drop region with the visible sources tree.
 
@@ -1155,6 +1182,21 @@ class ChatBridge(QObject):
         )
 
     @Slot(str)
+    def applyIndexingSettings(self, settings_json: str) -> None:
+        """Save the open project's indexing settings and rebuild its index.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON object of the changed indexing settings.
+
+        """
+
+        self.commandRequested.emit(
+            {"action": "apply_indexing", "settings": json.loads(settings_json)}
+        )
+
+    @Slot(str)
     def openExternalLink(self, url: str) -> None:
         """Open an approved HTTPS link only after the user clicks it.
 
@@ -1205,6 +1247,63 @@ class ChatBridge(QObject):
         """
 
         self.stopRequested.emit()
+
+
+def remove_unfinished_projects(
+    projects_folder: Path, unopened: Path | None, engine_pid: int
+) -> list[str]:
+    """Remove the new project a stopped engine was preparing.
+
+    Two cases: a folder the engine was still copying into, recognized by
+    the core's ``.kilin-creating`` marker holding that engine's process ID;
+    and a project it created but had not opened yet (still indexing). Only
+    direct children of the projects folder are removed, never a link.
+
+    Parameters
+    ----------
+    projects_folder: pathlib.Path
+        The folder that holds the projects.
+    unopened: pathlib.Path | None
+        A project the engine reported created but not opened, or None.
+    engine_pid: int
+        Process ID of the stopped engine, or 0 when unknown.
+
+    Returns
+    -------
+    list[str]
+        The folders removed.
+
+    Raises
+    ------
+    OSError
+        If a folder cannot be listed or removed.
+
+    """
+
+    parent = projects_folder.resolve()
+    targets = [unopened] if unopened is not None else []
+    if engine_pid and parent.is_dir():
+        owner = f"pid={engine_pid}"
+        for child in parent.iterdir():
+            try:
+                marker = (child / ".kilin-creating").read_text(
+                    encoding="ascii"
+                )
+            except (OSError, UnicodeError):
+                continue
+            if marker.strip() == owner:
+                targets.append(child)
+    removed = []
+    for folder in targets:
+        if (
+            folder.is_symlink()
+            or not folder.is_dir()
+            or folder.resolve().parent != parent
+        ):
+            continue
+        shutil.rmtree(folder)
+        removed.append(str(folder))
+    return removed
 
 
 def saved_conversation_turns(
@@ -1495,6 +1594,11 @@ class ChatWindow(QMainWindow):
         self.setMinimumSize(760, 560)
         self._closing = False
         self._stopping = False
+        # A new project the engine made but has not opened yet, and the
+        # engine's process ID when Stop was pressed: a stopped preparation
+        # leaves no project behind.
+        self._unopened_project: Path | None = None
+        self._stopped_pid = 0
         # Restarting the engine so that it uses a new projects folder.
         self._switching_folder = False
         self._pending: list[dict[str, object]] = []
@@ -1697,9 +1801,39 @@ class ChatWindow(QMainWindow):
                         event.get("project"), str
                     ):
                         self.bridge.project_root = Path(event["project"])
+                    if event["event"] == "project_created" and isinstance(
+                        event.get("workspace"), str
+                    ):
+                        self._unopened_project = Path(event["workspace"])
+                    elif event["event"] in {
+                        "opened", "error", "workspace_conflict"
+                    }:
+                        self._unopened_project = None
                     self.bridge.event.emit(json.dumps(event))
             except (UnicodeError, ValueError):
                 continue
+
+    def _remove_unfinished_projects(self) -> list[str]:
+        """Remove what a stopped project preparation left behind.
+
+        Returns
+        -------
+        list[str]
+            The folders removed.
+
+        """
+
+        try:
+            removed = remove_unfinished_projects(
+                default_workspace_directory(),
+                self._unopened_project,
+                self._stopped_pid,
+            )
+        except OSError:
+            removed = []  # Anything left can still be deleted later.
+        self._unopened_project = None
+        self._stopped_pid = 0
+        return removed
 
     def _read_diagnostics(self) -> None:
         """Drain and retain a bounded tail of backend diagnostic output."""
@@ -1722,6 +1856,7 @@ class ChatWindow(QMainWindow):
         if self._stopping:
             return
         self._stopping = True
+        self._stopped_pid = int(self.process.processId())
         self._cancel_timer.stop()
         self._pending.clear()
         if self.process.state() == QProcess.ProcessState.NotRunning:
@@ -1754,8 +1889,12 @@ class ChatWindow(QMainWindow):
             return
         if self._stopping:
             self._stopping = False
+            removed = self._remove_unfinished_projects()
             self._start_engine()
-            self.bridge.event.emit(json.dumps({"event": "stopped"}))
+            event: dict[str, object] = {"event": "stopped"}
+            if removed:
+                event["removed_projects"] = removed
+            self.bridge.event.emit(json.dumps(event))
         else:
             exit_code = int(_args[0]) if _args else self.process.exitCode()
             exit_status = _args[1] if len(_args) > 1 else None

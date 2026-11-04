@@ -65,6 +65,7 @@ folder.** This rule is enforced in the core, independently of the GUI.
 | `kilin.prepare_project_workspace(source, type_id, parent)` | Create a fresh single-source mirror in `sources/` and record `source_snapshot.json`. |
 | `kilin.synchronize_project_workspace(source, path)` | Explicitly synchronize that saved mirror. May replace local snapshot edits or remove copies deleted from the original. |
 | `kilin.project.configure_project(path, settings)` | Explicitly validate and update the saved profile. |
+| `kilin.project.delete_project(path)` | Move a closed project into the `deleted/` folder beside it, keeping its files. A name already there gets `_2`, `_3`, ... |
 
 `configure_project` is exported by `kilin.project`, not by the top-level
 `kilin` facade. In Python code, import it explicitly with
@@ -200,6 +201,37 @@ files. Tool authors can offer more specific repair or reset commands later.
 The core does not move or delete unrelated folders or generated files
 implicitly. An existing `target/` directory is left untouched; `outputs/`
 is created independently. No legacy migration is performed.
+
+## `profile.ini` and the Settings panel
+
+`profile.ini` is the project's authoritative settings layer (see
+[Configuration](configuration.md)). It keeps every project setting from
+the day the project was made, so a later KíLín release with new defaults
+does not change an existing project. It can also be edited by hand while
+the project is closed: reopening the project reads it again, an invalid
+value stops the project from opening with a message naming it, and a
+changed indexing value rebuilds the index.
+
+| Section and keys | Settings place | Saved from the GUI |
+| --- | --- | --- |
+| `[project] type_id`, `source` | Chosen at creation | Never; `source` is always `sources` |
+| `[project] extensions`, `max_file_bytes` | Project → Indexing | When entered and the user agrees to rebuild the index |
+| `[chunking]` | Project → Indexing | When entered and the user agrees to rebuild the index |
+| `[models] backend` | KíLín setup → Computation backend | At creation only |
+| `[models] embedding_*`, `query_format` | Project → Models | When changed; a new embedding asks first and rebuilds the index |
+| `[effort.mlx]`, `[effort.torch]` | Project → Models (effort levels) | When changed |
+| `[router]` | Project → Models (intent model) | When changed |
+| `[generation] temperature`, `max_new_tokens`, `thinking` | Project → Answers | When entered |
+| `[search] depth` | Project → Answers (search depth) | When entered |
+| `[tool.<name>]` | Project → Tools | When changed; only values that differ from the project type |
+| `[models] allow_download` | None | Never; the GUI writes `False` so models are downloaded only from Settings |
+| `[generation] block_unrequested_cjk` | None | Never; edit by hand to change |
+| `[models] chat_mlx`, `chat_torch` | None | Kept equal to the Lagom (level 3) model; GUI answers use the chosen level's model on MLX |
+| `[retrieval] count` | None | Never; GUI answers use the search depth step instead, so only the command line uses it |
+
+The project's name is its folder's name, so it is not in `profile.ini`.
+KíLín setup's Appearance and projects folder are per-user GUI preferences
+in `preferences.json`, not project settings.
 
 ## Tool resource contract
 

@@ -87,8 +87,8 @@ console.log("answer settings passed");
         self.assertIn("answer settings passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
-    def test_models_that_think_are_marked_in_effort_levels(self):
-        """Qwen3 language models get "· thinks"; the intent model never."""
+    def test_models_that_can_think_are_marked(self):
+        """Verified marks only, in the levels and intent; unknown is blank."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         self.assertIn(
@@ -96,36 +96,44 @@ console.log("answer settings passed");
             "true);",
             _function(source, "renderModelsPanel"),
         )
+        self.assertIn(
+            '"Intent model", true);', _function(source, "renderModelsPanel")
+        )
         script = r"""
 const assert = require("node:assert/strict");
 let busy = false;
 const cachedModels = new Set(["Qwen/Qwen3-8B-MLX-4bit"]);
+// Only what the engine verified from the templates; never the name.
+const thinkingSwitches = {
+  "Qwen/Qwen3-8B-MLX-4bit": true, "Qwen/Qwen3-1.7B-MLX-4bit": false,
+};
 const element = () => ({
   children: [], setAttribute() {},
   append(...items) { this.children.push(...items); },
 });
 var document = { createElement: element };
 """
-        for name in ("modelCanThink", "modelSelect"):
+        for name in ("modelCanThink", "thinkingMark", "modelSelect"):
             script += _function(source, name)
         script += r"""
-for (const id of [
-  "Qwen/Qwen3-1.7B-MLX-4bit", "Qwen/Qwen3-32B", "mlx-community/Qwen3-14B-4bit",
-  "lukaskremla/Qwen3.8-27B-4bit-MLX-TextOnly",
-]) assert.equal(modelCanThink(id), true, id);
-for (const id of [
-  "Qwen/Qwen3-4B-Instruct-2507", "Qwen/Qwen3-Embedding-0.6B",
-  "mlx-community/Llama-3.2-3B-Instruct-4bit", "Qwen/Qwen2.5-7B-Instruct",
-]) assert.equal(modelCanThink(id), false, id);
-const ids = ["Qwen/Qwen3-8B-MLX-4bit", "Qwen/Qwen3-4B-Instruct-2507"];
+assert.equal(modelCanThink("Qwen/Qwen3-8B-MLX-4bit"), true);
+// A Qwen3 name alone is not enough: its template must switch thinking.
+assert.equal(modelCanThink("Qwen/Qwen3-1.7B-MLX-4bit"), false);
+const ids = [
+  "Qwen/Qwen3-8B-MLX-4bit", "Qwen/Qwen3-1.7B-MLX-4bit",
+  "Qwen/Qwen3-4B-Instruct-2507",
+];
 const texts = (select) => select.children.map((option) => option.textContent);
+// Can think, no switch, and unknown (not checked: blank).
 assert.deepEqual(texts(modelSelect(ids, ids[0], "Level", true)), [
-  "Qwen/Qwen3-8B-MLX-4bit · thinks",
+  "Qwen/Qwen3-8B-MLX-4bit · can think",
+  "Qwen/Qwen3-1.7B-MLX-4bit · no thinking switch (not downloaded)",
   "Qwen/Qwen3-4B-Instruct-2507 (not downloaded)",
 ]);
-// Without the flag (intent model, embedding) nothing is marked.
-assert.deepEqual(texts(modelSelect(ids, ids[0], "Intent model")), [
+// Without the flag (embedding) nothing is marked.
+assert.deepEqual(texts(modelSelect(ids, ids[0], "Embedding model")), [
   "Qwen/Qwen3-8B-MLX-4bit",
+  "Qwen/Qwen3-1.7B-MLX-4bit (not downloaded)",
   "Qwen/Qwen3-4B-Instruct-2507 (not downloaded)",
 ]);
 console.log("thinking models passed");

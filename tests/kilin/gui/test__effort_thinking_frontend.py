@@ -80,6 +80,10 @@ const radios = ["on", "off"].map((value) => ({
   value, checked: false, disabled: false,
 }));
 var document = { querySelectorAll: () => radios };
+// As the engine verified from the downloaded chat templates.
+const thinkingSwitches = {
+  "Qwen/Qwen3-8B-MLX-4bit": true, "Qwen/Qwen3-1.7B-MLX-4bit": false,
+};
 """
         for name in ("modelCanThink", "showThinkingSwitch"):
             script += _function(source, name)
@@ -90,9 +94,11 @@ assert.deepEqual(radios.map((radio) => radio.disabled), [false, false]);
 thinking.checked = false;
 showThinkingSwitch("Qwen/Qwen3-8B-MLX-4bit");
 assert.deepEqual(radios.map((radio) => radio.checked), [false, true]);
-// A model that cannot think: the switch is disabled.
-showThinkingSwitch("mlx-community/Llama-3.2-3B-Instruct-4bit");
-assert.deepEqual(radios.map((radio) => radio.disabled), [true, true]);
+// No switch in its template, or not checked: the switch is disabled.
+for (const model of ["Qwen/Qwen3-1.7B-MLX-4bit", "other/unknown"]) {
+  showThinkingSwitch(model);
+  assert.deepEqual(radios.map((radio) => radio.disabled), [true, true]);
+}
 // Busy: nothing can change mid-answer.
 busy = true;
 showThinkingSwitch("Qwen/Qwen3-8B-MLX-4bit");

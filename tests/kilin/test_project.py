@@ -1265,6 +1265,47 @@ class TestProjectWorkspace(ProjectFixture):
         self.assertEqual(result.root, self._prepare().root)
 
 
+class TestDeleteProject(ProjectFixture):
+    """Move a project into the deleted folder beside it."""
+
+    def test_project_moves_to_deleted_and_keeps_its_files(self) -> None:
+        papers = project.initialize_project(self.root / "papers", "code").root
+        moved = project.delete_project(papers)
+        self.assertEqual(moved, self.root / "deleted" / "papers")
+        self.assertFalse(papers.exists())
+        self.assertTrue((moved / "profile.ini").is_file())
+
+    def test_a_name_already_deleted_is_kept(self) -> None:
+        for _ in range(3):
+            project.initialize_project(self.root / "papers", "code")
+            project.delete_project(self.root / "papers")
+        self.assertEqual(
+            sorted(path.name for path in (self.root / "deleted").iterdir()),
+            ["papers", "papers_2", "papers_3"],
+        )
+
+    def test_only_projects_are_moved(self) -> None:
+        folder = self._folder("not-a-project")
+        with self.assertRaises(FileNotFoundError):
+            project.delete_project(folder)
+        with self.assertRaises(FileNotFoundError):
+            project.delete_project(self.root / "missing")
+        papers = project.initialize_project(self.root / "papers", "code").root
+        link = self.root / "link"
+        link.symlink_to(papers)
+        with self.assertRaisesRegex(ValueError, "link"):
+            project.delete_project(link)
+        self.assertTrue(papers.is_dir())
+        self.assertFalse((self.root / "deleted").exists())
+
+    def test_a_project_named_deleted_is_not_used_as_the_bin(self) -> None:
+        project.initialize_project(self.root / "deleted", "code")
+        papers = project.initialize_project(self.root / "papers", "code").root
+        with self.assertRaisesRegex(ValueError, "is a project"):
+            project.delete_project(papers)
+        self.assertTrue(papers.is_dir())
+
+
 class TestWorkspaceHelpers(ProjectFixture):
     """Cover manifest helpers and collision decisions independently."""
 

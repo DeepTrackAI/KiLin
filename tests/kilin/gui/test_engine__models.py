@@ -106,7 +106,7 @@ class TestEngineModelTransitions(unittest.TestCase):
             "download": False,
         }
         self.cached = patch(
-            "kilin.gui.engine.available_models",
+            "kilin.gui.engine.downloaded_models",
             return_value=[
                 {"model_id": value}
                 for value in {

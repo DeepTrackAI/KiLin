@@ -273,13 +273,28 @@ The left-panel qilin logo is gold in light mode and blue-black in dark
 mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
 installed with the images.
 
-Settings are ordered Appearance, Effort levels, Search depth, Embedding
-model, Intent model, Answers, then Project. Clicking
-the backdrop or Close applies model edits, with confirmation for downloads and
-embedding changes; cancelling keeps the panel open.
+Settings has two parts. KíLín setup holds the app-wide choices: the
+computation backend for new projects, Appearance, and the projects folder.
+The Project part has five tabs: General (the project's name and Delete),
+Indexing (file types, file size and chunk sizes), Models (effort levels,
+intent model, embedding model), Answers (temperature, answer length,
+search depth, thinking) and Tools. Every change is saved as soon as it is
+made: a choice when it is picked, a typed value on Enter or when its field
+is left. A download, an embedding change or an Indexing change asks first,
+because it can take a while; cancelling puts the saved value back. The
+line under the tabs confirms each save. On the start screen nothing is
+saved: the Project values set there are kept on the page and written only
+into the new project's `profile.ini` when it is created, so the next new
+project starts from the defaults again.
 
 Effort levels lists five levels. Each has an editable name and a language
-model chosen from a dropdown of cached language models. Search depth is a
+model chosen from a dropdown of cached language models. Each model shows what the engine
+checked in its downloaded chat template, rendered with `enable_thinking`
+on and off: "· can think" when the two prompts differ, "· no thinking
+switch" when the template renders but ignores it. A model that is not
+downloaded, or whose template is missing or fails to render, shows
+nothing, because nothing is known; nothing is judged from the name. The
+composer's Thinking switch is enabled only for "· can think" models. Search depth is a
 separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
@@ -320,8 +335,10 @@ choices are saved per backend in the `[router]` section of `profile.ini`;
 application-wide choices are saved as user-preference overrides.
 
 **GUI defaults** ship in the read-only
-`kilin/gui/defaults.json`: appearance, the five effort levels (names and
-models), search depth, router and embedding models, and query format.
+`kilin/gui/defaults.json`: appearance, the backend new projects are made
+with (`auto`, `mlx` or `torch`, chosen in KíLín setup), the five effort
+levels (names and models), search depth, router and embedding models,
+query format, and the projects folder.
 Application-wide changes are stored separately in a user-owned
 `preferences.json`, using only keys (and backend values) that differ from
 the shipped defaults. The file is not created just to read defaults.

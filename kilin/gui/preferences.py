@@ -63,6 +63,7 @@ from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "APPEARANCE_CHOICES",
+    "BACKEND_CHOICES",
     "DEFAULTS_ENVIRONMENT",
     "DEFAULTS_FILE",
     "LEVEL_COUNT",
@@ -71,6 +72,7 @@ __all__ = [
     "app_defaults",
     "built_in_defaults",
     "default_appearance",
+    "default_backend",
     "default_effort_levels",
     "default_embedding_model",
     "default_query_format",
@@ -92,6 +94,8 @@ DEFAULTS_FILE: Final[Path] = Path(__file__).with_name("defaults.json")
 DEFAULTS_ENVIRONMENT: Final[str] = PREFERENCES_ENVIRONMENT
 # The page's appearance choices; "system" follows the operating system.
 APPEARANCE_CHOICES: Final[tuple[str, ...]] = ("system", "light", "dark")
+# Backends a new project can be made with; "auto" picks MLX or PyTorch.
+BACKEND_CHOICES: Final[tuple[str, ...]] = ("auto", BACKEND_MLX, BACKEND_TORCH)
 LEVEL_COUNT: Final[int] = 5
 MAX_LEVEL_NAME: Final[int] = 24
 MAX_SEARCH_DEPTH: Final[int] = 200
@@ -365,6 +369,7 @@ def _checks() -> dict[str, Callable[[object], object]]:
 
     return {
         "appearance": _choice(APPEARANCE_CHOICES),
+        "backend": _choice(BACKEND_CHOICES),
         "effort_levels": _per_backend(validate_effort_levels),
         "search_depth": validate_search_depth,
         "router_models": _per_backend(validate_model_id),
@@ -742,6 +747,19 @@ def default_appearance() -> str:
     """
 
     return str(app_defaults()["appearance"])
+
+
+def default_backend() -> str:
+    """Return the backend new projects are made with: auto, mlx, or torch.
+
+    Returns
+    -------
+    str
+        The backend chosen in KíLín setup, or ``"auto"``.
+
+    """
+
+    return str(app_defaults()["backend"])
 
 
 def required_models(backend: str) -> list[str]:

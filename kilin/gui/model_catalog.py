@@ -22,6 +22,11 @@ Key Features
 
     Expose distribution-presence checks without loading an inference model.
 
+- **Thinking switch**
+
+    Tell, for each cached model whose chat template renders, whether it
+    reacts to ``enable_thinking``, by rendering it with it on and off.
+
 Module Structure
 ----------------
 
@@ -41,6 +46,14 @@ Module Structure
 
     Mark the suggested models that are present in the local cache.
 
+- ``downloaded_models``
+
+    List the cached models whose download finished.
+
+- ``thinking_switches``
+
+    Tell which cached models' chat templates switch thinking on and off.
+
 Examples
 --------
 >>> import kilin.gui.model_catalog
@@ -57,6 +70,7 @@ import json
 from pathlib import Path
 from typing import Final, TypeAlias
 
+from kilin.huggingface import available_models
 from kilin.model_defaults import (
     DEFAULT_CHAT_MODEL_MLX,
     DEFAULT_CHAT_MODEL_TORCH,
@@ -74,11 +88,13 @@ __all__ = [
     "DEEP_CHAT_MODEL_MLX",
     "LIGHT_CHAT_MODEL_MLX",
     "cached_model_roles",
+    "downloaded_models",
     "GUI_REQUIRED_MODEL_IDS",
     "MODEL_CHOICES",
     "ModelChoice",
     "installed_backends",
     "model_choices",
+    "thinking_switches",
 ]
 
 ModelBackend: TypeAlias = SelectedBackend
@@ -281,3 +297,200 @@ def cached_model_roles(
             break
         roles[model_id] = role
     return roles
+
+
+def thinking_switches(
+    cached_models: list[dict[str, object]],
+) -> dict[str, bool]:
+    """Tell which cached models' chat templates switch thinking.
+
+    KíLín turns thinking on or off by passing ``enable_thinking`` to the
+    model's chat template. Each cached template is rendered for one short
+    question with it on and off, in a sandbox, the way the Hugging Face
+    tokenizer renders it: different prompts mean the switch works, equal
+    ones mean the template ignores it. Nothing is guessed from a model's
+    name, so a new model is checked the same way once it is downloaded. A
+    missing, unreadable or failing template leaves the model out: unknown.
+
+    Parameters
+    ----------
+    cached_models: list[dict[str, object]]
+        Entries from ``kilin.huggingface.available_models``.
+
+    Returns
+    -------
+    dict[str, bool]
+        For each checked model ID, whether its template switches thinking;
+        models that could not be checked are not included.
+
+    """
+
+    try:
+        from jinja2.ext import loopcontrols
+        from jinja2.sandbox import ImmutableSandboxedEnvironment
+    except ImportError:
+        return {}
+
+    environment = ImmutableSandboxedEnvironment(
+        trim_blocks=True, lstrip_blocks=True, extensions=[loopcontrols]
+    )
+    # The helpers the Hugging Face tokenizer gives templates; the date is
+    # fixed so both renders differ only by the switch.
+    environment.filters["tojson"] = lambda value, **_: json.dumps(value)
+    environment.globals["raise_exception"] = _raise_template_error
+    environment.globals["strftime_now"] = lambda _format: "1 January 2026"
+    found: dict[str, bool] = {}
+    for entry in cached_models:
+        for snapshot in sorted(
+            (Path(str(entry.get("path", ""))) / "snapshots").glob("*")
+        ):
+            template = _chat_template(snapshot)
+            if not template:
+                continue
+            try:
+                compiled = environment.from_string(template)
+                prompts = {
+                    compiled.render(
+                        messages=[{"role": "user", "content": "Hi"}],
+                        add_generation_prompt=True,
+                        enable_thinking=switch,
+                    )
+                    for switch in (True, False)
+                }
+            except Exception:  # pylint: disable=broad-exception-caught
+                continue  # A template that fails to render is not verified.
+            found[str(entry["model_id"])] = len(prompts) == 2
+            break
+    return dict(sorted(found.items()))
+
+
+def _raise_template_error(message: str) -> None:
+    """Stop rendering, as a template's ``raise_exception`` does.
+
+    Parameters
+    ----------
+    message: str
+        The template's own error message.
+
+    Raises
+    ------
+    ValueError
+        Always, so the model is not marked.
+
+    """
+
+    raise ValueError(message)
+
+
+def _chat_template(snapshot: Path) -> str:
+    """Return a cached model's chat template, or "" when it has none.
+
+    The same files the Hugging Face tokenizer reads, in its order:
+    ``chat_template.jinja``, ``chat_template.json``, then the
+    ``chat_template`` in ``tokenizer_config.json`` (the "default" one when
+    several are named).
+
+    Parameters
+    ----------
+    snapshot: pathlib.Path
+        One snapshot folder of a cached model.
+
+    Returns
+    -------
+    str
+        The template text, or "" when none can be read.
+
+    """
+
+    try:
+        jinja = snapshot / "chat_template.jinja"
+        if jinja.is_file():
+            return jinja.read_text(encoding="utf-8")
+        for name in ("chat_template.json", "tokenizer_config.json"):
+            path = snapshot / name
+            if not path.is_file():
+                continue
+            value = json.loads(path.read_text(encoding="utf-8"))
+            template = value.get("chat_template")
+            if isinstance(template, list):
+                template = next(
+                    (
+                        item.get("template")
+                        for item in template
+                        if isinstance(item, dict)
+                        and item.get("name") == "default"
+                    ),
+                    None,
+                )
+            if isinstance(template, str):
+                return template
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return ""
+
+
+# Weight files a finished download contains at least one of.
+_WEIGHT_PATTERNS: Final[tuple[str, ...]] = (
+    "*.safetensors", "*.bin", "*.npz", "*.gguf",
+)
+
+
+def downloaded_models() -> list[dict[str, object]]:
+    """List the cached models whose download finished.
+
+    A stopped download stays in the Hugging Face cache with only some of
+    its files, and ``kilin.huggingface.available_models`` lists it anyway.
+    The Hub links a file into a snapshot only once that file has fully
+    downloaded, so a snapshot counts as finished when it has
+    ``config.json``, every weight file its ``*.safetensors.index.json``
+    lists, and at least one weight file.
+
+    Returns
+    -------
+    list[dict[str, object]]
+        The ``available_models`` entries of finished downloads.
+
+    """
+
+    return [entry for entry in available_models() if _download_finished(entry)]
+
+
+def _download_finished(entry: dict[str, object]) -> bool:
+    """Tell whether one cached model has a finished snapshot.
+
+    Parameters
+    ----------
+    entry: dict[str, object]
+        One entry from ``kilin.huggingface.available_models``.
+
+    Returns
+    -------
+    bool
+        Whether any snapshot has its configuration and all its weights.
+
+    """
+
+    for snapshot in sorted(
+        (Path(str(entry.get("path", ""))) / "snapshots").glob("*")
+    ):
+        if not (snapshot / "config.json").is_file():
+            continue
+        try:
+            listed = {
+                str(name)
+                for index in snapshot.glob("*.safetensors.index.json")
+                for name in json.loads(
+                    index.read_text(encoding="utf-8")
+                ).get("weight_map", {}).values()
+            }
+        except (OSError, ValueError, AttributeError):
+            continue
+        if not all((snapshot / name).is_file() for name in listed):
+            continue
+        if any(
+            path.is_file()
+            for pattern in _WEIGHT_PATTERNS
+            for path in snapshot.glob(pattern)
+        ):
+            return True
+    return False

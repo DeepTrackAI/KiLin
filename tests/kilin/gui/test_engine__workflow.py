@@ -281,7 +281,13 @@ class TestEngineWorkflow(unittest.TestCase):
             "max_new_tokens": session.project.profile.max_new_tokens,
         })
         session.ask.assert_not_called()
-        self.assertEqual(events, [])
+        # The page is told the saved values are now in effect.
+        self.assertEqual(events, [{
+            "event": "answer_settings_saved",
+            "temperature": session.project.profile.temperature,
+            "thinking": not thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        }])
 
         engine.session = None
         engine.save_answer_settings({"thinking": True})

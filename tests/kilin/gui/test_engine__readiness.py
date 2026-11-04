@@ -88,7 +88,7 @@ class TestEngineReadiness(unittest.TestCase):
                         return_value={"mlx": True},
                     ),
                     patch(
-                        "kilin.gui.engine.available_models",
+                        "kilin.gui.engine.downloaded_models",
                         return_value=cached,
                     ),
                     patch(

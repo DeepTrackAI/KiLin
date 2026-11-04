@@ -182,6 +182,14 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "rename_project",
             ),
             (
+                {"action": "delete_project", "project": "/parent/old"},
+                "delete_project",
+            ),
+            (
+                {"action": "apply_indexing", "settings": {"x": 1}},
+                "apply_indexing_settings",
+            ),
+            (
                 {"action": "save_answer_timeline", "timestamp": "now",
                  "timeline": {"elapsed_ms": 10, "steps": []}},
                 "save_answer_timeline",
@@ -448,7 +456,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
         )
         worker._report_error = MagicMock()
         with (
-            patch.object(engine, "available_models", return_value=[]),
+            patch.object(engine, "downloaded_models", return_value=[]),
             patch.object(engine, "installed_backends", return_value=[]),
             patch.object(engine, "choose_backend", return_value="mlx"),
         ):
@@ -691,11 +699,12 @@ class TestGUIProtocolEvents(unittest.TestCase):
         ).read_text(encoding="utf-8")
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
-            "answer_cancelled", "answer_delta", "answer_phase", "answered",
+            "answer_cancelled", "answer_delta", "answer_phase",
+            "answer_settings_saved", "answered",
             "backend_failed",
             "backend_restarted", "conversation_delete_started",
             "conversation_opened", "conversation_viewed", "conversations",
-            "error",
+            "error", "indexing_applied",
             "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",
@@ -789,6 +798,58 @@ class TestGUIProtocolBridge(unittest.TestCase):
                 "tool": "find_fact",
                 "settings": {"part_tokens": 8000},
             },
+        ])
+
+    def test_delete_project_sends_the_project_folder(self) -> None:
+        self.bridge.deleteProject("/parent/old")
+        self.assertEqual(self.commands, [
+            {"action": "delete_project", "project": "/parent/old"},
+        ])
+
+    def test_stop_removes_the_project_being_prepared(self) -> None:
+        """A stopped preparation leaves no project behind, only that one."""
+
+        remove = importlib.import_module(
+            "kilin.gui.window"
+        ).remove_unfinished_projects
+        with TemporaryDirectory() as folder:
+            parent = Path(folder)
+            for name, marker in (
+                ("copying", "pid=42\n"), ("other", "pid=7\n"),
+                ("indexing", None), ("finished", None),
+            ):
+                (parent / name / "sources").mkdir(parents=True)
+                (parent / name / "profile.ini").write_text("x")
+                if marker is not None:
+                    (parent / name / ".kilin-creating").write_text(marker)
+            (parent / "link").symlink_to(parent / "finished")
+            removed = remove(parent, parent / "indexing", 42)
+            self.assertEqual(
+                sorted(Path(path).name for path in removed),
+                ["copying", "indexing"],
+            )
+            # Another creator's folder, finished projects and links stay;
+            # a folder outside the projects folder is never removed.
+            self.assertEqual(
+                sorted(path.name for path in parent.iterdir()),
+                ["finished", "link", "other"],
+            )
+            self.assertEqual(remove(parent, parent / "link", 0), [])
+            self.assertEqual(remove(parent, Path("/"), 0), [])
+
+    def test_backend_preference_is_saved_by_qt(self) -> None:
+        """Saved in preferences.json directly; no engine command."""
+
+        with patch("kilin.gui.window.write_defaults") as write:
+            self.bridge.setBackendPreference("torch")
+            self.bridge.setBackendPreference("cuda")
+        write.assert_called_once_with({"backend": "torch"})
+        self.assertEqual(self.commands, [])
+
+    def test_indexing_settings_are_sent_as_an_object(self) -> None:
+        self.bridge.applyIndexingSettings('{"target_tokens": 500}')
+        self.assertEqual(self.commands, [
+            {"action": "apply_indexing", "settings": {"target_tokens": 500}},
         ])
 
     def test_answer_stop_is_a_command_with_a_last_resort(self) -> None:
