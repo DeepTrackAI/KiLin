@@ -12,8 +12,9 @@ Qt/WebEngine smoke test.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import run_node
 
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -99,9 +100,6 @@ renderProjectTypes(types);
 assert.equal(activeProjectTypeId, "alpha");
 console.log("registry rendering passed");
 '''
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True, text=True, timeout=15, check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("registry rendering passed", result.stdout)

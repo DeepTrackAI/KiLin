@@ -15,8 +15,9 @@ checks.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import run_node
 
 _ROOT = Path(__file__).resolve().parents[3]
 _APP = _ROOT / "kilin/gui/web/app.js"
@@ -131,12 +132,6 @@ assert.deepEqual(sourceSyncPlan(changes, "both"), {
 });
 console.log("source sync passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("source sync passed", result.stdout)

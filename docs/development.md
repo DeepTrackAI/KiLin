@@ -161,6 +161,17 @@ modules for shared fixtures rather than importing another test module.
 For example, `tests/kilin/_project_type_support.py` supplies independent
 project-type definitions to the loader and cross-module contract tests.
 
+Shared test adapters belong in private, non-discovered support modules.
+`tests/kilin/gui/_frontend_support.py` owns the existing top-level
+JavaScript function extraction and isolated Node subprocess invocation;
+individual GUI tests still check their own event/DOM behavior. The
+extractor intentionally uses the existing source terminator, not a full
+JavaScript parser. Prefer behavioral tests over additional source-text
+checks when a future frontend refactor is considered.
+`tests/kilin/tools/_contract_support.py` owns common tool registry and
+packaged-default assertions; each package retains its own tests for
+invalid settings and tool-specific behavior.
+
 Unit tests should use isolated temporary files, deterministic fake models
 and controlled clocks where appropriate. Never require model downloads for
 the base suite. Test model/GUI integrations separately on supported

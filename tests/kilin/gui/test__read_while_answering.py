@@ -15,20 +15,17 @@ import importlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+
+from tests.kilin.gui._frontend_support import (
+    extract_function as _function,
+    run_node,
+)
 
 from kilin.conversation_format import new_conversation_session
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 def _branch(source: str, event: str) -> str:
@@ -209,13 +206,7 @@ answeringConversationId = "";
 assert.equal(readConversation({ conversation_id: "b", name: "B" }), false);
 console.log("reading passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("reading passed", result.stdout)
 

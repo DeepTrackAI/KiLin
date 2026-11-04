@@ -14,8 +14,9 @@ covered only by the Qt/WebEngine smoke test and manual checks.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import run_node
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -81,13 +82,7 @@ assert.ok(previewRows.every((row) => row.tagName === "LABEL"));
 assert.equal(preview.filter((node) => node.tagName === "INPUT").length, 4);
 console.log("workspace tree passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("workspace tree passed", result.stdout)
 
@@ -115,12 +110,6 @@ assert.equal(shownInWorkspace("sources/GAUDI/.DS_Store"), false);
 assert.equal(shownInWorkspace("sources/notes.DS_Store.md"), true);
 console.log("lock filter passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("lock filter passed", result.stdout)

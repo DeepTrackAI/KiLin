@@ -12,7 +12,6 @@ validation, and a full model-free run on a small paper and project.
 from __future__ import annotations
 
 from dataclasses import fields
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -22,7 +21,7 @@ from unittest.mock import Mock, patch
 from kilin.project_type import project_type
 from kilin.tools import reference_check as tool
 from kilin.tools._contract import ToolRequest
-from kilin.tools._registry import TOOL_REFERENCE_CHECK, TOOL_REGISTRY
+from kilin.tools._registry import TOOL_REFERENCE_CHECK
 from kilin.tools.reference_check import _configuration as config
 from kilin.tools.reference_check._resolution import offline_link
 from kilin.tools._shared.sentences import Sentence
@@ -32,6 +31,10 @@ from kilin.tools.reference_check.tool import (
     _cited_for,
 )
 from kilin.tools._shared.sentences import split_sentences
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
 from tests.kilin.tools._shared._support import chunk
 
 PAPER = """Introduction
@@ -68,29 +71,13 @@ class TestReferenceCheckPackage(unittest.TestCase):
     """Configuration, registry and intent."""
 
     def test_registry_uses_package_entry_points(self) -> None:
-        entry = TOOL_REGISTRY[TOOL_REFERENCE_CHECK]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
-        self.assertFalse(entry.follows_up)
+        assert_registry_entry(
+            self, "reference_check", tool, non_followup=True
+        )
 
     def test_packaged_defaults_are_documented(self) -> None:
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
-        )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn(f"`{section}`", readme)
-            for key in values:
-                with self.subTest(key=f"{section}.{key}"):
-                    self.assertIn(f"`{key}`", readme)
-        defaults = tool.ReferenceCheckSettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {f.name for f in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
+        data = assert_packaged_defaults(
+            self, tool, tool.ReferenceCheckSettings, check_values=False,
         )
         self.assertEqual(
             config.REFERENCE_LAYOUT.max_characters,

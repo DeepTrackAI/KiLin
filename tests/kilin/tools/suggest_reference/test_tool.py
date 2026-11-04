@@ -13,7 +13,6 @@ model-free run on a small project.
 from __future__ import annotations
 
 from dataclasses import fields
-import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -22,7 +21,11 @@ from unittest.mock import Mock
 from kilin.project_type import project_type
 from kilin.tools import suggest_reference as tool
 from kilin.tools._contract import ToolRequest
-from kilin.tools._registry import TOOL_REGISTRY, TOOL_SUGGEST_REFERENCE
+from kilin.tools._registry import TOOL_SUGGEST_REFERENCE
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
 from tests.kilin.tools._shared._support import chunk
 
 STATEMENT = "anomalous diffusion is common in living cells"
@@ -45,29 +48,13 @@ class TestSuggestReferencePackage(unittest.TestCase):
     """Configuration, registry and intent."""
 
     def test_registry_uses_package_entry_points(self) -> None:
-        entry = TOOL_REGISTRY[TOOL_SUGGEST_REFERENCE]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
-        self.assertFalse(entry.follows_up)
+        assert_registry_entry(
+            self, "suggest_reference", tool, non_followup=True
+        )
 
     def test_packaged_defaults_are_documented(self) -> None:
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
-        )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn(f"`{section}`", readme)
-            for key in values:
-                with self.subTest(key=f"{section}.{key}"):
-                    self.assertIn(f"`{key}`", readme)
-        defaults = tool.SuggestReferenceSettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {f.name for f in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
+        assert_packaged_defaults(
+            self, tool, tool.SuggestReferenceSettings, check_values=False,
         )
 
     def test_verdict_tokens_inherit_session_by_default(self) -> None:

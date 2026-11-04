@@ -15,18 +15,15 @@ Rendering is covered only by the Qt/WebEngine smoke test and manual checks.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import (
+    extract_function as _function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _WEB = _ROOT / "kilin/gui/web"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 class TestSidebarLogoFrontend(unittest.TestCase):
@@ -233,13 +230,7 @@ assert.deepEqual(
 );
 console.log("orders passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("orders passed", result.stdout)
 
@@ -319,13 +310,7 @@ assert.deepEqual(names(), ["paper", "a", "b"]);
 assert.equal(buttonOf(0).children[1].textContent, "code");
 console.log("projects list passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("projects list passed", result.stdout)
 

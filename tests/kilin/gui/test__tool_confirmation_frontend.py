@@ -16,17 +16,14 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import unittest
 
+from tests.kilin.gui._frontend_support import (
+    extract_function as _function,
+    run_node,
+)
+
 _APP = Path(__file__).resolve().parents[3] / "kilin/gui/web/app.js"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level production function without its page setup."""
-
-    start = source.index(f"function {name}(")
-    return source[start:source.index("\n}\n", start) + 3]
 
 
 _HARNESS = r"""
@@ -154,12 +151,9 @@ class TestToolConfirmationFrontend(unittest.TestCase):
             "showToolPrompt", "submitToolPrompt", "showToolPlan",
             "showToolChoice", "onEvent",
         ))
-        result = subprocess.run(
-            [shutil.which("node"), "-e", "\n".join((
+        result = run_node("\n".join((
                 _HARNESS, constants, functions, checks,
-            ))],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
+            )))
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_recorded_document_choice_renders_all_options(self) -> None:

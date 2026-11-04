@@ -15,17 +15,14 @@ Qt/WebEngine smoke test and manual checks.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
 
+from tests.kilin.gui._frontend_support import (
+    extract_function as _function,
+    run_node as _node,
+)
+
 _APP = Path(__file__).resolve().parents[3] / "kilin/gui/web/app.js"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 def _branch(source: str, event: str) -> str:
@@ -33,18 +30,6 @@ def _branch(source: str, event: str) -> str:
 
     start = source.index(f'data.event === "{event}"')
     return source[start : source.index("data.event ===", start + 1)]
-
-
-def _node(script: str) -> subprocess.CompletedProcess:
-    """Run a script in Node and return the finished process."""
-
-    return subprocess.run(
-        [shutil.which("node"), "-e", script],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
-    )
 
 
 class TestAnswerRecoveryFrontend(unittest.TestCase):

@@ -16,18 +16,15 @@ setup sits above the tabs, as it covers the whole app.
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import (
+    extract_function as _function,
+    run_node,
+)
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
 _TABS = ["general", "models", "answers", "tools", "project"]
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 class TestSettingsTabsFrontend(unittest.TestCase):
@@ -127,13 +124,7 @@ assert.deepEqual(sections.map((item) => item.classList.set.has("tab-hidden")),
   [false, true, true, true]);
 console.log("settings tabs passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("settings tabs passed", result.stdout)
 

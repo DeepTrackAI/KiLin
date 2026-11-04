@@ -13,8 +13,9 @@ checks.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
+
+from tests.kilin.gui._frontend_support import run_node
 
 _ROOT = Path(__file__).resolve().parents[3]
 _WEB = _ROOT / "kilin/gui/web"
@@ -66,12 +67,6 @@ setWorkspaceShare(null);
 assert.equal(share(), undefined);
 console.log("side divider passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("side divider passed", result.stdout)

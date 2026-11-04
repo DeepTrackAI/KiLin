@@ -11,13 +11,14 @@ and deterministic execution behavior.
 
 from __future__ import annotations
 
-from dataclasses import fields
-import json
-from pathlib import Path
 import unittest
 
 from kilin.tools import paper_overview as tool
-from kilin.tools._registry import TOOL_REGISTRY
+
+from tests.kilin.tools._contract_support import (
+    assert_packaged_defaults,
+    assert_registry_entry,
+)
 
 
 class TestPaperOverview(unittest.TestCase):
@@ -28,38 +29,18 @@ class TestPaperOverview(unittest.TestCase):
 
         """
 
-        entry = TOOL_REGISTRY["paper_overview"]
-        self.assertIs(entry.parse_settings, tool.parse_settings)
-        self.assertIs(entry.run, tool.run)
-        self.assertIsNone(entry.workspace_resources)
+        assert_registry_entry(
+            self, "paper_overview", tool
+        )
 
     def test_packaged_defaults_and_project_type_overrides(self) -> None:
         """Use the tool-local JSON when settings are not supplied.
 
         """
 
-        package = Path(tool.__file__).parent
-        data = json.loads(
-            (package / "defaults.json").read_text(encoding="utf-8")
+        assert_packaged_defaults(
+            self, tool, tool.OverviewSettings,
         )
-        readme = (package / "README.md").read_text(encoding="utf-8")
-        for section, values in data.items():
-            with self.subTest(section=section):
-                self.assertIn("`" + section + "`", readme)
-            for key in values:
-                with self.subTest(section=section, key=key):
-                    self.assertIn("`" + key + "`", readme)
-        defaults = tool.OverviewSettings()
-        self.assertEqual(defaults, tool.parse_settings({}, "example"))
-        self.assertEqual(
-            {field.name for field in fields(defaults)},
-            {name.lower() for name in data["SETTINGS"]},
-        )
-        for field in fields(defaults):
-            expected = data["SETTINGS"][field.name.upper()]
-            if isinstance(expected, list):
-                expected = tuple(expected)
-            self.assertEqual(getattr(defaults, field.name), expected)
 
     def test_invalid_project_type_settings(self) -> None:
         """Reject out-of-range, mistyped and unknown overrides.
