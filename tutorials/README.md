@@ -35,22 +35,22 @@ resuming a project preserves its existing setting.
 
 ## Tutorials
 
-- [10 · Setup](tutorials/10_setup.ipynb): Check the environment and computation backend without loading a model.
-- [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect the model cache and optionally download a chat model.
-- [30 · Model chat](tutorials/30_model_chat.ipynb): Load a model, exchange messages, and release it.
-- [40 · Repository files](tutorials/40_repository_files.ipynb): Select the files KíLín will read from a repository.
-- [50 · Source structure](tutorials/50_source_structure.ipynb): Read source files and split their structural units into searchable chunks.
-- [60 · Embeddings](tutorials/60_embeddings.ipynb): Convert chunks and questions into vectors with an embedding model.
-- [70 · Semantic retrieval](tutorials/70_semantic_retrieval.ipynb): Rank chunks by similarity in meaning.
-- [80 · Lexical retrieval](tutorials/80_lexical_retrieval.ipynb): Rank chunks by matching words and identifiers without an embedding model.
-- [90 · Code-aware retrieval](tutorials/90_code_aware_retrieval.ipynb): Find code through symbols and relationships such as calls and imports.
-- [100 · Persistent indexes](tutorials/100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
-- [110 · Hybrid ranking](tutorials/110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
-- [120 · Retrieval expansion](tutorials/120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
-- [130 · Project chat](tutorials/130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
-- [140 · Execution traces](tutorials/140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
-- [150 · Project types](tutorials/150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [160 · Custom tools](tutorials/160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [10 · Setup](./10_setup.ipynb): Check the environment and computation backend without loading a model.
+- [20 · Hugging Face models](./20_huggingface_models.ipynb): Inspect the model cache and optionally download a chat model.
+- [30 · Model chat](./30_model_chat.ipynb): Load a model, exchange messages, and release it.
+- [40 · Repository files](./40_repository_files.ipynb): Select the files KíLín will read from a repository.
+- [50 · Source structure](./50_source_structure.ipynb): Read source files and split their structural units into searchable chunks.
+- [60 · Embeddings](./60_embeddings.ipynb): Convert chunks and questions into vectors with an embedding model.
+- [70 · Semantic retrieval](./70_semantic_retrieval.ipynb): Rank chunks by similarity in meaning.
+- [80 · Lexical retrieval](./80_lexical_retrieval.ipynb): Rank chunks by matching words and identifiers without an embedding model.
+- [90 · Code-aware retrieval](./90_code_aware_retrieval.ipynb): Find code through symbols and relationships such as calls and imports.
+- [100 · Persistent indexes](./100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
+- [110 · Hybrid ranking](./110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
+- [120 · Retrieval expansion](./120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
+- [130 · Project chat](./130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
+- [140 · Execution traces](./140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
+- [150 · Project types](./150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
+- [160 · Custom tools](./160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
 
 ## Choose a learning path
 
