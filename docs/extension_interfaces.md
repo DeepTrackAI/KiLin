@@ -30,6 +30,15 @@ optional `answer_guidance`, `capabilities`, history settings, a valid
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
+`capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
+`paper_index` (`true` or `false`, default `false`). With `paper_index`,
+document passages are indexed with their paper's title, author, section and
+page, each document gets a paper card, and intents may use the `papers`
+retrieval strategy with `max_papers` (1-50, default 3) and
+`passages_per_paper` (0-10, default 0); see
+[Retrieval pipeline](retrieval_pipeline.md). A `papers` intent in a type
+without `paper_index` is rejected.
+
 The registry requires at least one valid definition, not either standard
 type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
 is the filename-derived identifier. The GUI takes its initial selection

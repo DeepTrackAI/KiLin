@@ -211,7 +211,12 @@ class TestEngineModelTransitions(unittest.TestCase):
         )
         self.engine.add_project_sources([str(new_file)])
         self.assertEqual(self.events[-1]["event"], "opened")
-        self.assertEqual(self.embedded, [new_file.read_text(encoding="utf-8")])
+        # Paper passages are embedded after their search header: the title
+        # (here the file name) and the file name.
+        self.assertEqual(
+            self.embedded,
+            ["new\nnew.txt\n\n" + new_file.read_text(encoding="utf-8")],
+        )
         self.assertNotIn("Original document about memory.", self.counted)
         original_vector = dict(
             zip(

@@ -74,9 +74,10 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID``
+- ``RETRIEVAL_STRATEGY_HYBRID`` and ``RETRIEVAL_STRATEGY_PAPERS``
 
-    Canonical string value for the hybrid search pipeline.
+    Canonical string values for the hybrid search pipeline and for the
+    pipeline that chooses papers first.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -167,6 +168,7 @@ __all__ = [
     "RETRIEVAL_MODE_SEARCH",
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
+    "RETRIEVAL_STRATEGY_PAPERS",
     "CodeGraphSetting",
     "HistoryPolicy",
     "Intent",
@@ -235,14 +237,22 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
         "1000 and 200000."
     )
 
-# Search pipeline used by RETRIEVAL_MODE_SEARCH. Only the existing hybrid
-# pipeline (semantic, lexical, code graph, fused) exists; new strategies
-# need benchmarks before they are added.
-RetrievalStrategy: TypeAlias = Literal["hybrid"]
+# Search pipeline used by RETRIEVAL_MODE_SEARCH: the hybrid pipeline
+# (semantic, lexical, code graph, fused), or the same pipeline choosing
+# papers first (``retrieval_papers.py``), for types that index papers.
+# New strategies need benchmarks before they are added.
+RetrievalStrategy: TypeAlias = Literal["hybrid", "papers"]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
+RETRIEVAL_STRATEGY_PAPERS: Final[RetrievalStrategy] = "papers"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
+    RETRIEVAL_STRATEGY_PAPERS,
 )
+# Papers the ``papers`` strategy chooses by default, and the accepted range.
+_DEFAULT_MAX_PAPERS: Final[int] = 3
+_MAX_PAPERS_LIMIT: Final[int] = 50
+# Most passages guaranteed to each chosen paper.
+_PASSAGES_PER_PAPER_LIMIT: Final[int] = 10
 
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
@@ -273,8 +283,10 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid"
-        Search pipeline used when searching; only ``hybrid`` exists.
+    retrieval_strategy: "hybrid" | "papers"
+        Search pipeline used when searching: ``hybrid``, or ``papers``,
+        which ranks papers first and fills the evidence from the best ones
+        (only for project types with ``paper_index``).
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
@@ -296,6 +308,12 @@ class Intent:
         ``None`` inherits the session setting; ``True`` or ``False``
         overrides it without changing the session. Defaults to ``None``.
         Tool-backed intents must leave this unset or null.
+    max_papers: int
+        Papers the ``papers`` strategy fills the evidence from. Defaults to
+        ``3``.
+    passages_per_paper: int
+        Passages the ``papers`` strategy guarantees to each chosen paper;
+        zero guarantees one to the best paper only. Defaults to ``0``.
 
     """
 
@@ -312,6 +330,8 @@ class Intent:
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
     thinking: bool | None = None
+    max_papers: int = _DEFAULT_MAX_PAPERS
+    passages_per_paper: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +370,10 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
+    paper_index: bool
+        Index documents as papers: search headers with each document's
+        title, author, section and page, and paper cards that summarize
+        each document. Defaults to ``False``.
 
     """
 
@@ -367,6 +391,7 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+    paper_index: bool = False
 
     @property
     def label(self) -> str:
@@ -550,6 +575,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "include_related_evidence",
             "prefer_source_code",
             "max_tokens",
+            "max_papers",
+            "passages_per_paper",
         ),
     )
 
@@ -592,6 +619,25 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         raise ValueError(
             f"Intent {where!r} retrieval strategy must be one of: "
             f"{', '.join(RETRIEVAL_STRATEGY_CHOICES)}."
+        )
+
+    max_papers = retrieval.get("max_papers", _DEFAULT_MAX_PAPERS)
+    if (
+        type(max_papers) is not int
+        or not 1 <= max_papers <= _MAX_PAPERS_LIMIT
+    ):
+        raise ValueError(
+            f"Intent {where!r} retrieval.max_papers must be a whole number "
+            f"from 1 to {_MAX_PAPERS_LIMIT}."
+        )
+    per_paper = retrieval.get("passages_per_paper", 0)
+    if (
+        type(per_paper) is not int
+        or not 0 <= per_paper <= _PASSAGES_PER_PAPER_LIMIT
+    ):
+        raise ValueError(
+            f"Intent {where!r} retrieval.passages_per_paper must be a whole "
+            f"number from 0 to {_PASSAGES_PER_PAPER_LIMIT}."
         )
 
     related = retrieval.get("include_related_evidence", False)
@@ -649,6 +695,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         max_tokens=max_tokens,
         tool=tool,
         thinking=thinking,
+        max_papers=max_papers,
+        passages_per_paper=per_paper,
     )
 
 
@@ -726,7 +774,9 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
 
     # The type check rejects 1 and 0, which equal True and False.
     capabilities = _object(type_id, data, "capabilities")
-    reject_unknown(f"{type_id}.capabilities", capabilities, ("code_graph",))
+    reject_unknown(
+        f"{type_id}.capabilities", capabilities, ("code_graph", "paper_index")
+    )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
         bool,
@@ -735,6 +785,13 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         raise ValueError(
             f"Project type {type_id!r} capabilities.code_graph must be true, "
             'false, or "auto".'
+        )
+
+    paper_index = capabilities.get("paper_index", False)
+    if type(paper_index) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} capabilities.paper_index must be true "
+            "or false."
         )
 
     history = _object(type_id, data, "history")
@@ -758,6 +815,16 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         intent_id: _parse_intent(type_id, intent_id, value)
         for intent_id, value in raw_intents.items()
     }
+    for intent in intents.values():
+        if (
+            intent.retrieval_strategy == RETRIEVAL_STRATEGY_PAPERS
+            and not paper_index
+        ):
+            raise ValueError(
+                f"Intent {type_id}.intents.{intent.intent_id} uses the "
+                '"papers" retrieval strategy, which needs '
+                "capabilities.paper_index."
+            )
     default_intent = data.get("default_intent", next(iter(intents)))
     if default_intent not in intents:
         raise ValueError(
@@ -783,6 +850,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
         suggestions=_texts(type_id, data, "suggestions"),
+        paper_index=paper_index,
     )
 
 
