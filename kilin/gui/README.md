@@ -304,8 +304,17 @@ engine rereads the actual profile and synchronizes the live chat. The GUI
 restores those confirmed values, or requires reopening the project if the
 saved state cannot be verified. A download, an embedding change or an
 Indexing change asks first, because it can take a while; cancelling puts
-the saved value back. The line under the tabs reports save status. On the start screen nothing is
-saved: the Project values set there are kept on the page and written only
+the saved value back. During the rebuild, the page reports the operation as
+pending, not already saved. Success is confirmed only after the project
+reopens with its updated settings. If rebuilding fails, the engine restores
+any changed `profile.ini` atomically and, if required, attempts to reopen
+the previous conversation. If recovery also fails, the project is closed
+where possible and the GUI asks for inspection and reopening. Rollback
+covers the profile file, **not** every intermediate index artifact; those
+are validated when the project reopens.
+
+The line under the tabs reports save status. On the start screen nothing
+is saved: the Project values set there are kept on the page and written only
 into the new project's `profile.ini` when it is created, so the next new
 project starts from the defaults again.
 

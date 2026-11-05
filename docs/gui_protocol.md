@@ -111,7 +111,7 @@ paths and source paths remain subject to downstream core validation.
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
 | `delete_project` | `project` | Move that closed project to `.deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
-| `apply_indexing` | `settings` | Save the open project's file types, file size limit or chunk sizes in `profile.ini` and reopen it, which rebuilds the index; then send `indexing_applied` with the `profile` |
+| `apply_indexing` | `settings` | Atomically save validated indexing settings, reopen the project and revalidate its index; send `indexing_applied` with the `profile` only after reopening succeeds |
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `tool_settings` | None | List the open project's tools and their settings |
@@ -177,6 +177,29 @@ no readiness command is sent, and the page restores the last acknowledged
 selection. Unsupported values are ignored. The engine resolves the saved
 preference at the beginning of each setup operation, while `auto` alone uses
 the platform policy. Existing saved project settings remain independent.
+
+### Indexing-settings failure recovery
+
+The frontend shows an in-progress status until `indexing_applied` confirms
+that the project has reopened with the new indexing settings. An `error`
+means the change failed, not that the values were saved. Before changing
+`profile.ini`, the engine snapshots its complete text. If the operation
+fails, it compares the actual file with the snapshot and restores any
+changed profile using `atomic_write_text` rather than overwriting the file
+in place. This includes failures after `configure_project` published a
+new profile but before that method returned. A rejection before profile
+publication leaves the current session active.
+
+If the engine already began replacing the session, recovery closes the
+partial session and tries to reopen the original project and selected
+conversation. Successful recovery can emit `opened` before the final
+`error` explaining why the indexing change failed. If the profile cannot
+be verified or restored, or the original session cannot be reactivated,
+the engine emits `backend_failed` followed by `error`, attempts to close
+the session, and asks the user to inspect `profile.ini` and reopen the
+project. If even closing fails, the user should restart KíLín. No event
+claims that the previous index files were transactionally restored: the
+core checks or rebuilds index artifacts on the next successful open.
 
 ### Interactive tool decisions
 

@@ -1773,7 +1773,7 @@ async function saveIndexingEdits(event) {
   }
   applyingIndexing = true;
   setBusy(true, "Rebuilding the index…");
-  byId("model-download-status").textContent = "Saved. Rebuilding the index with the new settings…";
+  byId("model-download-status").textContent = "Applying indexing settings and rebuilding the index…";
   bridge.applyIndexingSettings(JSON.stringify(edits));
 }
 

@@ -250,6 +250,8 @@ byId("target-tokens").value = "350";
 byId("extensions").value = ".html, .css";
 await saveIndexingEdits();
 assert.equal(busy, true);
+assert.match(byId("model-download-status").textContent, /Applying/);
+assert.doesNotMatch(byId("model-download-status").textContent, /Saved/);
 assert.deepEqual(calls, [{
   extensions: [".md", ".txt", ".html", ".css"], target_tokens: 350,
 }]);
