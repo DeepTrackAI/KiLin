@@ -1757,7 +1757,8 @@ class ChatEngine:
                 sources, type_id, workspace if workspace.strip() else None,
                 **options,
             )
-            # Until it opens, a Stop removes this new project again.
+            # The profile is now published. Stop must preserve it, even
+            # if Qt has not yet processed the later opened event.
             self._send("project_created", workspace=str(project.root))
             if created_depth is not None:
                 write_search_depth(project.root, created_depth)

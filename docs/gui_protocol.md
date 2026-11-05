@@ -197,7 +197,7 @@ can accompany an event.
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`); `backend_failed` (`message`) |
-| Process recovery | `stopped` (optional `removed_projects`: unfinished new projects Qt removed); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
+| Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
@@ -333,12 +333,19 @@ partial visible stream.
   `stopRequested`; the Qt window clears queued commands, kills its child
   using `QProcess.kill()`, starts a new child, and emits `stopped`. Loaded
   models are lost. Any unsaved partial answer is not committed as a
-  completed turn. A stopped project preparation leaves no project: before
-  restarting, Qt removes the folder the killed engine was still copying
-  into (its `.kilin-creating` marker names that engine's process ID) and a
-  project the engine reported with `project_created` (`workspace`, sent
-  before the first indexing; read by Qt, not the page) that has not sent
-  `opened` yet; `stopped` then lists them under `removed_projects`.
+  completed turn. Stop is conservative about project files. The core has
+  already published `profile.ini` when `project_created` (`workspace`) is
+  emitted, so a delayed `opened` event does not make that project disposable.
+  After stopping the child, Qt can remove only a directory containing its
+  `.kilin-creating` marker and no other entries, with the marker naming the
+  stopped engine's process ID and recording that it created this folder.
+  Markers from older versions and pre-existing empty folders are retained.
+  Qt never recursively deletes a project or a populated partial
+  workspace based on a PID or queued event.
+  `stopped` reports removed empty claims as `removed_projects` and paths
+  known to be preserved as `preserved_projects`. The latter may be a
+  completed project or partial files requiring inspection; it is not an
+  exhaustive inventory if an interruption occurred before any event.
 - On unexpected child exit, Qt prepares a `backend_restarted` message and
   starts a replacement child. The page requests settings/readiness again
   and may attempt to reopen the former project. The diagnostic text is

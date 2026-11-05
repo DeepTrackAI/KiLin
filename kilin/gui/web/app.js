@@ -5483,13 +5483,25 @@ function onEvent(raw) {
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
-    // A stopped preparation leaves no project: Qt removed what was made.
-    byId("connection").textContent = data.removed_projects?.length
-      ? "Stopped · the unfinished project was removed"
-      : "Stopped · reopen your project";
+    // Stop preserves any committed or nonempty project directory.
+    const preservedProjects = data.preserved_projects || [];
+    byId("connection").textContent = preservedProjects.length
+      ? "Stopped · project files preserved"
+      : data.removed_projects?.length
+        ? "Stopped · empty preparation folder removed"
+        : "Stopped · reopen your project";
+    if (preservedProjects.length) {
+      const locations = preservedProjects.join(", ");
+      error.textContent = `Project files were kept at: ${locations}. `
+        + "Reopen a completed project or inspect an unfinished folder "
+        + "before removing it.";
+      error.classList.remove("hidden");
+    }
     setBusy(false);
     bridge.requestSettings(byId("type-id").value, "");
-    if (data.removed_projects?.length) bridge.listSavedProjects("");
+    if (data.removed_projects?.length || preservedProjects.length) {
+      bridge.listSavedProjects("");
+    }
   } else if (data.event === "backend_failed") {
     ready = false;
     updateFloatingHeader();

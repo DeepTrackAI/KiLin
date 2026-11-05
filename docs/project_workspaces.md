@@ -402,7 +402,8 @@ An invalid profile or resource plan fails before reservation. The core uses
 exclusive filesystem creation to claim a `.kilin-creating` marker and holds
 it throughout initialization. Competing processes cannot initialize the same
 workspace. An explicit destination is checked again after the marker is
-claimed, not just before it. The marker is removed only by its owner.
+claimed, not just before it. The running creator removes its marker on a
+normal exit.
 
 The profile is published **last** using a same-directory temporary file and
 an exclusive hard link. Publication never replaces an existing profile,
@@ -417,6 +418,13 @@ parent directories are not removed. Unexpected unrelated files are preserved.
 A process termination may leave the marker and partial resources on disk.
 Such a directory remains occupied and requires deliberate inspection/recovery;
 creation never guesses that a marker is stale or silently clears the folder.
+When the GUI stops its engine, it may remove an otherwise empty directory
+containing only a marker matching that stopped engine's process ID and
+recording that the attempt created the directory. Pre-existing empty folders
+and legacy markers without this ownership information are retained. The GUI
+never recursively deletes a project or its contents. A published project is
+preserved even if the GUI has not yet processed its `opened` event. Incomplete
+files may therefore require explicit inspection and removal by the user.
 
 After a project is established, cumulative source additions and later source
 synchronization are deliberately **not** all-or-nothing transactions.

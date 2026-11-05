@@ -490,7 +490,13 @@ switching the answering model.
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen
 the project to continue. This is not transactional cancellation of a copy,
-index write, download, or conversation update that was in progress.
+index write, download, or conversation update that was in progress. The GUI
+never recursively deletes a project after Stop: it removes only an empty
+creation-marker directory whose metadata confirms it was created by the
+stopped engine, not an existing empty folder. Completed projects and
+nonempty partial workspaces are preserved, with known paths reported for
+inspection. A stopped preparation may leave an occupied folder that must be
+reviewed and removed manually before that location can be used again.
 
 ## Trace privacy and current limits
 

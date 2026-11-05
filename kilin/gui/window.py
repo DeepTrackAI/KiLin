@@ -55,7 +55,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import shutil
 import sys
 
 from PySide6.QtCore import (
@@ -84,6 +83,7 @@ from PySide6.QtWebEngineCore import QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 
+from kilin._project_creation import cleanup_stopped_creation
 from kilin.conversation_format import conversation_state
 from kilin.gui._paths import (
     default_workspace_directory,
@@ -1249,63 +1249,6 @@ class ChatBridge(QObject):
         self.stopRequested.emit()
 
 
-def remove_unfinished_projects(
-    projects_folder: Path, unopened: Path | None, engine_pid: int
-) -> list[str]:
-    """Remove the new project a stopped engine was preparing.
-
-    Two cases: a folder the engine was still copying into, recognized by
-    the core's ``.kilin-creating`` marker holding that engine's process ID;
-    and a project it created but had not opened yet (still indexing). Only
-    direct children of the projects folder are removed, never a link.
-
-    Parameters
-    ----------
-    projects_folder: pathlib.Path
-        The folder that holds the projects.
-    unopened: pathlib.Path | None
-        A project the engine reported created but not opened, or None.
-    engine_pid: int
-        Process ID of the stopped engine, or 0 when unknown.
-
-    Returns
-    -------
-    list[str]
-        The folders removed.
-
-    Raises
-    ------
-    OSError
-        If a folder cannot be listed or removed.
-
-    """
-
-    parent = projects_folder.resolve()
-    targets = [unopened] if unopened is not None else []
-    if engine_pid and parent.is_dir():
-        owner = f"pid={engine_pid}"
-        for child in parent.iterdir():
-            try:
-                marker = (child / ".kilin-creating").read_text(
-                    encoding="ascii"
-                )
-            except (OSError, UnicodeError):
-                continue
-            if marker.strip() == owner:
-                targets.append(child)
-    removed = []
-    for folder in targets:
-        if (
-            folder.is_symlink()
-            or not folder.is_dir()
-            or folder.resolve().parent != parent
-        ):
-            continue
-        shutil.rmtree(folder)
-        removed.append(str(folder))
-    return removed
-
-
 def saved_conversation_turns(
     root: Path, conversation_id: str
 ) -> list[dict[str, object]] | None:
@@ -1594,9 +1537,8 @@ class ChatWindow(QMainWindow):
         self.setMinimumSize(760, 560)
         self._closing = False
         self._stopping = False
-        # A new project the engine made but has not opened yet, and the
-        # engine's process ID when Stop was pressed: a stopped preparation
-        # leaves no project behind.
+        # A newly published project awaiting an opened event and the
+        # stopped engine's PID. Neither authorizes deleting project data.
         self._unopened_project: Path | None = None
         self._stopped_pid = 0
         # Restarting the engine so that it uses a new projects folder.
@@ -1813,27 +1755,31 @@ class ChatWindow(QMainWindow):
             except (UnicodeError, ValueError):
                 continue
 
-    def _remove_unfinished_projects(self) -> list[str]:
-        """Remove what a stopped project preparation left behind.
+    def _cleanup_stopped_creation(self) -> tuple[list[str], list[str]]:
+        """Remove only empty claims; preserve any known project contents.
 
         Returns
         -------
-        list[str]
-            The folders removed.
+        tuple[list[str], list[str]]
+            Paths removed and paths retained for inspection or reopening.
 
         """
 
         try:
-            removed = remove_unfinished_projects(
+            removed, preserved = cleanup_stopped_creation(
                 default_workspace_directory(),
                 self._unopened_project,
                 self._stopped_pid,
             )
         except OSError:
-            removed = []  # Anything left can still be deleted later.
+            removed = []
+            preserved = (
+                [str(self._unopened_project)]
+                if self._unopened_project is not None else []
+            )
         self._unopened_project = None
         self._stopped_pid = 0
-        return removed
+        return removed, preserved
 
     def _read_diagnostics(self) -> None:
         """Drain and retain a bounded tail of backend diagnostic output."""
@@ -1889,11 +1835,13 @@ class ChatWindow(QMainWindow):
             return
         if self._stopping:
             self._stopping = False
-            removed = self._remove_unfinished_projects()
+            removed, preserved = self._cleanup_stopped_creation()
             self._start_engine()
             event: dict[str, object] = {"event": "stopped"}
             if removed:
                 event["removed_projects"] = removed
+            if preserved:
+                event["preserved_projects"] = preserved
             self.bridge.event.emit(json.dumps(event))
         else:
             exit_code = int(_args[0]) if _args else self.process.exitCode()
