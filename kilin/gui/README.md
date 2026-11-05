@@ -388,9 +388,13 @@ same role exist, **Use installed models** switches to the closest installed
 size (for example a missing 8B model is replaced by an installed 14B
 rather than a 4B) and saves that choice.
 
-Selecting a cached model is not a completeness check. Offline loading,
-backend compatibility, model architecture, tokenizer behavior, and pooling
-assumptions are enforced or encountered later in the model-loading path.
+The GUI's cached-model list uses lightweight, offline file checks: a
+configuration, recognized tokenizer assets, and complete indexed weights.
+It reads only small metadata and file sizes, never full weights or tokenizer
+contents. "Downloaded" means locally complete by these checks, not verified
+loadable; backend compatibility, tokenizer behavior, and pooling assumptions
+are encountered later in the model-loading path. See
+[Model management](../../docs/model_management.md) for the exact limits.
 
 The default maximum for a new project's answer is 8,192 generated
 tokens, supplied by the core `PROJECT_PROFILE` configuration. The GUI does

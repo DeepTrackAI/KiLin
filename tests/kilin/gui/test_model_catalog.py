@@ -166,18 +166,27 @@ class TestDownloadedModels(unittest.TestCase):
             index = json.dumps({"weight_map": {
                 "a": "model-1.safetensors", "b": "model-2.safetensors",
             }})
-            cache("a/whole", {"config.json": "{}", "model.safetensors": "w"})
+            cache("a/whole", {
+                "config.json": "{}", "model.safetensors": "w",
+                "tokenizer.json": "{}",
+            })
             cache("a/shards", {
                 "config.json": "{}", "model.safetensors.index.json": index,
                 "model-1.safetensors": "w", "model-2.safetensors": "w",
+                "tokenizer.json": "{}",
             })
             # Stopped downloads: no weights yet, a missing shard, no config.
-            cache("a/stopped", {"config.json": "{}", "README.md": "r"})
+            cache("a/stopped", {
+                "config.json": "{}", "README.md": "r",
+                "tokenizer.json": "{}",
+            })
             cache("a/half", {
                 "config.json": "{}", "model.safetensors.index.json": index,
-                "model-1.safetensors": "w",
+                "model-1.safetensors": "w", "tokenizer.json": "{}",
             })
-            cache("a/noconfig", {"model.safetensors": "w"})
+            cache("a/noconfig", {
+                "model.safetensors": "w", "tokenizer.json": "{}",
+            })
             with patch(
                 "kilin.gui.model_catalog.available_models",
                 return_value=entries,
