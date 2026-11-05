@@ -304,15 +304,38 @@ const bridge = {
 };
 let ready = true;
 let busy = false;
+let openProjectPath = "/saved/project";
 let savedAnswerNumbers = { temperature: 0, max_new_tokens: null };
+let savedAnswerThinking = true;
+const answerSettingsSave = {
+  nextId: 0, pending: null, queued: null, uncertain: false,
+};
+const updateSendButton = () => {};
+const renderEffortPicker = () => {};
+const error = { textContent: "", classList: { remove: () => {} } };
 """
-        script += _function(source, "keepNewProjectValue")
-        script += _function(source, "saveAnswerNumbers")
+        for name in (
+            "keepNewProjectValue", "confirmedAnswerSettings",
+            "sameAnswerSettings", "displayAnswerSettings",
+            "queueAnswerSettings", "matchesAnswerSettingsSave",
+            "answerSettingsSaved", "saveAnswerNumbers",
+        ):
+            script += _function(source, name)
         script += r"""
 byId("temperature").value = "0.7";
 byId("max-new-tokens").value = "";
+byId("thinking").checked = true;
 saveAnswerNumbers();
-assert.deepEqual(calls, [{ temperature: 0.7, max_new_tokens: null }]);
+assert.deepEqual(calls, [{
+  request_id: 1, project: "/saved/project",
+  settings: { temperature: 0.7, thinking: true, max_new_tokens: null },
+}]);
+assert.equal(savedAnswerNumbers.temperature, 0);
+answerSettingsSaved({
+  request_id: 1, project: "/saved/project", temperature: 0.7,
+  max_new_tokens: null, thinking: true,
+});
+assert.equal(savedAnswerNumbers.temperature, 0.7);
 // A refused value is put back to the saved one.
 byId("temperature").value = "-1";
 saveAnswerNumbers();

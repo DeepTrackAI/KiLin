@@ -9,7 +9,8 @@
  *
  * Completed answers arrive as complete strings. The character-by-character
  * reveal is a presentation timer, not streamed model output. Conversation
- * persistence and tracing remain backend responsibilities.
+ * persistence and tracing remain backend responsibilities. Answer-settings
+ * edits are provisional until the engine confirms the saved project profile.
  */
 
 "use strict";
@@ -69,8 +70,14 @@ let profile = null;
 // Answer settings changed on the start screen: kept until the project is
 // created, instead of being reset by the next settings event.
 let answerSettingsEdited = false;
-// The open project's saved temperature and answer-token limit.
+// The last engine-confirmed answer settings; the UI may show newer edits.
 let savedAnswerNumbers = { temperature: 0, max_new_tokens: null };
+let savedAnswerThinking = true;
+// One save at a time. Only the latest newer edit is queued, and every
+// acknowledgement is checked against its request and project identity.
+const answerSettingsSave = {
+  nextId: 0, pending: null, queued: null, uncertain: false,
+};
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -1945,11 +1952,164 @@ function collectSettings() {
 }
 
 /**
- * Save the open project's temperature and answer-token limit as soon as
- * one is entered, like Thinking, so Settings shows what is in effect. A
- * refused value is put back; on the start screen it is only checked.
+ * Return the most recently verified project-wide answer settings.
+ * @returns Temperature, Thinking, and answer-token limit.
+ */
+function confirmedAnswerSettings() {
+  return { ...savedAnswerNumbers, thinking: savedAnswerThinking };
+}
+
+/**
+ * Compare two complete answer-settings snapshots.
+ * @param left First settings object.
+ * @param right Second settings object.
+ * @returns Whether every setting is equal.
+ */
+function sameAnswerSettings(left, right) {
+  return left.temperature === right.temperature
+    && left.thinking === right.thinking
+    && left.max_new_tokens === right.max_new_tokens;
+}
+
+/**
+ * Restore the actual or most recently verified values in both controls.
+ * @param settings Complete answer-settings snapshot.
+ */
+function displayAnswerSettings(settings) {
+  byId("temperature").value = settings.temperature;
+  byId("max-new-tokens").value = settings.max_new_tokens ?? "";
+  byId("thinking").checked = settings.thinking;
+  renderEffortPicker();
+}
+
+/**
+ * Adopt the configuration reported by the engine after opening a project.
+ * @param settings Complete settings from the opened project.
+ */
+function resetAnswerSettings(settings) {
+  savedAnswerNumbers = {
+    temperature: settings.temperature,
+    max_new_tokens: settings.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = settings.thinking;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
+  displayAnswerSettings(confirmedAnswerSettings());
+  updateSendButton();
+}
+
+/**
+ * Save an entire snapshot, or retain its latest version while saving.
  *
- * @param event The field's change event.
+ * Only the engine's acknowledgement advances confirmed settings. A request
+ * includes the current project so that late replies cannot affect another.
+ *
+ * @param settings Valid, complete answer settings.
+ */
+function queueAnswerSettings(settings) {
+  if (!ready || !bridge || !openProjectPath) return;
+  if (answerSettingsSave.uncertain) {
+    displayAnswerSettings(confirmedAnswerSettings());
+    byId("model-download-status").textContent =
+      "Reopen the project to verify its answer settings.";
+    return;
+  }
+  if (answerSettingsSave.pending) {
+    answerSettingsSave.queued = settings;
+    byId("model-download-status").textContent =
+      "Saving answer settings… latest edits queued.";
+    updateSendButton();
+    return;
+  }
+  if (sameAnswerSettings(settings, confirmedAnswerSettings())) return;
+  const request = {
+    id: ++answerSettingsSave.nextId,
+    project: openProjectPath,
+    settings,
+  };
+  answerSettingsSave.pending = request;
+  byId("model-download-status").textContent = "Saving answer settings…";
+  updateSendButton();
+  bridge.saveAnswerSettings(JSON.stringify({
+    request_id: request.id,
+    project: request.project,
+    settings: request.settings,
+  }));
+}
+
+/**
+ * Check whether an asynchronous save result belongs to this project.
+ * @param data Engine acknowledgement or operation-specific failure.
+ * @returns Whether it matches the active request and project.
+ */
+function matchesAnswerSettingsSave(data) {
+  const pending = answerSettingsSave.pending;
+  return pending !== null && data.request_id === pending.id
+    && data.project === pending.project && data.project === openProjectPath;
+}
+
+/**
+ * Confirm a successful write, then send only the latest queued edit.
+ * @param data Saved settings and correlated request identity.
+ */
+function answerSettingsSaved(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  savedAnswerNumbers = {
+    temperature: data.temperature,
+    max_new_tokens: data.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = data.thinking;
+  const queued = answerSettingsSave.queued;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  if (queued && !sameAnswerSettings(queued, confirmedAnswerSettings())) {
+    queueAnswerSettings(queued);
+    return;
+  }
+  byId("model-download-status").textContent =
+    "Saved in profile.ini. The next answer uses it.";
+  updateSendButton();
+}
+
+/**
+ * Recover the saved profile on failure and discard all unconfirmed edits.
+ *
+ * If the engine could not reread the file and update the live chat, the
+ * project must be reopened before answering again.
+ *
+ * @param data Failure, verified profile (if available), and request identity.
+ */
+function answerSettingsFailed(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = data.verified !== true;
+  if (!answerSettingsSave.uncertain) {
+    savedAnswerNumbers = {
+      temperature: data.temperature,
+      max_new_tokens: data.max_new_tokens ?? null,
+    };
+    savedAnswerThinking = data.thinking;
+  }
+  displayAnswerSettings(confirmedAnswerSettings());
+  const message = answerSettingsSave.uncertain
+    ? `${data.message} Reopen the project to verify its answer settings.`
+    : data.message;
+  byId("model-download-status").textContent = message;
+  error.textContent = message;
+  error.classList.remove("hidden");
+  updateSendButton();
+}
+
+/**
+ * Validate the Answers numbers, then save them with the current Thinking.
+ *
+ * The start screen retains these values for project creation. While an
+ * existing project's save is pending, later changes replace the queued
+ * snapshot rather than starting a second write.
+ *
+ * @param event Change event for an answer number, if any.
  */
 function saveAnswerNumbers(event) {
   const temperature = Number(byId("temperature").value);
@@ -1961,16 +2121,20 @@ function saveAnswerNumbers(event) {
       ? "Choose a positive answer-token limit or leave it blank."
       : "";
   if (!ready) return keepNewProjectValue(event?.target, invalid);
-  if (!bridge) return;
   const problem = invalid || (busy ? "KíLín is busy. Change this again when it finishes." : "");
   if (problem) {
     byId("model-download-status").textContent = problem;
-    byId("temperature").value = savedAnswerNumbers.temperature;
-    byId("max-new-tokens").value = savedAnswerNumbers.max_new_tokens ?? "";
+    const last = answerSettingsSave.queued
+      || answerSettingsSave.pending?.settings
+      || confirmedAnswerSettings();
+    byId("temperature").value = last.temperature;
+    byId("max-new-tokens").value = last.max_new_tokens ?? "";
     return;
   }
-  savedAnswerNumbers = { temperature, max_new_tokens: maxNewTokens };
-  bridge.saveAnswerSettings(JSON.stringify(savedAnswerNumbers));
+  queueAnswerSettings({
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  });
 }
 
 /**
@@ -2853,11 +3017,16 @@ byId("source-add-confirm").addEventListener("click", () => {
 function updateSendButton() {
   const answering = busy && ready && activity.classList.contains("answer-progress");
   const stop = answering && !reading;
-  byId("send").disabled = !ready || (busy && !stop);
+  byId("send").disabled = !ready || (busy && !stop)
+    || Boolean(answerSettingsSave.pending) || answerSettingsSave.uncertain;
   byId("send").classList.toggle("stopping", stop);
   byId("send").querySelector("span").textContent = stop ? "■" : "↑";
-  byId("send").setAttribute("aria-label", stop ? "Stop generation" : "Send message");
-  byId("send").title = byId("send").getAttribute("aria-label");
+  const sendLabel = stop ? "Stop generation"
+    : answerSettingsSave.uncertain ? "Reopen project to verify settings"
+      : answerSettingsSave.pending ? "Saving answer settings…"
+        : "Send message";
+  byId("send").setAttribute("aria-label", sendLabel);
+  byId("send").title = sendLabel;
 }
 
 /**
@@ -5285,7 +5454,9 @@ function onEvent(raw) {
     if (closeAfterModelsApply) hideModels();
     closeAfterModelsApply = false;
   } else if (data.event === "answer_settings_saved") {
-    byId("model-download-status").textContent = "Saved in profile.ini. The next answer uses it.";
+    answerSettingsSaved(data);
+  } else if (data.event === "answer_settings_failed") {
+    answerSettingsFailed(data);
   } else if (data.event === "indexing_applied") {
     applyingIndexing = false;
     profile = data.profile;
@@ -5329,6 +5500,10 @@ function onEvent(raw) {
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
+    // Reopening the same project need not discard a queued save that has
+    // not yet been acknowledged. A different project starts fresh.
+    const keepPendingAnswers = openProjectPath === data.project
+      && Boolean(answerSettingsSave.pending);
     // Set before the lists are drawn: chats keep their order per project.
     openProjectPath = data.project;
     messageAttachments = [];
@@ -5358,10 +5533,7 @@ function onEvent(raw) {
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
     showWorkspace(sidePanelChoice ?? true);
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
+    if (!keepPendingAnswers) resetAnswerSettings(data);
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5396,10 +5568,7 @@ function onEvent(raw) {
     restoreStoppedTurn();
     // A stopped first answer stays on screen instead of the welcome.
     if (!conversation.children.length) renderConversationEmpty();
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
+    if (!answerSettingsSave.pending) resetAnswerSettings(data);
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5460,6 +5629,9 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
+    if (answerSettingsSave.pending) answerSettingsSave.uncertain = true;
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
     restoreUnansweredQuestion();
     setupCompletionVisible = false;
     byId("readiness-meter").classList.add("hidden");
@@ -5514,6 +5686,9 @@ function onEvent(raw) {
       bridge.listSavedProjects("");
     }
   } else if (data.event === "backend_failed") {
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
     ready = false;
     updateFloatingHeader();
     chat.classList.add("hidden");
@@ -5525,6 +5700,9 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
     restoreUnansweredQuestion();
     const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
@@ -5739,6 +5917,13 @@ byId("question-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const question = byId("question").value.trim();
   if (!question || busy || !ready) return;
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    error.textContent = answerSettingsSave.uncertain
+      ? "Reopen the project to verify its answer settings before asking."
+      : "Answer settings are still saving. Send after they are confirmed.";
+    error.classList.remove("hidden");
+    return;
+  }
   error.classList.add("hidden");
   const temperature = Number(byId("temperature").value);
   if (!byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0) {
@@ -5749,13 +5934,25 @@ byId("question-form").addEventListener("submit", (event) => {
   if (answerTokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)) {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
+  const answerSettings = {
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  };
+  // An input can still contain a draft when Submit fires before Change.
+  // Never let ask() persist that draft as a side effect of answering.
+  if (!sameAnswerSettings(answerSettings, confirmedAnswerSettings())) {
+    queueAnswerSettings(answerSettings);
+    error.textContent = "Saving answer settings. Send after confirmation.";
+    error.classList.remove("hidden");
+    return;
+  }
   byId("question").value = "";
   // A question goes to the chat the engine has open.
   returnToAnswer();
   const ask = {
     question, attachments: messageAttachments, files: [], leftOut: [],
     effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
-    settings: { temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens },
+    settings: confirmedAnswerSettings(),
   };
   messageAttachments = [];
   renderAttachments();
@@ -5911,6 +6108,14 @@ function changeProjectsFolder(useDefault) {
  *   that could not be added (``leftOut``), and the answer settings.
  */
 function sendQuestion(ask) {
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    byId("question").value = ask.question;
+    messageAttachments = ask.attachments;
+    renderAttachments();
+    error.textContent = "Confirm answer settings before sending the question.";
+    error.classList.remove("hidden");
+    return;
+  }
   unansweredQuestion = ask.question;
   answeringConversationId = activeConversationId;
   const listed = ask.files.map((path) => `- ${path}`).join("\n");
@@ -5972,6 +6177,9 @@ for (const [id, commit] of [["conversation-name", commitConversationName]]) {
  * resumed or created.
  */
 function returnToLaunch() {
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
   bridge.closeProject();
   openProjectPath = "";
   ready = false;
@@ -6078,10 +6286,14 @@ for (const input of document.querySelectorAll('input[name="effort-thinking"]')) 
   });
 }
 byId("thinking").addEventListener("change", () => {
-  // Saved to the open project at once, so every chat and Settings agree.
-  // On the start screen it goes with the new project instead.
-  if (ready && !busy && bridge) {
-    bridge.saveAnswerSettings(JSON.stringify({ thinking: byId("thinking").checked }));
+  // Both Thinking controls share the Answers setting and its save queue.
+  // On the start screen the selected value belongs to the next project.
+  if (ready && busy) {
+    byId("thinking").checked = answerSettingsSave.queued?.thinking
+      ?? answerSettingsSave.pending?.settings.thinking
+      ?? savedAnswerThinking;
+  } else if (ready) {
+    saveAnswerNumbers();
   }
   renderEffortPicker();
 });

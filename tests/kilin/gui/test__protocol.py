@@ -234,7 +234,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             }),
         ])
         worker.save_answer_settings.assert_called_once_with(
-            {"thinking": False}
+            {"thinking": False}, None, None
         )
         worker.ask.assert_not_called()
 
@@ -410,6 +410,19 @@ class TestGUIProtocolCommands(unittest.TestCase):
             [{"event": "error", "message": "Unreadable command."}],
         )
         worker.reset.assert_called_once_with()
+
+    def test_correlated_answer_settings_command(self) -> None:
+        """Forward a save ID and project without losing their identity."""
+
+        worker, _ = self._run([json.dumps({
+            "action": "save_answer_settings",
+            "settings": {"thinking": True},
+            "request_id": 17,
+            "project": "/saved/project",
+        })])
+        worker.save_answer_settings.assert_called_once_with(
+            {"thinking": True}, 17, "/saved/project"
+        )
 
     def test_eof_closes_engine_once(self) -> None:
         """Release an idle coordinator when the command stream ends."""
@@ -700,7 +713,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
             "answer_cancelled", "answer_delta", "answer_phase",
-            "answer_settings_saved", "answered",
+            "answer_settings_failed", "answer_settings_saved",
+            "answered",
             "backend_failed", "backend_preference_failed",
             "backend_preference_saved", "backend_restarted",
             "conversation_delete_started",
@@ -1007,6 +1021,21 @@ class TestGUIProtocolBridge(unittest.TestCase):
             {"action": "save_answer_settings",
              "settings": {"thinking": True}},
         ])
+
+    def test_correlated_answer_settings_bridge_payload(self) -> None:
+        """Unwrap the browser envelope for the engine dispatcher."""
+
+        self.bridge.saveAnswerSettings(json.dumps({
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }))
+        self.assertEqual(self.commands, [{
+            "action": "save_answer_settings",
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }])
 
     def test_copy_text_goes_to_the_system_clipboard(self) -> None:
         """Copy through Qt, since the page may not write the clipboard."""

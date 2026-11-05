@@ -55,16 +55,13 @@ class TestEffortThinkingFrontend(unittest.TestCase):
         self.assertIn(
             'byId("thinking").checked = input.value === "on";', source
         )
-        # Saved to the open project at once; not while busy or not open.
+        # Thinking uses the same serialized project save as the numbers.
         start = source.index('byId("thinking").addEventListener("change"')
         changed = source[start : source.index("\n});\n", start)]
-        self.assertIn("if (ready && !busy && bridge) {", changed)
-        self.assertIn(
-            "bridge.saveAnswerSettings(JSON.stringify({ thinking: "
-            'byId("thinking").checked }));',
-            changed,
-        )
+        self.assertIn("if (ready && busy) {", changed)
+        self.assertIn("saveAnswerNumbers();", changed)
         self.assertIn("renderEffortPicker();", changed)
+        self.assertIn('request_id: request.id', source)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_switch_follows_the_setting_and_the_model(self):

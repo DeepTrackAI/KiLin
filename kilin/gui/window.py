@@ -939,22 +939,27 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def saveAnswerSettings(self, settings_json: str) -> None:
-        """Save answer settings to the open project right away.
+        """Submit a correlated answer-settings save to the engine.
 
         Parameters
         ----------
         settings_json: str
-            JSON object with any of temperature, thinking, and
-            max_new_tokens.
+            JSON settings object, or a GUI request envelope containing
+            ``settings``, ``request_id``, and ``project``. The envelope
+            permits matching asynchronous acknowledgements to the project.
 
         """
 
-        self.commandRequested.emit(
-            {
+        payload = json.loads(settings_json)
+        command = {"action": "save_answer_settings", "settings": payload}
+        if isinstance(payload, dict) and "request_id" in payload:
+            command = {
                 "action": "save_answer_settings",
-                "settings": json.loads(settings_json),
+                "settings": payload.get("settings"),
+                "request_id": payload["request_id"],
+                "project": payload.get("project"),
             }
-        )
+        self.commandRequested.emit(command)
 
     @Slot()
     def requestToolSettings(self) -> None:

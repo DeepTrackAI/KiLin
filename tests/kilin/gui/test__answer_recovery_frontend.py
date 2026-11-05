@@ -52,6 +52,7 @@ class TestAnswerRecoveryFrontend(unittest.TestCase):
         script = r"""
 const assert = require("node:assert/strict");
 const calls = [];
+const answerSettingsSave = { pending: null, uncertain: false };
 const activeConversationId = "conversation-1";
 let answeringConversationId = "";
 let unansweredQuestion = "";

@@ -132,6 +132,9 @@ const bridge = {
 let ready = true;
 let busy = false;
 let openProjectPath = "/projects/old";
+const answerSettingsSave = {
+  pending: null, queued: null, uncertain: false,
+};
 let branchDraft = null;
 let applyingIndexing = false;
 let attachedAsk = null;

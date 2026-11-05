@@ -135,8 +135,10 @@ class TestReadWhileAnsweringFrontend(unittest.TestCase):
         send = _function(source, "updateSendButton")
         self.assertIn("const stop = answering && !reading;", send)
         self.assertIn(
-            'byId("send").disabled = !ready || (busy && !stop);', send
+            'byId("send").disabled = !ready || (busy && !stop)', send
         )
+        self.assertIn('Boolean(answerSettingsSave.pending)', send)
+        self.assertIn('answerSettingsSave.uncertain', send)
 
     def test_answer_finished_while_reading_marks_its_chat_unread(self):
         """No scroll or selection in the chat being read; mark unread."""

@@ -49,6 +49,9 @@ let downloadingModel = null;
 let installingModels = false;
 let resumeAfterStop = false;
 let ready = true;
+const answerSettingsSave = {
+  pending: null, queued: null, uncertain: false,
+};
 const bridge = {
   requestSettings(type, workspace) {
     calls.push(["settings", type, workspace]);

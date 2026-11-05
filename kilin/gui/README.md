@@ -294,11 +294,17 @@ before the former session is released leaves that session open.
 The Project part has five tabs: General (the project's name and Delete),
 Indexing (file types, file size and chunk sizes), Models (effort levels,
 intent model, embedding model), Answers (temperature, answer length,
-search depth, thinking) and Tools. Every change is saved as soon as it is
-made: a choice when it is picked, a typed value on Enter or when its field
-is left. A download, an embedding change or an Indexing change asks first,
-because it can take a while; cancelling puts the saved value back. The
-line under the tabs confirms each save. On the start screen nothing is
+search depth, thinking) and Tools. Changes are submitted when chosen or
+when a typed field is committed (Enter or leaving the field). Answer settings
+are not considered saved until the engine acknowledges the profile write.
+While one answer-settings save is pending, later edits remain available and
+only the latest combination is queued for the next save. The next question
+cannot start until saving finishes; its text is preserved. On failure the
+engine rereads the actual profile and synchronizes the live chat. The GUI
+restores those confirmed values, or requires reopening the project if the
+saved state cannot be verified. A download, an embedding change or an
+Indexing change asks first, because it can take a while; cancelling puts
+the saved value back. The line under the tabs reports save status. On the start screen nothing is
 saved: the Project values set there are kept on the page and written only
 into the new project's `profile.ini` when it is created, so the next new
 project starts from the defaults again.
@@ -419,9 +425,11 @@ new tokens without rebuilding the index or reloading models. A blank answer
 limit requests the session's automatic budget; it does not remove the model's
 finite context limit. The values used for a completed answer are recorded with
 that turn. Temperature, thinking, and answer length belong to the project:
-a change is saved to its profile.ini when the next question is asked, every
-chat in the project uses it, switching chats keeps it, and opening another
-project loads that project's own values.
+a change is saved and acknowledged when committed in Settings or the
+Thinking control. Every chat uses the confirmed project-wide settings,
+switching chats keeps them, and another project loads its own values. A
+question never silently commits unconfirmed settings; it must wait until
+the corresponding profile save has been acknowledged.
 
 An ordinary answer intent can override thinking for that reply without
 changing these controls or the saved project setting. Both packaged

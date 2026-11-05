@@ -2025,41 +2025,110 @@ class ChatEngine:
             trace=self.active_trace,
         )
 
-    def save_answer_settings(self, settings: object) -> None:
-        """Save answer settings changed outside a question, e.g. Thinking.
+    def save_answer_settings(
+        self,
+        settings: object,
+        request_id: int | None = None,
+        project: str | None = None,
+    ) -> None:
+        """Persist answer settings and acknowledge the requesting project.
 
-        The open project's chat uses them at once, so the next answer and
-        every other chat follow the saved profile. Sends
-        ``answer_settings_saved`` with the values now in effect.
+        A correlated GUI request carries a request ID and project path. The
+        acknowledgement describes the saved profile, never merely the
+        requested values. When saving fails, reread ``profile.ini`` and
+        reconfigure the live chat before declaring the values verified.
 
         Parameters
         ----------
         settings: object
-            Mapping with any of ``temperature``, ``thinking``, and
-            ``max_new_tokens``; other keys are ignored.
+            Mapping with temperature, thinking, or max_new_tokens. Other
+            keys are ignored, as in the existing command contract.
+        request_id: int | None, optional
+            Positive identifier used to match the GUI acknowledgement.
+            None retains the uncorrelated caller's event contract.
+        project: str | None, optional
+            Canonical project path attached to a correlated GUI request.
+            None retains the existing caller's project selection.
 
         """
 
+        event_project = project or ""
         try:
+            if request_id is not None and (
+                type(request_id) is not int or request_id < 1
+            ):
+                raise ValueError("Invalid answer-settings request ID.")
             if self.session is None:
                 raise RuntimeError("Open a project first.")
+            actual_project = str(self.session.project.root)
+            if project is not None and project != actual_project:
+                raise RuntimeError("The active project has changed.")
+            event_project = actual_project
             if not isinstance(settings, dict):
                 raise ValueError("Answer settings must be an object.")
             self._save_answer_settings(settings)
             self._use_project_answer_settings()
             profile = self.session.project.profile
-            # The page confirms that the saved values are now in effect.
-            self._send(
-                "answer_settings_saved",
-                temperature=profile.temperature,
-                thinking=profile.thinking,
-                max_new_tokens=profile.max_new_tokens,
-            )
+            response = {
+                "temperature": profile.temperature,
+                "thinking": profile.thinking,
+                "max_new_tokens": profile.max_new_tokens,
+            }
+            if request_id is not None:
+                response.update(
+                    request_id=request_id, project=event_project
+                )
+            self._send("answer_settings_saved", **response)
         except Exception as error:
-            self._report_error(
+            if request_id is None:
+                self._report_error(
+                    "gui.answer_settings.failed",
+                    error,
+                    f"Could not save the answer settings: {error}",
+                )
+                return
+            # configure_project may have replaced profile.ini before a
+            # trace or live-session update failed. The disk state, not the
+            # old in-memory profile, is authoritative after such a failure.
+            verified = False
+            response = {}
+            if (
+                self.session is not None
+                and (
+                    project is None
+                    or project == str(self.session.project.root)
+                )
+            ):
+                try:
+                    self.session.project = open_project(
+                        self.session.project.root
+                    )
+                    self._use_project_answer_settings()
+                    profile = self.session.project.profile
+                    response = {
+                        "temperature": profile.temperature,
+                        "thinking": profile.thinking,
+                        "max_new_tokens": profile.max_new_tokens,
+                    }
+                    verified = True
+                except Exception as recovery_error:
+                    self.active_trace.exception(
+                        "gui.answer_settings.reconcile_failed",
+                        recovery_error,
+                        component="gui_engine",
+                    )
+            self.active_trace.exception(
                 "gui.answer_settings.failed",
                 error,
-                f"Could not save the answer settings: {error}",
+                component="gui_engine",
+            )
+            self._send(
+                "answer_settings_failed",
+                request_id=request_id,
+                project=event_project,
+                verified=verified,
+                message=f"Could not save the answer settings: {error}",
+                **response,
             )
 
     def tool_settings(self) -> None:
@@ -2605,8 +2674,8 @@ class ChatEngine:
     ) -> None:
         """Ask the loaded project and emit its saved answer and evidence.
 
-        Conversation settings affect the next answer without rebuilding the
-        project indexes or editing profile.ini.
+        Generation settings accompanying a question are also persisted to
+        profile.ini. Retrieval effort does not rebuild the project indexes.
 
         Parameters
         ----------
@@ -4426,7 +4495,11 @@ def main() -> None:
                     elif action == "apply_indexing":
                         engine.apply_indexing_settings(command["settings"])
                     elif action == "save_answer_settings":
-                        engine.save_answer_settings(command.get("settings"))
+                        engine.save_answer_settings(
+                            command.get("settings"),
+                            command.get("request_id"),
+                            command.get("project"),
+                        )
                     elif action == "tool_settings":
                         engine.tool_settings()
                     elif action == "save_tool_settings":
