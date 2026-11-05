@@ -20,7 +20,7 @@ from kilin import rag
 from kilin.chunking import Chunk
 from kilin.retrievals import papers
 from kilin.retrievals.papers import DocumentInfo
-from tests.kilin import test_rag as fixtures
+from tests.kilin import _rag_support as fixtures
 
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures"
 

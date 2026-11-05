@@ -19,10 +19,10 @@ from unittest.mock import Mock
 from kilin import rag
 from kilin.chunking import Chunk
 from kilin.retrievals import build_lexical_index
-from kilin.retrievals.code_graph import CodeGraph
+from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies import retrieval_papers as rp
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
-from tests.kilin import test_rag as fixtures
+from tests.kilin import _rag_support as fixtures
 
 
 def _passage(identifier: str, path: str, text: str = "text") -> Chunk:
@@ -77,6 +77,51 @@ class TestRankPapers(unittest.TestCase):
             ["b.pdf", "a.pdf"],
         )
         self.assertEqual(rp.rank_papers([], {}), [])
+
+
+class TestRelevantPapers(unittest.TestCase):
+
+    def setUp(self):
+        self.ranked = _ranked(("a1", "a.pdf"), ("b1", "b.pdf"),
+                              ("a2", "a.pdf"), ("c1", "c.pdf"))
+        self.papers = rp.rank_papers(self.ranked, {Path("c.pdf"): 0.9})
+
+    def _names(self, papers):
+        return [paper.path.name for paper in papers]
+
+    def test_papers_need_a_passage_among_the_best(self):
+        self.assertEqual(
+            self._names(rp.relevant_papers(self.papers, self.ranked,
+                                           depth=2)),
+            ["a.pdf", "b.pdf"],
+        )
+
+    def test_minimum_and_required_papers(self):
+        self.assertEqual(
+            self._names(rp.relevant_papers(self.papers, self.ranked,
+                                           depth=1, minimum=2)),
+            ["a.pdf", "c.pdf"],
+        )
+        self.assertEqual(
+            self._names(rp.relevant_papers(
+                self.papers, self.ranked, depth=1,
+                required=[Path("b.pdf")],
+            )),
+            ["b.pdf", "a.pdf"],
+        )
+
+    def test_questions_about_every_paper(self):
+        for question in ("Compare the datasets used in all five project "
+                         "papers.", "Review the five articles.",
+                         "Compare each study.", "compare all of them",
+                         "What is common across the papers?"):
+            with self.subTest(question=question):
+                self.assertTrue(rp.asks_for_all_papers(question))
+        for question in ("How does BRAPH 2 differ from the earlier BRAPH?",
+                         "How does it compare with the 2017 paper?",
+                         "Compare a.pdf and b.pdf."):
+            with self.subTest(question=question):
+                self.assertFalse(rp.asks_for_all_papers(question))
 
 
 class TestSelectPaperPassages(unittest.TestCase):
@@ -160,16 +205,33 @@ class TestPaperRetrieval(unittest.TestCase):
     def _paths(self, evidence):
         return [item.path.name for item in evidence]
 
-    def test_quota_covers_every_chosen_paper_with_one_embedding(self):
+    def test_quota_covers_every_paper_asked_for_with_one_embedding(self):
         session = _paper_session()
         evidence = session._retrieve(
-            "memory", 2, trace_turn_id="t1", papers=(3, 1)
+            "memory in all three papers", 2, trace_turn_id="t1",
+            papers=(3, 1),
         )
         self.assertEqual(set(self._paths(evidence)),
                          {"a.pdf", "b.pdf", "c.pdf"})
         session.embedding_session.embed_query.assert_called_once_with(
-            "memory", trace_turn_id="t1"
+            "memory in all three papers", trace_turn_id="t1"
         )
+
+    def test_comparisons_leave_out_unrelated_papers(self):
+        session = _paper_session()
+        evidence = session._retrieve("memory", 2, papers=(8, 1))
+        # Only a.pdf has a best passage; a comparison keeps two papers.
+        self.assertEqual(len(set(self._paths(evidence))), 2)
+        self.assertIn("a.pdf", self._paths(evidence))
+
+    def test_one_meant_paper_is_compared_with_relevant_papers(self):
+        session = _paper_session()
+        evidence = session._retrieve(
+            "memory", 2, papers=(8, 1), scope=(Path("b.pdf"),)
+        )
+        paths = self._paths(evidence)
+        self.assertIn("b.pdf", paths)
+        self.assertIn("a.pdf", paths)
 
     def test_hybrid_retrieval_is_unchanged_without_papers(self):
         session = _paper_session()
@@ -192,6 +254,23 @@ class TestPaperRetrieval(unittest.TestCase):
             "memory", 2, papers=(3, 1), scope=(Path("b.pdf"),)
         )
         self.assertEqual(self._paths(evidence)[0], "b.pdf")
+
+    def test_named_paper_is_searched_not_added_in_full(self):
+        session = _paper_session()
+        session.indexes.code_graph = CodeGraph(
+            (CodeEntity("a", "source_file", Path("a.pdf")),), ()
+        )
+        session.project.profile = SimpleNamespace(
+            **{**vars(fixtures._profile()), "type_id": "literature"}
+        )
+        evidence = session._retrieve("memory in a.pdf", 1,
+                                     scope=(Path("a.pdf"),))
+        self.assertEqual(self._paths(evidence), ["a.pdf"])
+        session.project.profile = fixtures._profile()
+        evidence = session._retrieve("memory in a.pdf", 1,
+                                     scope=(Path("a.pdf"),))
+        # Without a paper index, a named file is still added in full.
+        self.assertEqual(self._paths(evidence), ["a.pdf"] * 3)
 
     def test_without_cards_papers_are_ranked_by_passages(self):
         session = _paper_session()

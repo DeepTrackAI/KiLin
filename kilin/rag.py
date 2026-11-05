@@ -206,8 +206,10 @@ from kilin.repository import (
 )
 from kilin.retrievals.model_identity import embedding_model_identity
 from kilin.retrievals.strategies.retrieval_papers import (
+    asks_for_all_papers,
     card_similarities,
     rank_papers,
+    relevant_papers,
     select_paper_passages,
 )
 from kilin.retrievals.paper_cards import (
@@ -3381,9 +3383,11 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
-        # Paper search chooses papers first, unless one paper is named.
+        # Paper search chooses papers first. One named paper keeps its own
+        # passages, except in a comparison, which needs other papers too.
         named = list(scope)
-        if papers is not None and len(named) != 1:
+        papers_chosen = False
+        if papers is not None and (len(named) != 1 or papers[1] > 0):
             chosen = self._paper_passages(
                 question,
                 semantic_results,
@@ -3397,6 +3401,7 @@ class RAGSession:
             )
             if chosen:
                 combined = chosen
+                papers_chosen = True
                 report(
                     f"Kept {len(combined)} passages from "
                     f"{len({r.chunk.path for r in combined})} papers"
@@ -3404,7 +3409,7 @@ class RAGSession:
 
         # A named document supplies the primary passages; expansion may
         # still add useful context from elsewhere in the repository.
-        if len(named) == 1:
+        if len(named) == 1 and not papers_chosen:
             focused = [
                 result
                 for result in self._rank_everything(
@@ -3466,11 +3471,25 @@ class RAGSession:
             if plan.related_functions
             else None
         )
+        # A paper named in the question is searched (above), not added in
+        # full: a whole paper is tens of thousands of tokens of evidence.
+        expansion_plan = plan
+        if self._indexes_papers() and plan.paths:
+            documents = {
+                chunk.path for chunk in self.chunks
+                if chunk.kind in DOCUMENT_KINDS
+            }
+            expansion_plan = replace(
+                plan,
+                paths=tuple(
+                    path for path in plan.paths if path not in documents
+                ),
+            )
         expanded = expand_retrieval_context(
             combined,
             self.chunks,
             self.indexes.code_graph,
-            plan,
+            expansion_plan,
             relevance,
         )
         direct_paths = set(plan.paths) | set(scope)
@@ -4006,8 +4025,9 @@ class RAGSession:
             Passages guaranteed to each chosen paper; zero guarantees one
             to the best paper only.
         scope: Sequence[pathlib.Path]
-            Documents the question names; when there are several, only
-            they are chosen from.
+            Documents the question means. Several limit the papers to
+            them; a single one (in a comparison) is always chosen first,
+            with other relevant papers.
         trace_turn_id: str | None
             Turn identifier for trace events.
 
@@ -4021,7 +4041,11 @@ class RAGSession:
         -----
         Papers are ranked by fusing the similarity of the question to their
         cards with the rank of their best passage (``rank_papers``); papers
-        without a card are ranked by their passages only.
+        without a card are ranked by their passages only. Unless the
+        question asks about all papers (``asks_for_all_papers``), only
+        papers with a passage among the ``count`` best passages of the
+        collection are chosen (``relevant_papers``), at least two when
+        each paper gets passages (a comparison).
 
         """
 
@@ -4034,8 +4058,17 @@ class RAGSession:
             else {}
         )
         ranked = rank_papers(everything, scores)
-        if scope:
+        required = list(scope) if len(scope) == 1 else []
+        if len(scope) > 1:
             ranked = [paper for paper in ranked if paper.path in set(scope)]
+        elif not asks_for_all_papers(question):
+            ranked = relevant_papers(
+                ranked,
+                everything,
+                depth=count,
+                minimum=2 if per_paper > 0 else 1,
+                required=required,
+            )
         chosen = [paper.path for paper in ranked[:max_papers]]
         passages = select_paper_passages(
             everything, chosen, count=count, per_paper=per_paper
@@ -4507,7 +4540,7 @@ class RAGSession:
         -------
         bool
             The project type's ``paper_index`` capability; false when the
-            profile names no registered type.
+            profile names no type or an unregistered one.
 
         """
 
@@ -4515,7 +4548,12 @@ class RAGSession:
         type_id = getattr(profile, "type_id", None)
         if type_id is None:
             return False
-        return bool(getattr(project_type(type_id), "paper_index", False))
+        try:
+            definition = project_type(type_id)
+        except ValueError:
+            # An unregistered type has no paper index.
+            return False
+        return bool(getattr(definition, "paper_index", False))
 
     def _document_infos(
         self: RAGSession, chunks: Sequence[Chunk]
