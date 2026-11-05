@@ -109,6 +109,8 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
+// How to install the GUI and backend here: uv in a checkout, pip otherwise.
+let installCommand = "";
 // New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
@@ -304,6 +306,14 @@ function applyAppearance(value) {
 function renderSavedProjects(projects) {
   savedProjects = projects;
   const host = byId("saved-projects");
+  // The list is refreshed every few seconds; rebuilding it unchanged would
+  // jump a scrolled list back to the top.
+  const shown = JSON.stringify(projects.map((project) => [
+    project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
+  ]));
+  if (host.dataset.shown === shown) return;
+  host.dataset.shown = shown;
+  const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
   if (projects.length) {
     // One list of every project type, most recently used first (engine order).
@@ -335,6 +345,7 @@ function renderSavedProjects(projects) {
       list.append(button);
     }
     host.append(group);
+    list.scrollTop = scroll;
   }
   host.classList.toggle("hidden", !host.children.length);
 }
@@ -1093,7 +1104,7 @@ function renderModelsPanel() {
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the KíLín folder first.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${installCommand.replace(/--extra (mlx|torch)\b/, `--extra ${activeBackend}`) || "the KíLín installer"}, then restart KíLín.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -5209,6 +5220,7 @@ function onEvent(raw) {
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
+    installCommand = data.install_command || installCommand;
     cachedModels = new Set(data.cached_models || []);
     const card = byId("first-run-setup");
     const steps = byId("readiness-steps");
@@ -5217,7 +5229,7 @@ function onEvent(raw) {
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
       : data.unavailable_reason
-        || `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui --backend ${data.backend}`;
+        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommand}, then restart KíLín`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};

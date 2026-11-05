@@ -32,6 +32,11 @@ Module Structure
 
     Resolve the standard parent, ignoring the folder chosen in Settings.
 
+- ``gui_install_command``
+
+    Tell how to install the GUI and its backend, for a checkout or an
+    installed package.
+
 Examples
 --------
 >>> from kilin.gui._paths import default_workspace_directory
@@ -49,6 +54,7 @@ from typing import Final
 
 __all__ = [
     "default_workspace_directory",
+    "gui_install_command",
     "preferences_path",
     "saved_workspace_folder",
     "standard_workspace_directory",
@@ -250,3 +256,27 @@ def saved_workspace_folder() -> str:
         return str(app_defaults()["workspace_folder"])
     except (OSError, ValueError, KeyError):
         return ""
+
+
+def gui_install_command(backend: str) -> str:
+    """Tell how to install the GUI and its backend in this KíLín.
+
+    A source checkout installs them with uv; an installed package (from
+    PyPI or the macOS app) with pip, into the same Python, using the
+    ``app`` extra that picks the backend for the platform.
+
+    Parameters
+    ----------
+    backend: str
+        Backend that is missing: ``mlx`` or ``torch``.
+
+    Returns
+    -------
+    str
+        The command to run.
+
+    """
+
+    if _development_checkout() is not None:
+        return f"uv sync --extra gui --extra {backend}"
+    return f'{Path(sys.executable).name} -m pip install "kilin[app]"'

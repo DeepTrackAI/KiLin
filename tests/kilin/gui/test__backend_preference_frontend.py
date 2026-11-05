@@ -115,6 +115,7 @@ const byId = (name) => (fields[name] ??= element());
 const document = {createElement() {return element();}};
 let requiredModels = [];
 let readinessEnvironmentReady = true;
+let installCommand = "";
 let readinessMissingCount = 0;
 let cachedModels = new Set();
 let kilinReady = true;

@@ -71,7 +71,7 @@ cat >"$app/Contents/Info.plist" <<PLIST
     <key>CFBundleExecutable</key><string>KiLin</string>
     <key>CFBundleIconFile</key><string>KiLin</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>LSMinimumSystemVersion</key><string>13.5</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSArchitecturePriority</key><array><string>arm64</string></array>
     <key>NSHighResolutionCapable</key><true/>
 </dict>

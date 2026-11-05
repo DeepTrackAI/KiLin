@@ -85,7 +85,7 @@ from typing import Callable, Final
 
 from kilin._model_completion import GenerationCancelled
 from kilin.atomic_writes import atomic_write_text
-from kilin.gui._paths import default_workspace_directory
+from kilin.gui._paths import default_workspace_directory, gui_install_command
 from kilin.gui.preferences import (
     default_appearance,
     default_backend,
@@ -723,6 +723,7 @@ class ChatEngine:
                 can_use_installed=environment_ready
                 and bool(missing) and len(replacements) == len(missing),
                 ready=environment_ready and not missing,
+                install_command=gui_install_command(backend),
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))
@@ -802,9 +803,9 @@ class ChatEngine:
             backend = _setup_backend()
             if not installed_backends().get(backend, False):
                 raise RuntimeError(
-                    f"The {backend.upper()} runtime is not installed. Restart "
-                    "KíLín through "
-                    f"`uv run kilin --gui --backend {backend}`."
+                    f"The {backend.upper()} runtime is not installed. Install "
+                    f"it with `{gui_install_command(backend)}`, then restart "
+                    "KíLín."
                 )
             cached = {str(item["model_id"]) for item in downloaded_models()}
             missing = [
