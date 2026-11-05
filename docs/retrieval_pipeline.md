@@ -167,14 +167,29 @@ Intents whose retrieval strategy is `papers` (in `literature`:
 papers before passages (`strategies/retrieval_papers.py`). Papers are
 ranked by reciprocal-rank fusion of two lists: the similarity of the
 question to each card's vectors, and the rank of each paper's best passage
-in the full hybrid ranking. The query is embedded once for both. The best
-`max_papers` papers are chosen; with `passages_per_paper` zero, the
+in the full hybrid ranking. The query is embedded once for both. Unless
+the question asks about every paper ("all five papers", "each study",
+"across the articles"), only papers with a passage among the best `retrieval_count`
+passages of the collection are kept, at least two in a comparison, so that
+comparing two papers does not take in every paper of the collection. The
+best `max_papers` of them are chosen; with `passages_per_paper` zero, the
 evidence is the best passages of those papers with the best paper always
 represented, and otherwise each chosen paper receives that many passages
-before the best remaining ones fill the evidence. A question that names one
-document keeps the named-document behavior below; several named documents
-limit the papers that can be chosen. Without cards, papers are ranked by
-their passages only.
+before the best remaining ones fill the evidence. A question that means
+one document keeps the named-document behavior below, except in a
+comparison, where that paper is chosen first together with the other
+relevant papers; several named documents limit the papers that can be
+chosen. Without cards, papers are ranked by their passages only. In these
+projects a paper named in the question is searched, never added in full:
+the code-oriented expansion that appends every passage of a named file
+applies to code files only.
+
+Which document a follow-up means (`document_scope` in
+`tools/_shared/choose_document.py`) is decided by its wording when that is
+clear: words for one document ("its limitations", "that study") keep the
+document the earlier turns were about, and words for several ("these
+articles", "the other papers", "all") search the whole project. The router
+model judges only the remaining requests.
 
 ## Named-document retrieval and full-document reading
 

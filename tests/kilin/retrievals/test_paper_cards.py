@@ -23,7 +23,7 @@ from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals import paper_cards as pc
 from kilin.retrievals.papers import DocumentInfo
-from tests.kilin import test_rag as fixtures
+from tests.kilin import _rag_support as fixtures
 
 REPLY = json.dumps({
     "title": "Model title",
