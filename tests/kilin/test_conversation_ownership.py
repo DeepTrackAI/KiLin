@@ -80,7 +80,11 @@ class TestConversationFileLock(unittest.TestCase):
             self.assertTrue(owner.holds(self.path))
             self.assertTrue(owner.lock_path.is_file())
             self.assertEqual(
-                owner.lock_path.name, "conversation_test.json.lock"
+                owner.lock_path.name, ".conversation_test.json.lock"
+            )
+            self.assertEqual(owner.lock_path.parent, self.path.parent)
+            self.assertFalse(
+                self.path.with_name(self.path.name + ".lock").exists()
             )
             with self.assertRaisesRegex(RuntimeError, "already held"):
                 owner.acquire()

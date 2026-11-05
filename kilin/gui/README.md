@@ -431,10 +431,12 @@ new conversation trace before closing the previous one, so a conflict on
 the target does not discard the active trace. Metadata updates and branching
 borrow the active writer's file lock; inactive conversations are locked for
 the duration of their update or archival. Deleting an active conversation
-moves the saved JSON and its `.json.lock` companion into
-`logs/traces/.deleted/` and releases the old writer without appending a
-redundant closing event. The sidecar `.json.lock` file
-may remain after closing; it does not indicate a stale active lock. See
+moves the saved JSON into `logs/traces/.deleted/`, while its hidden
+`.conversation_*.json.lock` companion stays at the original path in
+`logs/traces/`. The old writer is released without appending a redundant
+closing event. The retained lock companion does not indicate an active
+writer. Restoration requires moving the JSON back while KíLín is closed;
+the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
 

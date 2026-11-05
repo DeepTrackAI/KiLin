@@ -201,6 +201,10 @@ can accompany an event.
 
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
+Deleting a conversation moves its JSON into `logs/traces/.deleted/`; the
+hidden `.conversation_*.json.lock` sidecar stays at its original path.
+`conversation_delete_started` is sent before the archive operation, so an
+error may be followed by a refreshed catalog instead of deletion.
 The process-recovery events `stopped` and `backend_restarted`,
 `conversation_viewed`, `projects_folder`, and some `error` events
 originate in `window.py`, not `engine.py`. Diagnostic trace event names such as `gui.project.settings.saved` are a **separate** trace

@@ -101,6 +101,7 @@ const assert = require("node:assert/strict");
         script += function
         script += r"""
 assert.equal(shownInWorkspace("logs/traces/conversation_a.json.lock"), false);
+assert.equal(shownInWorkspace("logs/traces/.conversation_a.json.lock"), false);
 assert.equal(shownInWorkspace("logs/traces/conversation_a.json"), true);
 assert.equal(shownInWorkspace("sources/notes.json.lock"), true);
 assert.equal(shownInWorkspace("outputs/report.md"), true);

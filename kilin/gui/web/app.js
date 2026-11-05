@@ -5132,7 +5132,7 @@ function onEvent(raw) {
       .find((item) => item.dataset.conversationId === data.conversation_id);
     button?.closest(".conversation-row")?.remove();
     byId("activity-text").textContent = "Conversation removed. Preserving its trace and opening the next chat…";
-    byId("activity-detail").textContent = "The archived trace remains in logs/traces/deleted.";
+    byId("activity-detail").textContent = "The archived trace remains in logs/traces/.deleted/.";
   } else if (data.event === "preview") {
     data.roots.forEach((root, index) => {
       const original = selectedSources[index];

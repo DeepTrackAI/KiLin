@@ -62,7 +62,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 import json
-import os
 from pathlib import Path
 import re
 from uuid import uuid4
@@ -371,9 +370,10 @@ class ConversationStore:
         records parent/checkpoint identity and the number of turns kept. A
         branch that keeps fewer turns omits the parent's checkpoint fields,
         which describe all of its turns. Old trace operations are not
-        copied. The new filename avoids existing paths at the moment it is
-        chosen; each candidate path is locked and checked before creation.
-        A collision detected after selection raises rather than overwriting.
+        copied. The new filename avoids existing paths and retained lock
+        companions at the moment it is chosen; each candidate is locked and
+        checked before creation. A collision detected after selection raises
+        rather than overwriting.
 
         """
 
@@ -597,8 +597,8 @@ class ConversationStore:
 
         The record is moved into ``logs/traces/.deleted`` so deletion remains
         recoverable; an existing file of the same name there is kept, and
-        the moved file gets a ``_2``, ``_3``, ... suffix. Its ``.json.lock``
-        companion follows it under the same name. When the last
+        the moved file gets a ``_2``, ``_3``, ... suffix. The hidden lock
+        companion remains at the original source path. When the last
         conversation is archived, a new empty conversation is created
         automatically. When the active conversation is archived, the most
         recently updated remaining one becomes active.
@@ -628,10 +628,10 @@ class ConversationStore:
         Notes
         -----
         The source path remains exclusively owned through the rename; the
-        registry update is not part of a filesystem transaction. The lock
-        companion is moved after the lock is released; where the system
-        refuses to move a file still open (Windows), it stays behind, which
-        is harmless: its presence alone does not mean ownership.
+        registry update is not part of a filesystem transaction. Never move
+        or remove the companion: other owners must continue opening the
+        same lock inode, even while a borrowed writer still holds it. Its
+        presence alone does not mean the conversation is being written.
 
         """
 
@@ -655,11 +655,6 @@ class ConversationStore:
                 )
                 number += 1
             source.rename(destination)
-        lock = source.with_name(source.name + ".lock")
-        try:
-            os.replace(lock, destination.with_name(destination.name + ".lock"))
-        except OSError:
-            pass  # Missing, or still open where it cannot be moved.
         self._items.pop(conversation_id)
         self._paths.pop(conversation_id)
 
@@ -787,7 +782,7 @@ class ConversationStore:
             self._items[item.conversation_id] = item
 
     def _new_path(self) -> Path:
-        """Choose a timestamped conversation filename not currently present.
+        """Choose a filename not present or reserved by a lock companion.
 
         Returns
         -------
@@ -795,12 +790,21 @@ class ConversationStore:
             Candidate JSON path with a numeric suffix added on collisions. The
             file is not created here.
 
+        Notes
+        -----
+        Retained sidecars reserve deleted filenames. This prevents a new
+        conversation from colliding with the still-owned path of an archived
+        conversation, especially when deletion creates an immediate new chat.
+
         """
 
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
         candidate = self.root / f"conversation_{timestamp}.json"
         number = 2
-        while candidate.exists():
+        while (
+            candidate.exists()
+            or ConversationFileLock(candidate).lock_path.exists()
+        ):
             candidate = self.root / f"conversation_{timestamp}_{number}.json"
             number += 1
         return candidate
