@@ -674,16 +674,30 @@ class ChatEngine:
 
         Notes
         -----
-        The required models are those the app-wide preferences use (see
-        ``kilin.gui.preferences``). For each missing one, the closest
-        installed model of the same role is offered as a replacement;
-        ``can_use_installed`` is true when every missing model has one.
+        The required models are those for the saved preferred backend,
+        resolved by platform policy only when the preference is ``auto``.
+        An unsupported explicit backend is reported as unavailable without
+        choosing a replacement backend. For each missing model, the closest
+        installed model of the same role may be offered as a replacement;
+        ``can_use_installed`` also requires a usable backend runtime.
 
         """
 
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            try:
+                backend = _setup_backend()
+                unavailable_reason = ""
+            except ValueError as error:
+                # Preserve an explicit unsupported choice for a useful
+                # readiness report; never substitute another backend.
+                backend = default_backend()
+                if backend not in (BACKEND_MLX, BACKEND_TORCH):
+                    raise
+                unavailable_reason = str(error)
             packages = installed_backends()
+            environment_ready = (
+                packages.get(backend, False) and not unavailable_reason
+            )
             entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             required = required_models(backend)
@@ -696,14 +710,15 @@ class ChatEngine:
             self._send(
                 "readiness",
                 backend=backend,
-                environment_ready=packages.get(backend, False),
+                environment_ready=environment_ready,
+                unavailable_reason=unavailable_reason,
                 required_models=required,
                 cached_models=sorted(cached),
                 missing_models=missing,
                 replacements=replacements,
-                can_use_installed=bool(missing)
-                and len(replacements) == len(missing),
-                ready=packages.get(backend, False) and not missing,
+                can_use_installed=environment_ready
+                and bool(missing) and len(replacements) == len(missing),
+                ready=environment_ready and not missing,
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))
@@ -714,7 +729,8 @@ class ChatEngine:
         Notes
         -----
         Each missing model is replaced by the installed model of the same
-        role (language or embedding) and backend whose size is closest,
+        role (language or embedding) and preferred backend whose size is
+        closest,
         in the effort levels, router, and embedding preferences. The
         change is saved in the app-wide preferences and reported with
         ``installed_models_used``; readiness is then checked again.
@@ -722,7 +738,7 @@ class ChatEngine:
         """
 
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            backend = _setup_backend()
             entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             missing = [
@@ -768,11 +784,18 @@ class ChatEngine:
             )
 
     def install_required_models(self) -> None:
-        """Download missing GUI models with live byte progress and timing."""
+        """Download missing models for the selected setup backend.
+
+        Notes
+        -----
+        An explicit backend choice is never replaced by ``auto``. If its
+        runtime is unavailable, installation fails before downloading.
+
+        """
 
         started = perf_counter()
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            backend = _setup_backend()
             if not installed_backends().get(backend, False):
                 raise RuntimeError(
                     f"The {backend.upper()} runtime is not installed. Restart "
@@ -1415,7 +1438,7 @@ class ChatEngine:
                 # projects start from (user preferences over package defaults).
                 backend = request.get("backend")
                 if backend not in (BACKEND_MLX, BACKEND_TORCH):
-                    backend = choose_backend(BACKEND_AUTO)
+                    backend = _setup_backend()
                 changes: dict[str, object] = {
                     "embedding_models": {backend: embedding_model},
                     "query_format": query_format,
@@ -3801,6 +3824,30 @@ def _model_size(model_id: str) -> float:
 
     match = re.search(r"(\d+(?:\.\d+)?)B\b", model_id)
     return float(match.group(1)) if match else 8.0
+
+
+def _setup_backend() -> str:
+    """Resolve new-project setup from the saved backend preference.
+
+    Returns
+    -------
+    str
+        The selected backend, using platform policy only for ``auto``.
+
+    Raises
+    ------
+    ValueError
+        If an explicitly selected backend is unsupported on this platform.
+
+    Notes
+    -----
+    The preference is read at the start of each setup operation. In
+    particular, an explicit PyTorch choice must not become MLX merely
+    because the automatic policy would select MLX.
+
+    """
+
+    return choose_backend(default_backend())
 
 
 def _installed_replacements(

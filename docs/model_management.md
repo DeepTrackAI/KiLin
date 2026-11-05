@@ -35,6 +35,13 @@ platform string.
 ## Backend resolution
 
 With `auto`, KíLín chooses MLX on native Darwin/arm64 and PyTorch otherwise.
+For GUI setup, the preference saved in the user's `preferences.json` chooses
+which backend's required models are checked, downloaded, or replaced by
+cached alternatives. Explicit `mlx` and `torch` selections never fall back to
+the platform's automatic choice. The Qt bridge refreshes readiness after a
+successful preference write; a failed write leaves the previous choice in
+effect and is reported to the page. Missing runtime packages keep readiness
+false even if every model ID appears cached.
 An explicit MLX request outside that platform is rejected. MLX also checks
 that Metal is available when loading the chat model. PyTorch probes device
 availability and follows CUDA -> MPS -> CPU, then moves the loaded model to

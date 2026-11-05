@@ -275,6 +275,14 @@ installed with the images.
 
 Settings has two parts. KíLín setup holds the app-wide choices: the
 computation backend for new projects, Appearance, and the projects folder.
+Selecting Auto uses MLX on native Apple Silicon and PyTorch otherwise.
+Selecting MLX or PyTorch explicitly selects that backend for setup checks,
+required-model downloads, and compatible cached-model alternatives, with no
+silent fallback to the other backend. If the selected runtime is unavailable
+or MLX is unsupported on the platform, setup reports that limitation rather
+than declaring another backend ready. Changing the preference refreshes the
+setup status after the write succeeds; if the preferences file cannot be
+saved, the previous selection is restored and an error is shown.
 The Project part has five tabs: General (the project's name and Delete),
 Indexing (file types, file size and chunk sizes), Models (effort levels,
 intent model, embedding model), Answers (temperature, answer length,

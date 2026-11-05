@@ -876,12 +876,17 @@ class ChatBridge(QObject):
 
     @Slot(str)
     def setBackendPreference(self, backend: str) -> None:
-        """Save the backend new projects are made with in preferences.
+        """Persist a new-project backend and refresh setup after success.
 
         Parameters
         ----------
         backend: str
             ``auto``, ``mlx``, or ``torch``; anything else is ignored.
+
+        Notes
+        -----
+        Qt owns preference writes. A failed write must not update readiness
+        or leave the page believing an uncommitted backend was saved.
 
         """
 
@@ -889,8 +894,17 @@ class ChatBridge(QObject):
             return
         try:
             write_defaults({"backend": backend})
-        except OSError:
-            pass  # An unwritable preferences file keeps today's choice.
+        except (OSError, ValueError) as error:
+            self.event.emit(json.dumps({
+                "event": "backend_preference_failed",
+                "backend": backend,
+                "message": f"Could not save the backend preference: {error}",
+            }))
+            return
+        self.event.emit(json.dumps({
+            "event": "backend_preference_saved", "backend": backend,
+        }))
+        self.commandRequested.emit({"action": "readiness"})
 
     @Slot(str)
     def setSourceDropTarget(self, bounds_json: str) -> None:

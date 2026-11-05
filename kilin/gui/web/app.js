@@ -110,6 +110,8 @@ let installingModels = false;
 let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
+// The last backend acknowledged by Qt, not the page's pending selection.
+let confirmedBackendPreference = "auto";
 let activeBackend = "mlx";
 let activeTracePath = "";
 let activeConversationId = "";
@@ -1901,9 +1903,11 @@ function showSettings(data) {
   installedBackends = data.installed_backends || {};
   supportedExtensions = new Set(data.supported_extensions);
   closeModelMenus();
-  // New projects use the backend chosen in KíLín setup (preferences).
+  // Saved projects use their profile; new projects use the last
+  // acknowledged user preference, independently of the automatic policy.
+  confirmedBackendPreference = data.backend_preference || "auto";
   byId("backend").value = data.workspace ? profile.backend
-    : data.backend_preference || profile.backend;
+    : confirmedBackendPreference;
   byId("query-format").value = profile.query_format;
   showIndexingFields();
   const keepAnswers = ready || answerSettingsEdited;
@@ -5029,6 +5033,25 @@ function onEvent(raw) {
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
     markActiveConversationFile();
+  } else if (data.event === "backend_preference_saved") {
+    confirmedBackendPreference = data.backend;
+    // Qt requests a fresh readiness check only after its write succeeds.
+    // Do not use the former backend's status while that check is pending.
+    kilinReady = false;
+    readinessEnvironmentReady = false;
+    readinessMissingCount = 0;
+    byId("readiness-status").textContent = "Checking";
+    byId("readiness-summary").textContent = "Checking the selected backend…";
+    showSetupLock();
+  } else if (data.event === "backend_preference_failed") {
+    // A second selection may already be pending: only revert the failed one.
+    if (!ready && byId("backend").value === data.backend) {
+      byId("backend").value = confirmedBackendPreference;
+      showModelFields();
+    }
+    error.textContent = data.message;
+    error.classList.remove("hidden");
+    byId("model-download-status").textContent = data.message;
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
@@ -5039,7 +5062,8 @@ function onEvent(raw) {
     const runtime = document.createElement("li");
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
-      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui`;
+      : data.unavailable_reason
+        || `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui --backend ${data.backend}`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -5062,6 +5086,8 @@ function onEvent(raw) {
     byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
     byId("readiness-summary").textContent = data.ready
       ? "KíLín is ready."
+      : !data.environment_ready
+        ? data.unavailable_reason || `${String(data.backend).toUpperCase()} runtime is not installed.`
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;

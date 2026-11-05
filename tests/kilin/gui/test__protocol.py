@@ -701,8 +701,9 @@ class TestGUIProtocolEvents(unittest.TestCase):
         self.assertEqual(handled, {
             "answer_cancelled", "answer_delta", "answer_phase",
             "answer_settings_saved", "answered",
-            "backend_failed",
-            "backend_restarted", "conversation_delete_started",
+            "backend_failed", "backend_preference_failed",
+            "backend_preference_saved", "backend_restarted",
+            "conversation_delete_started",
             "conversation_opened", "conversation_viewed", "conversations",
             "error", "indexing_applied",
             "workspace_conflict",
@@ -892,13 +893,44 @@ class TestGUIProtocolBridge(unittest.TestCase):
             self.assertIsNone(fake._unopened_project)
 
     def test_backend_preference_is_saved_by_qt(self) -> None:
-        """Saved in preferences.json directly; no engine command."""
+        """Refresh setup only after saving a valid preference."""
 
         with patch("kilin.gui.window.write_defaults") as write:
             self.bridge.setBackendPreference("torch")
             self.bridge.setBackendPreference("cuda")
         write.assert_called_once_with({"backend": "torch"})
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{"event": "backend_preference_saved", "backend": "torch"}])
+
+    def test_backend_preference_save_error_keeps_previous_status(
+        self,
+    ) -> None:
+        """Never request readiness after a failed preferences write."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=OSError("read-only preferences"),
+        ):
+            self.bridge.setBackendPreference("torch")
         self.assertEqual(self.commands, [])
+        self.assertEqual(len(self.events), 1)
+        event = json.loads(self.events[0])
+        self.assertEqual(event["event"], "backend_preference_failed")
+        self.assertEqual(event["backend"], "torch")
+        self.assertIn("read-only preferences", event["message"])
+
+    def test_invalid_saved_preferences_report_failure(self) -> None:
+        """Do not refresh readiness when preference validation fails."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=ValueError("invalid preferences.json"),
+        ):
+            self.bridge.setBackendPreference("mlx")
+        self.assertEqual(self.commands, [])
+        self.assertIn("invalid preferences.json", self.events[0])
 
     def test_indexing_settings_are_sent_as_an_object(self) -> None:
         self.bridge.applyIndexingSettings('{"target_tokens": 500}')

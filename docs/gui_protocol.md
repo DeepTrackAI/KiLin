@@ -145,6 +145,13 @@ Native file selection, `openWorkspaceFile`, appearance and backend
 preference changes (saved in `preferences.json` by Qt), drag/drop
 state, and `stopOperation` are *not* additional engine commands. They use
 Qt signals, platform dialogs, local file opening, or process control.
+When `setBackendPreference` successfully persists `auto`, `mlx`, or `torch`,
+Qt emits `backend_preference_saved` and sends the existing `readiness` engine
+command. A write/validation error instead emits `backend_preference_failed`;
+no readiness command is sent, and the page restores the last acknowledged
+selection. Unsupported values are ignored. The engine resolves the saved
+preference at the beginning of each setup operation, while `auto` alone uses
+the platform policy. Existing saved project settings remain independent.
 
 ### Interactive tool decisions
 
@@ -187,7 +194,7 @@ can accompany an event.
 
 | Group | Events and representative payloads |
 | --- | --- |
-| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
+| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether the saved directory is unavailable) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: for each checked cached model, whether its chat template switches thinking); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (`temperature`, `thinking`, `max_new_tokens` now in effect); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
