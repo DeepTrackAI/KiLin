@@ -11,6 +11,7 @@
   --surface: #ffffff;
   --surface-soft: #fffaf1;
   --logo-image: url("../icons/kilin-qilin.png");
+  --sidebar-head-image: url("../icons/kilin-qilin-head.png");
   --wordmark-image: url("../icons/kilin-wordmark-light.svg");
   --mosaic-image: url("../icons/kilin-mosaic-accent.svg");
   --text: #102744;
@@ -57,6 +58,7 @@
   --surface: #142b42;
   --surface-soft: #10253a;
   --logo-image: url("../icons/kilin-qilin-dark.png");
+  --sidebar-head-image: url("../icons/kilin-qilin-head-dark.png");
   --wordmark-image: url("../icons/kilin-wordmark-dark.svg");
   --text: #eff6ff;
   --muted: #adc2d5;
@@ -101,6 +103,7 @@
     --surface: #142b42;
     --surface-soft: #10253a;
     --logo-image: url("../icons/kilin-qilin-dark.png");
+  --sidebar-head-image: url("../icons/kilin-qilin-head-dark.png");
     --wordmark-image: url("../icons/kilin-wordmark-dark.svg");
     --text: #eff6ff;
     --muted: #adc2d5;
@@ -310,12 +313,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .side-panels { display: none; min-width: 0; max-height: 100vh; overflow: auto; border-left: 1px solid var(--line); background: var(--surface-soft); }
 .sidebar-open .side-panels { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 .conversations-panel { position: sticky; top: 0; display: flex; flex-direction: column; min-width: 0; height: 100vh; padding: 24px 12px; border-right: 1px solid var(--line); background: var(--surface-soft); }
-.sidebar-logo { display: block; flex: none; width: 100%; max-width: 190px; margin: 0 auto 14px; padding: 10px; border: 0; border-radius: 14px; background: transparent; }
+.sidebar-logo { display: flex; align-items: center; gap: 7px; flex: none; width: 100%; max-width: 206px; margin: 0 auto 14px; padding: 7px 5px; border: 0; border-radius: 14px; background: transparent; }
 .sidebar-logo:hover:not(:disabled) { background: var(--hover); }
 .sidebar-logo:disabled { opacity: .55; }
-/* The qilin image is about 1.37 times wider than tall. */
-.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.57; background: var(--logo-image) center / contain no-repeat; }
-.sidebar-logo-wordmark { display: block; width: 94px; height: 34px; margin: -3px auto 0; background: var(--wordmark-image) center / contain no-repeat; }
+/* In an open project, use only the dragon face beside the wordmark. */
+.sidebar-logo-mark { display: block; flex: 0 0 86px; height: 65px; background: var(--sidebar-head-image) center / contain no-repeat; }
+.sidebar-logo-wordmark { display: block; flex: 1 1 0; min-width: 0; height: 51px; background: var(--wordmark-image) center / contain no-repeat; }
 .sidebar-section { display: flex; flex-direction: column; min-height: 0; }
 /* Conversations take the space left, down to three rows; only then does
    the project list shrink. */
@@ -622,7 +625,8 @@ button.question-attachment:hover, button.question-attachment:focus-visible { bor
   .conversation-item { width: auto; max-width: 190px; flex: 0 0 auto; }
   .sidebar-section[data-section="projects"] { display: none; }
   .sidebar-section-action { opacity: 1; }
-  .sidebar-logo { width: 64px; margin: 0 0 6px; padding: 4px; }
+  .sidebar-logo { width: 82px; margin: 0 0 6px; padding: 4px; }
+  .sidebar-logo-mark { flex-basis: 74px; height: 58px; }
   .sidebar-logo-wordmark { display: none; }
   .setup-brand { flex-direction: column; align-items: center; padding: 16px 16px 22px; text-align: center; }
   .setup-brand-figure { flex: none; width: min(100%, 270px); }

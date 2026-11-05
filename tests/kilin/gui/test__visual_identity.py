@@ -96,20 +96,82 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertIn('"kilin-dark.png" if dark else "kilin-light.png"',
                       window)
 
-    def test_wordmarks_have_vector_outlines_and_long_accents(self):
-        """No installed font is needed to render the i accents."""
+    def test_wordmarks_have_even_spacing_and_only_i_accents(self):
+        """Outlined letters have equal ink gaps and no K embellishment."""
+        namespace = "{http://www.w3.org/2000/svg}"
+        expected = ["K", "i", "L", "i", "n"]
         for name in ("kilin-wordmark-light.svg",
                      "kilin-wordmark-dark.svg"):
             root = ElementTree.parse(_ICONS / name).getroot()
-            paths = root.findall("{http://www.w3.org/2000/svg}path")
-            self.assertGreaterEqual(len(paths), 6)
-            self.assertIsNone(root.find("{http://www.w3.org/2000/svg}text"))
             self.assertEqual(root.attrib["aria-label"], "KíLín")
-            # Both i characters have a distinct elongated, curved accent.
-            self.assertTrue(any(p.attrib["d"].startswith("M104 44 C")
-                                for p in paths))
-            self.assertTrue(any(p.attrib["d"].startswith("M214 44 C")
-                                for p in paths))
+            self.assertIsNone(root.find(f"{namespace}text"))
+            letters = root.findall(f"{namespace}g")
+            self.assertEqual([g.attrib["data-letter"] for g in letters],
+                             expected)
+            self.assertEqual([int(g.attrib["data-index"])
+                              for g in letters], list(range(5)))
+            bounds = [
+                (float(g.attrib["data-ink-left"]),
+                 float(g.attrib["data-ink-right"]))
+                for g in letters
+            ]
+            gaps = [right[0] - left[1]
+                    for left, right in zip(bounds, bounds[1:])]
+            for gap in gaps:
+                self.assertAlmostEqual(gap, 17.0, places=2)
+            accents = root.findall(f"{namespace}path")
+            self.assertEqual(len(accents), 2)
+            self.assertEqual(
+                [p.attrib["data-over"] for p in accents], ["1", "3"]
+            )
+            self.assertTrue(all(p.attrib["class"] == "kilin-accent"
+                                for p in accents))
+            # The glyph K is a single outline, not a letter plus a slash.
+            self.assertEqual(len(letters[0].findall(f"{namespace}path")),
+                             1)
+            self.assertEqual(len(letters[0]), 1)
+
+    def test_wordmark_variants_and_lockups_share_the_same_letters(self):
+        """Brand masters match the GUI logo without changing mascot art."""
+        for name, number in (("light", "08"), ("dark", "09")):
+            gui = (_ICONS / f"kilin-wordmark-{name}.svg").read_bytes()
+            brand = (_BRAND / f"{number}-wordmark-{name}.svg")
+            self.assertEqual(gui, brand.read_bytes())
+            for prefix in ("horizontal", "stacked"):
+                lockup_number = {
+                    ("light", "horizontal"): "10",
+                    ("dark", "horizontal"): "11",
+                    ("light", "stacked"): "12",
+                    ("dark", "stacked"): "13",
+                }[(name, prefix)]
+                path = _BRAND / (
+                    f"{lockup_number}-lockup-{prefix}-{name}.svg"
+                )
+                root = ElementTree.parse(path).getroot()
+                namespace = "{http://www.w3.org/2000/svg}"
+                self.assertEqual(len(root.findall(
+                    f".//{namespace}g[@class='kilin-letter']")), 5)
+                self.assertEqual(len(root.findall(
+                    f".//{namespace}path[@class='kilin-accent']")), 2)
+
+    def test_sidebar_uses_face_but_home_retains_full_mascot(self):
+        """Project navigation is compact without changing the start logo."""
+        full = _png_header(_ICONS / "kilin-qilin.png")
+        for name in ("kilin-qilin-head.png",
+                     "kilin-qilin-head-dark.png"):
+            width, height, color_type = _png_header(_ICONS / name)
+            self.assertLess(width, full[0])
+            self.assertLess(height, full[1])
+            self.assertGreater(width, height)
+            self.assertEqual(color_type, 6)
+        css = (_WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".setup-brand-figure {", css)
+        self.assertIn("background: var(--logo-image)", css)
+        self.assertIn(".sidebar-logo-mark {", css)
+        self.assertIn("background: var(--sidebar-head-image)", css)
+        self.assertIn(".sidebar-logo { display: flex;", css)
+        self.assertIn(".sidebar-logo-wordmark { display: block;", css)
+        self.assertIn(".sidebar-logo-wordmark { display: none; }", css)
 
     def test_light_dark_and_system_theme_use_matching_assets(self):
         """Theme choice changes both wordmark and mascot in pure CSS."""
@@ -119,6 +181,12 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertEqual(css.count(
             '--logo-image: url("../icons/kilin-qilin-dark.png");'), 2)
         self.assertEqual(css.count(
+            '--sidebar-head-image: url("../icons/kilin-qilin-head.png");'),
+            1)
+        self.assertEqual(css.count(
+            '--sidebar-head-image: '
+            'url("../icons/kilin-qilin-head-dark.png");'), 2)
+        self.assertEqual(css.count(
             '--wordmark-image: url("../icons/kilin-wordmark-light.svg");'),
             1)
         self.assertEqual(css.count(
@@ -127,6 +195,7 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertIn(':root[data-appearance="dark"]', css)
         self.assertIn(':root[data-appearance="system"]', css)
         self.assertIn('var(--logo-image)', css)
+        self.assertIn('var(--sidebar-head-image)', css)
         self.assertIn('var(--wordmark-image)', css)
         self.assertIn('var(--mosaic-image)', css)
 
@@ -169,7 +238,9 @@ class TestVisualIdentity(unittest.TestCase):
         """All assets used by CSS are in the installed package data."""
         for name in ("kilin-mosaic-accent.svg",
                      "kilin-wordmark-light.svg",
-                     "kilin-wordmark-dark.svg"):
+                     "kilin-wordmark-dark.svg",
+                     "kilin-qilin-head.png",
+                     "kilin-qilin-head-dark.png"):
             self.assertTrue((_ICONS / name).is_file())
         project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('"icons/*.svg",', project)
