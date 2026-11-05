@@ -1,79 +1,141 @@
 :root {
-  --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%233f5149' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  --page: #f4f5f2;
+  /* Brand colours are shared by the artwork and the application controls. */
+  --kilin-orange: #f46b32;
+  --kilin-yellow: #ffd438;
+  --kilin-red: #e52935;
+  --kilin-blue: #377cf6;
+  --kilin-teal: #14b8a6;
+  --kilin-ink: #102744;
+  --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23324c64' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --page: #f3f6fb;
+  --surface: #ffffff;
+  --surface-soft: #fffaf1;
   --logo-image: url("../icons/kilin-qilin.png");
-  --surface: #fff;
-  --surface-soft: #f8faf7;
-  --text: #17202a;
-  --muted: #6c797f;
-  --line: #d9ddd8;
-  --accent: #ef7935;
-  --control: #52675d;
-  --control-strong: #334e43;
-  --eyebrow: #687f73;
-  --field-border: #ccd2ce;
-  --hover: #eef2ee;
-  --highlight: #e5ece6;
-  --selected: #e9ece9;
-  --reference-hover: #f4f8f4;
-  --user-bubble: #e5ece6;
-  --user-bubble-text: #17202a;
-  --citation: #315848;
-  --citation-hover: #172820;
-  --disabled-text: #8b9691;
-  --primary: #334e43;
-  --primary-hover: #263e34;
-  --slider-track: #d8dbd9;
-  --usage-read: #aebdb5;
-  --slider-tick: #b4b9b6;
-  --line-highlight: #deebe2;
-  --error-text: #863b37;
-  --error-surface: #faeeee;
-  --focus: #526f63;
-  --focus-shadow: rgb(82 111 99 / 13%);
-  --drop-border: #9cab9f;
-  --reference-border: #8ea899;
-  --preview-border: #bfd2c4;
-  --answer-outline: #b8cbbf;
+  --wordmark-image: url("../icons/kilin-wordmark-light.svg");
+  --mosaic-image: url("../icons/kilin-mosaic-accent.svg");
+  --text: #102744;
+  --muted: #52677a;
+  --line: #d9e3ee;
+  --accent: #f46b32;
+  --accent-hover: #de581b;
+  --accent-ink: #102744;
+  --control: #43617b;
+  --control-strong: #183b59;
+  --eyebrow: #36678c;
+  --field-border: #b9cadb;
+  --hover: #fff0d9;
+  --highlight: #eaf4ff;
+  --selected: #ffead1;
+  --reference-hover: #eff7ff;
+  --user-bubble: #fff0dc;
+  --user-bubble-text: #102744;
+  --citation: #0c6b85;
+  --citation-hover: #074b65;
+  --disabled-text: #72879a;
+  --primary: #f46b32;
+  --primary-hover: #e45a1c;
+  --primary-ink: #102744;
+  --slider-track: #d7e5f0;
+  --usage-read: #66b9a9;
+  --slider-tick: #9eb5c5;
+  --line-highlight: #dff3f2;
+  --error-text: #963627;
+  --error-surface: #fff0ed;
+  --focus: #196cb4;
+  --focus-shadow: rgb(25 108 180 / 19%);
+  --drop-border: #8bb2cc;
+  --reference-border: #81b5cb;
+  --preview-border: #bfd7e6;
+  --answer-outline: #75b8d6;
   color: var(--text);
   background: var(--page);
   font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 :root[data-appearance="dark"] {
-  --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+  --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23c0d3e5' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --page: #081a2b;
+  --surface: #142b42;
+  --surface-soft: #10253a;
   --logo-image: url("../icons/kilin-qilin-dark.png");
-  --text: #f0f0f0; --muted: #ababab; --line: #444;
-  --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
-  --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
-  --selected: #3a3a3a; --reference-hover: #303030;
-  --user-bubble: #3a3a3a; --user-bubble-text: #f3f3f3;
-  --citation: #bcbcbc; --citation-hover: #fff; --disabled-text: #808080;
-  --primary: #4a4a4a; --primary-hover: #5a5a5a;
-  --slider-track: #505050;
-  --usage-read: #5f7168; --slider-tick: #aaa; --line-highlight: #383838;
-  --focus: #777; --focus-shadow: rgb(255 255 255 / 10%);
-  --drop-border: #888; --reference-border: #666;
-  --preview-border: #555; --answer-outline: #888;
+  --wordmark-image: url("../icons/kilin-wordmark-dark.svg");
+  --text: #eff6ff;
+  --muted: #adc2d5;
+  --line: #334e67;
+  --accent: #ff874e;
+  --accent-hover: #ffa470;
+  --accent-ink: #081a2b;
+  --control: #c0d4e3;
+  --control-strong: #e6f3ff;
+  --eyebrow: #8fc6e6;
+  --field-border: #4a6781;
+  --hover: #243d55;
+  --highlight: #214963;
+  --selected: #34526d;
+  --reference-hover: #1a4258;
+  --user-bubble: #26435a;
+  --user-bubble-text: #f0f7ff;
+  --citation: #64e1e0;
+  --citation-hover: #a6f2ef;
+  --disabled-text: #8199ab;
+  --primary: #ff874e;
+  --primary-hover: #ffa470;
+  --primary-ink: #081a2b;
+  --slider-track: #35536d;
+  --usage-read: #3e9d91;
+  --slider-tick: #809cb2;
+  --line-highlight: #1d5055;
+  --error-text: #ffaea3;
+  --error-surface: #462b39;
+  --focus: #66c5fc;
+  --focus-shadow: rgb(102 197 252 / 21%);
+  --drop-border: #6597b6;
+  --reference-border: #5892b0;
+  --preview-border: #4f738e;
+  --answer-outline: #58bfd4;
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-appearance="system"] {
-    --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23b8b8b8' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    --page: #161616; --surface: #232323; --surface-soft: #1d1d1d;
+    --dropdown-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m3 6 5 5 5-5' fill='none' stroke='%23c0d3e5' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --page: #081a2b;
+    --surface: #142b42;
+    --surface-soft: #10253a;
     --logo-image: url("../icons/kilin-qilin-dark.png");
-    --text: #f0f0f0; --muted: #ababab; --line: #444;
-    --control: #b8b8b8; --control-strong: #ddd; --eyebrow: #aaa;
-    --field-border: #505050; --hover: #2c2c2c; --highlight: #333;
-    --selected: #3a3a3a; --reference-hover: #303030;
-    --user-bubble: #3a3a3a; --user-bubble-text: #f3f3f3;
-    --citation: #bcbcbc; --citation-hover: #fff; --disabled-text: #808080;
-    --primary: #4a4a4a; --primary-hover: #5a5a5a;
-    --slider-track: #505050;
-    --usage-read: #5f7168; --slider-tick: #aaa; --line-highlight: #383838;
-    --focus: #777; --focus-shadow: rgb(255 255 255 / 10%);
-    --drop-border: #888; --reference-border: #666;
-    --preview-border: #555; --answer-outline: #888;
+    --wordmark-image: url("../icons/kilin-wordmark-dark.svg");
+    --text: #eff6ff;
+    --muted: #adc2d5;
+    --line: #334e67;
+    --accent: #ff874e;
+    --accent-hover: #ffa470;
+    --accent-ink: #081a2b;
+    --control: #c0d4e3;
+    --control-strong: #e6f3ff;
+    --eyebrow: #8fc6e6;
+    --field-border: #4a6781;
+    --hover: #243d55;
+    --highlight: #214963;
+    --selected: #34526d;
+    --reference-hover: #1a4258;
+    --user-bubble: #26435a;
+    --user-bubble-text: #f0f7ff;
+    --citation: #64e1e0;
+    --citation-hover: #a6f2ef;
+    --disabled-text: #8199ab;
+    --primary: #ff874e;
+    --primary-hover: #ffa470;
+    --primary-ink: #081a2b;
+    --slider-track: #35536d;
+    --usage-read: #3e9d91;
+    --slider-tick: #809cb2;
+    --line-highlight: #1d5055;
+    --error-text: #ffaea3;
+    --error-surface: #462b39;
+    --focus: #66c5fc;
+    --focus-shadow: rgb(102 197 252 / 21%);
+    --drop-border: #6597b6;
+    --reference-border: #5892b0;
+    --preview-border: #4f738e;
+    --answer-outline: #58bfd4;
     color-scheme: dark;
   }
 }
@@ -137,6 +199,15 @@ button, input, select, textarea { font: inherit; }
 .download-meter.indeterminate > span { width: 36%; animation: download-meter-moving 1.1s ease-in-out infinite; }
 @keyframes download-meter-moving { from { transform: translateX(-110%); } to { transform: translateX(310%); } }
 .setup { width: min(100%, 650px); margin: auto; padding: 42px 0; }
+/* The hero uses the complete mascot; type stays separately scalable. */
+.setup-brand { position: relative; display: flex; align-items: center; gap: 14px; min-height: 170px; margin: 0 0 27px; padding: 16px 21px 20px 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 22px; background: linear-gradient(120deg, var(--surface) 28%, var(--surface-soft)); }
+.setup-brand::after { position: absolute; right: 0; bottom: 0; left: 0; height: 11px; background: var(--mosaic-image) center / auto 56px repeat-x; opacity: .85; content: ""; }
+.setup-brand-figure { flex: 0 0 45%; min-width: 0; aspect-ratio: 1.57; background: var(--logo-image) center / contain no-repeat; }
+.setup-brand-copy { flex: 1; min-width: 0; }
+.setup-brand-name { margin: 0 0 7px; }
+.setup-brand-wordmark { display: block; width: min(100%, 250px); height: 79px; background: var(--wordmark-image) left center / contain no-repeat; }
+.setup-brand .intro { margin: 0; font-size: 14px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .workspace:has(> .activity:not(.hidden)) .setup,
 .workspace:has(> .error:not(.hidden)) .setup { margin: 0 auto; padding-bottom: 0; }
 .eyebrow { color: var(--eyebrow); font-size: 12px; font-weight: 750; letter-spacing: .14em; }
@@ -243,7 +314,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .sidebar-logo:hover:not(:disabled) { background: var(--hover); }
 .sidebar-logo:disabled { opacity: .55; }
 /* The qilin image is about 1.37 times wider than tall. */
-.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.37; background: var(--logo-image) center / contain no-repeat; }
+.sidebar-logo-mark { display: block; width: 100%; aspect-ratio: 1.57; background: var(--logo-image) center / contain no-repeat; }
+.sidebar-logo-wordmark { display: block; width: 94px; height: 34px; margin: -3px auto 0; background: var(--wordmark-image) center / contain no-repeat; }
 .sidebar-section { display: flex; flex-direction: column; min-height: 0; }
 /* Conversations take the space left, down to three rows; only then does
    the project list shrink. */
@@ -346,7 +418,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--focus); box-shad
 .conversation-fields { display: grid; gap: 16px; }
 button { min-height: 43px; padding: 0 16px; border-radius: 9px; font-weight: 650; cursor: pointer; }
 button:disabled { opacity: .62; cursor: default; }
-.primary { border: 0; color: white; background: var(--primary); }
+.primary { border: 0; color: var(--primary-ink); background: var(--primary); }
 .primary:hover:not(:disabled) { background: var(--primary-hover); }
 .secondary { border: 1px solid var(--line); color: var(--text); background: var(--surface-soft); }
 .secondary:hover:not(:disabled) { background: var(--hover); }
@@ -420,8 +492,8 @@ button:disabled { opacity: .62; cursor: default; }
 .composer-icon, .send-button { display: grid; width: 32px; min-width: 32px; min-height: 32px; padding: 0; place-items: center; border-radius: 50%; font-size: 18px; font-weight: 400; line-height: 1; }
 .composer-icon { border: 0; color: var(--text); background: transparent; }
 .composer-icon:hover { background: rgb(120 130 124 / 12%); }
-.send-button { border: 0; color: white; background: var(--accent); }
-.send-button:hover:not(:disabled) { background: #d86529; }
+.send-button { border: 0; color: var(--accent-ink); background: var(--accent); }
+.send-button:hover:not(:disabled) { background: var(--accent-hover); }
 .send-button span { display: block; transform: translateY(-1px); }
 .send-button.stopping span { font-size: 12px; transform: none; }
 .send-button.waiting span { width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; font-size: 0; transform: none; animation: send-waiting .8s linear infinite; }
@@ -551,6 +623,12 @@ button.question-attachment:hover, button.question-attachment:focus-visible { bor
   .sidebar-section[data-section="projects"] { display: none; }
   .sidebar-section-action { opacity: 1; }
   .sidebar-logo { width: 64px; margin: 0 0 6px; padding: 4px; }
+  .sidebar-logo-wordmark { display: none; }
+  .setup-brand { flex-direction: column; align-items: center; padding: 16px 16px 22px; text-align: center; }
+  .setup-brand-figure { flex: none; width: min(100%, 270px); }
+  .setup-brand-copy { width: 100%; }
+  .setup-brand-wordmark { margin: 0 auto; background-position: center; }
+  .setup-brand .intro { margin: 0 auto; }
   .side-panels { max-height: none; border-left: 0; border-top: 1px solid var(--line); }
   .sidebar-open .side-panels { display: block; height: auto; overflow: visible; }
   .side-divider { display: none; }

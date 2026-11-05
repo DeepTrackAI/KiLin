@@ -269,9 +269,13 @@ chunking). Messages from Close show below the tabs, whichever tab is open.
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
-The left-panel qilin logo is gold in light mode and blue-black in dark
-mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
-installed with the images.
+The left-panel and welcome-screen logos use the locally packaged,
+Gaudí-inspired mosaic qilin (dragon head, deer body, cow tail), with a
+separate vector wordmark. Dark mode keeps the vivid ceramic colors against
+navy surfaces. The window and Dock use a close-up of the dragon head;
+`icons/README.md` documents the artwork and the attribution history.
+The palette and decorations are CSS-only and do not alter interaction,
+project settings, model selection, or accessibility labels.
 
 Settings has two parts. KíLín setup holds the app-wide choices: the
 computation backend for new projects, Appearance, and the projects folder.
