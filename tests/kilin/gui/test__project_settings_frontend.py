@@ -18,17 +18,14 @@ in the core and the engine.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
 
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
+
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 class TestProjectSettingsFrontend(unittest.TestCase):
@@ -54,7 +51,7 @@ class TestProjectSettingsFrontend(unittest.TestCase):
         # Settings opens on the General tab and redraws when opened.
         self.assertIn('let settingsTab = "general";', source)
         self.assertIn(
-            "showProjectSettings();", _function(source, "openModels")
+            "showProjectSettings();", extract_function(source, "openModels")
         )
         # Opening a project, or Settings with one open, shows that
         # project's own values, never edits made on the start screen.
@@ -64,11 +61,11 @@ class TestProjectSettingsFrontend(unittest.TestCase):
         self.assertIn('byId("backend").value = profile.backend;', opened)
         self.assertIn(
             "if (ready && profile) showIndexingFields();",
-            _function(source, "openModels"),
+            extract_function(source, "openModels"),
         )
         # The message under the tabs answers only the last action.
         self.assertIn(
-            "clearSettingsStatus();", _function(source, "openModels")
+            "clearSettingsStatus();", extract_function(source, "openModels")
         )
         self.assertIn("clearSettingsStatus(); showSettingsTab(", source)
 
@@ -107,8 +104,8 @@ const returnToLaunch = () => {
             "projectName",
             "renameProjectFromSettings",
         ):
-            script += _function(source, name)
-        script += "async " + _function(source, "deleteOpenProject")
+            script += extract_function(source, name)
+        script += "async " + extract_function(source, "deleteOpenProject")
         script += r"""
 (async () => {
   // Start screen: no project to delete; a typed name is kept for the
@@ -156,13 +153,7 @@ const returnToLaunch = () => {
   console.log("project settings passed");
 })().catch((error) => { console.error(error); process.exit(1); });
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("project settings passed", result.stdout)
 
@@ -209,8 +200,8 @@ const askKilin = async (title) => { asked.push(title); return answer; };
             "showIndexingFields",
             "keepNewProjectValue",
         ):
-            script += _function(source, name)
-        script += "async " + _function(source, "saveIndexingEdits")
+            script += extract_function(source, name)
+        script += "async " + extract_function(source, "saveIndexingEdits")
         script += r"""
 (async () => {
 fill();
@@ -270,13 +261,7 @@ assert.match(byId("model-download-status").textContent, /Overlap/);
 console.log("indexing edits passed");
 })().catch((error) => { console.error(error); process.exit(1); });
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("indexing edits passed", result.stdout)
         # Saved on Enter or leaving the field, not on each arrow click or
@@ -285,7 +270,9 @@ console.log("indexing edits passed");
         self.assertNotIn(
             'addEventListener("change", saveIndexingEdits)', source
         )
-        self.assertNotIn("indexingEdits", _function(source, "closeModels"))
+        self.assertNotIn(
+            "indexingEdits", extract_function(source, "closeModels")
+        )
 
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
@@ -322,7 +309,7 @@ const error = { textContent: "", classList: { remove: () => {} } };
             "queueAnswerSettings", "matchesAnswerSettingsSave",
             "answerSettingsSaved", "saveAnswerNumbers",
         ):
-            script += _function(source, name)
+            script += extract_function(source, name)
         script += r"""
 byId("temperature").value = "0.7";
 byId("max-new-tokens").value = "";
@@ -362,13 +349,7 @@ assert.match(byId("model-download-status").textContent, /temperature/);
 assert.equal(calls.length, 1);
 console.log("answer numbers passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("answer numbers passed", result.stdout)
 
@@ -378,11 +359,12 @@ console.log("answer numbers passed");
         """Saved as made; refused ones go back; Close only closes."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
-        render = _function(source, "renderModelsPanel")
+        render = extract_function(source, "renderModelsPanel")
         self.assertEqual(render.count("saveModelEdits();"), 3)
         self.assertEqual(render.count("saveOnEnter("), 2)
         self.assertIn(
-            "saveModelEdits();", _function(source, "restoreDefaultModels")
+            "saveModelEdits();",
+            extract_function(source, "restoreDefaultModels"),
         )
         script = r"""
 const assert = require("node:assert/strict");
@@ -429,8 +411,8 @@ const setupLocked = () => false;
         for name in (
             "showSavedModels", "closeModels", "keepNewProjectModels"
         ):
-            script += _function(source, name)
-        script += "async " + _function(source, "saveModelEdits")
+            script += extract_function(source, name)
+        script += "async " + extract_function(source, "saveModelEdits")
         script += r"""
 (async () => {
 // A change that is sent stays as entered.
@@ -483,13 +465,7 @@ assert.equal(closeAfterModelsApply, true);
 console.log("model saves passed");
 })().catch((error) => { console.error(error); process.exit(1); });
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("model saves passed", result.stdout)
 
