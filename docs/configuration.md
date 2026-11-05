@@ -38,6 +38,13 @@ not permission to overwrite an existing profile or reinstall user resources.
 Creation, read-only reopening and explicit updates are different operations,
 owned by [Project workspaces](project_workspaces.md#creation-opening-and-explicit-updates).
 
+In the GUI, readiness for the selected default backend and required models
+blocks **new-project creation only**. Setup opens automatically to explain
+missing requirements but can be dismissed. Existing projects are offered for
+Resume regardless of this global readiness: reopening uses their persisted
+backend and model IDs, then reports project-specific loading failures without
+silently substituting current creation defaults.
+
 `kilin.project.configure_project()` is the core API for validated project
 settings. GUI-specific project settings (effort levels, search-depth steps,
 router model) are saved in additional `profile.ini` sections by

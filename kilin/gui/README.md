@@ -283,6 +283,14 @@ or MLX is unsupported on the platform, setup reports that limitation rather
 than declaring another backend ready. Changing the preference refreshes the
 setup status after the write succeeds; if the preferences file cannot be
 saved, the previous selection is restored and an error is shown.
+New-project preparation requires the selected default runtime and models,
+but Settings can be closed even when they are missing. Saved projects remain
+available from Resume and the Projects sidebar, using each project's own
+saved backend and models. An unavailable saved-project model fails through
+the normal project-opening path; it is not replaced by a new-project default.
+If switching projects fails after the former session has been released, the
+GUI returns to the start screen and displays the error. A profile rejected
+before the former session is released leaves that session open.
 The Project part has five tabs: General (the project's name and Delete),
 Indexing (file types, file size and chunk sizes), Models (effort levels,
 intent model, embedding model), Answers (temperature, answer length,
@@ -386,7 +394,8 @@ each check), and opened by itself when something is missing or a download
 runs. When some are missing but installed models of the
 same role exist, **Use installed models** switches to the closest installed
 size (for example a missing 8B model is replaced by an installed 14B
-rather than a 4B) and saves that choice.
+rather than a 4B) and saves that choice. Setup is guidance for new projects,
+not a prerequisite for browsing or resuming existing saved projects.
 
 The GUI's cached-model list uses lightweight, offline file checks: a
 configuration, recognized tokenizer assets, and complete indexed weights.

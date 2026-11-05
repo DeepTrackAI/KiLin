@@ -1,10 +1,9 @@
-"""Exercise KíLín setup as the first step before any project.
+"""Exercise the new-project setup gate without blocking saved projects.
 
-While required models are missing and can be installed, Settings stays
-open on KíLín setup, Prepare project is disabled and projects cannot be
-resumed. While they download, Install becomes Stop downloading and nothing
-else can start. Run the production page functions in Node with stubs;
-downloads and readiness are tested in the engine.
+Missing defaults prevent new-project preparation, but Settings is
+always dismissible and saved projects can be resumed. While models
+download, Install becomes Stop downloading. Production JavaScript
+functions are exercised in Node without Qt or a browser.
 
 """
 
@@ -28,7 +27,7 @@ def _function(source: str, name: str) -> str:
 
 
 class TestSetupLockFrontend(unittest.TestCase):
-    """Setup comes first; a download can be stopped and started again."""
+    """Keep new-project setup separate from saved-project access."""
 
     def test_setup_guards_project_opening(self):
         source = (_WEB / "app.js").read_text(encoding="utf-8")
@@ -36,10 +35,19 @@ class TestSetupLockFrontend(unittest.TestCase):
             'byId("project-form").addEventListener("submit"'
         ):]
         self.assertIn(
-            "if (busy || !bridge || needsSetup()) return;",
+            "if (busy || !bridge || needsNewProjectSetup()) return;",
             submit[: submit.index("\n});\n")],
         )
-        self.assertEqual(source.count("needsSetup()) return;"), 3)
+        self.assertEqual(
+            source.count("needsNewProjectSetup()) return;"), 1
+        )
+        self.assertNotIn(
+            "needsNewProjectSetup()", _function(source, "renderSavedProjects")
+        )
+        self.assertNotIn(
+            "needsNewProjectSetup()",
+            _function(source, "renderSidebarProjects"),
+        )
         self.assertIn(
             'byId("open").disabled = value || !bridge || !kilinReady;',
             _function(source, "setBusy"),
@@ -71,24 +79,24 @@ let applyingModels = false;
 let closeAfterModelsApply = false;
 """
         for name in (
-            "setupLocked", "showSetupLock", "needsSetup", "closeModels"
+            "showSetupLock", "needsNewProjectSetup", "closeModels"
         ):
             script += _function(source, name)
         script += r"""
-// Models missing: Install is offered; Close and Prepare project wait.
+// Models missing: Install is offered; only Prepare project waits.
 showSetupLock();
 assert.equal(
   byId("install-required").textContent, "Install required models",
 );
 assert.equal(byId("install-required").disabled, false);
-assert.equal(byId("close-models").disabled, true);
+assert.equal(byId("close-models").disabled, false);
 assert.equal(byId("open").disabled, true);
 closeModels();
-assert.deepEqual(calls, []);
-assert.match(byId("model-download-status").textContent, /Finish KíLín setup/);
-// Resuming a project shows setup instead.
-assert.equal(needsSetup(), true);
-assert.deepEqual(calls, ["open settings"]);
+assert.deepEqual(calls, ["hide"]);
+// Only new-project creation asks for the missing defaults.
+assert.equal(needsNewProjectSetup(), true);
+assert.deepEqual(calls, ["hide", "open settings"]);
+assert.match(byId("model-download-status").textContent, /new project/);
 // Downloading: Install becomes Stop and stays clickable; nothing else.
 busy = true;
 installingModels = true;
@@ -96,6 +104,14 @@ showSetupLock();
 assert.equal(byId("install-required").textContent, "Stop downloading");
 assert.equal(byId("install-required").disabled, false);
 assert.equal(byId("use-installed").disabled, true);
+assert.equal(byId("close-models").disabled, false);
+// A pending settings save still defers closing until acknowledgement.
+applyingModels = true;
+closeAfterModelsApply = false;
+closeModels();
+assert.equal(closeAfterModelsApply, true);
+assert.deepEqual(calls, ["hide", "open settings"]);
+applyingModels = false;
 // Stopped: back to missing models, Install offered again.
 busy = false;
 installingModels = false;
@@ -103,7 +119,7 @@ showSetupLock();
 assert.equal(
   byId("install-required").textContent, "Install required models",
 );
-assert.equal(byId("close-models").disabled, true);
+assert.equal(byId("close-models").disabled, false);
 // A missing runtime cannot be fixed here: Settings can close, but no
 // project can be prepared.
 readinessEnvironmentReady = false;
@@ -118,7 +134,7 @@ calls.length = 0;
 showSetupLock();
 assert.equal(byId("close-models").disabled, false);
 assert.equal(byId("open").disabled, false);
-assert.equal(needsSetup(), false);
+assert.equal(needsNewProjectSetup(), false);
 closeModels();
 assert.deepEqual(calls, ["hide"]);
 console.log("setup lock passed");

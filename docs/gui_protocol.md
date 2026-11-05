@@ -134,6 +134,17 @@ conversation. An `opened` event reports the actual selected ID when
 activation succeeds. This restores the active chat after Stop or engine
 restart; it does not recover unsaved partial model output.
 
+`readiness` applies to **new-project creation**, not `resume`. The page can
+close Settings and issue `resume` from either saved-project list when the
+selected default runtime or models are missing. The engine uses the saved
+project profile and lets normal loading report unavailable project-specific
+models. A failed resume emits `error` with `resume_released`: `false` when
+profile validation failed before the previous session was closed; `true`
+when switching had already begun releasing the previous session. For the
+latter, the page returns to launch and requests session cleanup rather than
+showing the former project as active. New-project preparation remains gated
+by successful readiness.
+
 The page invokes the Qt slots rather than writing these dictionaries itself.
 The bridge decodes JSON-encoded arguments for source lists, generation
 settings, folder edits, and model settings. `openProject()` additionally
@@ -203,7 +214,7 @@ can accompany an event.
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
-| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`); `backend_failed` (`message`) |
+| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
 | Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
 The engine also emits `startup` and `saved_project`, but the current

@@ -622,6 +622,7 @@ class ChatEngine:
         event_type: str,
         error: BaseException,
         message: str,
+        **event_fields: object,
     ) -> None:
         """Trace one backend failure and show a short GUI message.
 
@@ -634,6 +635,8 @@ class ChatEngine:
             error.
         message: str
             User-facing explanation included in the error event.
+        **event_fields: object
+            Optional operation-specific recovery information for the GUI.
 
         Notes
         -----
@@ -657,6 +660,7 @@ class ChatEngine:
                 if trace.readable_path is not None
                 else None
             ),
+            **event_fields,
         )
 
     def startup(self) -> None:
@@ -1127,8 +1131,12 @@ class ChatEngine:
 
         """
 
+        previous_released = False
         try:
             project = open_project(directory)
+            # Once closing starts, the previous UI cannot assume its
+            # session remains usable if a subsequent load fails.
+            previous_released = True
             self.close()
             conversation = self._open_conversation_store(
                 project, conversation_id
@@ -1141,8 +1149,13 @@ class ChatEngine:
                 "gui.project.resume.failed",
                 error,
                 f"Could not resume the project: {error}",
+                resume_released=previous_released,
             )
-            if self.session is None:
+            # An activation error can leave a partially opened session.
+            # Release it rather than retaining a project the GUI cannot use.
+            if previous_released:
+                self.close()
+            elif self.session is None:
                 self._close_project_trace()
 
     def _report_source_changes(self, project: QAProject) -> None:

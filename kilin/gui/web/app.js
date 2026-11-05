@@ -102,7 +102,7 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
-// Whether KíLín setup is complete; until it is, no project can be opened.
+// New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
 let readinessMissingCount = 0;
@@ -321,7 +321,7 @@ function renderSavedProjects(projects) {
       button.append(name, typeLabel);
       button.title = `Resume ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
-        if (busy || needsSetup()) return;
+        if (busy) return;
         setBusy(true, "Resuming project…");
         bridge.resumeProject(project.project);
       });
@@ -491,7 +491,7 @@ function renderSidebarProjects(projects, current) {
     if (active) button.setAttribute("aria-current", "true");
     button.disabled = busy;
     const open = () => {
-      if (busy || active || needsSetup()) return;
+      if (busy || active) return;
       setBusy(true, `Opening ${project.name}…`);
       bridge.resumeProject(project.project);
     };
@@ -1660,18 +1660,9 @@ function showSavedModels() {
 }
 
 /**
- * Tell whether Settings must stay open on KíLín setup: required models are
- * missing and can be installed here. A missing runtime cannot be fixed in
- * the app, so it does not lock Settings, but projects still cannot open.
- */
-function setupLocked() {
-  return !kilinReady && readinessEnvironmentReady;
-}
-
-/**
  * Show the setup buttons, Close and Prepare project for the current setup
  * state: while the required models download, Install becomes Stop and
- * nothing else can start; Close and Prepare project wait for setup.
+ * new-project preparation waits for setup. Settings can always close.
  */
 function showSetupLock() {
   const install = byId("install-required");
@@ -1679,21 +1670,20 @@ function showSetupLock() {
   install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
   byId("use-installed").disabled = busy || !readinessEnvironmentReady;
   byId("open").disabled = busy || !bridge || !kilinReady;
-  byId("close-models").disabled = setupLocked();
-  byId("close-models").title = setupLocked() ? "Finish KíLín setup first." : "";
+  byId("close-models").disabled = false;
+  byId("close-models").title = "";
 }
 
 /**
- * Before opening a project, make sure KíLín setup is done; otherwise show
- * it in Settings instead.
+ * Require the selected default backend and models only for new projects.
  *
- * @returns Whether setup still has to be finished.
+ * @returns Whether new-project setup still needs to be finished.
  */
-function needsSetup() {
+function needsNewProjectSetup() {
   if (kilinReady) return false;
   openModels();
   byId("first-run-setup").open = true;
-  byId("model-download-status").textContent = "Finish KíLín setup before opening a project.";
+  byId("model-download-status").textContent = "Finish KíLín setup before preparing a new project.";
   return true;
 }
 
@@ -1701,11 +1691,6 @@ function needsSetup() {
  * Close Settings; every change has been saved when it was made.
  */
 function closeModels() {
-  if (setupLocked()) {
-    byId("first-run-setup").open = true;
-    byId("model-download-status").textContent = "Finish KíLín setup first: install the required models, or use the installed ones.";
-    return;
-  }
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
   // A save still running closes Settings once it is done.
   if (applyingModels) closeAfterModelsApply = true;
@@ -2886,7 +2871,7 @@ function setBusy(value, message = "") {
   busy = value;
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  // Settings can close while KíLín works, but not before setup is done.
+  // Closing Settings is independent of new-project readiness.
   showSetupLock();
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
@@ -5099,7 +5084,7 @@ function onEvent(raw) {
     showSetupLock();
     refreshModelStatus();
     if (!data.ready) {
-      // Setup comes first: Settings opens on it and stays until it is done.
+      // Explain missing new-project requirements without locking Settings.
       byId("models-panel").classList.remove("hidden");
       byId("first-run-setup").focus?.();
     }
@@ -5577,6 +5562,9 @@ function onEvent(raw) {
       }
     });
   } else if (data.event === "error") {
+    // A failed switch may already have released the previous session.
+    // Do not show its stale conversation or claim it is still active.
+    if (data.resume_released) returnToLaunch();
     if (applyingIndexing) {
       // Not saved: show the settings still in effect.
       applyingIndexing = false;
@@ -5702,7 +5690,7 @@ byId("cancel-model-download").addEventListener("click", () => {
 });
 byId("project-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (busy || !bridge || needsSetup()) return;
+  if (busy || !bridge || needsNewProjectSetup()) return;
   if (!profile) return showError("Settings are still loading. Try again in a moment.");
   if (!installedBackends[activeBackend]) {
     openModels();
