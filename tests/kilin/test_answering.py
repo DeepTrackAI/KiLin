@@ -747,6 +747,30 @@ class TestRouting(unittest.TestCase):
         self.assertIsNone(mixed.shortcut)
         router.assert_called_once()
 
+    def test_follow_up_tools_need_an_earlier_answer(self) -> None:
+        """Replace an answer-inspecting tool for a new question on a file."""
+
+        literature = project_type("literature")
+        reply = '{"intent": "source_context", "standalone": true}'
+        cases = (
+            ("In Figure 1G of smith20.pdf, what does 79.7 represent?",
+             literature.default_intent),
+            ("Show the sentence you cited from smith20.pdf.",
+             "source_context"),
+            ("Show the context of the first cited passage.",
+             "source_context"),
+        )
+        for question, intent in cases:
+            with self.subTest(question=question):
+                with patch.object(answering, "side_reply",
+                                  return_value=reply):
+                    decision = answering.route_question(
+                        object(), literature, self.turns, question
+                    )
+                self.assertEqual(decision.intent, intent)
+                if intent == literature.default_intent:
+                    self.assertIn("names a file", decision.fallback)
+
     def test_router_errors_do_not_stop_answers(self) -> None:
         """Use a fallback when generation of the route raises."""
 

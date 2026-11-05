@@ -222,6 +222,17 @@ HISTORY_CITATION_MARKER: Final[str] = "[source]"
 _REFERS_BACK: Final[re.Pattern[str]] = require_default_pattern(
     _ANSWERING_DEFAULTS, "REFERS_BACK_PATTERN", "ANSWERING", flags=re.I
 )
+# A tool that works on an earlier answer is not meant by a question that
+# names a file and says nothing about earlier answers ("In Figure 1G of
+# smith20.pdf, what does 79.7 represent?").
+_NAMED_FILE: Final[re.Pattern[str]] = re.compile(
+    r"\b[\w.-]+\.(?:pdf|md|txt|docx?|py|ipynb|m|json)\b", re.I
+)
+_EARLIER_ANSWER: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:you|your|cited|quoted|listed|answer|answers|previous|earlier"
+    r"|above|just|that|this|these|those|them)\b",
+    re.I,
+)
 # Common words are excluded from term matching but keep their configured
 # vocabulary independent of Python source code.
 _COMMON_WORDS: Final[frozenset[str]] = require_default_lowercase_words(
@@ -824,7 +835,10 @@ def route_question(
     with the turn's question, sources, or summary. Turns whose intent
     neither reads history nor retrieves (small talk) are not listed to the
     router and are never related. A question left with no related turns
-    is standalone.
+    is standalone. A tool that works on an earlier answer (``follows_up``)
+    is replaced by the default intent when the question names a file and
+    says nothing of earlier answers ("In Figure 1G of smith20.pdf, what
+    does 79.7 represent?").
 
     """
 
@@ -879,6 +893,23 @@ def route_question(
     standalone = decision.standalone or (bool(dropped) and not kept)
 
     intent = project.intents.get(decision.intent)
+    fallback = decision.fallback
+    if (
+        intent is not None
+        and intent.tool is not None
+        and TOOL_REGISTRY[intent.tool.name].follows_up
+        and _NAMED_FILE.search(question)
+        and not _EARLIER_ANSWER.search(question)
+    ):
+        # A new question about a named file, not about an earlier answer.
+        decision = RouteDecision(
+            **{**_fields(decision), "intent": project.default_intent}
+        )
+        intent = project.intents[project.default_intent]
+        fallback = (
+            "follow-up intent replaced: the question names a file and "
+            "no earlier answer"
+        )
     if (
         not kept
         and intent is not None
@@ -912,7 +943,7 @@ def route_question(
             "standalone": standalone,
             "related_turn_ids": tuple(kept),
         },
-        fallback=decision.fallback,
+        fallback=fallback,
         refers_back=pointing,
         dropped_turns=tuple(dropped),
     )
