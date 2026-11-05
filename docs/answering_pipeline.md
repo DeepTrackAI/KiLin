@@ -105,6 +105,12 @@ decision. `select_history()` applies the intent's policy:
 - `recent`: send a recent bounded window.
 - `relevant`: choose validated related turns where available.
 
+A tool that works on an earlier answer (`follows_up`, such as `show_source`
+or `filter_results`) is replaced by the default intent when the question
+names a file and says nothing of earlier answers ("In Figure 1G of
+smith20.pdf, what does 79.7 represent?"): such a question is new, not a
+follow-up, and the tool would only report that it found no earlier answer.
+
 The prompt history contains selected prior **questions and answers**, not
 full prior evidence payloads. Related-turn evidence may be carried forward
 separately when an intent permits it. This distinction affects privacy,
