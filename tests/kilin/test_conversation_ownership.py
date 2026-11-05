@@ -82,7 +82,10 @@ class TestConversationFileLock(unittest.TestCase):
             self.assertEqual(
                 owner.lock_path.name, ".conversation_test.json.lock"
             )
-            self.assertEqual(owner.lock_path.parent, self.path.parent)
+            self.assertEqual(
+                owner.lock_path.parent.resolve(),
+                self.path.parent.resolve(),
+            )
             self.assertFalse(
                 self.path.with_name(self.path.name + ".lock").exists()
             )
