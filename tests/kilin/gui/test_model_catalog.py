@@ -145,6 +145,29 @@ class TestThinkingModels(unittest.TestCase):
                 thinking_switches(entries), thinking_switches(entries)
             )
 
+    def test_prompt_difference_does_not_verify_model_reasoning(self) -> None:
+        """A template-only prompt difference is not a model load test."""
+
+        with TemporaryDirectory() as folder:
+            entries = []
+            for model_id, template in (
+                ("a/format-change", "{{ 'A' if enable_thinking else 'B' }}"),
+                ("a/static", "Unchanging prompt"),
+            ):
+                snapshot = Path(folder, model_id, "snapshots", "abc")
+                snapshot.mkdir(parents=True)
+                (snapshot / "chat_template.jinja").write_text(
+                    template, encoding="utf-8"
+                )
+                entries.append({
+                    "model_id": model_id,
+                    "path": str(Path(folder, model_id)),
+                })
+
+            self.assertEqual(
+                thinking_switches(entries),
+                {"a/format-change": True, "a/static": False},
+            )
 
 
 class TestDownloadedModels(unittest.TestCase):

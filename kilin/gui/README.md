@@ -318,14 +318,17 @@ is saved: the Project values set there are kept on the page and written only
 into the new project's `profile.ini` when it is created, so the next new
 project starts from the defaults again.
 
-Effort levels lists five levels. Each has an editable name and a language
-model chosen from a dropdown of cached language models. Each model shows what the engine
-checked in its downloaded chat template, rendered with `enable_thinking`
-on and off: "· can think" when the two prompts differ, "· no thinking
-switch" when the template renders but ignores it. A model that is not
-downloaded, or whose template is missing or fails to render, shows
-nothing, because nothing is known; nothing is judged from the name. The
-composer's Thinking switch is enabled only for "· can think" models. Search depth is a
+Effort levels lists five levels. Each has an editable name and a
+language model chosen from a dropdown of cached language models. The
+GUI renders each cached chat template with `enable_thinking` on and
+off for one sample prompt. It shows "· thinking switch detected" when
+the rendered prompts differ, "· no template switch detected" when
+they are identical, or no label when the template cannot be checked.
+This probe neither loads the model nor establishes its reasoning
+capability or runtime support. The composer's Thinking switch remains
+disabled unless a template prompt difference was detected. In Answers,
+"Request thinking via chat template" passes the setting to generation;
+actual model behavior is not verified by the probe. Search depth is a
 separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
