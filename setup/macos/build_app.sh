@@ -8,7 +8,9 @@
 #
 # Output: dist/KíLín.app and dist/KíLín.dmg. Set CODESIGN_IDENTITY to sign
 # with a Developer ID; otherwise the app is signed ad hoc, and users open it
-# the first time with right-click > Open.
+# the first time with right-click > Open. The disk image's window is laid
+# out through Finder, so the first build asks to let the terminal control
+# Finder. dmg-background.png (and @2x) is the window's background.
 set -euo pipefail
 
 project_dir=$(cd "$(dirname "$0")/../.." && pwd)
@@ -80,13 +82,52 @@ PLIST
 
 codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$app"
 
-# The disk image: the app beside a link to Applications, to drag onto.
+# The disk image: the app beside a link to Applications, to drag onto,
+# over a background that says so. Finder keeps the window's layout in the
+# image, so it is laid out on a writable copy, then compressed.
 staging=$(mktemp -d)
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
-hdiutil create -volname "KíLín" -srcfolder "$staging" -ov -format UDZO \
-    "$dist/KíLín.dmg" >/dev/null
-rm -rf "$staging"
+mkdir "$staging/.background"
+tiffutil -cathidpicheck setup/macos/dmg-background.png \
+    setup/macos/dmg-background@2x.png \
+    -out "$staging/.background/background.tiff" >/dev/null 2>&1
+writable="$staging.dmg"
+hdiutil create -volname "KíLín" -srcfolder "$staging" -ov -format UDRW \
+    "$writable" >/dev/null
+mount_point=$(mktemp -d)
+hdiutil attach "$writable" -readwrite -noverify -noautoopen \
+    -mountpoint "$mount_point" >/dev/null
+# 640 x 400 window, the icons centred on the background's arrow.
+if ! osascript >/dev/null <<APPLESCRIPT
+tell application "Finder"
+    set dmgFolder to folder (POSIX file "$mount_point" as alias)
+    open dmgFolder
+    set current view of container window of dmgFolder to icon view
+    set toolbar visible of container window of dmgFolder to false
+    set statusbar visible of container window of dmgFolder to false
+    set bounds of container window of dmgFolder to {200, 120, 840, 548}
+    set options to icon view options of container window of dmgFolder
+    set arrangement of options to not arranged
+    set icon size of options to 112
+    set text size of options to 13
+    set background picture of options to file ".background:background.tiff" of dmgFolder
+    set position of item "KíLín.app" of dmgFolder to {170, 170}
+    set position of item "Applications" of dmgFolder to {470, 170}
+    update dmgFolder without registering applications
+    delay 1
+    close container window of dmgFolder
+end tell
+APPLESCRIPT
+then
+    echo "Could not lay out the disk image window (Finder automation" \
+        "may need permission); it keeps the plain layout." >&2
+fi
+sync
+hdiutil detach "$mount_point" >/dev/null
+rm -f "$dist/KíLín.dmg"
+hdiutil convert "$writable" -format UDZO -o "$dist/KíLín.dmg" >/dev/null
+rm -rf "$staging" "$writable" "$mount_point"
 
 echo "Built $app"
 echo "Built $dist/KíLín.dmg (installs $spec)"
