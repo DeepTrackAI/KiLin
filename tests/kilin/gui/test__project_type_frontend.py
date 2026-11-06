@@ -14,7 +14,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -28,11 +31,10 @@ class TestProjectTypeFrontend(unittest.TestCase):
         """No code/literature assumptions are needed to drive the browser."""
 
         source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
-        functions = []
-        for name in ("renderProjectTypes", "renderConversationEmpty"):
-            start = source.index(f"function {name}(")
-            end = source.index("\n}\n", start) + 3
-            functions.append(source[start:end])
+        functions = [
+            extract_function(source, name)
+            for name in ("renderProjectTypes", "renderConversationEmpty")
+        ]
         state = []
         for prefix in (
             "let activeProjectTypeId", "const lastEmptyPrompt",

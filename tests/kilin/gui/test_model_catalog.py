@@ -145,6 +145,29 @@ class TestThinkingModels(unittest.TestCase):
                 thinking_switches(entries), thinking_switches(entries)
             )
 
+    def test_prompt_difference_does_not_verify_model_reasoning(self) -> None:
+        """A template-only prompt difference is not a model load test."""
+
+        with TemporaryDirectory() as folder:
+            entries = []
+            for model_id, template in (
+                ("a/format-change", "{{ 'A' if enable_thinking else 'B' }}"),
+                ("a/static", "Unchanging prompt"),
+            ):
+                snapshot = Path(folder, model_id, "snapshots", "abc")
+                snapshot.mkdir(parents=True)
+                (snapshot / "chat_template.jinja").write_text(
+                    template, encoding="utf-8"
+                )
+                entries.append({
+                    "model_id": model_id,
+                    "path": str(Path(folder, model_id)),
+                })
+
+            self.assertEqual(
+                thinking_switches(entries),
+                {"a/format-change": True, "a/static": False},
+            )
 
 
 class TestDownloadedModels(unittest.TestCase):
@@ -166,18 +189,27 @@ class TestDownloadedModels(unittest.TestCase):
             index = json.dumps({"weight_map": {
                 "a": "model-1.safetensors", "b": "model-2.safetensors",
             }})
-            cache("a/whole", {"config.json": "{}", "model.safetensors": "w"})
+            cache("a/whole", {
+                "config.json": "{}", "model.safetensors": "w",
+                "tokenizer.json": "{}",
+            })
             cache("a/shards", {
                 "config.json": "{}", "model.safetensors.index.json": index,
                 "model-1.safetensors": "w", "model-2.safetensors": "w",
+                "tokenizer.json": "{}",
             })
             # Stopped downloads: no weights yet, a missing shard, no config.
-            cache("a/stopped", {"config.json": "{}", "README.md": "r"})
+            cache("a/stopped", {
+                "config.json": "{}", "README.md": "r",
+                "tokenizer.json": "{}",
+            })
             cache("a/half", {
                 "config.json": "{}", "model.safetensors.index.json": index,
-                "model-1.safetensors": "w",
+                "model-1.safetensors": "w", "tokenizer.json": "{}",
             })
-            cache("a/noconfig", {"model.safetensors": "w"})
+            cache("a/noconfig", {
+                "model.safetensors": "w", "tokenizer.json": "{}",
+            })
             with patch(
                 "kilin.gui.model_catalog.available_models",
                 return_value=entries,

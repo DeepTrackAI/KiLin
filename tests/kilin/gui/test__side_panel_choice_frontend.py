@@ -16,7 +16,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _APP = _ROOT / "kilin/gui/web/app.js"
@@ -54,8 +57,7 @@ class TestSidePanelChoiceFrontend(unittest.TestCase):
         source = _APP.read_text(encoding="utf-8")
         start = source.index("let sidePanelChoice")
         state = source[start : source.index(";", start) + 1]
-        start = source.index("function chooseSidePanels(")
-        function = source[start : source.index("\n}\n", start) + 3]
+        function = extract_function(source, "chooseSidePanels")
         script = r"""
 const assert = require("node:assert/strict");
 const shown = [];

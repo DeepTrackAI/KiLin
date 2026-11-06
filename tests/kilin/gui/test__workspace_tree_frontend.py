@@ -16,7 +16,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -29,11 +32,10 @@ class TestWorkspaceTreeFrontend(unittest.TestCase):
         """Only the selectable preview tree contains labels and checkboxes."""
 
         source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
-        functions = []
-        for name in ("branch", "allFiles"):
-            start = source.index(f"function {name}(")
-            end = source.index("\n}\n", start) + 3
-            functions.append(source[start:end])
+        functions = [
+            extract_function(source, name)
+            for name in ("branch", "allFiles")
+        ]
         start = source.index("const expandedFolders")
         state = source[start : source.index(";", start) + 1]
         script = r"""
@@ -90,17 +92,16 @@ console.log("workspace tree passed");
         """The tree leaves out conversation locks and .DS_Store files."""
 
         source = (_ROOT / "kilin/gui/web/app.js").read_text(encoding="utf-8")
-        start = source.index("function renderWorkspace(")
-        render = source[start : source.index("\n}\n", start)]
+        render = extract_function(source, "renderWorkspace")
         self.assertIn("fileTree(paths.filter(shownInWorkspace))", render)
-        start = source.index("function shownInWorkspace(")
-        function = source[start : source.index("\n}\n", start) + 3]
+        function = extract_function(source, "shownInWorkspace")
         script = r"""
 const assert = require("node:assert/strict");
 """
         script += function
         script += r"""
 assert.equal(shownInWorkspace("logs/traces/conversation_a.json.lock"), false);
+assert.equal(shownInWorkspace("logs/traces/.conversation_a.json.lock"), false);
 assert.equal(shownInWorkspace("logs/traces/conversation_a.json"), true);
 assert.equal(shownInWorkspace("sources/notes.json.lock"), true);
 assert.equal(shownInWorkspace("outputs/report.md"), true);

@@ -80,6 +80,7 @@ include = ["kilin*"]
     "web/katex/LICENSE",
     "web/katex/README.md",
     "icons/*.png",
+    "icons/*.svg",
     "icons/README.md",
 ]
 

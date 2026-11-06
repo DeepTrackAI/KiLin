@@ -229,6 +229,22 @@ changed indexing value rebuilds the index.
 | `[models] chat_mlx`, `chat_torch` | None | Kept equal to the Lagom (level 3) model; GUI answers use the chosen level's model on MLX |
 | `[retrieval] count` | None | Never; GUI answers use the search depth step instead, so only the command line uses it |
 
+Indexing edits made in the GUI are acknowledged only after the updated
+project has reopened. The engine retains a complete snapshot of the
+previous `profile.ini` and, if the operation fails after publication,
+restores that text using atomic file replacement. A failure before the
+profile changes leaves the existing session intact. If the engine already
+started reopening the project, it restores the previous conversation after
+the profile is recovered. If restoration or reactivation cannot be
+verified, the project is left inactive and the user must inspect the
+saved profile and reopen it (or restart KíLín if closing failed).
+
+This is a **single-file profile rollback**, not a transaction over
+`indexes/`, source manifests, and the index metadata. The core validates
+saved index settings and source state on reopening and rebuilds stale
+indexes as needed. A failed rebuild can therefore leave intermediate index
+artifacts even when the previous profile has been restored.
+
 The project's name is its folder's name, so it is not in `profile.ini`.
 KíLín setup's Appearance and projects folder are per-user GUI preferences
 in `preferences.json`, not project settings.
@@ -402,7 +418,8 @@ An invalid profile or resource plan fails before reservation. The core uses
 exclusive filesystem creation to claim a `.kilin-creating` marker and holds
 it throughout initialization. Competing processes cannot initialize the same
 workspace. An explicit destination is checked again after the marker is
-claimed, not just before it. The marker is removed only by its owner.
+claimed, not just before it. The running creator removes its marker on a
+normal exit.
 
 The profile is published **last** using a same-directory temporary file and
 an exclusive hard link. Publication never replaces an existing profile,
@@ -417,6 +434,13 @@ parent directories are not removed. Unexpected unrelated files are preserved.
 A process termination may leave the marker and partial resources on disk.
 Such a directory remains occupied and requires deliberate inspection/recovery;
 creation never guesses that a marker is stale or silently clears the folder.
+When the GUI stops its engine, it may remove an otherwise empty directory
+containing only a marker matching that stopped engine's process ID and
+recording that the attempt created the directory. Pre-existing empty folders
+and legacy markers without this ownership information are retained. The GUI
+never recursively deletes a project or its contents. A published project is
+preserved even if the GUI has not yet processed its `opened` event. Incomplete
+files may therefore require explicit inspection and removal by the user.
 
 After a project is established, cumulative source additions and later source
 synchronization are deliberately **not** all-or-nothing transactions.

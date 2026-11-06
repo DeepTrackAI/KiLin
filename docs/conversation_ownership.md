@@ -36,7 +36,7 @@ The OS lock belongs to a persistent *companion file*, such as:
 ```text
 logs/traces/
     conversation_2026-10-12T20-00-00.json
-    conversation_2026-10-12T20-00-00.json.lock
+    .conversation_2026-10-12T20-00-00.json.lock
 ```
 
 On macOS/Linux, the lock uses nonblocking `fcntl.flock`. On Windows, it uses
@@ -46,6 +46,8 @@ lock cannot be attached to its replaceable inode. The companion remains on
 disk after closure; **its existence does not mean that the file is locked**.
 Do not remove lock files while KíLín may still be using them, because a
 removed/recreated companion can break coordination between writers.
+The leading dot hides the sidecar in Finder and typical Linux file browsers.
+This fresh-release convention does not migrate legacy lock filenames.
 
 ## Lifetimes and ownership
 
@@ -93,12 +95,21 @@ RAG borrows it rather than acquiring a second lock.
 `RAGSession.reset()` archives the current file while owning its path and
 continues with a fresh conversation under that same path. The GUI's
 `ConversationStore.archive()` borrows the active owner where applicable,
-then moves the JSON, and afterwards its `.json.lock` companion, to
-`logs/traces/.deleted/`. A JSON moved back into `logs/traces/` by hand gets a
-new lock companion the first time it is opened. In the deletion flow, the GUI
-closes the old logger with `emit_event=False` to release ownership without
-rewriting the already archived JSON. An inactive conversation is locked
-independently during archival.
+then moves only the JSON to `logs/traces/.deleted/`. The hidden lock
+companion remains at its original path even while a borrowed writer holds
+the lease. The GUI closes the old logger with `emit_event=False` to release
+ownership without rewriting the archived JSON. An inactive conversation is
+locked independently during archival; a competing owner prevents deletion.
+
+Archived conversations are excluded from the active catalog. There is no
+in-app restore command. Exceptional restoration requires closing all KíLín
+instances using the project, moving the archived JSON back to
+`logs/traces/`, and reopening the project. Returning it under its original
+filename reuses the hidden lock. If an archive collision added a suffix,
+restore to an unused conversation filename; a different filename receives
+its own companion upon first use. A manual move performed while a writer is
+active does not participate in the locking protocol. In macOS Finder, use
+Command-Shift-Period to reveal the hidden `.deleted` folder if necessary.
 
 ## Atomic writes and cleanup
 

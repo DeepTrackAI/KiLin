@@ -16,6 +16,10 @@ Key Features
 
     Allocate the preferred default name, then numbered siblings, atomically.
 
+- **Conservative Stop cleanup**
+
+    Remove empty creation claims without erasing any project files.
+
 Module Structure
 ----------------
 
@@ -26,6 +30,10 @@ Module Structure
 - ``claim_workspace``
 
     Reserve an explicit empty destination or a fresh default sibling.
+
+- ``cleanup_stopped_creation``
+
+    Safely remove empty claims after a stopped engine; retain project data.
 
 Examples
 --------
@@ -190,6 +198,104 @@ def check_available(root: Path) -> None:
             )
 
 
+def cleanup_stopped_creation(
+    projects_folder: Path,
+    reported_workspace: Path | None,
+    engine_pid: int,
+) -> tuple[list[str], list[str]]:
+    """Clean only an empty creation claim after its engine was stopped.
+
+    A ``project_created`` event means the profile has been published, even
+    if the GUI has not yet received ``opened``. Such a workspace is always
+    preserved. A matching process-ID marker identifies a possible unfinished
+    claim, but is not proof that its contents can be discarded: process IDs
+    can be reused, and files may have been added or edited meanwhile.
+
+    Only a directory containing its creation marker and nothing else may be
+    removed, using ``rmdir`` rather than recursive deletion. The marker must
+    also record that the engine created the directory, rather than claiming
+    an existing empty folder. Older markers without this distinction remain
+    untouched. Populated directories require deliberate recovery.
+
+    Parameters
+    ----------
+    projects_folder: pathlib.Path
+        Parent of the GUI's automatically allocated project directories.
+    reported_workspace: pathlib.Path | None
+        Workspace reported by ``project_created`` but not yet acknowledged
+        as opened by the Qt window, or None.
+    engine_pid: int
+        Process ID of the stopped engine, or 0 when unknown.
+
+    Returns
+    -------
+    tuple[list[str], list[str]]
+        Removed empty claim directories and known preserved workspaces.
+        Preserved paths include the reported workspace and matching claims
+        containing files; they are not an exhaustive search for leftovers.
+
+    Notes
+    -----
+    This is conservative crash cleanup, not a secure filesystem transaction
+    against hostile concurrent modifications. Never infer that a populated
+    project belongs to a stopped process solely from a PID marker.
+
+    """
+
+    parent = projects_folder.resolve()
+    preserved: list[str] = []
+    protected = None
+    if reported_workspace is not None:
+        workspace = Path(reported_workspace)
+        if not workspace.is_symlink() and workspace.is_dir():
+            protected = workspace.resolve()
+            preserved.append(str(protected))
+    if engine_pid <= 0 or not parent.is_dir():
+        return [], preserved
+
+    removed: list[str] = []
+    owner = f"pid={engine_pid}\ncreated=1\n"
+    old_owner = f"pid={engine_pid}\n"
+    existing_owner = f"{old_owner}created=0\n"
+    for folder in parent.iterdir():
+        if folder.is_symlink() or not folder.is_dir():
+            continue
+        root = folder.resolve()
+        if root.parent != parent:
+            continue
+        marker = folder / _MARKER
+        if marker.is_symlink():
+            continue
+        try:
+            claim = marker.read_text(encoding="ascii")
+        except (OSError, UnicodeError):
+            continue
+        if claim in {old_owner, existing_owner}:
+            if root != protected:
+                preserved.append(str(root))
+            continue
+        if claim != owner or root == protected:
+            continue
+        try:
+            entries = list(folder.iterdir())
+        except OSError:
+            preserved.append(str(root))
+            continue
+        if entries != [marker]:
+            preserved.append(str(root))
+            continue
+        try:
+            marker.unlink()
+            folder.rmdir()
+        except OSError:
+            # Another entry or a permission change must never trigger
+            # recursive deletion, even if the marker was already removed.
+            preserved.append(str(root))
+            continue
+        removed.append(str(root))
+    return removed, preserved
+
+
 @contextmanager
 def claim_workspace(
     preferred: str | Path, *, allocate: bool = False
@@ -219,9 +325,10 @@ def claim_workspace(
 
     Notes
     -----
-    The exclusive marker coordinates cooperating creators without guessing
-    whether a crashed process is still alive. Stale markers remain protected.
-    Cleanup removes only this attempt's marker and, when created here, its
+    The exclusive marker records its PID and whether this attempt created
+    the directory. Cooperating creators never guess if a crashed process
+    remains alive. Populated stale claims remain protected. Normal cleanup
+    removes only this attempt's marker and, when created here, its
     empty root. Initialization owns cleanup of its other resources. This is
     not protection against hostile processes changing the filesystem.
 
@@ -266,7 +373,8 @@ def claim_workspace(
             if profile.exists() or profile.is_symlink():
                 raise ProjectAlreadyExistsError(root)
             raise WorkspaceOccupiedError(root, "Workspace is no longer empty")
-        os.write(descriptor, f"pid={os.getpid()}\n".encode("ascii"))
+        claim = f"pid={os.getpid()}\ncreated={int(created)}\n"
+        os.write(descriptor, claim.encode("ascii"))
         yield root
     finally:
         if descriptor is not None:

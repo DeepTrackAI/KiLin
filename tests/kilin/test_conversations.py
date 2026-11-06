@@ -17,11 +17,17 @@ from dataclasses import FrozenInstanceError, asdict
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from kilin import conversations as module
+from kilin.conversation_ownership import (
+    ConversationFileLock,
+    ConversationLockedError,
+)
 from kilin.conversation_format import (
     CONVERSATION_SESSION_KEY,
     conversation_state,
@@ -1056,6 +1062,43 @@ class TestStoreArchiving(ConversationStoreFixture):
         self.assertIn(old.conversation_id,
                       archived.read_text(encoding="utf-8"))
 
+    def test_archive_last_borrowed_owner_reserves_original_filename(self):
+        """Create a replacement without colliding with an owned sidecar."""
+
+        when = datetime(2026, 11, 5, 9, 10, 11, tzinfo=timezone.utc)
+        with patch.object(module, "datetime") as clock:
+            clock.now.return_value = when
+            old = self.store.create()
+            path = self.store.state_path(old)
+            with ConversationFileLock(path) as owner:
+                active, archived = self.store.archive(
+                    old.conversation_id, ownership=owner
+                )
+                replacement = self.store.state_path(active)
+                self.assertTrue(owner.holds(path))
+                self.assertTrue(archived.is_file())
+                self.assertFalse(path.exists())
+                self.assertNotEqual(replacement, path)
+                self.assertTrue(replacement.is_file())
+                self.assertTrue(owner.lock_path.is_file())
+                self.assertNotEqual(
+                    ConversationFileLock(replacement).lock_path,
+                    owner.lock_path,
+                )
+
+    def test_new_conversation_skips_archived_lock_companion(self):
+        """Preserve a restorable name even if no JSON exists at that path."""
+
+        when = datetime(2026, 11, 5, 9, 10, 11, tzinfo=timezone.utc)
+        old_path = self.store.root / "conversation_2026-11-05T09-10-11.json"
+        with ConversationFileLock(old_path) as old:
+            with patch.object(module, "datetime") as clock:
+                clock.now.return_value = when
+                item = self.store.create()
+                self.assertNotEqual(self.store.state_path(item), old_path)
+                self.assertTrue(old.holds(old_path))
+                self.assertTrue(self.store.state_path(item).is_file())
+
     def test_archive_active_selects_latest_remaining(self):
         first = self.store.create()
         second = self.store.create()
@@ -1098,41 +1141,147 @@ class TestStoreArchiving(ConversationStoreFixture):
         self.assertNotEqual(active.conversation_id,
                             item.conversation_id)
 
-    def test_archive_moves_the_lock_companion_with_the_json(self):
+    def test_archive_keeps_hidden_lock_companion_at_original_path(self):
+        """Keep the lock inode stable while the JSON moves to .deleted."""
+
         # Another conversation stays, so no replacement takes the name.
         self.store.create()
         item = self.store.create()
         path = self.store.state_path(item)
-        lock = path.with_name(path.name + ".lock")
+        lock = ConversationFileLock(path).lock_path
         lock.write_text("", encoding="utf-8")
+        before = lock.stat()
         _, archived = self.store.archive(item.conversation_id)
-        self.assertFalse(lock.exists())
-        self.assertTrue(
-            archived.with_name(archived.name + ".lock").is_file()
+        self.assertTrue(archived.is_file())
+        self.assertTrue(lock.is_file())
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino),
+                         (before.st_dev, before.st_ino))
+        self.assertFalse(
+            ConversationFileLock(archived).lock_path.exists()
         )
 
-    def test_restored_conversation_gets_a_new_lock_when_opened(self):
-        """A JSON dragged back from .deleted/ works without its lock."""
+    def test_restored_conversation_reuses_hidden_lock_when_opened(self):
+        """A manually restored JSON reuses the original stable companion."""
+
         kept = self.store.create()
         item = self.store.create()
+        path = self.store.state_path(item)
+        lock = ConversationFileLock(path).lock_path
         _, archived = self.store.archive(item.conversation_id)
-        archived.with_name(archived.name + ".lock").unlink()
-        restored = self.store.root / archived.name
-        archived.rename(restored)
+        before = lock.stat()
+        archived.rename(path)
         reopened = module.ConversationStore(self.project)
         reopened.ensure()
         self.assertIn(
             item.conversation_id,
             [x.conversation_id for x in reopened.conversations()],
         )
-        lock = restored.with_name(restored.name + ".lock")
-        self.assertFalse(lock.exists())
-        with module.conversation_write_ownership(restored):
+        with module.conversation_write_ownership(path):
             self.assertTrue(lock.is_file())
+        self.assertEqual((lock.stat().st_dev, lock.stat().st_ino),
+                         (before.st_dev, before.st_ino))
+        self.assertFalse(
+            ConversationFileLock(archived).lock_path.exists()
+        )
         self.assertIn(
             kept.conversation_id,
             [x.conversation_id for x in reopened.conversations()],
         )
+
+    def test_archive_while_borrowed_blocks_independent_process(self):
+        """Retain the same OS lock during archival of an active trace."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        command = [
+            sys.executable, "-c",
+            "import sys; from kilin.conversation_ownership import "
+            "ConversationFileLock; "
+            "owner = ConversationFileLock(sys.argv[1]); "
+            "owner.acquire(); owner.release()",
+            str(path),
+        ]
+        with ConversationFileLock(path) as owner:
+            before = owner.lock_path.stat()
+            _, archived = self.store.archive(
+                item.conversation_id, ownership=owner
+            )
+            self.assertTrue(archived.is_file())
+            self.assertFalse(path.exists())
+            self.assertTrue(owner.holds(path))
+            self.assertTrue(owner.lock_path.is_file())
+            self.assertEqual(
+                (owner.lock_path.stat().st_dev,
+                 owner.lock_path.stat().st_ino),
+                (before.st_dev, before.st_ino),
+            )
+            rejected = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=15, check=False,
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn("ConversationLockedError", rejected.stderr)
+        accepted = subprocess.run(
+            command, capture_output=True, text=True,
+            timeout=15, check=False,
+        )
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+
+    def test_archive_refuses_an_unborrowed_active_lock(self):
+        """Reject deletion while another owner holds the conversation."""
+
+        item = self.store.create()
+        path = self.store.state_path(item)
+        before = path.read_bytes()
+        with ConversationFileLock(path):
+            with self.assertRaises(ConversationLockedError):
+                self.store.archive(item.conversation_id)
+            self.assertEqual(path.read_bytes(), before)
+            self.assertEqual(self.store.active(), item)
+        self.assertTrue(path.is_file())
+
+    def test_repeated_archive_restore_keeps_single_companion(self):
+        """Never create a second sidecar during repeated manual recovery."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        lock = ConversationFileLock(path).lock_path
+        with ConversationFileLock(path):
+            pass
+        before = lock.stat()
+        for _ in range(3):
+            _, archived = self.store.archive(item.conversation_id)
+            self.assertTrue(lock.is_file())
+            self.assertFalse(
+                ConversationFileLock(archived).lock_path.exists()
+            )
+            archived.rename(path)
+            self.store = module.ConversationStore(self.project)
+            self.store.ensure()
+            with module.conversation_write_ownership(path):
+                pass
+            self.assertEqual(
+                (lock.stat().st_dev, lock.stat().st_ino),
+                (before.st_dev, before.st_ino),
+            )
+
+    def test_manually_restored_path_respects_existing_ownership(self):
+        """Reject another lease even when archived JSON is moved back."""
+
+        self.store.create()
+        item = self.store.create()
+        path = self.store.state_path(item)
+        with ConversationFileLock(path) as owner:
+            _, archived = self.store.archive(
+                item.conversation_id, ownership=owner
+            )
+            archived.rename(path)
+            with self.assertRaises(ConversationLockedError):
+                ConversationFileLock(path).acquire()
+        with ConversationFileLock(path):
+            pass
 
     def test_archive_collision_skips_multiple_reserved_names(self):
         item = self.store.create()
