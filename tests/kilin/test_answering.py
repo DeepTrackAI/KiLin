@@ -771,6 +771,33 @@ class TestRouting(unittest.TestCase):
                 if intent == literature.default_intent:
                     self.assertIn("names a file", decision.fallback)
 
+    def test_follow_up_tools_are_rerouted_without_them(self) -> None:
+        """Ask the router again without tools that need an earlier answer."""
+
+        literature = project_type("literature")
+        replies = [
+            '{"intent": "source_context", "standalone": true}',
+            '{"intent": "topic_listing", "standalone": true}',
+        ]
+        question = (
+            "Find new passages in smith20.pdf explaining how its "
+            "interface works."
+        )
+        with patch.object(
+            answering, "side_reply", side_effect=replies
+        ) as reply:
+            decision = answering.route_question(
+                object(), literature, self.turns, question
+            )
+
+        self.assertEqual(decision.intent, "topic_listing")
+        self.assertIn("source_context replaced by topic_listing",
+                      decision.fallback)
+        first, second = (call.args[2] for call in reply.call_args_list)
+        self.assertIn("- source_context:", first)
+        self.assertNotIn("- source_context:", second)
+        self.assertIn("- topic_listing:", second)
+
     def test_router_errors_do_not_stop_answers(self) -> None:
         """Use a fallback when generation of the route raises."""
 
