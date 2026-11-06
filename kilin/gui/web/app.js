@@ -45,6 +45,8 @@ let busy = false;
 let ready = false;
 // The Settings status text that showError last wrote, cleared with it.
 let shownErrorStatus = "";
+// The setup reminder shown in the Settings status line, until it is done.
+let shownSetupReminder = "";
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
@@ -337,16 +339,16 @@ function renderSavedProjects(projects) {
       button.type = "button";
       const name = document.createElement("span");
       name.className = "saved-project-name";
-      name.textContent = `Resume ${project.name}`;
+      name.textContent = project.name;
       const typeLabel = document.createElement("span");
       typeLabel.className = "saved-project-type";
       // The type's own name, or its ID until the types have arrived.
       typeLabel.textContent = projectTypes[project.type_id]?.label || project.type_id;
       button.append(name, typeLabel);
-      button.title = `Resume ${project.type_id} project from ${project.project}`;
+      button.title = `Open ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
-        setBusy(true, "Resuming project…");
+        setBusy(true, "Opening project…");
         bridge.resumeProject(project.project);
       });
       list.append(button);
@@ -1735,8 +1737,25 @@ function showWelcome() {
   byId("terms-agree").checked = termsAccepted;
   byId("terms-agree").closest("label").classList.toggle("hidden", termsAccepted);
   byId("accept-terms").textContent = termsAccepted ? "Close" : "Continue";
+  byId("welcome-hint").classList.add("hidden");
   showSetupConfirmations();
-  if (!dialog.open) dialog.showModal();
+  if (dialog.open) return;
+  dialog.showModal();
+  // Opening focuses "Read the full terms of use"; the dialog takes it.
+  dialog.focus?.();
+}
+
+/**
+ * Answer an attempt to leave the welcome dialog before the terms are
+ * accepted: scroll to its end and say what is still needed there.
+ */
+function remindWelcome() {
+  const dialog = byId("welcome");
+  const hint = byId("welcome-hint");
+  hint.classList.remove("hidden");
+  dialog.scrollTo?.({ top: dialog.scrollHeight, behavior: "smooth" });
+  byId("terms-agree").focus?.({ preventScroll: true });
+  drawAttention(hint);
 }
 
 /**
@@ -1746,6 +1765,7 @@ function showWelcome() {
 function showSetupConfirmations() {
   const confirm = byId("confirm-workspace");
   confirm.classList.toggle("hidden", folderConfirmed);
+  byId("confirm-workspace-note").classList.toggle("hidden", folderConfirmed);
   confirm.disabled = busy || ready || !bridge;
   confirm.title = ready ? "Confirm it from the start screen." : "";
   // Continue needs the box ticked; Close (terms already accepted) does not.
@@ -1789,15 +1809,52 @@ function needsNewProjectSetup() {
 function remindSetupConfirmations() {
   byId("first-run-setup").open = true;
   if (!termsAccepted) showWelcome();
-  else {
-    byId("confirm-workspace").scrollIntoView?.({ block: "center" });
-    byId("confirm-workspace").focus?.({ preventScroll: true });
-  }
+  else pointToProjectsFolder();
   byId("model-download-status").textContent = !folderConfirmed && !termsAccepted
     ? "Confirm the projects folder and accept the terms of use to continue."
     : !folderConfirmed
       ? "Confirm the projects folder to continue."
       : "Accept the terms of use to continue.";
+  shownSetupReminder = byId("model-download-status").textContent;
+  // The terms have their own reminder in the welcome dialog.
+  if (termsAccepted) drawAttention(byId("model-download-status"));
+}
+
+/**
+ * Remove the setup reminder and its highlights once it no longer applies.
+ *
+ * The status line is cleared only while it still shows the reminder, so a
+ * later message there (such as download progress) stays.
+ */
+function clearSetupReminder() {
+  const status = byId("model-download-status");
+  if (shownSetupReminder && status.textContent === shownSetupReminder) {
+    status.textContent = "";
+  }
+  shownSetupReminder = "";
+  status.classList.remove("attention");
+  byId("confirm-workspace").classList.remove("attention");
+}
+
+/**
+ * Bring the Confirm projects folder button into view and highlight it.
+ */
+function pointToProjectsFolder() {
+  const confirm = byId("confirm-workspace");
+  confirm.scrollIntoView?.({ block: "center" });
+  confirm.focus?.({ preventScroll: true });
+  drawAttention(confirm);
+}
+
+/**
+ * Briefly highlight an element (see `.attention` in the styles).
+ * @param element Button or message to point to.
+ */
+function drawAttention(element) {
+  // Restarting the animation highlights again on every reminder.
+  element.classList.remove("attention");
+  void element.offsetWidth;
+  element.classList.add("attention");
 }
 
 /**
@@ -5359,11 +5416,15 @@ function onEvent(raw) {
     termsStep.classList.toggle("complete", termsAccepted);
     steps.append(folderStep, termsStep);
     renderTerms(data.terms || "");
+    byId("copyright").textContent = data.copyright || "";
+    // Just accepted in the welcome dialog: the folder is the next step.
+    const termsJustAccepted = acceptingTerms && termsAccepted;
     acceptingTerms = false;
     // The terms come first: the welcome dialog stays until they are accepted.
     if (!termsAccepted && termsVersion) showWelcome();
     else if (termsAccepted && byId("accept-terms").textContent === "Continue") byId("welcome").close?.();
     const setupReady = Boolean(data.ready) && folderConfirmed && termsAccepted;
+    if (folderConfirmed && termsAccepted) clearSetupReminder();
     // Always available; it opens by itself when something is missing.
     card.classList.remove("hidden");
     if (!setupReady) card.open = true;
@@ -5384,6 +5445,8 @@ function onEvent(raw) {
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
+    // The user's last setup step completed it: back to the normal view.
+    const setupJustFinished = setupReady && !kilinReady;
     kilinReady = setupReady;
     readinessMissingCount = data.missing_models.length;
     byId("install-required").classList.toggle("hidden", !data.missing_models.length);
@@ -5395,6 +5458,10 @@ function onEvent(raw) {
       // Explain missing new-project requirements without locking Settings.
       byId("models-panel").classList.remove("hidden");
       byId("first-run-setup").focus?.();
+      if (termsJustAccepted && !folderConfirmed) pointToProjectsFolder();
+    } else if (setupJustFinished) {
+      card.open = false;
+      closeModels();
     }
   } else if (data.event === "installed_models_used") {
     savedLevels = data.effort_levels || savedLevels;
@@ -5917,12 +5984,16 @@ byId("default-workspace").addEventListener("click", () => changeProjectsFolder(t
 byId("confirm-workspace").addEventListener("click", () => {
   if (!bridge || busy) return;
   if (ready) return changeProjectsFolder(false);
+  clearSetupReminder();
   // The engine restarts with the confirmed folder, then setup is rechecked.
   switchingProjectsFolder = true;
   setBusy(true, "Confirming the projects folder…");
   bridge.confirmProjectsFolder();
 });
-byId("terms-agree").addEventListener("change", showSetupConfirmations);
+byId("terms-agree").addEventListener("change", () => {
+  if (byId("terms-agree").checked) byId("welcome-hint").classList.add("hidden");
+  showSetupConfirmations();
+});
 byId("accept-terms").addEventListener("click", () => {
   if (termsAccepted) return byId("welcome").close();
   if (!bridge || !termsVersion || !byId("terms-agree").checked) return;
@@ -5931,9 +6002,23 @@ byId("accept-terms").addEventListener("click", () => {
   showSetupConfirmations();
   bridge.acceptTerms(termsVersion);
 });
-// Escape cannot skip the terms before they are accepted.
+// Escape cannot skip the terms before they are accepted. The browser may
+// close a dialog opened without a click despite a cancelled "cancel", so
+// Escape is stopped first and a dialog closed anyway is reopened.
+byId("welcome").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
 byId("welcome").addEventListener("cancel", (event) => {
-  if (!termsAccepted) event.preventDefault();
+  if (termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
+byId("welcome").addEventListener("close", () => {
+  if (termsAccepted || !termsVersion) return;
+  byId("welcome").showModal();
+  remindWelcome();
 });
 byId("view-terms").addEventListener("click", showWelcome);
 for (const link of document.querySelectorAll("#welcome .external-link")) {

@@ -41,6 +41,10 @@ Module Structure
     Read the terms of use shown in KíLín setup and whether the user has
     agreed to the current version.
 
+- ``copyright_notice``
+
+    Build the copyright line shown in Settings from the package authors.
+
 Examples
 --------
 >>> from kilin.gui.preferences import default_search_depth
@@ -53,8 +57,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from importlib import metadata
 import json
 from pathlib import Path
+import tomllib
 from typing import Final
 
 from huggingface_hub.utils import validate_repo_id
@@ -69,6 +75,7 @@ from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 __all__ = [
     "APPEARANCE_CHOICES",
     "BACKEND_CHOICES",
+    "COPYRIGHT_YEAR",
     "DEFAULTS_ENVIRONMENT",
     "DEFAULTS_FILE",
     "LEVEL_COUNT",
@@ -78,6 +85,7 @@ __all__ = [
     "TERMS_VERSION",
     "app_defaults",
     "built_in_defaults",
+    "copyright_notice",
     "default_appearance",
     "default_backend",
     "default_effort_levels",
@@ -115,6 +123,9 @@ _QUERY_FORMATS: Final[tuple[str, ...]] = ("qwen3", "plain")
 # text changes, so every user is asked to agree again.
 TERMS_FILE: Final[Path] = Path(__file__).with_name("terms.txt")
 TERMS_VERSION: Final[str] = "2026-11-05.2"
+# Year of first publication, which a copyright notice states; the names
+# come from the package authors (``pyproject.toml``).
+COPYRIGHT_YEAR: Final[int] = 2026
 
 
 def validate_model_id(value: str) -> str:
@@ -841,6 +852,46 @@ def terms_text() -> str:
     """
 
     return TERMS_FILE.read_text(encoding="utf-8").strip()
+
+
+def copyright_notice() -> str:
+    """Return the copyright line shown in Settings.
+
+    Returns
+    -------
+    str
+        For example "Copyright © 2026 A, B, and C", or "" when the
+        authors cannot be read.
+
+    Notes
+    -----
+    The authors are those of the installed package, which come from
+    ``pyproject.toml``; an uninstalled checkout reads that file directly,
+    like ``kilin.__version__``. Changing the authors there changes this
+    line, with no second list to update.
+
+    """
+
+    try:
+        authors = metadata.metadata("kilin")["Author"] or ""
+        names = [name.strip() for name in authors.split(",")]
+    except metadata.PackageNotFoundError:
+        manifest = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        try:
+            with manifest.open("rb") as stream:
+                project = tomllib.load(stream)["project"]
+        except (OSError, KeyError, tomllib.TOMLDecodeError):
+            return ""
+        names = [author.get("name", "") for author in project["authors"]]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    listed = (
+        names[0] if len(names) == 1
+        else " and ".join(names) if len(names) == 2
+        else f"{', '.join(names[:-1])}, and {names[-1]}"
+    )
+    return f"Copyright © {COPYRIGHT_YEAR} {listed}"
 
 
 def terms_accepted() -> bool:

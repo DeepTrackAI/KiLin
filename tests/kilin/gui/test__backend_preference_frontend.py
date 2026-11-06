@@ -122,10 +122,12 @@ let kilinReady = true;
 let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
+let acceptingTerms = false;
 let confirmedBackendPreference = "mlx";
 const showSetupLock = () => {};
 const refreshModelStatus = () => {};
 const renderTerms = () => {};
+const clearSetupReminder = () => {};
 """ + handler + r"""
 onEvent(JSON.stringify({
   event: "readiness", backend: "mlx", ready: false,
@@ -182,11 +184,17 @@ let kilinReady = true;
 let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
+let acceptingTerms = false;
 let confirmedBackendPreference = "mlx";
 const shownTerms = [];
 const showSetupLock = () => {};
 const refreshModelStatus = () => {};
 const renderTerms = (text) => shownTerms.push(text);
+const clearSetupReminder = () => {};
+let closed = 0;
+const closeModels = () => { closed += 1; };
+let pointed = 0;
+const pointToProjectsFolder = () => { pointed += 1; };
 let welcomes = 0;
 const showWelcome = () => { welcomes += 1; };
 """ + handler + r"""
@@ -212,12 +220,23 @@ assert.deepEqual(steps.slice(2), [
 assert.equal(byId("readiness-status").textContent, "2 missing");
 assert.equal(byId("readiness-summary").textContent,
   "Confirm the projects folder and accept the terms of use to finish setup.");
+// Accepting the terms in the dialog points to the folder next.
+acceptingTerms = true;
+readiness({folder_confirmed: false, terms_accepted: true});
+assert.equal(pointed, 1);
+assert.equal(acceptingTerms, false);
 readiness({folder_confirmed: true, terms_accepted: false});
 assert.equal(kilinReady, false);
 assert.equal(byId("readiness-summary").textContent,
   "Accept the terms of use to finish setup.");
+assert.equal(closed, 0);
 readiness({folder_confirmed: true, terms_accepted: true});
 assert.equal(kilinReady, true);
+// The last step finished setup: it collapses and Settings closes, once.
+assert.equal(byId("first-run-setup").open, false);
+assert.equal(closed, 1);
+readiness({folder_confirmed: true, terms_accepted: true});
+assert.equal(closed, 1);
 assert.equal(byId("readiness-steps").children[2].textContent,
   "Projects folder: /Projects");
 assert.equal(byId("readiness-status").textContent, "Ready");

@@ -8,8 +8,9 @@
 # by KíLín setup inside the window.
 set -u
 
-# Filled in by build_app.sh.
+# Filled in by build_app.sh; the checksum is empty for a PyPI install.
 KILIN_SPEC="@KILIN_SPEC@"
+KILIN_WHEEL_SHA="@KILIN_WHEEL_SHA@"
 
 contents=$(cd "$(dirname "$0")/.." && pwd)
 resources="$contents/Resources"
@@ -35,15 +36,22 @@ fi
 
 # A wheel inside the app is installed from there.
 spec=${KILIN_SPEC//@RESOURCES@/$resources}
+# What is installed: the spec, plus the wheel's checksum, so a rebuilt
+# wheel with an unchanged version and file name is installed too.
+build="$spec${KILIN_WHEEL_SHA:+ $KILIN_WHEEL_SHA}"
 mkdir -p "$runtime_root"
 
 # Install, or reinstall after an update; a second launch meanwhile waits.
-if [ "$(cat "$runtime/.installed" 2>/dev/null)" != "$spec" ]; then
+if [ "$(cat "$runtime/.installed" 2>/dev/null)" != "$build" ]; then
     lock="$runtime_root/.installing"
     until mkdir "$lock" 2>/dev/null; do sleep 1; done
     trap 'rmdir "$lock" 2>/dev/null' EXIT
-    if [ "$(cat "$runtime/.installed" 2>/dev/null)" != "$spec" ]; then
-        notify "Installing KíLín. The first launch takes a few minutes."
+    if [ "$(cat "$runtime/.installed" 2>/dev/null)" != "$build" ]; then
+        if [ -e "$runtime/.installed" ]; then
+            notify "Updating KíLín. This takes a few minutes; projects and settings are kept."
+        else
+            notify "Installing KíLín. The first launch takes a few minutes."
+        fi
         # Python and uv's downloads stay in runtime/, so deleting runtime/
         # removes the installed KíLín and nothing else.
         export UV_PYTHON_INSTALL_DIR="$runtime_root/python"
@@ -59,7 +67,7 @@ if [ "$(cat "$runtime/.installed" 2>/dev/null)" != "$spec" ]; then
             alert "KíLín could not be installed. Check the internet connection and open KíLín again. Details: $log"
             exit 1
         fi
-        echo "$spec" >"$runtime/.installed"
+        echo "$build" >"$runtime/.installed"
         # The downloads are not needed once installed.
         rm -rf "$UV_CACHE_DIR"
         notify "KíLín is installed."

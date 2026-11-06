@@ -79,10 +79,11 @@ let folderConfirmed = true;
 let termsAccepted = true;
 const showSetupConfirmations = () => {};
 const showWelcome = () => calls.push("welcome");
+const drawAttention = (element) => calls.push(`attention ${element.id}`);
 """
         for name in (
             "showSetupLock", "needsNewProjectSetup", "closeModels",
-            "remindSetupConfirmations",
+            "remindSetupConfirmations", "pointToProjectsFolder",
         ):
             script += extract_function(source, name)
         script += r"""
@@ -146,6 +147,7 @@ folderConfirmed = false;
 termsAccepted = false;
 closeModels();
 // The terms come first: their welcome dialog opens again.
+// Nothing in Settings is highlighted for the terms.
 assert.deepEqual(calls, ["welcome"]);
 assert.equal(byId("first-run-setup").open, true);
 assert.equal(byId("model-download-status").textContent,
@@ -153,10 +155,14 @@ assert.equal(byId("model-download-status").textContent,
 termsAccepted = true;
 calls.length = 0;
 closeModels();
-assert.deepEqual(calls, []);
+// The Confirm button and the message are highlighted.
+assert.deepEqual(calls, [
+  "attention confirm-workspace", "attention model-download-status",
+]);
 assert.equal(byId("model-download-status").textContent,
   "Confirm the projects folder to continue.");
 folderConfirmed = true;
+calls.length = 0;
 closeModels();
 assert.deepEqual(calls, ["hide"]);
 console.log("setup lock passed");

@@ -35,6 +35,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 
 # What the launcher installs on first launch.
 spec="kilin[app]==$version"
+# A bundled wheel's checksum: a rebuilt app with the same version still
+# reinstalls KíLín. A PyPI version is uploaded only once, so needs none.
+wheel_sha=""
 if [ "${1:-}" = "--wheel" ]; then
     rm -f "$dist"/kilin-*.whl
     "$uv_binary" build --wheel --out-dir "$dist"
@@ -42,9 +45,11 @@ if [ "${1:-}" = "--wheel" ]; then
     wheel=$(basename "$(ls "$dist"/kilin-*.whl)")
     cp "$dist/$wheel" "$app/Contents/Resources/"
     spec="@RESOURCES@/$wheel[app]"
+    wheel_sha=$(shasum -a 256 "$dist/$wheel" | cut -d " " -f 1)
 fi
 
-sed "s|@KILIN_SPEC@|$spec|" setup/macos/launcher.sh >"$app/Contents/MacOS/KiLin"
+sed -e "s|@KILIN_SPEC@|$spec|" -e "s|@KILIN_WHEEL_SHA@|$wheel_sha|" \
+    setup/macos/launcher.sh >"$app/Contents/MacOS/KiLin"
 chmod +x "$app/Contents/MacOS/KiLin"
 cp "$uv_binary" "$app/Contents/Resources/uv"
 

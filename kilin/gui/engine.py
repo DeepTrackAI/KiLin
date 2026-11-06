@@ -92,6 +92,7 @@ from kilin.gui._paths import (
 )
 from kilin.gui.preferences import (
     TERMS_VERSION,
+    copyright_notice,
     default_appearance,
     default_backend,
     default_effort_levels,
@@ -739,6 +740,7 @@ class ChatEngine:
                 terms=terms_text(),
                 terms_version=TERMS_VERSION,
                 terms_accepted=terms_accepted(),
+                copyright=copyright_notice(),
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))

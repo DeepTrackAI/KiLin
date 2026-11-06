@@ -9,6 +9,8 @@ authors = [
 ]
 description = "Local, provider-independent question-answering application"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
 keywords = ["question answering", "local LLM", "RAG", "literature", "code"]
 classifiers = [

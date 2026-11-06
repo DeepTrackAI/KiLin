@@ -155,7 +155,7 @@ The user ticks the agreement and clicks Continue; until then the dialog
 cannot be dismissed. The agreed version is saved as `terms_accepted`;
 changing the text needs a new `TERMS_VERSION` in `kilin/gui/preferences.py`,
 so every user is asked again. Settings reopens the terms from its Terms of
-use link. Settings stays open until the folder is confirmed and the terms
+use link, under a copyright line built from the package authors. Settings stays open until the folder is confirmed and the terms
 are accepted. New projects also wait for the models; saved projects can
 still be resumed. Repeated creation from the same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
