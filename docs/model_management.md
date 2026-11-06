@@ -15,7 +15,7 @@ presents suggested models through `gui/model_catalog.py`.
 | `runtime.choose_backend()` | Resolve `auto`, `mlx` or `torch` using operating system and architecture. |
 | `runtime.torch_device()` | Select CUDA, then MPS, then CPU from caller-supplied availability flags. |
 | `huggingface.available_models()` | Inventory model repositories and cached revisions (not runtime compatibility). |
-| `huggingface.cached_model_snapshot()` | Resolve a usable local cached snapshot without downloading. |
+| `huggingface.cached_model_snapshot()` | Resolve a local snapshot containing `config.json`, without downloading. |
 | `huggingface.download_model()` | Explicitly fetch permitted model files, with progress integration. |
 | `EmbeddingSession` | Load embedding tokenizer/model, count text tokens, create query/document vectors. |
 | `ChatSession` | Load causal LM and tokenizer, format history, generate, retain/reset messages. |
@@ -35,6 +35,13 @@ platform string.
 ## Backend resolution
 
 With `auto`, KíLín chooses MLX on native Darwin/arm64 and PyTorch otherwise.
+For GUI setup, the preference saved in the user's `preferences.json` chooses
+which backend's required models are checked, downloaded, or replaced by
+cached alternatives. Explicit `mlx` and `torch` selections never fall back to
+the platform's automatic choice. The Qt bridge refreshes readiness after a
+successful preference write; a failed write leaves the previous choice in
+effect and is reported to the page. Missing runtime packages keep readiness
+false even if every model ID appears cached.
 An explicit MLX request outside that platform is rejected. MLX also checks
 that Metal is available when loading the chat model. PyTorch probes device
 availability and follows CUDA -> MPS -> CPU, then moves the loaded model to
@@ -52,12 +59,33 @@ identical streaming or thinking controls.
 ## Model identity, caching and network behavior
 
 A model identifier may denote an existing local directory or a Hugging Face
-repository. Loading with `allow_download=False` resolves a local directory
-or a complete cached snapshot; a missing/incomplete snapshot raises rather
-than downloading it. With downloading allowed, backend loaders or an
-explicit download command may access remote repositories. The cache
-inventory alone does not prove that dependencies, architecture, quantization
-or tokenizer are usable.
+repository. With `allow_download=False`, resolution stays offline; the core's
+`cached_model_snapshot()` checks for `config.json` but does not certify all
+weights or tokenizer assets. A later backend load can reject missing files.
+With downloading allowed, backend loaders or an explicit download command may
+access remote repositories. Cache inventory alone does not prove that
+backend dependencies, architecture or quantization are usable.
+
+### Lightweight GUI cache readiness
+
+For setup and model selection, `gui.model_catalog.downloaded_models()`
+filters cached repositories by inspecting local snapshots. At least one
+revision must have a nonempty, valid JSON `config.json`, recognized nonempty
+tokenizer files, and a supported weight representation. Tokenizers may use
+`tokenizer.json`, a SentencePiece model, `vocab.txt`, a `.tiktoken` file, or
+both `vocab.json` and `merges.txt`. Indexed safetensors and PyTorch `.bin`
+checkpoints require every listed shard to exist and be nonempty. Numbered
+checkpoint shards without their index are not considered complete.
+
+The check uses directory listings, file sizes and small configuration/index
+JSON files. It **does not** read model weights or tokenizer vocabularies,
+compute hashes, contact the Hub, instantiate a tokenizer, or load a model.
+It is therefore suitable for repeated readiness checks, but can miss an
+unusual valid file layout or accept files whose contents are incompatible
+or corrupt. The actual backend loader remains responsible for loadability.
+The GUI's `cached`/`downloaded` labels mean *locally complete by these
+supported-file rules*, not *verified loadable*. This is distinct from the
+core's less restrictive `cached_model_snapshot()` lookup.
 
 `ChatSession` passes `trust_remote_code=False` when loading tokenizers and
 models via supported backends. This is a useful precaution, **not** a
@@ -71,6 +99,23 @@ an unnoticed embedding-model change.
 Model **IDs** in packaged `DEFAULT_MODELS` are recommended starting values,
 not a frozen allowlist. See [Package defaults](package_defaults.md) for
 exact default IDs and validation.
+
+### GUI chat-template thinking probe
+
+`gui.model_catalog.thinking_switches()` renders the locally cached chat
+model's template once with `enable_thinking=True` and once with
+`enable_thinking=False`, using one short sample prompt and a Jinja sandbox.
+It does not load a tokenizer or model, run inference, or use a model-name
+heuristic. A `True` result means that the two rendered prompts differ; a
+`False` result means they are identical for this test. Missing or failing
+templates give no result (unknown). Neither result verifies a model's
+reasoning capability, actual behavior, or runtime compatibility.
+
+The GUI labels these outcomes *thinking switch detected*, *no template
+switch detected*, and no label, respectively. The composer's Thinking
+control is enabled only for a detected prompt difference; it is not a
+capability test. The Answers checkbox requests the `enable_thinking`
+setting for generation independently of what the probe can establish.
 
 ## Chat generation lifecycle
 

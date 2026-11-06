@@ -111,8 +111,8 @@ paths and source paths remain subject to downstream core validation.
 | `edit_folder` | None | `folder`, `operation` default to `""`; other fields forwarded as keyword arguments |
 | `rename_project` | `name` | Rename the project |
 | `delete_project` | `project` | Move that closed project to `.deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
-| `apply_indexing` | `settings` | Save the open project's file types, file size limit or chunk sizes in `profile.ini` and reopen it, which rebuilds the index; then send `indexing_applied` with the `profile` |
-| `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. Then sends `answer_settings_saved`. |
+| `apply_indexing` | `settings` | Atomically save validated indexing settings, reopen the project and revalidate its index; send `indexing_applied` with the `profile` only after reopening succeeds |
+| `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `tool_settings` | None | List the open project's tools and their settings |
 | `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
@@ -120,10 +120,24 @@ paths and source paths remain subject to downstream core validation.
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
 
 `save_answer_settings` updates the saved project profile and the live chat
-settings without asking a question. Success emits `answer_settings_saved`
-with the values now in effect; validation or persistence failure emits
-`error`.
-An omitted `settings` field reaches the handler as `None` and is rejected,
+settings without asking a question. The Qt bridge accepts either the original
+settings JSON object or an envelope containing `settings`, `request_id`, and
+`project`, which it forwards as command fields. Correlated GUI requests must
+match the active project; the engine never applies a late request to a newly
+opened project. The page sends only one such request at a time, retains the
+latest subsequent edit, and waits for its acknowledgement before sending the
+next. Asking a question is blocked while a save is pending; the input is kept.
+
+Success emits `answer_settings_saved` with the full profile values now in
+effect. Correlated successes also return `request_id` and `project`. A
+correlated failure emits `answer_settings_failed` with the same identity,
+`message`, and `verified`: if true, the engine successfully reread
+`profile.ini` and reconfigured the live chat, and returns its authoritative
+`temperature`, `thinking`, and `max_new_tokens`. If false, the page discards
+pending edits and requires reopening the project before answering. The GUI
+ignores stale acknowledgements and discards queued edits after any failure.
+Uncorrelated callers retain the prior generic `error` event on failure. An
+omitted `settings` field reaches the handler as `None` and is rejected,
 not treated as a request to reset defaults.
 
 For `resume`, a supplied `conversation_id` must identify an existing
@@ -133,6 +147,17 @@ model is activated. Omitting the field selects the most recently updated
 conversation. An `opened` event reports the actual selected ID when
 activation succeeds. This restores the active chat after Stop or engine
 restart; it does not recover unsaved partial model output.
+
+`readiness` applies to **new-project creation**, not `resume`. The page can
+close Settings and issue `resume` from either saved-project list when the
+selected default runtime or models are missing. The engine uses the saved
+project profile and lets normal loading report unavailable project-specific
+models. A failed resume emits `error` with `resume_released`: `false` when
+profile validation failed before the previous session was closed; `true`
+when switching had already begun releasing the previous session. For the
+latter, the page returns to launch and requests session cleanup rather than
+showing the former project as active. New-project preparation remains gated
+by successful readiness.
 
 The page invokes the Qt slots rather than writing these dictionaries itself.
 The bridge decodes JSON-encoded arguments for source lists, generation
@@ -145,6 +170,36 @@ Native file selection, `openWorkspaceFile`, appearance and backend
 preference changes (saved in `preferences.json` by Qt), drag/drop
 state, and `stopOperation` are *not* additional engine commands. They use
 Qt signals, platform dialogs, local file opening, or process control.
+When `setBackendPreference` successfully persists `auto`, `mlx`, or `torch`,
+Qt emits `backend_preference_saved` and sends the existing `readiness` engine
+command. A write/validation error instead emits `backend_preference_failed`;
+no readiness command is sent, and the page restores the last acknowledged
+selection. Unsupported values are ignored. The engine resolves the saved
+preference at the beginning of each setup operation, while `auto` alone uses
+the platform policy. Existing saved project settings remain independent.
+
+### Indexing-settings failure recovery
+
+The frontend shows an in-progress status until `indexing_applied` confirms
+that the project has reopened with the new indexing settings. An `error`
+means the change failed, not that the values were saved. Before changing
+`profile.ini`, the engine snapshots its complete text. If the operation
+fails, it compares the actual file with the snapshot and restores any
+changed profile using `atomic_write_text` rather than overwriting the file
+in place. This includes failures after `configure_project` published a
+new profile but before that method returned. A rejection before profile
+publication leaves the current session active.
+
+If the engine already began replacing the session, recovery closes the
+partial session and tries to reopen the original project and selected
+conversation. Successful recovery can emit `opened` before the final
+`error` explaining why the indexing change failed. If the profile cannot
+be verified or restored, or the original session cannot be reactivated,
+the engine emits `backend_failed` followed by `error`, attempts to close
+the session, and asks the user to inspect `profile.ini` and reopen the
+project. If even closing fails, the user should restart KíLín. No event
+claims that the previous index files were transactionally restored: the
+core checks or rebuilds index artifacts on the next successful open.
 
 ### Interactive tool decisions
 
@@ -187,20 +242,24 @@ can accompany an event.
 
 | Group | Events and representative payloads |
 | --- | --- |
-| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings) |
+| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`) |
 | Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether the saved directory is unavailable) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: for each checked cached model, whether its chat template switches thinking); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (`temperature`, `thinking`, `max_new_tokens` now in effect); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
-| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`); `backend_failed` (`message`) |
-| Process recovery | `stopped` (optional `removed_projects`: unfinished new projects Qt removed); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
+| Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
+| Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
+Deleting a conversation moves its JSON into `logs/traces/.deleted/`; the
+hidden `.conversation_*.json.lock` sidecar stays at its original path.
+`conversation_delete_started` is sent before the archive operation, so an
+error may be followed by a refreshed catalog instead of deletion.
 The process-recovery events `stopped` and `backend_restarted`,
 `conversation_viewed`, `projects_folder`, and some `error` events
 originate in `window.py`, not `engine.py`. Diagnostic trace event names such as `gui.project.settings.saved` are a **separate** trace
@@ -333,12 +392,19 @@ partial visible stream.
   `stopRequested`; the Qt window clears queued commands, kills its child
   using `QProcess.kill()`, starts a new child, and emits `stopped`. Loaded
   models are lost. Any unsaved partial answer is not committed as a
-  completed turn. A stopped project preparation leaves no project: before
-  restarting, Qt removes the folder the killed engine was still copying
-  into (its `.kilin-creating` marker names that engine's process ID) and a
-  project the engine reported with `project_created` (`workspace`, sent
-  before the first indexing; read by Qt, not the page) that has not sent
-  `opened` yet; `stopped` then lists them under `removed_projects`.
+  completed turn. Stop is conservative about project files. The core has
+  already published `profile.ini` when `project_created` (`workspace`) is
+  emitted, so a delayed `opened` event does not make that project disposable.
+  After stopping the child, Qt can remove only a directory containing its
+  `.kilin-creating` marker and no other entries, with the marker naming the
+  stopped engine's process ID and recording that it created this folder.
+  Markers from older versions and pre-existing empty folders are retained.
+  Qt never recursively deletes a project or a populated partial
+  workspace based on a PID or queued event.
+  `stopped` reports removed empty claims as `removed_projects` and paths
+  known to be preserved as `preserved_projects`. The latter may be a
+  completed project or partial files requiring inspection; it is not an
+  exhaustive inventory if an interruption occurred before any event.
 - On unexpected child exit, Qt prepares a `backend_restarted` message and
   starts a replacement child. The page requests settings/readiness again
   and may attempt to reopen the former project. The diagnostic text is

@@ -87,8 +87,8 @@ console.log("answer settings passed");
         self.assertIn("answer settings passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
-    def test_models_that_can_think_are_marked(self):
-        """Verified marks only, in the levels and intent; unknown is blank."""
+    def test_model_template_switch_marks(self):
+        """Describe template evidence without claiming reasoning ability."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         self.assertIn(
@@ -113,21 +113,23 @@ const element = () => ({
 });
 var document = { createElement: element };
 """
-        for name in ("modelCanThink", "thinkingMark", "modelSelect"):
+        for name in ("modelHasThinkingSwitch", "thinkingMark", "modelSelect"):
             script += _function(source, name)
         script += r"""
-assert.equal(modelCanThink("Qwen/Qwen3-8B-MLX-4bit"), true);
+assert.equal(modelHasThinkingSwitch("Qwen/Qwen3-8B-MLX-4bit"), true);
 // A Qwen3 name alone is not enough: its template must switch thinking.
-assert.equal(modelCanThink("Qwen/Qwen3-1.7B-MLX-4bit"), false);
+assert.equal(modelHasThinkingSwitch("Qwen/Qwen3-1.7B-MLX-4bit"), false);
+assert.equal(modelHasThinkingSwitch("other/unknown"), false);
+assert.equal(thinkingMark("other/unknown"), "");
 const ids = [
   "Qwen/Qwen3-8B-MLX-4bit", "Qwen/Qwen3-1.7B-MLX-4bit",
   "Qwen/Qwen3-4B-Instruct-2507",
 ];
 const texts = (select) => select.children.map((option) => option.textContent);
-// Can think, no switch, and unknown (not checked: blank).
+// Changed template, unchanged template, and unknown (no mark).
 assert.deepEqual(texts(modelSelect(ids, ids[0], "Level", true)), [
-  "Qwen/Qwen3-8B-MLX-4bit · can think",
-  "Qwen/Qwen3-1.7B-MLX-4bit · no thinking switch (not downloaded)",
+  "Qwen/Qwen3-8B-MLX-4bit · thinking switch detected",
+  "Qwen/Qwen3-1.7B-MLX-4bit · no template switch detected (not downloaded)",
   "Qwen/Qwen3-4B-Instruct-2507 (not downloaded)",
 ]);
 // Without the flag (embedding) nothing is marked.

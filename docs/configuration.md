@@ -38,6 +38,13 @@ not permission to overwrite an existing profile or reinstall user resources.
 Creation, read-only reopening and explicit updates are different operations,
 owned by [Project workspaces](project_workspaces.md#creation-opening-and-explicit-updates).
 
+In the GUI, readiness for the selected default backend and required models
+blocks **new-project creation only**. Setup opens automatically to explain
+missing requirements but can be dismissed. Existing projects are offered for
+Resume regardless of this global readiness: reopening uses their persisted
+backend and model IDs, then reports project-specific loading failures without
+silently substituting current creation defaults.
+
 `kilin.project.configure_project()` is the core API for validated project
 settings. GUI-specific project settings (effort levels, search-depth steps,
 router model) are saved in additional `profile.ini` sections by
@@ -50,9 +57,12 @@ outside that migration is not authorized.
 
 - **Model role vs model ID:** role constants describe purposes such as chat
   and embeddings; default IDs are suggested choices, not an allowlist.
-- **Backend vs device:** `auto` selects MLX or PyTorch; PyTorch independently
-  chooses CUDA/MPS/CPU based on availability. The GUI dependency bootstrap
-  does not override an already-saved project backend.
+- **Backend vs device:** `auto` selects MLX on native Apple Silicon and
+  PyTorch elsewhere; an explicit `mlx` or `torch` user preference is never
+  silently replaced when setup checks models, suggests substitutes, or
+  installs missing models. A missing runtime is reported as unavailable.
+  PyTorch separately chooses CUDA/MPS/CPU. New-project GUI preferences do
+  not override an already-saved project backend.
 - **Default chunking vs profile chunking:** direct `chunk_source_units()`
   defaults are not identical to a newly created project's persisted sizes.
 - **Project-type defaults vs project overrides:** type JSON affects intent

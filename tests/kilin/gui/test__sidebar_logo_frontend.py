@@ -60,33 +60,37 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         self.assertNotIn("change-project", source)
 
     def test_logo_is_the_qilin(self):
-        """Gold qilin on light pages, blue-black one in dark mode."""
+        """Project sidebar and launch both use the full unchanged qilin."""
 
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         start = styles.index(".sidebar-logo-mark {")
         rule = styles[start : styles.index("}", start)]
         self.assertIn("var(--logo-image)", rule)
+        start = styles.index(".setup-brand-figure {")
+        rule = styles[start : styles.index("}", start)]
+        self.assertIn("var(--logo-image)", rule)
         self.assertEqual(
-            styles.count('--logo-image: url("../icons/kilin-qilin.png");'), 1
+            styles.count('--logo-image: url("../icons/kilin-qilin.png");'),
+            1,
         )
-        # Both dark blocks: the chosen dark look and the system one.
         self.assertEqual(
             styles.count(
                 '--logo-image: url("../icons/kilin-qilin-dark.png");'
             ),
             2,
         )
-        for name in ("kilin-qilin.png", "kilin-qilin-dark.png"):
-            self.assertTrue((_ROOT / "kilin/gui/icons" / name).is_file())
-        # The source drawing is CC BY-SA 4.0, so the credit ships with it.
-        credit = (_ROOT / "kilin/gui/icons/README.md").read_text(
-            encoding="utf-8"
-        )
-        for text in ("RootOfAllLight", "CC BY-SA 4.0", "kilin-qilin-dark"):
+        icons = _ROOT / "kilin/gui/icons"
+        for name in ("kilin-qilin.png", "kilin-qilin-dark.png",
+                     "kilin-qilin-head.png", "kilin-qilin-head-dark.png"):
+            self.assertTrue((icons / name).is_file())
+        # Preserve the attribution history of the previous illustration.
+        credit = (icons / "README.md").read_text(encoding="utf-8")
+        for text in ("RootOfAllLight", "CC BY-SA 4.0",
+                     "kilin-qilin-head-dark"):
             self.assertIn(text, credit)
-        # The credit is installed with the images.
         project = (_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('"icons/README.md",', project)
+        self.assertIn('"icons/*.png",', project)
 
     def test_sections_have_fold_sort_and_new(self):
         """Logo, Projects, then Conversations, each with ⋯ and ＋."""

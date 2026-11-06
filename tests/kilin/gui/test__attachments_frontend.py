@@ -75,6 +75,7 @@ const calls = [];
 const bridge = new Proxy({}, {
   get: (target, name) => (...args) => calls.push([name, ...args]),
 });
+const answerSettingsSave = { pending: null, uncertain: false };
 const busyStates = [];
 const setBusy = (value, message) => busyStates.push([value, message]);
 const pending = [];

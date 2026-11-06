@@ -12,7 +12,7 @@
   <body>
     <div class="app-shell">
       <aside id="conversations-panel" class="conversations-panel hidden" aria-label="Conversations">
-        <button id="home-logo" type="button" class="sidebar-logo" aria-label="Back to the start screen" title="Back to the start screen"><span class="sidebar-logo-mark" aria-hidden="true"></span></button>
+        <button id="home-logo" type="button" class="sidebar-logo" aria-label="Back to the start screen" title="Back to the start screen"><span class="sidebar-logo-mark" aria-hidden="true"></span><span class="sidebar-logo-wordmark" aria-hidden="true"></span></button>
         <section class="sidebar-section" data-section="projects">
           <div class="sidebar-section-head">
             <button type="button" class="sidebar-section-toggle" aria-expanded="true" aria-controls="project-list">Projects<svg class="sidebar-chevron" aria-hidden="true" viewBox="0 0 16 16"><path d="m4 6 4 4 4-4"/></svg></button>
@@ -43,8 +43,13 @@
       </header>
 
       <section id="setup" class="setup">
-        <h1>KíLín</h1>
-        <p class="intro">Your AI. Your Knowledge. Your Control.</p>
+        <div class="setup-brand">
+          <span class="setup-brand-figure" aria-hidden="true"></span>
+          <div class="setup-brand-copy">
+            <h1 class="setup-brand-name"><span class="setup-brand-wordmark" aria-hidden="true"></span><span class="visually-hidden">KíLín</span></h1>
+            <p class="intro">Your AI. Your Knowledge. Your Control.</p>
+          </div>
+        </div>
         <section id="saved-projects" class="saved-projects hidden" aria-label="Saved projects"></section>
         <p id="models-hint" class="models-hint hidden">No suggested local chat-and-embedding pair found. <button id="models-hint-button" type="button">Set up models</button></p>
         <form id="project-form" class="setup-card">
@@ -217,7 +222,7 @@
             </div>
             <!-- Filled with the Models tab's drafts, so it applies with them. -->
             <div id="search-depth"></div>
-            <label class="check-row thinking-row" for="thinking"><input id="thinking" type="checkbox"> Enable model thinking, if supported</label>
+            <label class="check-row thinking-row" for="thinking"><input id="thinking" type="checkbox"> Request thinking via chat template</label>
           </section>
           <section id="settings-tools" class="settings-section" data-settings-tab="tools">
             <div id="tool-settings"></div>

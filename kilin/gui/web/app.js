@@ -9,7 +9,8 @@
  *
  * Completed answers arrive as complete strings. The character-by-character
  * reveal is a presentation timer, not streamed model output. Conversation
- * persistence and tracing remain backend responsibilities.
+ * persistence and tracing remain backend responsibilities. Answer-settings
+ * edits are provisional until the engine confirms the saved project profile.
  */
 
 "use strict";
@@ -69,8 +70,14 @@ let profile = null;
 // Answer settings changed on the start screen: kept until the project is
 // created, instead of being reset by the next settings event.
 let answerSettingsEdited = false;
-// The open project's saved temperature and answer-token limit.
+// The last engine-confirmed answer settings; the UI may show newer edits.
 let savedAnswerNumbers = { temperature: 0, max_new_tokens: null };
+let savedAnswerThinking = true;
+// One save at a time. Only the latest newer edit is queued, and every
+// acknowledgement is checked against its request and project identity.
+const answerSettingsSave = {
+  nextId: 0, pending: null, queued: null, uncertain: false,
+};
 let cachedModels = new Set();
 let modelChoices = [];
 // Effort levels per backend: saved for the project, built-in defaults, and
@@ -88,8 +95,8 @@ let savedRouters = {};
 let defaultRouters = {};
 let draftRouter = "";
 let modelRoles = {};
-// Whether each checked model's chat template switches thinking, from the
-// engine; a model it could not check is missing (unknown).
+// Whether the tested chat template changes its rendered prompt when
+// enable_thinking changes; missing entries mean unknown.
 let thinkingSwitches = {};
 let modelsBaseline = null;
 let applyingModels = false;
@@ -102,7 +109,7 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
-// Whether KíLín setup is complete; until it is, no project can be opened.
+// New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
 let readinessMissingCount = 0;
@@ -110,6 +117,8 @@ let installingModels = false;
 let setupCompletionVisible = false;
 let supportedExtensions = new Set();
 let automaticBackend = "mlx";
+// The last backend acknowledged by Qt, not the page's pending selection.
+let confirmedBackendPreference = "auto";
 let activeBackend = "mlx";
 let activeTracePath = "";
 let activeConversationId = "";
@@ -319,7 +328,7 @@ function renderSavedProjects(projects) {
       button.append(name, typeLabel);
       button.title = `Resume ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
-        if (busy || needsSetup()) return;
+        if (busy) return;
         setBusy(true, "Resuming project…");
         bridge.resumeProject(project.project);
       });
@@ -489,7 +498,7 @@ function renderSidebarProjects(projects, current) {
     if (active) button.setAttribute("aria-current", "true");
     button.disabled = busy;
     const open = () => {
-      if (busy || active || needsSetup()) return;
+      if (busy || active) return;
       setBusy(true, `Opening ${project.name}…`);
       bridge.resumeProject(project.project);
     };
@@ -941,7 +950,7 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
- * @param markThinking Whether to add each model's verified thinking mark.
+ * @param markThinking Whether to add the template-switch probe label.
  */
 function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
@@ -960,28 +969,30 @@ function modelSelect(ids, value, label, markThinking = false) {
 }
 
 /**
- * Tell whether a language model's chat template switches thinking on and
- * off, as the engine checked it in the downloaded files.
+ * Check whether a cached model's template rendered different prompts
+ * with enable_thinking on and off. This does not test model reasoning.
  *
- * Nothing is judged from the name: a model that is not downloaded, or
- * whose template could not be checked, is unknown.
+ * Missing models or templates that could not be checked are unknown.
  *
  * @param id Model identifier or local path.
- * @returns Whether the model is verified to switch thinking.
+ * @returns True only for a detected template prompt difference.
  */
-function modelCanThink(id) {
+function modelHasThinkingSwitch(id) {
   return thinkingSwitches[id] === true;
 }
 
 /**
- * Return the verified thinking mark for a model list, or "" when unknown.
+ * Label the template probe outcome, or return "" when unknown.
  *
  * @param id Model identifier or local path.
- * @returns " · can think", " · no thinking switch", or "".
+ * @returns A template-switch label, or "" when no result is available.
  */
 function thinkingMark(id) {
-  if (thinkingSwitches[id] === true) return " · can think";
-  return thinkingSwitches[id] === false ? " · no thinking switch" : "";
+  if (thinkingSwitches[id] === true) {
+    return " · thinking switch detected";
+  }
+  return thinkingSwitches[id] === false
+    ? " · no template switch detected" : "";
 }
 
 /**
@@ -1658,18 +1669,9 @@ function showSavedModels() {
 }
 
 /**
- * Tell whether Settings must stay open on KíLín setup: required models are
- * missing and can be installed here. A missing runtime cannot be fixed in
- * the app, so it does not lock Settings, but projects still cannot open.
- */
-function setupLocked() {
-  return !kilinReady && readinessEnvironmentReady;
-}
-
-/**
  * Show the setup buttons, Close and Prepare project for the current setup
  * state: while the required models download, Install becomes Stop and
- * nothing else can start; Close and Prepare project wait for setup.
+ * new-project preparation waits for setup. Settings can always close.
  */
 function showSetupLock() {
   const install = byId("install-required");
@@ -1677,21 +1679,20 @@ function showSetupLock() {
   install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
   byId("use-installed").disabled = busy || !readinessEnvironmentReady;
   byId("open").disabled = busy || !bridge || !kilinReady;
-  byId("close-models").disabled = setupLocked();
-  byId("close-models").title = setupLocked() ? "Finish KíLín setup first." : "";
+  byId("close-models").disabled = false;
+  byId("close-models").title = "";
 }
 
 /**
- * Before opening a project, make sure KíLín setup is done; otherwise show
- * it in Settings instead.
+ * Require the selected default backend and models only for new projects.
  *
- * @returns Whether setup still has to be finished.
+ * @returns Whether new-project setup still needs to be finished.
  */
-function needsSetup() {
+function needsNewProjectSetup() {
   if (kilinReady) return false;
   openModels();
   byId("first-run-setup").open = true;
-  byId("model-download-status").textContent = "Finish KíLín setup before opening a project.";
+  byId("model-download-status").textContent = "Finish KíLín setup before preparing a new project.";
   return true;
 }
 
@@ -1699,11 +1700,6 @@ function needsSetup() {
  * Close Settings; every change has been saved when it was made.
  */
 function closeModels() {
-  if (setupLocked()) {
-    byId("first-run-setup").open = true;
-    byId("model-download-status").textContent = "Finish KíLín setup first: install the required models, or use the installed ones.";
-    return;
-  }
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
   // A save still running closes Settings once it is done.
   if (applyingModels) closeAfterModelsApply = true;
@@ -1779,7 +1775,7 @@ async function saveIndexingEdits(event) {
   }
   applyingIndexing = true;
   setBusy(true, "Rebuilding the index…");
-  byId("model-download-status").textContent = "Saved. Rebuilding the index with the new settings…";
+  byId("model-download-status").textContent = "Applying indexing settings and rebuilding the index…";
   bridge.applyIndexingSettings(JSON.stringify(edits));
 }
 
@@ -1901,9 +1897,11 @@ function showSettings(data) {
   installedBackends = data.installed_backends || {};
   supportedExtensions = new Set(data.supported_extensions);
   closeModelMenus();
-  // New projects use the backend chosen in KíLín setup (preferences).
+  // Saved projects use their profile; new projects use the last
+  // acknowledged user preference, independently of the automatic policy.
+  confirmedBackendPreference = data.backend_preference || "auto";
   byId("backend").value = data.workspace ? profile.backend
-    : data.backend_preference || profile.backend;
+    : confirmedBackendPreference;
   byId("query-format").value = profile.query_format;
   showIndexingFields();
   const keepAnswers = ready || answerSettingsEdited;
@@ -1956,11 +1954,164 @@ function collectSettings() {
 }
 
 /**
- * Save the open project's temperature and answer-token limit as soon as
- * one is entered, like Thinking, so Settings shows what is in effect. A
- * refused value is put back; on the start screen it is only checked.
+ * Return the most recently verified project-wide answer settings.
+ * @returns Temperature, Thinking, and answer-token limit.
+ */
+function confirmedAnswerSettings() {
+  return { ...savedAnswerNumbers, thinking: savedAnswerThinking };
+}
+
+/**
+ * Compare two complete answer-settings snapshots.
+ * @param left First settings object.
+ * @param right Second settings object.
+ * @returns Whether every setting is equal.
+ */
+function sameAnswerSettings(left, right) {
+  return left.temperature === right.temperature
+    && left.thinking === right.thinking
+    && left.max_new_tokens === right.max_new_tokens;
+}
+
+/**
+ * Restore the actual or most recently verified values in both controls.
+ * @param settings Complete answer-settings snapshot.
+ */
+function displayAnswerSettings(settings) {
+  byId("temperature").value = settings.temperature;
+  byId("max-new-tokens").value = settings.max_new_tokens ?? "";
+  byId("thinking").checked = settings.thinking;
+  renderEffortPicker();
+}
+
+/**
+ * Adopt the configuration reported by the engine after opening a project.
+ * @param settings Complete settings from the opened project.
+ */
+function resetAnswerSettings(settings) {
+  savedAnswerNumbers = {
+    temperature: settings.temperature,
+    max_new_tokens: settings.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = settings.thinking;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
+  displayAnswerSettings(confirmedAnswerSettings());
+  updateSendButton();
+}
+
+/**
+ * Save an entire snapshot, or retain its latest version while saving.
  *
- * @param event The field's change event.
+ * Only the engine's acknowledgement advances confirmed settings. A request
+ * includes the current project so that late replies cannot affect another.
+ *
+ * @param settings Valid, complete answer settings.
+ */
+function queueAnswerSettings(settings) {
+  if (!ready || !bridge || !openProjectPath) return;
+  if (answerSettingsSave.uncertain) {
+    displayAnswerSettings(confirmedAnswerSettings());
+    byId("model-download-status").textContent =
+      "Reopen the project to verify its answer settings.";
+    return;
+  }
+  if (answerSettingsSave.pending) {
+    answerSettingsSave.queued = settings;
+    byId("model-download-status").textContent =
+      "Saving answer settings… latest edits queued.";
+    updateSendButton();
+    return;
+  }
+  if (sameAnswerSettings(settings, confirmedAnswerSettings())) return;
+  const request = {
+    id: ++answerSettingsSave.nextId,
+    project: openProjectPath,
+    settings,
+  };
+  answerSettingsSave.pending = request;
+  byId("model-download-status").textContent = "Saving answer settings…";
+  updateSendButton();
+  bridge.saveAnswerSettings(JSON.stringify({
+    request_id: request.id,
+    project: request.project,
+    settings: request.settings,
+  }));
+}
+
+/**
+ * Check whether an asynchronous save result belongs to this project.
+ * @param data Engine acknowledgement or operation-specific failure.
+ * @returns Whether it matches the active request and project.
+ */
+function matchesAnswerSettingsSave(data) {
+  const pending = answerSettingsSave.pending;
+  return pending !== null && data.request_id === pending.id
+    && data.project === pending.project && data.project === openProjectPath;
+}
+
+/**
+ * Confirm a successful write, then send only the latest queued edit.
+ * @param data Saved settings and correlated request identity.
+ */
+function answerSettingsSaved(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  savedAnswerNumbers = {
+    temperature: data.temperature,
+    max_new_tokens: data.max_new_tokens ?? null,
+  };
+  savedAnswerThinking = data.thinking;
+  const queued = answerSettingsSave.queued;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  if (queued && !sameAnswerSettings(queued, confirmedAnswerSettings())) {
+    queueAnswerSettings(queued);
+    return;
+  }
+  byId("model-download-status").textContent =
+    "Saved in profile.ini. The next answer uses it.";
+  updateSendButton();
+}
+
+/**
+ * Recover the saved profile on failure and discard all unconfirmed edits.
+ *
+ * If the engine could not reread the file and update the live chat, the
+ * project must be reopened before answering again.
+ *
+ * @param data Failure, verified profile (if available), and request identity.
+ */
+function answerSettingsFailed(data) {
+  if (!matchesAnswerSettingsSave(data)) return;
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = data.verified !== true;
+  if (!answerSettingsSave.uncertain) {
+    savedAnswerNumbers = {
+      temperature: data.temperature,
+      max_new_tokens: data.max_new_tokens ?? null,
+    };
+    savedAnswerThinking = data.thinking;
+  }
+  displayAnswerSettings(confirmedAnswerSettings());
+  const message = answerSettingsSave.uncertain
+    ? `${data.message} Reopen the project to verify its answer settings.`
+    : data.message;
+  byId("model-download-status").textContent = message;
+  error.textContent = message;
+  error.classList.remove("hidden");
+  updateSendButton();
+}
+
+/**
+ * Validate the Answers numbers, then save them with the current Thinking.
+ *
+ * The start screen retains these values for project creation. While an
+ * existing project's save is pending, later changes replace the queued
+ * snapshot rather than starting a second write.
+ *
+ * @param event Change event for an answer number, if any.
  */
 function saveAnswerNumbers(event) {
   const temperature = Number(byId("temperature").value);
@@ -1972,16 +2123,20 @@ function saveAnswerNumbers(event) {
       ? "Choose a positive answer-token limit or leave it blank."
       : "";
   if (!ready) return keepNewProjectValue(event?.target, invalid);
-  if (!bridge) return;
   const problem = invalid || (busy ? "KíLín is busy. Change this again when it finishes." : "");
   if (problem) {
     byId("model-download-status").textContent = problem;
-    byId("temperature").value = savedAnswerNumbers.temperature;
-    byId("max-new-tokens").value = savedAnswerNumbers.max_new_tokens ?? "";
+    const last = answerSettingsSave.queued
+      || answerSettingsSave.pending?.settings
+      || confirmedAnswerSettings();
+    byId("temperature").value = last.temperature;
+    byId("max-new-tokens").value = last.max_new_tokens ?? "";
     return;
   }
-  savedAnswerNumbers = { temperature, max_new_tokens: maxNewTokens };
-  bridge.saveAnswerSettings(JSON.stringify(savedAnswerNumbers));
+  queueAnswerSettings({
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  });
 }
 
 /**
@@ -2864,11 +3019,16 @@ byId("source-add-confirm").addEventListener("click", () => {
 function updateSendButton() {
   const answering = busy && ready && activity.classList.contains("answer-progress");
   const stop = answering && !reading;
-  byId("send").disabled = !ready || (busy && !stop);
+  byId("send").disabled = !ready || (busy && !stop)
+    || Boolean(answerSettingsSave.pending) || answerSettingsSave.uncertain;
   byId("send").classList.toggle("stopping", stop);
   byId("send").querySelector("span").textContent = stop ? "■" : "↑";
-  byId("send").setAttribute("aria-label", stop ? "Stop generation" : "Send message");
-  byId("send").title = byId("send").getAttribute("aria-label");
+  const sendLabel = stop ? "Stop generation"
+    : answerSettingsSave.uncertain ? "Reopen project to verify settings"
+      : answerSettingsSave.pending ? "Saving answer settings…"
+        : "Send message";
+  byId("send").setAttribute("aria-label", sendLabel);
+  byId("send").title = sendLabel;
 }
 
 /**
@@ -2882,7 +3042,7 @@ function setBusy(value, message = "") {
   busy = value;
   byId("backend").disabled = ready || value;
   for (const id of ["chat-model", "embedding-model", "query-format"]) byId(id).disabled = value;
-  // Settings can close while KíLín works, but not before setup is done.
+  // Closing Settings is independent of new-project readiness.
   showSetupLock();
   byId("conversation-name").contentEditable = String(!value);
   syncSourceDropTarget();
@@ -4320,17 +4480,17 @@ function renderEffortPicker() {
  * Show the Thinking switch under "Lagom ›" as Settings → Answers has it.
  *
  * Both are one setting: the switch only sets the Answers checkbox, which
- * saves it to the open project. A model that cannot think disables the
- * switch.
+ * saves it to the open project. Without a detected template prompt
+ * difference, the switch remains disabled; capability is not inferred.
  *
  * @param model Model of the chosen effort level.
  */
 function showThinkingSwitch(model) {
-  const supported = modelCanThink(model);
+  const detected = modelHasThinkingSwitch(model);
   const on = byId("thinking").checked;
   for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
     input.checked = (input.value === "on") === on;
-    input.disabled = busy || !supported;
+    input.disabled = busy || !detected;
   }
 }
 
@@ -5029,6 +5189,25 @@ function onEvent(raw) {
   if (data.event === "trace_ready") {
     activeTracePath = data.trace_path || "";
     markActiveConversationFile();
+  } else if (data.event === "backend_preference_saved") {
+    confirmedBackendPreference = data.backend;
+    // Qt requests a fresh readiness check only after its write succeeds.
+    // Do not use the former backend's status while that check is pending.
+    kilinReady = false;
+    readinessEnvironmentReady = false;
+    readinessMissingCount = 0;
+    byId("readiness-status").textContent = "Checking";
+    byId("readiness-summary").textContent = "Checking the selected backend…";
+    showSetupLock();
+  } else if (data.event === "backend_preference_failed") {
+    // A second selection may already be pending: only revert the failed one.
+    if (!ready && byId("backend").value === data.backend) {
+      byId("backend").value = confirmedBackendPreference;
+      showModelFields();
+    }
+    error.textContent = data.message;
+    error.classList.remove("hidden");
+    byId("model-download-status").textContent = data.message;
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
@@ -5039,7 +5218,8 @@ function onEvent(raw) {
     const runtime = document.createElement("li");
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
-      : `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui`;
+      : data.unavailable_reason
+        || `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui --backend ${data.backend}`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -5062,6 +5242,8 @@ function onEvent(raw) {
     byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
     byId("readiness-summary").textContent = data.ready
       ? "KíLín is ready."
+      : !data.environment_ready
+        ? data.unavailable_reason || `${String(data.backend).toUpperCase()} runtime is not installed.`
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
@@ -5073,7 +5255,7 @@ function onEvent(raw) {
     showSetupLock();
     refreshModelStatus();
     if (!data.ready) {
-      // Setup comes first: Settings opens on it and stays until it is done.
+      // Explain missing new-project requirements without locking Settings.
       byId("models-panel").classList.remove("hidden");
       byId("first-run-setup").focus?.();
     }
@@ -5132,7 +5314,7 @@ function onEvent(raw) {
       .find((item) => item.dataset.conversationId === data.conversation_id);
     button?.closest(".conversation-row")?.remove();
     byId("activity-text").textContent = "Conversation removed. Preserving its trace and opening the next chat…";
-    byId("activity-detail").textContent = "The archived trace remains in logs/traces/deleted.";
+    byId("activity-detail").textContent = "The archived trace remains in logs/traces/.deleted/.";
   } else if (data.event === "preview") {
     data.roots.forEach((root, index) => {
       const original = selectedSources[index];
@@ -5274,7 +5456,9 @@ function onEvent(raw) {
     if (closeAfterModelsApply) hideModels();
     closeAfterModelsApply = false;
   } else if (data.event === "answer_settings_saved") {
-    byId("model-download-status").textContent = "Saved in profile.ini. The next answer uses it.";
+    answerSettingsSaved(data);
+  } else if (data.event === "answer_settings_failed") {
+    answerSettingsFailed(data);
   } else if (data.event === "indexing_applied") {
     applyingIndexing = false;
     profile = data.profile;
@@ -5318,6 +5502,10 @@ function onEvent(raw) {
       showModelFields();
     }
     activeProjectTypeId = data.type_id;
+    // Reopening the same project need not discard a queued save that has
+    // not yet been acknowledged. A different project starts fresh.
+    const keepPendingAnswers = openProjectPath === data.project
+      && Boolean(answerSettingsSave.pending);
     // Set before the lists are drawn: chats keep their order per project.
     openProjectPath = data.project;
     messageAttachments = [];
@@ -5347,10 +5535,7 @@ function onEvent(raw) {
     renderWorkspace(data.workspace_files);
     // Open by default, unless the user closed the panel.
     showWorkspace(sidePanelChoice ?? true);
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
+    if (!keepPendingAnswers) resetAnswerSettings(data);
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5385,10 +5570,7 @@ function onEvent(raw) {
     restoreStoppedTurn();
     // A stopped first answer stays on screen instead of the welcome.
     if (!conversation.children.length) renderConversationEmpty();
-    byId("temperature").value = data.temperature;
-    byId("max-new-tokens").value = data.max_new_tokens ?? "";
-    byId("thinking").checked = data.thinking;
-    savedAnswerNumbers = { temperature: data.temperature, max_new_tokens: data.max_new_tokens ?? null };
+    if (!answerSettingsSave.pending) resetAnswerSettings(data);
     // The open project now owns its Answers settings.
     answerSettingsEdited = false;
     updateChatSummary(data.turns.length);
@@ -5449,6 +5631,9 @@ function onEvent(raw) {
     updateFloatingHeader();
     setBusy(false);
   } else if (data.event === "stopped") {
+    if (answerSettingsSave.pending) answerSettingsSave.uncertain = true;
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
     restoreUnansweredQuestion();
     setupCompletionVisible = false;
     byId("readiness-meter").classList.add("hidden");
@@ -5483,14 +5668,29 @@ function onEvent(raw) {
     setup.classList.remove("hidden");
     showWorkspace(false);
     clearReferences();
-    // A stopped preparation leaves no project: Qt removed what was made.
-    byId("connection").textContent = data.removed_projects?.length
-      ? "Stopped · the unfinished project was removed"
-      : "Stopped · reopen your project";
+    // Stop preserves any committed or nonempty project directory.
+    const preservedProjects = data.preserved_projects || [];
+    byId("connection").textContent = preservedProjects.length
+      ? "Stopped · project files preserved"
+      : data.removed_projects?.length
+        ? "Stopped · empty preparation folder removed"
+        : "Stopped · reopen your project";
+    if (preservedProjects.length) {
+      const locations = preservedProjects.join(", ");
+      error.textContent = `Project files were kept at: ${locations}. `
+        + "Reopen a completed project or inspect an unfinished folder "
+        + "before removing it.";
+      error.classList.remove("hidden");
+    }
     setBusy(false);
     bridge.requestSettings(byId("type-id").value, "");
-    if (data.removed_projects?.length) bridge.listSavedProjects("");
+    if (data.removed_projects?.length || preservedProjects.length) {
+      bridge.listSavedProjects("");
+    }
   } else if (data.event === "backend_failed") {
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
     ready = false;
     updateFloatingHeader();
     chat.classList.add("hidden");
@@ -5502,6 +5702,9 @@ function onEvent(raw) {
     clearReferences();
     showError(data.message, data.trace_path || activeTracePath);
   } else if (data.event === "backend_restarted") {
+    answerSettingsSave.pending = null;
+    answerSettingsSave.queued = null;
+    answerSettingsSave.uncertain = true;
     restoreUnansweredQuestion();
     const reopenProject = ready && openProjectPath && activeConversationId;
     error.classList.add("hidden");
@@ -5539,6 +5742,9 @@ function onEvent(raw) {
       }
     });
   } else if (data.event === "error") {
+    // A failed switch may already have released the previous session.
+    // Do not show its stale conversation or claim it is still active.
+    if (data.resume_released) returnToLaunch();
     if (applyingIndexing) {
       // Not saved: show the settings still in effect.
       applyingIndexing = false;
@@ -5664,7 +5870,7 @@ byId("cancel-model-download").addEventListener("click", () => {
 });
 byId("project-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  if (busy || !bridge || needsSetup()) return;
+  if (busy || !bridge || needsNewProjectSetup()) return;
   if (!profile) return showError("Settings are still loading. Try again in a moment.");
   if (!installedBackends[activeBackend]) {
     openModels();
@@ -5713,6 +5919,13 @@ byId("question-form").addEventListener("submit", (event) => {
   event.preventDefault();
   const question = byId("question").value.trim();
   if (!question || busy || !ready) return;
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    error.textContent = answerSettingsSave.uncertain
+      ? "Reopen the project to verify its answer settings before asking."
+      : "Answer settings are still saving. Send after they are confirmed.";
+    error.classList.remove("hidden");
+    return;
+  }
   error.classList.add("hidden");
   const temperature = Number(byId("temperature").value);
   if (!byId("temperature").value.trim() || !Number.isFinite(temperature) || temperature < 0) {
@@ -5723,13 +5936,25 @@ byId("question-form").addEventListener("submit", (event) => {
   if (answerTokens && (!Number.isInteger(maxNewTokens) || maxNewTokens < 1)) {
     return showError("Choose a positive answer-token limit or leave it blank.");
   }
+  const answerSettings = {
+    temperature, max_new_tokens: maxNewTokens,
+    thinking: byId("thinking").checked,
+  };
+  // An input can still contain a draft when Submit fires before Change.
+  // Never let ask() persist that draft as a side effect of answering.
+  if (!sameAnswerSettings(answerSettings, confirmedAnswerSettings())) {
+    queueAnswerSettings(answerSettings);
+    error.textContent = "Saving answer settings. Send after confirmation.";
+    error.classList.remove("hidden");
+    return;
+  }
   byId("question").value = "";
   // A question goes to the chat the engine has open.
   returnToAnswer();
   const ask = {
     question, attachments: messageAttachments, files: [], leftOut: [],
     effort: JSON.stringify({ model: selectedModelLevel, search_depth: selectedDepthStep }),
-    settings: { temperature, thinking: byId("thinking").checked, max_new_tokens: maxNewTokens },
+    settings: confirmedAnswerSettings(),
   };
   messageAttachments = [];
   renderAttachments();
@@ -5885,6 +6110,14 @@ function changeProjectsFolder(useDefault) {
  *   that could not be added (``leftOut``), and the answer settings.
  */
 function sendQuestion(ask) {
+  if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
+    byId("question").value = ask.question;
+    messageAttachments = ask.attachments;
+    renderAttachments();
+    error.textContent = "Confirm answer settings before sending the question.";
+    error.classList.remove("hidden");
+    return;
+  }
   unansweredQuestion = ask.question;
   answeringConversationId = activeConversationId;
   const listed = ask.files.map((path) => `- ${path}`).join("\n");
@@ -5946,6 +6179,9 @@ for (const [id, commit] of [["conversation-name", commitConversationName]]) {
  * resumed or created.
  */
 function returnToLaunch() {
+  answerSettingsSave.pending = null;
+  answerSettingsSave.queued = null;
+  answerSettingsSave.uncertain = false;
   bridge.closeProject();
   openProjectPath = "";
   ready = false;
@@ -6052,10 +6288,14 @@ for (const input of document.querySelectorAll('input[name="effort-thinking"]')) 
   });
 }
 byId("thinking").addEventListener("change", () => {
-  // Saved to the open project at once, so every chat and Settings agree.
-  // On the start screen it goes with the new project instead.
-  if (ready && !busy && bridge) {
-    bridge.saveAnswerSettings(JSON.stringify({ thinking: byId("thinking").checked }));
+  // Both Thinking controls share the Answers setting and its save queue.
+  // On the start screen the selected value belongs to the next project.
+  if (ready && busy) {
+    byId("thinking").checked = answerSettingsSave.queued?.thinking
+      ?? answerSettingsSave.pending?.settings.thinking
+      ?? savedAnswerThinking;
+  } else if (ready) {
+    saveAnswerNumbers();
   }
   renderEffortPicker();
 });

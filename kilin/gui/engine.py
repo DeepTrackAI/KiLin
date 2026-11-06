@@ -622,6 +622,7 @@ class ChatEngine:
         event_type: str,
         error: BaseException,
         message: str,
+        **event_fields: object,
     ) -> None:
         """Trace one backend failure and show a short GUI message.
 
@@ -634,6 +635,8 @@ class ChatEngine:
             error.
         message: str
             User-facing explanation included in the error event.
+        **event_fields: object
+            Optional operation-specific recovery information for the GUI.
 
         Notes
         -----
@@ -657,6 +660,7 @@ class ChatEngine:
                 if trace.readable_path is not None
                 else None
             ),
+            **event_fields,
         )
 
     def startup(self) -> None:
@@ -674,16 +678,30 @@ class ChatEngine:
 
         Notes
         -----
-        The required models are those the app-wide preferences use (see
-        ``kilin.gui.preferences``). For each missing one, the closest
-        installed model of the same role is offered as a replacement;
-        ``can_use_installed`` is true when every missing model has one.
+        The required models are those for the saved preferred backend,
+        resolved by platform policy only when the preference is ``auto``.
+        An unsupported explicit backend is reported as unavailable without
+        choosing a replacement backend. For each missing model, the closest
+        installed model of the same role may be offered as a replacement;
+        ``can_use_installed`` also requires a usable backend runtime.
 
         """
 
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            try:
+                backend = _setup_backend()
+                unavailable_reason = ""
+            except ValueError as error:
+                # Preserve an explicit unsupported choice for a useful
+                # readiness report; never substitute another backend.
+                backend = default_backend()
+                if backend not in (BACKEND_MLX, BACKEND_TORCH):
+                    raise
+                unavailable_reason = str(error)
             packages = installed_backends()
+            environment_ready = (
+                packages.get(backend, False) and not unavailable_reason
+            )
             entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             required = required_models(backend)
@@ -696,14 +714,15 @@ class ChatEngine:
             self._send(
                 "readiness",
                 backend=backend,
-                environment_ready=packages.get(backend, False),
+                environment_ready=environment_ready,
+                unavailable_reason=unavailable_reason,
                 required_models=required,
                 cached_models=sorted(cached),
                 missing_models=missing,
                 replacements=replacements,
-                can_use_installed=bool(missing)
-                and len(replacements) == len(missing),
-                ready=packages.get(backend, False) and not missing,
+                can_use_installed=environment_ready
+                and bool(missing) and len(replacements) == len(missing),
+                ready=environment_ready and not missing,
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))
@@ -714,7 +733,8 @@ class ChatEngine:
         Notes
         -----
         Each missing model is replaced by the installed model of the same
-        role (language or embedding) and backend whose size is closest,
+        role (language or embedding) and preferred backend whose size is
+        closest,
         in the effort levels, router, and embedding preferences. The
         change is saved in the app-wide preferences and reported with
         ``installed_models_used``; readiness is then checked again.
@@ -722,7 +742,7 @@ class ChatEngine:
         """
 
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            backend = _setup_backend()
             entries = downloaded_models()
             cached = {str(item["model_id"]) for item in entries}
             missing = [
@@ -768,11 +788,18 @@ class ChatEngine:
             )
 
     def install_required_models(self) -> None:
-        """Download missing GUI models with live byte progress and timing."""
+        """Download missing models for the selected setup backend.
+
+        Notes
+        -----
+        An explicit backend choice is never replaced by ``auto``. If its
+        runtime is unavailable, installation fails before downloading.
+
+        """
 
         started = perf_counter()
         try:
-            backend = choose_backend(BACKEND_AUTO)
+            backend = _setup_backend()
             if not installed_backends().get(backend, False):
                 raise RuntimeError(
                     f"The {backend.upper()} runtime is not installed. Restart "
@@ -1104,8 +1131,12 @@ class ChatEngine:
 
         """
 
+        previous_released = False
         try:
             project = open_project(directory)
+            # Once closing starts, the previous UI cannot assume its
+            # session remains usable if a subsequent load fails.
+            previous_released = True
             self.close()
             conversation = self._open_conversation_store(
                 project, conversation_id
@@ -1118,8 +1149,13 @@ class ChatEngine:
                 "gui.project.resume.failed",
                 error,
                 f"Could not resume the project: {error}",
+                resume_released=previous_released,
             )
-            if self.session is None:
+            # An activation error can leave a partially opened session.
+            # Release it rather than retaining a project the GUI cannot use.
+            if previous_released:
+                self.close()
+            elif self.session is None:
                 self._close_project_trace()
 
     def _report_source_changes(self, project: QAProject) -> None:
@@ -1415,7 +1451,7 @@ class ChatEngine:
                 # projects start from (user preferences over package defaults).
                 backend = request.get("backend")
                 if backend not in (BACKEND_MLX, BACKEND_TORCH):
-                    backend = choose_backend(BACKEND_AUTO)
+                    backend = _setup_backend()
                 changes: dict[str, object] = {
                     "embedding_models": {backend: embedding_model},
                     "query_format": query_format,
@@ -1757,7 +1793,8 @@ class ChatEngine:
                 sources, type_id, workspace if workspace.strip() else None,
                 **options,
             )
-            # Until it opens, a Stop removes this new project again.
+            # The profile is now published. Stop must preserve it, even
+            # if Qt has not yet processed the later opened event.
             self._send("project_created", workspace=str(project.root))
             if created_depth is not None:
                 write_search_depth(project.root, created_depth)
@@ -1988,41 +2025,110 @@ class ChatEngine:
             trace=self.active_trace,
         )
 
-    def save_answer_settings(self, settings: object) -> None:
-        """Save answer settings changed outside a question, e.g. Thinking.
+    def save_answer_settings(
+        self,
+        settings: object,
+        request_id: int | None = None,
+        project: str | None = None,
+    ) -> None:
+        """Persist answer settings and acknowledge the requesting project.
 
-        The open project's chat uses them at once, so the next answer and
-        every other chat follow the saved profile. Sends
-        ``answer_settings_saved`` with the values now in effect.
+        A correlated GUI request carries a request ID and project path. The
+        acknowledgement describes the saved profile, never merely the
+        requested values. When saving fails, reread ``profile.ini`` and
+        reconfigure the live chat before declaring the values verified.
 
         Parameters
         ----------
         settings: object
-            Mapping with any of ``temperature``, ``thinking``, and
-            ``max_new_tokens``; other keys are ignored.
+            Mapping with temperature, thinking, or max_new_tokens. Other
+            keys are ignored, as in the existing command contract.
+        request_id: int | None, optional
+            Positive identifier used to match the GUI acknowledgement.
+            None retains the uncorrelated caller's event contract.
+        project: str | None, optional
+            Canonical project path attached to a correlated GUI request.
+            None retains the existing caller's project selection.
 
         """
 
+        event_project = project or ""
         try:
+            if request_id is not None and (
+                type(request_id) is not int or request_id < 1
+            ):
+                raise ValueError("Invalid answer-settings request ID.")
             if self.session is None:
                 raise RuntimeError("Open a project first.")
+            actual_project = str(self.session.project.root)
+            if project is not None and project != actual_project:
+                raise RuntimeError("The active project has changed.")
+            event_project = actual_project
             if not isinstance(settings, dict):
                 raise ValueError("Answer settings must be an object.")
             self._save_answer_settings(settings)
             self._use_project_answer_settings()
             profile = self.session.project.profile
-            # The page confirms that the saved values are now in effect.
-            self._send(
-                "answer_settings_saved",
-                temperature=profile.temperature,
-                thinking=profile.thinking,
-                max_new_tokens=profile.max_new_tokens,
-            )
+            response = {
+                "temperature": profile.temperature,
+                "thinking": profile.thinking,
+                "max_new_tokens": profile.max_new_tokens,
+            }
+            if request_id is not None:
+                response.update(
+                    request_id=request_id, project=event_project
+                )
+            self._send("answer_settings_saved", **response)
         except Exception as error:
-            self._report_error(
+            if request_id is None:
+                self._report_error(
+                    "gui.answer_settings.failed",
+                    error,
+                    f"Could not save the answer settings: {error}",
+                )
+                return
+            # configure_project may have replaced profile.ini before a
+            # trace or live-session update failed. The disk state, not the
+            # old in-memory profile, is authoritative after such a failure.
+            verified = False
+            response = {}
+            if (
+                self.session is not None
+                and (
+                    project is None
+                    or project == str(self.session.project.root)
+                )
+            ):
+                try:
+                    self.session.project = open_project(
+                        self.session.project.root
+                    )
+                    self._use_project_answer_settings()
+                    profile = self.session.project.profile
+                    response = {
+                        "temperature": profile.temperature,
+                        "thinking": profile.thinking,
+                        "max_new_tokens": profile.max_new_tokens,
+                    }
+                    verified = True
+                except Exception as recovery_error:
+                    self.active_trace.exception(
+                        "gui.answer_settings.reconcile_failed",
+                        recovery_error,
+                        component="gui_engine",
+                    )
+            self.active_trace.exception(
                 "gui.answer_settings.failed",
                 error,
-                f"Could not save the answer settings: {error}",
+                component="gui_engine",
+            )
+            self._send(
+                "answer_settings_failed",
+                request_id=request_id,
+                project=event_project,
+                verified=verified,
+                message=f"Could not save the answer settings: {error}",
+                **response,
             )
 
     def tool_settings(self) -> None:
@@ -2568,8 +2674,8 @@ class ChatEngine:
     ) -> None:
         """Ask the loaded project and emit its saved answer and evidence.
 
-        Conversation settings affect the next answer without rebuilding the
-        project indexes or editing profile.ini.
+        Generation settings accompanying a question are also persisted to
+        profile.ini. Retrieval effort does not rebuild the project indexes.
 
         Parameters
         ----------
@@ -3340,7 +3446,8 @@ class ChatEngine:
         """Save the open project's indexing settings and rebuild its index.
 
         The index records these settings, so reopening the project with new
-        values rebuilds it. A failure restores the previous profile.ini.
+        values rebuilds it. On failure, restore a changed profile atomically
+        and reopen the previous conversation if the session was replaced.
 
         Parameters
         ----------
@@ -3348,12 +3455,19 @@ class ChatEngine:
             Changed values among ``extensions``, ``max_file_bytes``,
             ``target_tokens``, ``max_tokens`` and ``overlap_tokens``.
 
+        Notes
+        -----
+        ``configure_project`` can fail after publishing ``profile.ini``.
+        Recovery therefore compares the saved profile to the current file,
+        not only whether configuration returned successfully. Index files
+        are revalidated by reopening; they are not rolled back atomically.
+
         """
 
         root = None
         profile_text = None
         conversation_id = None
-        changed = False
+        reopen_started = False
         try:
             if self.session is None:
                 raise RuntimeError("Open a project before changing indexing.")
@@ -3364,14 +3478,14 @@ class ChatEngine:
             ):
                 raise ValueError("Invalid indexing settings.")
             root = self.session.project.root
-            profile_text = (root / "profile.ini").read_text(encoding="utf-8")
+            profile_text = (root / PROFILE_FILE).read_text(encoding="utf-8")
             conversation_id = self.active_conversation.conversation_id
             self._send("status", message="Rebuilding the index…")
-            # Invalid values are refused before profile.ini is written.
+            # Validation precedes the core's atomic profile replacement.
             project = configure_project(
                 root, settings, trace=self.active_trace
             )
-            changed = True
+            reopen_started = True
             self.close()
             self._reopen_project_conversation(project, conversation_id)
             self._send(
@@ -3379,24 +3493,43 @@ class ChatEngine:
                 profile=asdict(self.session.project.profile),
             )
         except Exception as error:
-            if changed:
+            recovery_error = None
+            if root is not None and profile_text is not None:
                 try:
-                    (root / "profile.ini").write_text(
-                        profile_text, encoding="utf-8"
-                    )
+                    path = root / PROFILE_FILE
+                    # A post-write trace failure also needs a rollback.
+                    if path.read_text(encoding="utf-8") != profile_text:
+                        atomic_write_text(path, profile_text)
+                    if reopen_started:
+                        self.close()
+                        self._reopen_project_conversation(
+                            open_project(root), conversation_id
+                        )
+                except Exception as failure:
+                    recovery_error = failure
+            message = f"Could not apply indexing settings: {error}"
+            if recovery_error is not None:
+                try:
                     self.close()
-                    self._reopen_project_conversation(
-                        open_project(root), conversation_id
+                except Exception as close_error:
+                    recovery_error = RuntimeError(
+                        f"{recovery_error}; closing failed: {close_error}"
                     )
-                except Exception:
-                    self._send(
-                        "backend_failed",
-                        message="Reload failed. Reopen the project to retry.",
-                    )
+                    advice = "Restart KíLín, inspect profile.ini and reopen."
+                else:
+                    advice = "Inspect profile.ini and reopen the project."
+                self._send(
+                    "backend_failed",
+                    message=(
+                        "Could not complete indexing recovery. "
+                        + advice
+                    ),
+                )
+                message += f"; recovery failed: {recovery_error}. {advice}"
             self._report_error(
                 "gui.indexing.change.failed",
                 error,
-                f"Could not apply indexing settings: {error}",
+                message,
             )
 
     def _switch_with_store_rollback(
@@ -3800,6 +3933,30 @@ def _model_size(model_id: str) -> float:
 
     match = re.search(r"(\d+(?:\.\d+)?)B\b", model_id)
     return float(match.group(1)) if match else 8.0
+
+
+def _setup_backend() -> str:
+    """Resolve new-project setup from the saved backend preference.
+
+    Returns
+    -------
+    str
+        The selected backend, using platform policy only for ``auto``.
+
+    Raises
+    ------
+    ValueError
+        If an explicitly selected backend is unsupported on this platform.
+
+    Notes
+    -----
+    The preference is read at the start of each setup operation. In
+    particular, an explicit PyTorch choice must not become MLX merely
+    because the automatic policy would select MLX.
+
+    """
+
+    return choose_backend(default_backend())
 
 
 def _installed_replacements(
@@ -4365,7 +4522,11 @@ def main() -> None:
                     elif action == "apply_indexing":
                         engine.apply_indexing_settings(command["settings"])
                     elif action == "save_answer_settings":
-                        engine.save_answer_settings(command.get("settings"))
+                        engine.save_answer_settings(
+                            command.get("settings"),
+                            command.get("request_id"),
+                            command.get("project"),
+                        )
                     elif action == "tool_settings":
                         engine.tool_settings()
                     elif action == "save_tool_settings":

@@ -294,6 +294,121 @@ class TestEngineWorkflow(unittest.TestCase):
         self.assertEqual(events[-1]["event"], "error")
         self.assertIn("Open a project first", events[-1]["message"])
 
+    def test_answer_settings_acknowledge_matching_project(self) -> None:
+        """A correlated reply reports the persisted full configuration."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        engine.save_answer_settings(
+            {"temperature": 0.6, "max_new_tokens": 512}, 7, project
+        )
+        self.assertEqual(events[-1], {
+            "event": "answer_settings_saved",
+            "request_id": 7,
+            "project": project,
+            "temperature": 0.6,
+            "thinking": session.project.profile.thinking,
+            "max_new_tokens": 512,
+        })
+        self.assertEqual(session.project.profile.temperature, 0.6)
+        self.assertEqual(session.project.profile.max_new_tokens, 512)
+
+    def test_answer_settings_reject_stale_project_identity(self) -> None:
+        """A delayed save cannot mutate a different active project."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        initial = session.project.profile.thinking
+        engine.save_answer_settings(
+            {"thinking": not initial}, 8, "/another/project"
+        )
+        self.assertEqual(events[-1]["event"], "answer_settings_failed")
+        self.assertEqual(events[-1]["request_id"], 8)
+        self.assertEqual(events[-1]["project"], "/another/project")
+        self.assertFalse(events[-1]["verified"])
+        self.assertEqual(session.project.profile.thinking, initial)
+
+    def test_answer_settings_failure_reports_verified_profile(self) -> None:
+        """Rejected values revert to the actual persisted project state."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        original = session.project.profile
+        engine.save_answer_settings({"temperature": -1}, 9, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertEqual(failure["request_id"], 9)
+        self.assertEqual(failure["project"], project)
+        self.assertTrue(failure["verified"])
+        self.assertEqual(failure["temperature"], original.temperature)
+        self.assertEqual(failure["thinking"], original.thinking)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": original.temperature,
+            "thinking": original.thinking,
+            "max_new_tokens": original.max_new_tokens,
+        })
+
+    def test_answer_settings_reconcile_after_post_write_error(self) -> None:
+        """Reread disk after a save succeeds but its trace step fails."""
+
+        from kilin.project import configure_project
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+
+        def write_then_fail(directory, settings, *, trace):
+            """Simulate a post-commit error without rolling back disk."""
+            configure_project(directory, settings)
+            raise RuntimeError("trace failed after writing")
+
+        with patch(
+            "kilin.gui.engine.configure_project",
+            side_effect=write_then_fail,
+        ):
+            engine.save_answer_settings({"temperature": 0.5}, 10, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertTrue(failure["verified"])
+        self.assertEqual(failure["temperature"], 0.5)
+        self.assertEqual(session.project.profile.temperature, 0.5)
+        session.chat_session.configure_generation.assert_called_with({
+            "temperature": 0.5,
+            "thinking": session.project.profile.thinking,
+            "max_new_tokens": session.project.profile.max_new_tokens,
+        })
+
+    def test_answer_settings_unverifiable_failure_requires_reopen(
+        self,
+    ) -> None:
+        """Do not claim a saved state when the profile cannot be read."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        project = str(session.project.root)
+        with patch(
+            "kilin.gui.engine.open_project",
+            side_effect=OSError("cannot read profile"),
+        ):
+            engine.save_answer_settings({"temperature": -1}, 11, project)
+        failure = events[-1]
+        self.assertEqual(failure["event"], "answer_settings_failed")
+        self.assertFalse(failure["verified"])
+        self.assertNotIn("temperature", failure)
+        self.assertEqual(failure["request_id"], 11)
+
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.open_project")
     def test_resume_does_not_copy_sources(

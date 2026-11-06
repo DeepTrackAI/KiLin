@@ -16,16 +16,17 @@ Key Features
 - **Catalog availability**
 
     Return all presets with cache flags; the web interface filters choices by
-    role and backend.
+    role and backend. A lightweight snapshot check excludes interrupted
+    downloads without loading a model or reading its weight files.
 
 - **Installation hints**
 
     Expose distribution-presence checks without loading an inference model.
 
-- **Thinking switch**
+- **Thinking template probe**
 
-    Tell, for each cached model whose chat template renders, whether it
-    reacts to ``enable_thinking``, by rendering it with it on and off.
+    Compare a cached chat template rendered with ``enable_thinking``
+    on and off. Prompt differences do not establish model capability.
 
 Module Structure
 ----------------
@@ -48,11 +49,11 @@ Module Structure
 
 - ``downloaded_models``
 
-    List the cached models whose download finished.
+    List cached models with a plausible complete local snapshot.
 
 - ``thinking_switches``
 
-    Tell which cached models' chat templates switch thinking on and off.
+    Report which checked templates change their rendered prompt.
 
 Examples
 --------
@@ -68,6 +69,7 @@ from dataclasses import asdict, dataclass
 from importlib.metadata import PackageNotFoundError, version
 import json
 from pathlib import Path
+import re
 from typing import Final, TypeAlias
 
 from kilin.huggingface import available_models
@@ -302,15 +304,15 @@ def cached_model_roles(
 def thinking_switches(
     cached_models: list[dict[str, object]],
 ) -> dict[str, bool]:
-    """Tell which cached models' chat templates switch thinking.
+    """Compare chat-template prompts with thinking enabled and disabled.
 
-    KíLín turns thinking on or off by passing ``enable_thinking`` to the
-    model's chat template. Each cached template is rendered for one short
-    question with it on and off, in a sandbox, the way the Hugging Face
-    tokenizer renders it: different prompts mean the switch works, equal
-    ones mean the template ignores it. Nothing is guessed from a model's
-    name, so a new model is checked the same way once it is downloaded. A
-    missing, unreadable or failing template leaves the model out: unknown.
+    KíLín renders each cached chat template for one short prompt in a
+    Jinja sandbox, once with ``enable_thinking=True`` and once with
+    ``enable_thinking=False``. ``True`` means the rendered strings
+    differ; ``False`` means they are identical for that prompt. Neither
+    result establishes the model's reasoning ability or runtime support.
+    A missing, unreadable, or failing template is omitted (unknown).
+    No model is loaded and no capability is inferred from its name.
 
     Parameters
     ----------
@@ -320,8 +322,8 @@ def thinking_switches(
     Returns
     -------
     dict[str, bool]
-        For each checked model ID, whether its template switches thinking;
-        models that could not be checked are not included.
+        For checked model IDs, whether the rendered prompts differ with
+        ``enable_thinking`` toggled; unchecked models are omitted.
 
     """
 
@@ -358,7 +360,7 @@ def thinking_switches(
                     for switch in (True, False)
                 }
             except Exception:  # pylint: disable=broad-exception-caught
-                continue  # A template that fails to render is not verified.
+                continue  # A failed render gives no template-probe result.
             found[str(entry["model_id"])] = len(prompts) == 2
             break
     return dict(sorted(found.items()))
@@ -429,68 +431,209 @@ def _chat_template(snapshot: Path) -> str:
     return ""
 
 
-# Weight files a finished download contains at least one of.
+# Recognize only weight and tokenizer layouts supported by the cache
+# inventory. This is a file-presence check, not a model compatibility test.
 _WEIGHT_PATTERNS: Final[tuple[str, ...]] = (
     "*.safetensors", "*.bin", "*.npz", "*.gguf",
+)
+_WEIGHT_INDEX_PATTERNS: Final[tuple[str, ...]] = (
+    "*.safetensors.index.json", "*.bin.index.json",
+)
+_TOKENIZER_FILES: Final[tuple[str, ...]] = (
+    "tokenizer.json", "tokenizer.model", "spiece.model",
+    "sentencepiece.bpe.model", "tokenizer.tiktoken", "vocab.txt",
+)
+_SHARD_FILENAME: Final[re.Pattern[str]] = re.compile(
+    r".+-[0-9]{5}-of-[0-9]{5}\.(?:safetensors|bin)$"
 )
 
 
 def downloaded_models() -> list[dict[str, object]]:
-    """List the cached models whose download finished.
+    """List cached models with a plausible complete local snapshot.
 
-    A stopped download stays in the Hugging Face cache with only some of
-    its files, and ``kilin.huggingface.available_models`` lists it anyway.
-    The Hub links a file into a snapshot only once that file has fully
-    downloaded, so a snapshot counts as finished when it has
-    ``config.json``, every weight file its ``*.safetensors.index.json``
-    lists, and at least one weight file.
+    A Hub cache entry can represent an interrupted download. This lightweight,
+    offline check requires valid configuration metadata, nonempty tokenizer
+    assets, and a supported weight layout with all indexed shards present.
+    It never reads weight or tokenizer contents or loads a model. A reported
+    model can still fail to load due to incompatible or corrupt files.
 
     Returns
     -------
     list[dict[str, object]]
-        The ``available_models`` entries of finished downloads.
+        The ``available_models`` entries with a locally complete snapshot.
 
     """
 
     return [entry for entry in available_models() if _download_finished(entry)]
 
 
-def _download_finished(entry: dict[str, object]) -> bool:
-    """Tell whether one cached model has a finished snapshot.
+def _nonempty_file(path: Path) -> bool:
+    """Check one cache file without reading its contents.
 
     Parameters
     ----------
-    entry: dict[str, object]
-        One entry from ``kilin.huggingface.available_models``.
+    path: pathlib.Path
+        File to check, including a possible Hugging Face snapshot symlink.
 
     Returns
     -------
     bool
-        Whether any snapshot has its configuration and all its weights.
+        Whether the path resolves to a nonempty regular file.
+
+    """
+
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        # A missing target or a concurrent cache change is not readiness.
+        return False
+
+
+def _json_object(path: Path) -> dict[str, object] | None:
+    """Read a small configuration or weight-index mapping if valid.
+
+    Parameters
+    ----------
+    path: pathlib.Path
+        JSON metadata file; never a tokenizer or model-weight file.
+
+    Returns
+    -------
+    dict[str, object] | None
+        The JSON object, or ``None`` if missing or malformed.
+
+    """
+
+    if not _nonempty_file(path):
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _tokenizer_present(snapshot: Path) -> bool:
+    """Check standard tokenizer files without parsing vocabularies.
+
+    Parameters
+    ----------
+    snapshot: pathlib.Path
+        One local Hugging Face snapshot directory.
+
+    Returns
+    -------
+    bool
+        Whether a recognized nonempty tokenizer representation exists.
+
+    """
+
+    return (
+        any(_nonempty_file(snapshot / name) for name in _TOKENIZER_FILES)
+        or all(
+            _nonempty_file(snapshot / name)
+            for name in ("vocab.json", "merges.txt")
+        )
+    )
+
+
+def _index_complete(index: Path, snapshot: Path) -> bool:
+    """Check that a weight index references only present, nonempty shards.
+
+    Parameters
+    ----------
+    index: pathlib.Path
+        Safetensors or PyTorch weight-index metadata.
+    snapshot: pathlib.Path
+        Snapshot root to which indexed filenames must be relative.
+
+    Returns
+    -------
+    bool
+        Whether the index lists at least one valid weight file and every
+        referenced shard is present and nonempty.
+
+    """
+
+    metadata = _json_object(index)
+    if metadata is None:
+        return False
+    weight_map = metadata.get("weight_map")
+    if not isinstance(weight_map, dict) or not weight_map:
+        return False
+    filenames = weight_map.values()
+    if not all(isinstance(name, str) and name for name in filenames):
+        return False
+    for name in set(filenames):
+        relative = Path(name)
+        if (
+            relative.is_absolute() or ".." in relative.parts
+            or relative.suffix not in (".safetensors", ".bin")
+            or not _nonempty_file(snapshot / relative)
+        ):
+            return False
+    return True
+
+
+def _weights_present(snapshot: Path) -> bool:
+    """Check a complete indexed checkpoint or one unsharded weight file.
+
+    Parameters
+    ----------
+    snapshot: pathlib.Path
+        One local Hugging Face snapshot directory.
+
+    Returns
+    -------
+    bool
+        Whether a recognized, nonempty weight representation is present.
+
+    """
+
+    indexes = [
+        path for pattern in _WEIGHT_INDEX_PATTERNS
+        for path in snapshot.glob(pattern)
+    ]
+    if indexes:
+        # A broken index must not be hidden by an unrelated weight file.
+        return all(_index_complete(index, snapshot) for index in indexes)
+    for pattern in _WEIGHT_PATTERNS:
+        for path in snapshot.glob(pattern):
+            # Sharded downloads without their index cannot be verified.
+            if _SHARD_FILENAME.fullmatch(path.name):
+                continue
+            if _nonempty_file(path):
+                return True
+    return False
+
+
+def _download_finished(entry: dict[str, object]) -> bool:
+    """Check whether at least one cached revision is locally complete.
+
+    Parameters
+    ----------
+    entry: dict[str, object]
+        One repository from ``kilin.huggingface.available_models``.
+
+    Returns
+    -------
+    bool
+        Whether one snapshot has plausible metadata, tokenizer and weights.
+
+    Notes
+    -----
+    This is deliberately not a loader check: no model inference, tokenizer
+    parsing, remote request, or large-file hashing is performed.
 
     """
 
     for snapshot in sorted(
         (Path(str(entry.get("path", ""))) / "snapshots").glob("*")
     ):
-        if not (snapshot / "config.json").is_file():
-            continue
-        try:
-            listed = {
-                str(name)
-                for index in snapshot.glob("*.safetensors.index.json")
-                for name in json.loads(
-                    index.read_text(encoding="utf-8")
-                ).get("weight_map", {}).values()
-            }
-        except (OSError, ValueError, AttributeError):
-            continue
-        if not all((snapshot / name).is_file() for name in listed):
-            continue
-        if any(
-            path.is_file()
-            for pattern in _WEIGHT_PATTERNS
-            for path in snapshot.glob(pattern)
+        if (
+            _json_object(snapshot / "config.json") is not None
+            and _tokenizer_present(snapshot)
+            and _weights_present(snapshot)
         ):
             return True
     return False

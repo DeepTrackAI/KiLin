@@ -79,6 +79,23 @@ class TestFrontendSupport(unittest.TestCase):
             env=options,
         )
 
+    @patch("tests.kilin.gui._frontend_support.subprocess.run")
+    @patch("tests.kilin.gui._frontend_support.shutil.which")
+    def test_node_runner_forwards_script_arguments(
+        self, which, run
+    ) -> None:
+        which.return_value = "/path/to/node"
+        args = ("path with spaces/app.js", "reason_codes.json")
+        run_node("example", args=args)
+        run.assert_called_once_with(
+            ["/path/to/node", "-e", "example", *args],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+            env=None,
+        )
+
     @patch("tests.kilin.gui._frontend_support.shutil.which")
     def test_missing_node_has_explicit_failure(self, which) -> None:
         which.return_value = None

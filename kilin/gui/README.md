@@ -269,32 +269,74 @@ chunking). Messages from Close show below the tabs, whichever tab is open.
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
-The left-panel qilin logo is gold in light mode and blue-black in dark
-mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
-installed with the images.
+The welcome screen displays the locally packaged, full-body
+Gaudí-inspired mosaic qilin (dragon head, deer body, cow tail).
+In an open project, the sidebar now shows the full mascot alone,
+without a separate wordmark, while the welcome card continues to
+use the refined vector KíLín logotype with evenly spaced letters
+and tapered accents above both i characters. Dark mode keeps the
+vivid ceramic colors against navy surfaces. The window and Dock
+use a close-up of the dragon head; `icons/README.md` documents the
+artwork and the attribution history.
+The palette and decorations are CSS-only and do not alter interaction,
+project settings, model selection, or accessibility labels.
 
 Settings has two parts. KíLín setup holds the app-wide choices: the
 computation backend for new projects, Appearance, and the projects folder.
+Selecting Auto uses MLX on native Apple Silicon and PyTorch otherwise.
+Selecting MLX or PyTorch explicitly selects that backend for setup checks,
+required-model downloads, and compatible cached-model alternatives, with no
+silent fallback to the other backend. If the selected runtime is unavailable
+or MLX is unsupported on the platform, setup reports that limitation rather
+than declaring another backend ready. Changing the preference refreshes the
+setup status after the write succeeds; if the preferences file cannot be
+saved, the previous selection is restored and an error is shown.
+New-project preparation requires the selected default runtime and models,
+but Settings can be closed even when they are missing. Saved projects remain
+available from Resume and the Projects sidebar, using each project's own
+saved backend and models. An unavailable saved-project model fails through
+the normal project-opening path; it is not replaced by a new-project default.
+If switching projects fails after the former session has been released, the
+GUI returns to the start screen and displays the error. A profile rejected
+before the former session is released leaves that session open.
 The Project part has five tabs: General (the project's name and Delete),
 Indexing (file types, file size and chunk sizes), Models (effort levels,
 intent model, embedding model), Answers (temperature, answer length,
-search depth, thinking) and Tools. Every change is saved as soon as it is
-made: a choice when it is picked, a typed value on Enter or when its field
-is left. A download, an embedding change or an Indexing change asks first,
-because it can take a while; cancelling puts the saved value back. The
-line under the tabs confirms each save. On the start screen nothing is
-saved: the Project values set there are kept on the page and written only
+search depth, thinking) and Tools. Changes are submitted when chosen or
+when a typed field is committed (Enter or leaving the field). Answer settings
+are not considered saved until the engine acknowledges the profile write.
+While one answer-settings save is pending, later edits remain available and
+only the latest combination is queued for the next save. The next question
+cannot start until saving finishes; its text is preserved. On failure the
+engine rereads the actual profile and synchronizes the live chat. The GUI
+restores those confirmed values, or requires reopening the project if the
+saved state cannot be verified. A download, an embedding change or an
+Indexing change asks first, because it can take a while; cancelling puts
+the saved value back. During the rebuild, the page reports the operation as
+pending, not already saved. Success is confirmed only after the project
+reopens with its updated settings. If rebuilding fails, the engine restores
+any changed `profile.ini` atomically and, if required, attempts to reopen
+the previous conversation. If recovery also fails, the project is closed
+where possible and the GUI asks for inspection and reopening. Rollback
+covers the profile file, **not** every intermediate index artifact; those
+are validated when the project reopens.
+
+The line under the tabs reports save status. On the start screen nothing
+is saved: the Project values set there are kept on the page and written only
 into the new project's `profile.ini` when it is created, so the next new
 project starts from the defaults again.
 
-Effort levels lists five levels. Each has an editable name and a language
-model chosen from a dropdown of cached language models. Each model shows what the engine
-checked in its downloaded chat template, rendered with `enable_thinking`
-on and off: "· can think" when the two prompts differ, "· no thinking
-switch" when the template renders but ignores it. A model that is not
-downloaded, or whose template is missing or fails to render, shows
-nothing, because nothing is known; nothing is judged from the name. The
-composer's Thinking switch is enabled only for "· can think" models. Search depth is a
+Effort levels lists five levels. Each has an editable name and a
+language model chosen from a dropdown of cached language models. The
+GUI renders each cached chat template with `enable_thinking` on and
+off for one sample prompt. It shows "· thinking switch detected" when
+the rendered prompts differ, "· no template switch detected" when
+they are identical, or no label when the template cannot be checked.
+This probe neither loads the model nor establishes its reasoning
+capability or runtime support. The composer's Thinking switch remains
+disabled unless a template prompt difference was detected. In Answers,
+"Request thinking via chat template" passes the setting to generation;
+actual model behavior is not verified by the probe. Search depth is a
 separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses
@@ -378,11 +420,16 @@ each check), and opened by itself when something is missing or a download
 runs. When some are missing but installed models of the
 same role exist, **Use installed models** switches to the closest installed
 size (for example a missing 8B model is replaced by an installed 14B
-rather than a 4B) and saves that choice.
+rather than a 4B) and saves that choice. Setup is guidance for new projects,
+not a prerequisite for browsing or resuming existing saved projects.
 
-Selecting a cached model is not a completeness check. Offline loading,
-backend compatibility, model architecture, tokenizer behavior, and pooling
-assumptions are enforced or encountered later in the model-loading path.
+The GUI's cached-model list uses lightweight, offline file checks: a
+configuration, recognized tokenizer assets, and complete indexed weights.
+It reads only small metadata and file sizes, never full weights or tokenizer
+contents. "Downloaded" means locally complete by these checks, not verified
+loadable; backend compatibility, tokenizer behavior, and pooling assumptions
+are encountered later in the model-loading path. See
+[Model management](../../docs/model_management.md) for the exact limits.
 
 The default maximum for a new project's answer is 8,192 generated
 tokens, supplied by the core `PROJECT_PROFILE` configuration. The GUI does
@@ -398,9 +445,11 @@ new tokens without rebuilding the index or reloading models. A blank answer
 limit requests the session's automatic budget; it does not remove the model's
 finite context limit. The values used for a completed answer are recorded with
 that turn. Temperature, thinking, and answer length belong to the project:
-a change is saved to its profile.ini when the next question is asked, every
-chat in the project uses it, switching chats keeps it, and opening another
-project loads that project's own values.
+a change is saved and acknowledged when committed in Settings or the
+Thinking control. Every chat uses the confirmed project-wide settings,
+switching chats keeps them, and another project loads its own values. A
+question never silently commits unconfirmed settings; it must wait until
+the corresponding profile save has been acknowledged.
 
 An ordinary answer intent can override thinking for that reply without
 changing these controls or the saved project setting. Both packaged
@@ -431,10 +480,12 @@ new conversation trace before closing the previous one, so a conflict on
 the target does not discard the active trace. Metadata updates and branching
 borrow the active writer's file lock; inactive conversations are locked for
 the duration of their update or archival. Deleting an active conversation
-moves the saved JSON and its `.json.lock` companion into
-`logs/traces/.deleted/` and releases the old writer without appending a
-redundant closing event. The sidecar `.json.lock` file
-may remain after closing; it does not indicate a stale active lock. See
+moves the saved JSON into `logs/traces/.deleted/`, while its hidden
+`.conversation_*.json.lock` companion stays at the original path in
+`logs/traces/`. The old writer is released without appending a redundant
+closing event. The retained lock companion does not indicate an active
+writer. Restoration requires moving the JSON back while KíLín is closed;
+the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
 
@@ -490,7 +541,13 @@ switching the answering model.
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen
 the project to continue. This is not transactional cancellation of a copy,
-index write, download, or conversation update that was in progress.
+index write, download, or conversation update that was in progress. The GUI
+never recursively deletes a project after Stop: it removes only an empty
+creation-marker directory whose metadata confirms it was created by the
+stopped engine, not an existing empty folder. Completed projects and
+nonempty partial workspaces are preserved, with known paths reported for
+inspection. A stopped preparation may leave an occupied folder that must be
+reviewed and removed manually before that location can be used again.
 
 ## Trace privacy and current limits
 

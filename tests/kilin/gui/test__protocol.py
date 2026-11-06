@@ -234,7 +234,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             }),
         ])
         worker.save_answer_settings.assert_called_once_with(
-            {"thinking": False}
+            {"thinking": False}, None, None
         )
         worker.ask.assert_not_called()
 
@@ -410,6 +410,19 @@ class TestGUIProtocolCommands(unittest.TestCase):
             [{"event": "error", "message": "Unreadable command."}],
         )
         worker.reset.assert_called_once_with()
+
+    def test_correlated_answer_settings_command(self) -> None:
+        """Forward a save ID and project without losing their identity."""
+
+        worker, _ = self._run([json.dumps({
+            "action": "save_answer_settings",
+            "settings": {"thinking": True},
+            "request_id": 17,
+            "project": "/saved/project",
+        })])
+        worker.save_answer_settings.assert_called_once_with(
+            {"thinking": True}, 17, "/saved/project"
+        )
 
     def test_eof_closes_engine_once(self) -> None:
         """Release an idle coordinator when the command stream ends."""
@@ -700,9 +713,11 @@ class TestGUIProtocolEvents(unittest.TestCase):
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
             "answer_cancelled", "answer_delta", "answer_phase",
-            "answer_settings_saved", "answered",
-            "backend_failed",
-            "backend_restarted", "conversation_delete_started",
+            "answer_settings_failed", "answer_settings_saved",
+            "answered",
+            "backend_failed", "backend_preference_failed",
+            "backend_preference_saved", "backend_restarted",
+            "conversation_delete_started",
             "conversation_opened", "conversation_viewed", "conversations",
             "error", "indexing_applied",
             "workspace_conflict",
@@ -807,44 +822,129 @@ class TestGUIProtocolBridge(unittest.TestCase):
         ])
 
     def test_stop_removes_the_project_being_prepared(self) -> None:
-        """A stopped preparation leaves no project behind, only that one."""
+        """Remove only empty claims, not completed or partial projects."""
 
-        remove = importlib.import_module(
-            "kilin.gui.window"
-        ).remove_unfinished_projects
+        cleanup = importlib.import_module(
+            "kilin._project_creation"
+        ).cleanup_stopped_creation
         with TemporaryDirectory() as folder:
-            parent = Path(folder)
-            for name, marker in (
-                ("copying", "pid=42\n"), ("other", "pid=7\n"),
-                ("indexing", None), ("finished", None),
-            ):
-                (parent / name / "sources").mkdir(parents=True)
-                (parent / name / "profile.ini").write_text("x")
-                if marker is not None:
-                    (parent / name / ".kilin-creating").write_text(marker)
-            (parent / "link").symlink_to(parent / "finished")
-            removed = remove(parent, parent / "indexing", 42)
-            self.assertEqual(
-                sorted(Path(path).name for path in removed),
-                ["copying", "indexing"],
+            parent = Path(folder).resolve()
+            empty = parent / "copying"
+            empty.mkdir()
+            (empty / ".kilin-creating").write_text(
+                "pid=42\ncreated=1\n"
             )
-            # Another creator's folder, finished projects and links stay;
-            # a folder outside the projects folder is never removed.
+            partial = parent / "partial"
+            partial.mkdir()
+            (partial / ".kilin-creating").write_text(
+                "pid=42\ncreated=1\n"
+            )
+            (partial / "notes.txt").write_text("keep")
+            other = parent / "other"
+            other.mkdir()
+            (other / ".kilin-creating").write_text(
+                "pid=7\ncreated=1\n"
+            )
+            committed = parent / "indexing"
+            committed.mkdir()
+            (committed / "profile.ini").write_text("published")
+            (committed / "notes.txt").write_text("user data")
+            (parent / "link").symlink_to(committed)
+            removed, preserved = cleanup(parent, committed, 42)
+            self.assertEqual(removed, [str(empty)])
+            self.assertEqual(
+                preserved, [str(committed), str(partial)]
+            )
             self.assertEqual(
                 sorted(path.name for path in parent.iterdir()),
-                ["finished", "link", "other"],
+                ["indexing", "link", "other", "partial"],
             )
-            self.assertEqual(remove(parent, parent / "link", 0), [])
-            self.assertEqual(remove(parent, Path("/"), 0), [])
+            self.assertEqual((committed / "notes.txt").read_text(),
+                             "user data")
+            self.assertEqual((partial / "notes.txt").read_text(), "keep")
+            self.assertEqual(cleanup(parent, parent / "link", 0), ([], []))
+            self.assertEqual(cleanup(parent, Path("/"), 0), ([], ["/"]))
+
+    def test_stop_keeps_committed_project_before_queued_opened(self):
+        """A delayed Qt event must not turn a published project into trash."""
+
+        window = importlib.import_module("kilin.gui.window").ChatWindow
+        with TemporaryDirectory() as folder:
+            parent = Path(folder).resolve()
+            project = parent / "finished"
+            project.mkdir()
+            (project / "profile.ini").write_text("published")
+            (project / "notes.txt").write_text("important")
+            events = []
+            fake = MagicMock()
+            fake._stdout = bytearray()
+            fake._closing = False
+            fake._switching_folder = False
+            fake._stopping = True
+            fake._unopened_project = project
+            fake._stopped_pid = 42
+            fake.process.readAllStandardOutput.return_value = (
+                json.dumps({"event": "opened", "project": str(project)})
+                + "\n"
+            ).encode()
+            fake.bridge.event.emit.side_effect = events.append
+            fake._cleanup_stopped_creation.side_effect = lambda: (
+                window._cleanup_stopped_creation(fake)
+            )
+            with patch(
+                "kilin.gui.window.default_workspace_directory",
+                return_value=parent,
+            ):
+                window._read_events(fake)
+                self.assertEqual(fake._unopened_project, project)
+                window._process_finished(fake)
+            self.assertEqual((project / "notes.txt").read_text(),
+                             "important")
+            self.assertEqual(events, [json.dumps({
+                "event": "stopped", "preserved_projects": [str(project)]
+            })])
+            fake._start_engine.assert_called_once_with()
+            self.assertIsNone(fake._unopened_project)
 
     def test_backend_preference_is_saved_by_qt(self) -> None:
-        """Saved in preferences.json directly; no engine command."""
+        """Refresh setup only after saving a valid preference."""
 
         with patch("kilin.gui.window.write_defaults") as write:
             self.bridge.setBackendPreference("torch")
             self.bridge.setBackendPreference("cuda")
         write.assert_called_once_with({"backend": "torch"})
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{"event": "backend_preference_saved", "backend": "torch"}])
+
+    def test_backend_preference_save_error_keeps_previous_status(
+        self,
+    ) -> None:
+        """Never request readiness after a failed preferences write."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=OSError("read-only preferences"),
+        ):
+            self.bridge.setBackendPreference("torch")
         self.assertEqual(self.commands, [])
+        self.assertEqual(len(self.events), 1)
+        event = json.loads(self.events[0])
+        self.assertEqual(event["event"], "backend_preference_failed")
+        self.assertEqual(event["backend"], "torch")
+        self.assertIn("read-only preferences", event["message"])
+
+    def test_invalid_saved_preferences_report_failure(self) -> None:
+        """Do not refresh readiness when preference validation fails."""
+
+        with patch(
+            "kilin.gui.window.write_defaults",
+            side_effect=ValueError("invalid preferences.json"),
+        ):
+            self.bridge.setBackendPreference("mlx")
+        self.assertEqual(self.commands, [])
+        self.assertIn("invalid preferences.json", self.events[0])
 
     def test_indexing_settings_are_sent_as_an_object(self) -> None:
         self.bridge.applyIndexingSettings('{"target_tokens": 500}')
@@ -921,6 +1021,21 @@ class TestGUIProtocolBridge(unittest.TestCase):
             {"action": "save_answer_settings",
              "settings": {"thinking": True}},
         ])
+
+    def test_correlated_answer_settings_bridge_payload(self) -> None:
+        """Unwrap the browser envelope for the engine dispatcher."""
+
+        self.bridge.saveAnswerSettings(json.dumps({
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }))
+        self.assertEqual(self.commands, [{
+            "action": "save_answer_settings",
+            "settings": {"thinking": False, "temperature": 0.4},
+            "request_id": 17,
+            "project": "/saved/project",
+        }])
 
     def test_copy_text_goes_to_the_system_clipboard(self) -> None:
         """Copy through Qt, since the page may not write the clipboard."""
