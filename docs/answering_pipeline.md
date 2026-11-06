@@ -105,13 +105,22 @@ decision. `select_history()` applies the intent's policy:
 - `recent`: send a recent bounded window.
 - `relevant`: choose validated related turns where available.
 
-A tool that works on an earlier answer (`follows_up`, such as `show_source`
-or `filter_results`) is not used when the question names a file and says
+After the router call, two kinds of wording rules from the project type
+can change its intent; the router's related turns and standalone
+judgement are kept. An intent's `cues` are patterns searched in the
+question: the first intent, in the project type's order, whose cue
+matches replaces the router's choice ("give me an overview of the Smith
+paper" is `paper_overview`, "how does X differ from Y" is
+`compare_sources`). Without a cue, the wording can rule out the router's
+choice: an intent with `requires` patterns needs one of them to match (a
+reference check needs words such as "references" or "cite"), and a tool
+that works on an earlier answer (`follows_up`, such as `show_source` or
+`filter_results`) is not used when the question names a file and says
 nothing of earlier answers ("In Figure 1G of smith20.pdf, what does 79.7
-represent?"): such a question is new, not a follow-up, and the tool would
-only report that it found no earlier answer. The router is asked once more
-with those tools left out of the intent list; when that call fails or
-still names one of them, the default intent is used.
+represent?"), since such a question is new and the tool would only report
+that it found no earlier answer. The router is then asked once more with
+the ruled-out intents left out of the list; when that call fails or still
+names one of them, the default intent is used.
 
 The prompt history contains selected prior **questions and answers**, not
 full prior evidence payloads. Related-turn evidence may be carried forward

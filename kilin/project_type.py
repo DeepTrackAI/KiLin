@@ -290,6 +290,14 @@ class Intent:
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
+    cues: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns searched in a question whose wording
+        means this intent ("give me an overview of the Smith paper"); a
+        match sets the intent after the router has judged the history.
+    requires: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns of which a question must match one for
+        the router's choice of this intent to stand (a reference check
+        needs words such as "references" or "cite"). Empty: no condition.
     include_related_evidence: bool
         When searching, also supply the evidence cited by the earlier turns
         the router marked as related, so follow-ups keep their sources.
@@ -325,6 +333,8 @@ class Intent:
     retrieval_mode: RetrievalMode
     retrieval_strategy: RetrievalStrategy
     shortcuts: tuple[re.Pattern[str], ...] = ()
+    cues: tuple[re.Pattern[str], ...] = ()
+    requires: tuple[re.Pattern[str], ...] = ()
     include_related_evidence: bool = False
     prefer_source_code: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
@@ -439,6 +449,44 @@ def _text(type_id: str, data: dict, field: str, required: bool = True) -> str:
         raise ValueError(f"Project type {type_id!r} needs text for {field!r}.")
 
     return value.strip()
+
+
+def _patterns(
+    where: str, data: dict, field: str
+) -> tuple[re.Pattern[str], ...]:
+    """Compile a list of case-insensitive regular expressions.
+
+    Parameters
+    ----------
+    where: str
+        Intent location for errors.
+    data: dict
+        The intent's JSON object.
+    field: str
+        Field name, such as ``"shortcuts"`` or ``"cues"``.
+
+    Returns
+    -------
+    tuple[re.Pattern[str], ...]
+        The compiled patterns; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of texts or a pattern is invalid.
+
+    """
+
+    patterns = []
+    for pattern in _texts(where, data, field):
+        try:
+            patterns.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as error:
+            raise ValueError(
+                f"Intent {where!r} {field} pattern {pattern!r} is not a "
+                f"valid regular expression: {error}"
+            ) from error
+    return tuple(patterns)
 
 
 def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
@@ -559,6 +607,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "history",
             "retrieval",
             "shortcuts",
+            "cues",
+            "requires",
             "tool",
             "thinking",
         ),
@@ -668,15 +718,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     if guidance is not None and not isinstance(guidance, str):
         raise ValueError(f"Intent {where!r} answer_guidance must be text.")
 
-    shortcuts = []
-    for pattern in _texts(where, data, "shortcuts"):
-        try:
-            shortcuts.append(re.compile(pattern, re.IGNORECASE))
-        except re.error as error:
-            raise ValueError(
-                f"Intent {where!r} shortcut {pattern!r} is not a valid "
-                f"regular expression: {error}"
-            ) from error
+    shortcuts = _patterns(where, data, "shortcuts")
 
     return Intent(
         intent_id=intent_id,
@@ -689,7 +731,9 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         history_policy=policy,
         retrieval_mode=mode,
         retrieval_strategy=strategy,
-        shortcuts=tuple(shortcuts),
+        shortcuts=shortcuts,
+        cues=_patterns(where, data, "cues"),
+        requires=_patterns(where, data, "requires"),
         include_related_evidence=related,
         prefer_source_code=prefer_source,
         max_tokens=max_tokens,

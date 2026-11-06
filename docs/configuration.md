@@ -316,9 +316,9 @@ JSON is not proof that a particular model revision ran.
 
 Source selection changes can invalidate manifests; chunk/tokenizer/query
 format or embedding-model changes can invalidate retrieval caches; route
-shortcuts and intent instructions can change answers without reindexing.
-Unit tests should validate each ownership/precedence boundary and refusal
-of malformed configuration. Include an installed-wheel test when adding a
+shortcuts, cues, required words and intent instructions can change answers
+without reindexing. Unit tests should validate each ownership/precedence
+boundary and refusal of malformed configuration. Include an installed-wheel test when adding a
 new packaged JSON resource.
 
 ### Change impact and verification

@@ -996,6 +996,22 @@ class TestIntentFields(ProjectTypeFixture):
         with self.assertRaisesRegex(ValueError, "regular expression"):
             self._load("regexbad", self._with_intent(shortcuts=["("]))
 
+    def test_cues_and_requires_are_compiled_patterns(self) -> None:
+        """Compile wording cues and required words case-insensitively."""
+
+        data = self._with_intent(cues=[r"\boverview of\b"], requires=["cite"])
+        intent = self._load("cuesok", data).intents["explain"]
+        self.assertTrue(intent.cues[0].search("An OVERVIEW of it"))
+        self.assertTrue(intent.requires[0].search("does it CITE x?"))
+        plain = self._load("cuesnone", self._with_intent())
+        self.assertEqual(plain.intents["explain"].cues, ())
+        self.assertEqual(plain.intents["explain"].requires, ())
+        for index, field in enumerate(("cues", "requires")):
+            with self.assertRaisesRegex(ValueError, field):
+                self._load(
+                    f"cuesbad{index}", self._with_intent(**{field: ["("]})
+                )
+
     def test_unknown_intent_and_nested_keys_are_rejected(self) -> None:
         """Reject unexpected intent, history, and retrieval properties."""
 

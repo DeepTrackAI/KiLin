@@ -57,8 +57,9 @@ supported for every type. Missing welcome content has generic fallbacks;
 project-type prompts, tools and retrieval policies still control answers.
 
 Each intent key names an operation. Its fields may supply a description,
-shortcuts, history policy, retrieval mode/strategy, instruction, and a tool
-reference. `Intent` is the validated in-memory record; its values are not
+shortcuts, wording `cues` that set the intent, `requires` patterns a
+question must match for the intent, history policy, retrieval
+mode/strategy, instruction, and a tool reference. `Intent` is the validated in-memory record; its values are not
 always a literal one-to-one copy of keys in JSON because the loader applies
 defaults. Supported history modes are `none`, `recent`, `relevant`; supported
 retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
