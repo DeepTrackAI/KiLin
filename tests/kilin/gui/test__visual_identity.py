@@ -220,10 +220,24 @@ class TestVisualIdentity(unittest.TestCase):
     def test_launch_layout_is_compact_enough_for_initial_view(self):
         """Landing screen reduces vertical padding to avoid initial scroll."""
         css = (_WEB / "styles.css").read_text(encoding="utf-8")
-        self.assertIn('.setup { width: min(100%, 650px); margin: 0 auto auto; padding: 16px 0 10px; }', css)
-        self.assertIn('.setup-brand { position: relative; display: flex; align-items: center; gap: 12px; min-height: 146px;', css)
-        self.assertIn('.setup-card { display: grid; gap: 8px; padding: 20px; }', css)
-        self.assertIn('.drop-zone { width: 100%; min-height: 102px; padding: 24px;', css)
+        self.assertIn(
+            '.setup { width: min(100%, 650px); margin: 0 auto auto; '
+            'padding: 16px 0 10px; }',
+            css,
+        )
+        self.assertIn(
+            '.setup-brand { position: relative; display: flex; '
+            'align-items: center; gap: 12px; min-height: 146px;',
+            css,
+        )
+        self.assertIn(
+            '.setup-card { display: grid; gap: 8px; padding: 20px; }',
+            css,
+        )
+        self.assertIn(
+            '.drop-zone { width: 100%; min-height: 102px; padding: 24px;',
+            css,
+        )
 
     def test_monochrome_marks_remain_monochrome(self):
         """Black and white brand marks do not inherit colored accents."""
