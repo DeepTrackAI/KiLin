@@ -94,6 +94,7 @@ let projectsFolderInfo = null;
 let openProjectPath = "";
 const setBusy = (value) => { busy = value; };
 const refreshSavedProject = () => calls.push("refreshSavedProject");
+const showSetupConfirmations = () => {};
 """
         for name in (
             "showProjectsFolder",

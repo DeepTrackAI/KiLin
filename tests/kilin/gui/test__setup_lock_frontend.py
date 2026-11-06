@@ -75,9 +75,14 @@ const hideModels = () => calls.push("hide");
 const document = { activeElement: null };
 let applyingModels = false;
 let closeAfterModelsApply = false;
+let folderConfirmed = true;
+let termsAccepted = true;
+const showSetupConfirmations = () => {};
+const showWelcome = () => calls.push("welcome");
 """
         for name in (
-            "showSetupLock", "needsNewProjectSetup", "closeModels"
+            "showSetupLock", "needsNewProjectSetup", "closeModels",
+            "remindSetupConfirmations",
         ):
             script += extract_function(source, name)
         script += r"""
@@ -133,6 +138,25 @@ showSetupLock();
 assert.equal(byId("close-models").disabled, false);
 assert.equal(byId("open").disabled, false);
 assert.equal(needsNewProjectSetup(), false);
+closeModels();
+assert.deepEqual(calls, ["hide"]);
+// Without a confirmed folder or agreed terms, Close points to them.
+calls.length = 0;
+folderConfirmed = false;
+termsAccepted = false;
+closeModels();
+// The terms come first: their welcome dialog opens again.
+assert.deepEqual(calls, ["welcome"]);
+assert.equal(byId("first-run-setup").open, true);
+assert.equal(byId("model-download-status").textContent,
+  "Confirm the projects folder and accept the terms of use to continue.");
+termsAccepted = true;
+calls.length = 0;
+closeModels();
+assert.deepEqual(calls, []);
+assert.equal(byId("model-download-status").textContent,
+  "Confirm the projects folder to continue.");
+folderConfirmed = true;
 closeModels();
 assert.deepEqual(calls, ["hide"]);
 console.log("setup lock passed");

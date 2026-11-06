@@ -989,7 +989,7 @@ class TestGUIProtocolBridge(unittest.TestCase):
 
 
     def test_projects_folder_is_reported_and_chosen(self) -> None:
-        """Report the folder in use; Use default asks Qt to save ""."""
+        """Report the folder in use; Use default saves the standard path."""
 
         chosen: list[str] = []
         self.bridge.projectsFolderChosen.connect(chosen.append)
@@ -1009,9 +1009,27 @@ class TestGUIProtocolBridge(unittest.TestCase):
             "standard": "/sandbox", "saved": "/Gone/Projects",
             "missing": True,
         })
-        self.bridge.useDefaultProjectsFolder()
-        self.assertEqual(chosen, [""])
+        with patch.object(
+            window, "standard_workspace_directory",
+            return_value=Path("/sandbox"),
+        ):
+            self.bridge.useDefaultProjectsFolder()
+        self.assertEqual(chosen, [str(Path("/sandbox"))])
         self.assertEqual(self.commands, [])
+
+    def test_accepting_the_terms_saves_the_current_version(self) -> None:
+        """Only the current terms are saved, then readiness is rechecked."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms("an outdated version")
+            write.assert_not_called()
+            self.assertEqual(self.commands, [])
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once_with(
+            {"terms_accepted": window.TERMS_VERSION}
+        )
+        self.assertEqual(self.commands, [{"action": "readiness"}])
 
     def test_answer_settings_command_payload(self) -> None:
         """The bridge sends the settings as a command of their own."""

@@ -99,6 +99,7 @@ include = ["kilin*"]
 ]
 "kilin.gui" = [
     "defaults.json",
+    "terms.txt",
     "web/*.html",
     "web/*.css",
     "web/*.js",

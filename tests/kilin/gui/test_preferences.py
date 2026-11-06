@@ -254,6 +254,26 @@ class TestGUIPreferences(unittest.TestCase):
         saved = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertNotIn("backend", saved)
 
+    def test_terms_are_agreed_to_once_per_version(self) -> None:
+        """Only the current version counts; older ones ask again."""
+
+        self.assertTrue(preferences.terms_text())
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults({"terms_accepted": "an older version"})
+        # Still a valid file, but the user is asked again.
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults(
+            {"terms_accepted": preferences.TERMS_VERSION}
+        )
+        self.assertTrue(preferences.terms_accepted())
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["terms_accepted"], preferences.TERMS_VERSION)
+        with self.assertRaises(ValueError):
+            preferences.write_defaults({"terms_accepted": 1})
+        # A broken preferences file counts as not agreed.
+        self.path.write_text("{", encoding="utf-8")
+        self.assertFalse(preferences.terms_accepted())
+
     def test_empty_update_does_not_write(self) -> None:
         """Do not create a preference file for a no-op update."""
 

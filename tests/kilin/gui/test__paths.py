@@ -69,10 +69,7 @@ class TestGUIPaths(unittest.TestCase):
 
         with patch.object(_paths.sys, "platform", "darwin"):
             workspace = _paths.default_workspace_directory()
-            self.assertEqual(
-                workspace,
-                self.home / "Library/Application Support/kilin/workspaces",
-            )
+            self.assertEqual(workspace, self.home / "Documents/KíLín")
             self.assertEqual(
                 _paths.preferences_path(),
                 self.home / "Library/Application Support/kilin/"
@@ -82,7 +79,7 @@ class TestGUIPaths(unittest.TestCase):
         self.assertFalse(self.home.exists())
 
     def test_linux_xdg_directories_and_relative_fallback(self) -> None:
-        """Use XDG absolute paths and ignore relative XDG locations."""
+        """Use an absolute XDG config path; projects go in Documents."""
 
         with (
             patch.object(_paths.sys, "platform", "linux"),
@@ -100,7 +97,7 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "xdg-data/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
         with (
             patch.object(_paths.sys, "platform", "linux"),
@@ -115,11 +112,11 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.home / ".local/share/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
 
     def test_windows_config_and_data_use_distinct_locations(self) -> None:
-        """Use roaming preferences and local workspace data on Windows."""
+        """Use roaming preferences and Documents for projects on Windows."""
 
         with (
             patch.object(_paths.sys, "platform", "win32"),
@@ -137,7 +134,7 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "local/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
 
     def test_environment_overrides_are_explicit(self) -> None:
@@ -167,7 +164,7 @@ class TestGUIPaths(unittest.TestCase):
         preferences.write_text(
             json.dumps({"workspace_folder": str(chosen)}), encoding="utf-8"
         )
-        standard = self.home / "Library/Application Support/kilin/workspaces"
+        standard = self.home / "Documents/KíLín"
         environment = {"KILIN_DEFAULTS_FILE": str(preferences)}
         with (
             patch.dict("os.environ", environment),

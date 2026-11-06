@@ -178,6 +178,14 @@ selection. Unsupported values are ignored. The engine resolves the saved
 preference at the beginning of each setup operation, while `auto` alone uses
 the platform policy. Existing saved project settings remain independent.
 
+KíLín setup is complete when `ready` (runtime and models), `folder_confirmed`
+and `terms_accepted` are all true. `confirmProjectsFolder` saves the folder in
+use, and `useDefaultProjectsFolder` the standard folder, by its path; like a
+folder chosen with Browse, this creates the folder and restarts the engine.
+`acceptTerms(version)` saves `version` as `terms_accepted` when it is the
+current `terms_version`, then sends the `readiness` engine command; a failed
+write emits `error` instead.
+
 ### Indexing-settings failure recovery
 
 The frontend shows an in-progress status until `indexing_applied` confirms
@@ -242,8 +250,8 @@ can accompany an event.
 
 | Group | Events and representative payloads |
 | --- | --- |
-| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`) |
-| Installation | `installation_started` (`total`, `backend`); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
+| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`) |
+| Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether the saved directory is unavailable) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |

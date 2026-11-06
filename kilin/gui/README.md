@@ -134,21 +134,30 @@ A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
 selected explicitly or created under the GUI's default workspace parent. In
 a source checkout (containing `pyproject.toml`, `tests/kilin/`, and the GUI
 source), the default is the repository's `sandbox/` folder. In an installed
-package, it is a per-user application-data directory:
-
-- macOS: `~/Library/Application Support/kilin/workspaces/`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/kilin/workspaces/`
-- Windows: `%LOCALAPPDATA%/kilin/workspaces/` (with a home fallback)
+package (the macOS app or pip), it is `Documents/KíLín` in the user's home
+folder, on every platform.
 
 `KILIN_WORKSPACES_DIR` overrides this default in both cases and must
 be an absolute path (or a home-expanded `~/...` path). Otherwise the
-Workspace folder chosen in Settings → Project (Browse) is used: it is saved
-in the preferences file as `workspace_folder`, so it is kept after a
-restart, and Use default goes back to the standard folder. A chosen folder
-that is missing or not mounted is skipped with a note. Changing it restarts
-the engine, so it is offered only on the start screen. The engine
-does not create the default directory until a project needs it; existing
-projects are never moved. Repeated creation from the same sources allocates
+projects folder chosen in KíLín setup is used: it is saved in the
+preferences file as `workspace_folder`, so it is kept after a restart.
+KíLín setup asks the user to confirm it once, recommending the folder in
+use (Confirm projects folder), choose another (Browse), or choose the
+standard folder (Use default); each saves the folder by its path and
+creates it. A chosen folder that is missing or not mounted is skipped with
+a note, and setup asks again. Changing it restarts the engine, so it is
+offered only on the start screen. Existing projects are never moved.
+
+Before anything else, a welcome dialog summarizes KíLín and shows the full
+terms of use (`kilin/gui/terms.txt`), with links to the Apache 2.0 licence
+and Hugging Face's terms and privacy policy, opened in the system browser.
+The user ticks the agreement and clicks Continue; until then the dialog
+cannot be dismissed. The agreed version is saved as `terms_accepted`;
+changing the text needs a new `TERMS_VERSION` in `kilin/gui/preferences.py`,
+so every user is asked again. Settings reopens the terms from its Terms of
+use link. Settings stays open until the folder is confirmed and the terms
+are accepted. New projects also wait for the models; saved projects can
+still be resumed. Repeated creation from the same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
