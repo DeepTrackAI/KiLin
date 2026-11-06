@@ -18,10 +18,11 @@ import unittest
 from unittest.mock import patch
 
 
+from kilin.atomic_writes import atomic_write_text
 from kilin.conversation_format import conversation_state
 from kilin.conversations import ConversationStore
 from kilin.gui.engine import ChatEngine
-from kilin.project import open_project
+from kilin.project import configure_project, open_project
 
 from kilin.workspace import prepare_sources_workspace
 
@@ -219,6 +220,230 @@ class TestEngineProjectRecovery(unittest.TestCase):
             (self.project.root / "profile.ini").read_text(encoding="utf-8"),
             profile,
         )
+
+    def test_indexing_post_write_failure_restores_profile(self):
+        """Restore an atomically published profile after a trace error."""
+        profile_path = self.project.root / "profile.ini"
+        original = profile_path.read_text(encoding="utf-8")
+        old_session = self.engine.session
+
+        def fail_after_write(*args, **kwargs):
+            """Simulate a failure after configure_project commits."""
+            configure_project(*args, **kwargs)
+            raise RuntimeError("Trace failed after the write")
+
+        with (
+            patch(
+                "kilin.gui.engine.configure_project",
+                side_effect=fail_after_write,
+            ),
+            patch(
+                "kilin.gui.engine.atomic_write_text",
+                wraps=atomic_write_text,
+            ) as restore,
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        restore.assert_called_once_with(profile_path, original)
+        self.assertEqual(profile_path.read_text(encoding="utf-8"), original)
+        self.assertIs(self.engine.session, old_session)
+        self.assertFalse(old_session.closed)
+        self.assert_chat_preserved(self.project.root)
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertNotIn(
+            "backend_failed", [event["event"] for event in self.events]
+        )
+
+    def test_indexing_failed_reopen_restores_atomically(self):
+        """Use atomic rollback and reactivate the old saved conversation."""
+        profile_path = self.project.root / "profile.ini"
+        original = profile_path.read_text(encoding="utf-8")
+        old_session = self.engine.session
+        activate = self.engine._activate_project
+        calls = 0
+
+        def fail_once(*args):
+            """Simulate a failed index rebuild on the first reopen."""
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("Index rebuild failed")
+            return activate(*args)
+
+        with (
+            patch.object(self.engine, "_activate_project", fail_once),
+            patch(
+                "kilin.gui.engine.atomic_write_text",
+                wraps=atomic_write_text,
+            ) as restore,
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        restore.assert_called_once_with(profile_path, original)
+        self.assertTrue(old_session.closed)
+        self.assertEqual(profile_path.read_text(encoding="utf-8"), original)
+        self.assert_chat_preserved(self.project.root)
+        self.assertEqual(self.engine.session.project.profile.target_tokens,
+                         self.project.profile.target_tokens)
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIn("opened", [event["event"] for event in self.events])
+        self.assertNotIn(
+            "indexing_applied", [event["event"] for event in self.events]
+        )
+
+    def test_indexing_atomic_rollback_failure_closes_project(self):
+        """Never claim a safe session if atomic restoration fails."""
+        profile_path = self.project.root / "profile.ini"
+        original = profile_path.read_text(encoding="utf-8")
+        activate = self.engine._activate_project
+        calls = 0
+
+        def fail_once(*args):
+            """Reject only the first attempt to reopen the project."""
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("Index rebuild failed")
+            return activate(*args)
+
+        with (
+            patch.object(self.engine, "_activate_project", fail_once),
+            patch(
+                "kilin.gui.engine.atomic_write_text",
+                side_effect=OSError("Atomic replace denied"),
+            ) as restore,
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        restore.assert_called_once_with(profile_path, original)
+        self.assertIsNone(self.engine.session)
+        self.assertEqual(open_project(self.project.root).profile.target_tokens,
+                         350)
+        self.assertIn(
+            "backend_failed", [event["event"] for event in self.events]
+        )
+        self.assertIn("recovery failed",
+                      self.events[-1]["message"].lower())
+        self.assertIn("profile.ini", self.events[-1]["message"])
+        self.assertEqual(list(self.project.root.glob(".profile.ini.*.tmp")),
+                         [])
+
+    def test_indexing_atomic_replace_failure_preserves_whole_file(self):
+        """A rejected rollback rename must not truncate profile.ini."""
+        profile_path = self.project.root / "profile.ini"
+        replace = Path.replace
+        calls = 0
+
+        def fail_rollback_replace(source, destination):
+            """Allow configure_project to commit but reject restoration."""
+            nonlocal calls
+            if destination == profile_path:
+                calls += 1
+                if calls == 2:
+                    raise OSError("Replacement interrupted")
+            return replace(source, destination)
+
+        def fail_after_write(*args, **kwargs):
+            """Trigger rollback after the profile has been committed."""
+            configure_project(*args, **kwargs)
+            raise RuntimeError("Trace failed after the write")
+
+        with (
+            patch.object(Path, "replace", fail_rollback_replace),
+            patch(
+                "kilin.gui.engine.configure_project",
+                side_effect=fail_after_write,
+            ),
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        self.assertEqual(calls, 2)
+        self.assertIsNone(self.engine.session)
+        self.assertEqual(open_project(self.project.root).profile.target_tokens,
+                         350)
+        self.assertEqual(list(self.project.root.glob(".profile.ini.*.tmp")),
+                         [])
+        self.assertIn(
+            "backend_failed", [event["event"] for event in self.events]
+        )
+        self.assertIn("profile.ini", self.events[-1]["message"])
+
+    def test_indexing_rollback_reopen_failure_reports_inactive(self):
+        """Restore the profile even when the original session cannot load."""
+        profile_path = self.project.root / "profile.ini"
+        original = profile_path.read_text(encoding="utf-8")
+        with (
+            patch.object(
+                self.engine, "_activate_project",
+                side_effect=RuntimeError("Models unavailable"),
+            ),
+            patch(
+                "kilin.gui.engine.atomic_write_text",
+                wraps=atomic_write_text,
+            ) as restore,
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        restore.assert_called_once_with(profile_path, original)
+        self.assertEqual(profile_path.read_text(encoding="utf-8"), original)
+        self.assertIsNone(self.engine.session)
+        self.assertIn(
+            "backend_failed", [event["event"] for event in self.events]
+        )
+        self.assertIn("reopen", self.events[-1]["message"].lower())
+        self.assertNotIn(
+            "indexing_applied", [event["event"] for event in self.events]
+        )
+
+    def test_indexing_prewrite_failure_retains_active_chat(self):
+        """Do not reload or rewrite when configuration did not commit."""
+        profile_path = self.project.root / "profile.ini"
+        original = profile_path.read_text(encoding="utf-8")
+        old_session = self.engine.session
+        with (
+            patch(
+                "kilin.gui.engine.configure_project",
+                side_effect=OSError("Cannot configure"),
+            ),
+            patch("kilin.gui.engine.atomic_write_text") as restore,
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        restore.assert_not_called()
+        self.assertEqual(profile_path.read_text(encoding="utf-8"), original)
+        self.assertIs(self.engine.session, old_session)
+        self.assertFalse(old_session.closed)
+        self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_indexing_unreadable_profile_recovery_fails_closed(self):
+        """Do not assume the profile was unchanged when rereading fails."""
+        profile_path = self.project.root / "profile.ini"
+        original_read = Path.read_text
+        reads = 0
+
+        def fail_recovery(path, *args, **kwargs):
+            """Permit the snapshot, then refuse recovery verification."""
+            nonlocal reads
+            if path == profile_path:
+                reads += 1
+                if reads > 1:
+                    raise OSError("Cannot read saved profile")
+            return original_read(path, *args, **kwargs)
+
+        def fail_after_write(*args, **kwargs):
+            """Write the profile before a trace failure is raised."""
+            configure_project(*args, **kwargs)
+            raise RuntimeError("Trace failed after the write")
+
+        with (
+            patch.object(Path, "read_text", fail_recovery),
+            patch(
+                "kilin.gui.engine.configure_project",
+                side_effect=fail_after_write,
+            ),
+        ):
+            self.engine.apply_indexing_settings({"target_tokens": 350})
+        self.assertIsNone(self.engine.session)
+        self.assertEqual(open_project(self.project.root).profile.target_tokens,
+                         350)
+        self.assertIn(
+            "backend_failed", [event["event"] for event in self.events]
+        )
+        self.assertIn("profile.ini", self.events[-1]["message"])
 
     def test_add_file_and_folder_preserves_sources_and_chat(self):
         """Add new sources without reloading the active chat."""

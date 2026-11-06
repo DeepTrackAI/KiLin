@@ -166,8 +166,12 @@ Shared test adapters belong in private, non-discovered support modules.
 JavaScript function extraction and isolated Node subprocess invocation;
 individual GUI tests still check their own event/DOM behavior. The
 extractor intentionally uses the existing source terminator, not a full
-JavaScript parser. Prefer behavioral tests over additional source-text
-checks when a future frontend refactor is considered.
+JavaScript parser. Prefer ``extract_function()`` to repeated manual
+function slicing. ``run_node()`` accepts optional ``args`` appended
+after Node's ``-e`` script (``process.argv[1:]``), plus a timeout and
+environment overrides. Tests retain their own Node-availability skip
+gates and assertions. Prefer behavioral tests over additional
+source-text checks when a future frontend refactor is considered.
 `tests/kilin/tools/_contract_support.py` owns common tool registry and
 packaged-default assertions; each package retains its own tests for
 invalid settings and tool-specific behavior.

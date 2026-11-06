@@ -15,7 +15,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _WEB = _ROOT / "kilin/gui/web"
@@ -41,8 +44,7 @@ class TestSideDividerFrontend(unittest.TestCase):
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         start = source.index("const WORKSPACE_SHARE_LIMITS")
         state = source[start : source.index(";", start) + 1]
-        start = source.index("function setWorkspaceShare(")
-        function = source[start : source.index("\n}\n", start) + 3]
+        function = extract_function(source, "setWorkspaceShare")
         script = r"""
 const assert = require("node:assert/strict");
 const properties = new Map();

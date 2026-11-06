@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
-from typing import Mapping
+from typing import Mapping, Sequence
 
 
 def extract_function(source: str, name: str) -> str:
@@ -49,6 +49,7 @@ def extract_function(source: str, name: str) -> str:
 def run_node(
     script: str,
     *,
+    args: Sequence[str] = (),
     timeout: float = 15,
     env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -58,6 +59,9 @@ def run_node(
     ----------
     script: str
         JavaScript executed through ``node -e``.
+    args: Sequence[str]
+        Optional arguments appended after the script, accessible in
+        Node through ``process.argv[1:]``. Defaults to no arguments.
     timeout: float
         Maximum duration in seconds, default 15.
     env: Mapping[str, str] | None
@@ -87,7 +91,7 @@ def run_node(
     if executable is None:
         raise FileNotFoundError("Node.js is not available")
     return subprocess.run(
-        [executable, "-e", script],
+        [executable, "-e", script, *args],
         capture_output=True,
         text=True,
         timeout=timeout,

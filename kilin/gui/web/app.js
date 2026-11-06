@@ -95,8 +95,8 @@ let savedRouters = {};
 let defaultRouters = {};
 let draftRouter = "";
 let modelRoles = {};
-// Whether each checked model's chat template switches thinking, from the
-// engine; a model it could not check is missing (unknown).
+// Whether the tested chat template changes its rendered prompt when
+// enable_thinking changes; missing entries mean unknown.
 let thinkingSwitches = {};
 let modelsBaseline = null;
 let applyingModels = false;
@@ -961,7 +961,7 @@ function roleModelIds(role, current) {
  * @param ids Model IDs offered in the dropdown.
  * @param value Currently chosen model ID.
  * @param label Accessible label of the model selector.
- * @param markThinking Whether to add each model's verified thinking mark.
+ * @param markThinking Whether to add the template-switch probe label.
  */
 function modelSelect(ids, value, label, markThinking = false) {
   const select = document.createElement("select");
@@ -980,28 +980,30 @@ function modelSelect(ids, value, label, markThinking = false) {
 }
 
 /**
- * Tell whether a language model's chat template switches thinking on and
- * off, as the engine checked it in the downloaded files.
+ * Check whether a cached model's template rendered different prompts
+ * with enable_thinking on and off. This does not test model reasoning.
  *
- * Nothing is judged from the name: a model that is not downloaded, or
- * whose template could not be checked, is unknown.
+ * Missing models or templates that could not be checked are unknown.
  *
  * @param id Model identifier or local path.
- * @returns Whether the model is verified to switch thinking.
+ * @returns True only for a detected template prompt difference.
  */
-function modelCanThink(id) {
+function modelHasThinkingSwitch(id) {
   return thinkingSwitches[id] === true;
 }
 
 /**
- * Return the verified thinking mark for a model list, or "" when unknown.
+ * Label the template probe outcome, or return "" when unknown.
  *
  * @param id Model identifier or local path.
- * @returns " · can think", " · no thinking switch", or "".
+ * @returns A template-switch label, or "" when no result is available.
  */
 function thinkingMark(id) {
-  if (thinkingSwitches[id] === true) return " · can think";
-  return thinkingSwitches[id] === false ? " · no thinking switch" : "";
+  if (thinkingSwitches[id] === true) {
+    return " · thinking switch detected";
+  }
+  return thinkingSwitches[id] === false
+    ? " · no template switch detected" : "";
 }
 
 /**
@@ -1784,7 +1786,7 @@ async function saveIndexingEdits(event) {
   }
   applyingIndexing = true;
   setBusy(true, "Rebuilding the index…");
-  byId("model-download-status").textContent = "Saved. Rebuilding the index with the new settings…";
+  byId("model-download-status").textContent = "Applying indexing settings and rebuilding the index…";
   bridge.applyIndexingSettings(JSON.stringify(edits));
 }
 
@@ -4489,17 +4491,17 @@ function renderEffortPicker() {
  * Show the Thinking switch under "Lagom ›" as Settings → Answers has it.
  *
  * Both are one setting: the switch only sets the Answers checkbox, which
- * saves it to the open project. A model that cannot think disables the
- * switch.
+ * saves it to the open project. Without a detected template prompt
+ * difference, the switch remains disabled; capability is not inferred.
  *
  * @param model Model of the chosen effort level.
  */
 function showThinkingSwitch(model) {
-  const supported = modelCanThink(model);
+  const detected = modelHasThinkingSwitch(model);
   const on = byId("thinking").checked;
   for (const input of document.querySelectorAll('input[name="effort-thinking"]')) {
     input.checked = (input.value === "on") === on;
-    input.disabled = busy || !supported;
+    input.disabled = busy || !detected;
   }
 }
 

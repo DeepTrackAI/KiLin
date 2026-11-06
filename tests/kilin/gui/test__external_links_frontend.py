@@ -15,7 +15,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 
@@ -30,8 +33,7 @@ class TestExternalLinksFrontend(unittest.TestCase):
         )
         start = source.index("const MARKDOWN_INLINE = ")
         expression = source[start:source.index("\n", start)]
-        start = source.index("function appendInlineMarkdown(")
-        function = source[start:source.index("\n}\n", start) + 3]
+        function = extract_function(source, "appendInlineMarkdown")
         script = r"""
 const assert = require("node:assert/strict");
 const opened = [];

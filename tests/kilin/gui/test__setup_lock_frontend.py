@@ -13,17 +13,14 @@ functions are exercised in Node without Qt or a browser.
 
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
 
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
+
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-
-
-def _function(source: str, name: str) -> str:
-    """Return one top-level function's source text."""
-
-    start = source.index(f"function {name}(")
-    return source[start : source.index("\n}\n", start) + 3]
 
 
 class TestSetupLockFrontend(unittest.TestCase):
@@ -42,18 +39,19 @@ class TestSetupLockFrontend(unittest.TestCase):
             source.count("needsNewProjectSetup()) return;"), 1
         )
         self.assertNotIn(
-            "needsNewProjectSetup()", _function(source, "renderSavedProjects")
+            "needsNewProjectSetup()",
+            extract_function(source, "renderSavedProjects"),
         )
         self.assertNotIn(
             "needsNewProjectSetup()",
-            _function(source, "renderSidebarProjects"),
+            extract_function(source, "renderSidebarProjects"),
         )
         self.assertIn(
             'byId("open").disabled = value || !bridge || !kilinReady;',
-            _function(source, "setBusy"),
+            extract_function(source, "setBusy"),
         )
         self.assertIn(
-            "showSetupLock();", _function(source, "setBusy")
+            "showSetupLock();", extract_function(source, "setBusy")
         )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
@@ -81,7 +79,7 @@ let closeAfterModelsApply = false;
         for name in (
             "showSetupLock", "needsNewProjectSetup", "closeModels"
         ):
-            script += _function(source, name)
+            script += extract_function(source, name)
         script += r"""
 // Models missing: Install is offered; only Prepare project waits.
 showSetupLock();
@@ -139,13 +137,7 @@ closeModels();
 assert.deepEqual(calls, ["hide"]);
 console.log("setup lock passed");
 """
-        result = subprocess.run(
-            [shutil.which("node"), "-e", script],
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
-        )
+        result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("setup lock passed", result.stdout)
 

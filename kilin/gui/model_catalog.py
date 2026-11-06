@@ -23,10 +23,10 @@ Key Features
 
     Expose distribution-presence checks without loading an inference model.
 
-- **Thinking switch**
+- **Thinking template probe**
 
-    Tell, for each cached model whose chat template renders, whether it
-    reacts to ``enable_thinking``, by rendering it with it on and off.
+    Compare a cached chat template rendered with ``enable_thinking``
+    on and off. Prompt differences do not establish model capability.
 
 Module Structure
 ----------------
@@ -53,7 +53,7 @@ Module Structure
 
 - ``thinking_switches``
 
-    Tell which cached models' chat templates switch thinking on and off.
+    Report which checked templates change their rendered prompt.
 
 Examples
 --------
@@ -304,15 +304,15 @@ def cached_model_roles(
 def thinking_switches(
     cached_models: list[dict[str, object]],
 ) -> dict[str, bool]:
-    """Tell which cached models' chat templates switch thinking.
+    """Compare chat-template prompts with thinking enabled and disabled.
 
-    KíLín turns thinking on or off by passing ``enable_thinking`` to the
-    model's chat template. Each cached template is rendered for one short
-    question with it on and off, in a sandbox, the way the Hugging Face
-    tokenizer renders it: different prompts mean the switch works, equal
-    ones mean the template ignores it. Nothing is guessed from a model's
-    name, so a new model is checked the same way once it is downloaded. A
-    missing, unreadable or failing template leaves the model out: unknown.
+    KíLín renders each cached chat template for one short prompt in a
+    Jinja sandbox, once with ``enable_thinking=True`` and once with
+    ``enable_thinking=False``. ``True`` means the rendered strings
+    differ; ``False`` means they are identical for that prompt. Neither
+    result establishes the model's reasoning ability or runtime support.
+    A missing, unreadable, or failing template is omitted (unknown).
+    No model is loaded and no capability is inferred from its name.
 
     Parameters
     ----------
@@ -322,8 +322,8 @@ def thinking_switches(
     Returns
     -------
     dict[str, bool]
-        For each checked model ID, whether its template switches thinking;
-        models that could not be checked are not included.
+        For checked model IDs, whether the rendered prompts differ with
+        ``enable_thinking`` toggled; unchecked models are omitted.
 
     """
 
@@ -360,7 +360,7 @@ def thinking_switches(
                     for switch in (True, False)
                 }
             except Exception:  # pylint: disable=broad-exception-caught
-                continue  # A template that fails to render is not verified.
+                continue  # A failed render gives no template-probe result.
             found[str(entry["model_id"])] = len(prompts) == 2
             break
     return dict(sorted(found.items()))

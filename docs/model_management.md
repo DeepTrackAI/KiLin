@@ -100,6 +100,23 @@ Model **IDs** in packaged `DEFAULT_MODELS` are recommended starting values,
 not a frozen allowlist. See [Package defaults](package_defaults.md) for
 exact default IDs and validation.
 
+### GUI chat-template thinking probe
+
+`gui.model_catalog.thinking_switches()` renders the locally cached chat
+model's template once with `enable_thinking=True` and once with
+`enable_thinking=False`, using one short sample prompt and a Jinja sandbox.
+It does not load a tokenizer or model, run inference, or use a model-name
+heuristic. A `True` result means that the two rendered prompts differ; a
+`False` result means they are identical for this test. Missing or failing
+templates give no result (unknown). Neither result verifies a model's
+reasoning capability, actual behavior, or runtime compatibility.
+
+The GUI labels these outcomes *thinking switch detected*, *no template
+switch detected*, and no label, respectively. The composer's Thinking
+control is enabled only for a detected prompt difference; it is not a
+capability test. The Answers checkbox requests the `enable_thinking`
+setting for generation independently of what the probe can establish.
+
 ## Chat generation lifecycle
 
 `ChatSession(model_id, *, backend, thinking, temperature, max_new_tokens,

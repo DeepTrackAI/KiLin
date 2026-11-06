@@ -63,9 +63,16 @@ class TestEffortThinkingFrontend(unittest.TestCase):
         self.assertIn("renderEffortPicker();", changed)
         self.assertIn('request_id: request.id', source)
 
+    def test_settings_describes_a_template_request(self):
+        """Do not imply that the model's reasoning was verified."""
+
+        page = (_WEB / "index.html").read_text(encoding="utf-8")
+        self.assertIn("Request thinking via chat template", page)
+        self.assertNotIn("Enable model thinking, if supported", page)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_switch_follows_the_setting_and_the_model(self):
-        """On or Off as in Settings; disabled for models that cannot."""
+        """On or Off as in Settings; disabled if no switch is detected."""
 
         source = (_WEB / "app.js").read_text(encoding="utf-8")
         script = r"""
@@ -82,7 +89,7 @@ const thinkingSwitches = {
   "Qwen/Qwen3-8B-MLX-4bit": true, "Qwen/Qwen3-1.7B-MLX-4bit": false,
 };
 """
-        for name in ("modelCanThink", "showThinkingSwitch"):
+        for name in ("modelHasThinkingSwitch", "showThinkingSwitch"):
             script += _function(source, name)
         script += r"""
 showThinkingSwitch("Qwen/Qwen3-8B-MLX-4bit");
@@ -91,7 +98,7 @@ assert.deepEqual(radios.map((radio) => radio.disabled), [false, false]);
 thinking.checked = false;
 showThinkingSwitch("Qwen/Qwen3-8B-MLX-4bit");
 assert.deepEqual(radios.map((radio) => radio.checked), [false, true]);
-// No switch in its template, or not checked: the switch is disabled.
+// No detected switch, or unknown: the switch is disabled.
 for (const model of ["Qwen/Qwen3-1.7B-MLX-4bit", "other/unknown"]) {
   showThinkingSwitch(model);
   assert.deepEqual(radios.map((radio) => radio.disabled), [true, true]);

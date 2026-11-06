@@ -3447,7 +3447,8 @@ class ChatEngine:
         """Save the open project's indexing settings and rebuild its index.
 
         The index records these settings, so reopening the project with new
-        values rebuilds it. A failure restores the previous profile.ini.
+        values rebuilds it. On failure, restore a changed profile atomically
+        and reopen the previous conversation if the session was replaced.
 
         Parameters
         ----------
@@ -3455,12 +3456,19 @@ class ChatEngine:
             Changed values among ``extensions``, ``max_file_bytes``,
             ``target_tokens``, ``max_tokens`` and ``overlap_tokens``.
 
+        Notes
+        -----
+        ``configure_project`` can fail after publishing ``profile.ini``.
+        Recovery therefore compares the saved profile to the current file,
+        not only whether configuration returned successfully. Index files
+        are revalidated by reopening; they are not rolled back atomically.
+
         """
 
         root = None
         profile_text = None
         conversation_id = None
-        changed = False
+        reopen_started = False
         try:
             if self.session is None:
                 raise RuntimeError("Open a project before changing indexing.")
@@ -3471,14 +3479,14 @@ class ChatEngine:
             ):
                 raise ValueError("Invalid indexing settings.")
             root = self.session.project.root
-            profile_text = (root / "profile.ini").read_text(encoding="utf-8")
+            profile_text = (root / PROFILE_FILE).read_text(encoding="utf-8")
             conversation_id = self.active_conversation.conversation_id
             self._send("status", message="Rebuilding the index…")
-            # Invalid values are refused before profile.ini is written.
+            # Validation precedes the core's atomic profile replacement.
             project = configure_project(
                 root, settings, trace=self.active_trace
             )
-            changed = True
+            reopen_started = True
             self.close()
             self._reopen_project_conversation(project, conversation_id)
             self._send(
@@ -3486,24 +3494,43 @@ class ChatEngine:
                 profile=asdict(self.session.project.profile),
             )
         except Exception as error:
-            if changed:
+            recovery_error = None
+            if root is not None and profile_text is not None:
                 try:
-                    (root / "profile.ini").write_text(
-                        profile_text, encoding="utf-8"
-                    )
+                    path = root / PROFILE_FILE
+                    # A post-write trace failure also needs a rollback.
+                    if path.read_text(encoding="utf-8") != profile_text:
+                        atomic_write_text(path, profile_text)
+                    if reopen_started:
+                        self.close()
+                        self._reopen_project_conversation(
+                            open_project(root), conversation_id
+                        )
+                except Exception as failure:
+                    recovery_error = failure
+            message = f"Could not apply indexing settings: {error}"
+            if recovery_error is not None:
+                try:
                     self.close()
-                    self._reopen_project_conversation(
-                        open_project(root), conversation_id
+                except Exception as close_error:
+                    recovery_error = RuntimeError(
+                        f"{recovery_error}; closing failed: {close_error}"
                     )
-                except Exception:
-                    self._send(
-                        "backend_failed",
-                        message="Reload failed. Reopen the project to retry.",
-                    )
+                    advice = "Restart KíLín, inspect profile.ini and reopen."
+                else:
+                    advice = "Inspect profile.ini and reopen the project."
+                self._send(
+                    "backend_failed",
+                    message=(
+                        "Could not complete indexing recovery. "
+                        + advice
+                    ),
+                )
+                message += f"; recovery failed: {recovery_error}. {advice}"
             self._report_error(
                 "gui.indexing.change.failed",
                 error,
-                f"Could not apply indexing settings: {error}",
+                message,
             )
 
     def _switch_with_store_rollback(

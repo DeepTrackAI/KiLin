@@ -17,7 +17,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _APP = _ROOT / "kilin/gui/web/app.js"
@@ -53,10 +56,9 @@ class TestSourceChangesFrontend(unittest.TestCase):
         self.assertIn(
             "decisions[input.dataset.path] = input.value;", apply
         )
-        start = source.index("function syncSources(")
         self.assertIn(
             "bridge.syncProjectSources(JSON.stringify(decisions));",
-            source[start : source.index("\n}\n", start)],
+            extract_function(source, "syncSources"),
         )
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
@@ -64,13 +66,13 @@ class TestSourceChangesFrontend(unittest.TestCase):
         """Count files, offer valid choices and keep edited copies."""
 
         source = _APP.read_text(encoding="utf-8")
-        functions = []
-        for name in (
-            "sourceSyncSummary", "sourceSyncChoices", "sourceSyncPlan",
-            "sourceSyncGroups",
-        ):
-            start = source.index(f"function {name}(")
-            functions.append(source[start : source.index("\n}\n", start) + 3])
+        functions = [
+            extract_function(source, name)
+            for name in (
+                "sourceSyncSummary", "sourceSyncChoices",
+                "sourceSyncPlan", "sourceSyncGroups",
+            )
+        ]
         script = r"""
 const assert = require("node:assert/strict");
 """

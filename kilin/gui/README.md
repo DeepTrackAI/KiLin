@@ -269,9 +269,17 @@ chunking). Messages from Close show below the tabs, whichever tab is open.
 The window and Dock icon follow the Appearance setting: `icons/kilin-light.png`
 for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
-The left-panel qilin logo is gold in light mode and blue-black in dark
-mode; `icons/README.md` credits its CC BY-SA 4.0 source and is
-installed with the images.
+The welcome screen displays the locally packaged, full-body
+Gaudí-inspired mosaic qilin (dragon head, deer body, cow tail).
+In an open project, the sidebar now shows the full mascot alone,
+without a separate wordmark, while the welcome card continues to
+use the refined vector KíLín logotype with evenly spaced letters
+and tapered accents above both i characters. Dark mode keeps the
+vivid ceramic colors against navy surfaces. The window and Dock
+use a close-up of the dragon head; `icons/README.md` documents the
+artwork and the attribution history.
+The palette and decorations are CSS-only and do not alter interaction,
+project settings, model selection, or accessibility labels.
 
 Settings has two parts. KíLín setup holds the app-wide choices: the
 computation backend for new projects, Appearance, and the projects folder.
@@ -304,19 +312,31 @@ engine rereads the actual profile and synchronizes the live chat. The GUI
 restores those confirmed values, or requires reopening the project if the
 saved state cannot be verified. A download, an embedding change or an
 Indexing change asks first, because it can take a while; cancelling puts
-the saved value back. The line under the tabs reports save status. On the start screen nothing is
-saved: the Project values set there are kept on the page and written only
+the saved value back. During the rebuild, the page reports the operation as
+pending, not already saved. Success is confirmed only after the project
+reopens with its updated settings. If rebuilding fails, the engine restores
+any changed `profile.ini` atomically and, if required, attempts to reopen
+the previous conversation. If recovery also fails, the project is closed
+where possible and the GUI asks for inspection and reopening. Rollback
+covers the profile file, **not** every intermediate index artifact; those
+are validated when the project reopens.
+
+The line under the tabs reports save status. On the start screen nothing
+is saved: the Project values set there are kept on the page and written only
 into the new project's `profile.ini` when it is created, so the next new
 project starts from the defaults again.
 
-Effort levels lists five levels. Each has an editable name and a language
-model chosen from a dropdown of cached language models. Each model shows what the engine
-checked in its downloaded chat template, rendered with `enable_thinking`
-on and off: "· can think" when the two prompts differ, "· no thinking
-switch" when the template renders but ignores it. A model that is not
-downloaded, or whose template is missing or fails to render, shows
-nothing, because nothing is known; nothing is judged from the name. The
-composer's Thinking switch is enabled only for "· can think" models. Search depth is a
+Effort levels lists five levels. Each has an editable name and a
+language model chosen from a dropdown of cached language models. The
+GUI renders each cached chat template with `enable_thinking` on and
+off for one sample prompt. It shows "· thinking switch detected" when
+the rendered prompts differ, "· no template switch detected" when
+they are identical, or no label when the template cannot be checked.
+This probe neither loads the model nor establishes its reasoning
+capability or runtime support. The composer's Thinking switch remains
+disabled unless a template prompt difference was detected. In Answers,
+"Request thinking via chat template" passes the setting to generation;
+actual model behavior is not verified by the probe. Search depth is a
 separate section of five steps, each the number of passages retrieved for
 an answer (1-200; default 5, 8, 10, 15, 20). The composer's effort picker
 shows the effort name once at the top and has two sliders: Model chooses

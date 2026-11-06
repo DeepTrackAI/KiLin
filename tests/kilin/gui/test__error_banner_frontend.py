@@ -16,7 +16,10 @@ from pathlib import Path
 import shutil
 import unittest
 
-from tests.kilin.gui._frontend_support import run_node
+from tests.kilin.gui._frontend_support import (
+    extract_function,
+    run_node,
+)
 
 _ROOT = Path(__file__).resolve().parents[3]
 _APP = _ROOT / "kilin/gui/web/app.js"
@@ -40,8 +43,7 @@ class TestErrorBannerFrontend(unittest.TestCase):
         """The Settings copy of the error is cleared, newer text is not."""
 
         source = _APP.read_text(encoding="utf-8")
-        start = source.index("function clearError(")
-        function = source[start : source.index("\n}\n", start) + 3]
+        function = extract_function(source, "clearError")
         start = source.index("let shownErrorStatus")
         state = source[start : source.index(";", start) + 1]
         script = r"""
