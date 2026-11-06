@@ -12,8 +12,8 @@ The scope is the paper the question names or points at ("that paper"),
 otherwise every indexed file. Reading everything takes time, so by default
 the user always chooses first: read everything, a quick answer, or cancel.
 When the question names exact terms, the quick answer takes notes on only
-the passages that mention them; otherwise it answers from the best-ranked
-passages directly. Passages are numbered once across all files, so every
+the passages that mention them; otherwise, or when no passage mentions
+them, it answers from the best-ranked passages directly. Passages are numbered once across all files, so every
 citation is unambiguous, and citations to passages that do not exist are
 counted in the summary.
 
@@ -328,7 +328,13 @@ def run(
 
     # Quick: when the question names exact terms, only the passages that
     # mention them (read in parts, per file); otherwise the ranked ones.
+    # Terms that no passage mentions are often the question's own wording
+    # ("metadata table C6", "modular software extension"), not the paper's,
+    # so the quick answer falls back to the ranked passages.
     terms, hits = term_hits(request.question, context, passages)
+    missing: tuple[str, ...] = ()
+    if terms and not hits:
+        missing, terms = terms, ()
     hit_set = set(hits)
     quick_by_file = [
         (
@@ -352,6 +358,8 @@ def run(
             f"{'passage' if len(ranked) == 1 else 'passages'}; may miss a "
             "fact stated elsewhere"
         )
+        if missing:
+            note = f"{term_label(missing, ())[1]}. {note}"
         quick_seconds = (
             _QUICK_ANSWER_SECONDS
             + sum(estimate_tokens(texts[index]) for index in ranked)
@@ -384,21 +392,12 @@ def run(
         plan, settings.confirmation, settings.large_batches, context
     )
     summary.update({"plan": plan.to_dict(), "choice": choice, "asked": asked})
+    if missing:
+        summary["terms_without_hits"] = list(missing)
     if choice == PLAN_CHOICE_CANCEL:
         context.done("Cancelled before reading", evidence_count=0)
         return ToolResult(
             "Cancelled; no model calls were made.", (), summary
-        )
-
-    if choice == PLAN_CHOICE_QUICK and terms and not hits:
-        quoted = " or ".join(f"“{term}”" for term in terms)
-        context.done(f"No passage mentions {quoted}", evidence_count=0)
-        return ToolResult(
-            f"No passage mentions {quoted}; all {len(passages)} passages "
-            "in scope were checked for these words. Ask again and choose "
-            "Continue to read everything for related wording.",
-            (),
-            summary,
         )
 
     failures: list[dict[str, object]] = []
@@ -473,6 +472,10 @@ def run(
             if terms
             else "best-ranked passages"
         )
+        if missing:
+            which += " (no passage mentions " + " or ".join(
+                f"“{term}”" for term in missing
+            ) + ")"
         answer += (
             f"\n\n*Quick answer from the {read} {which}; ask again and "
             "choose Continue to read everything.*"

@@ -11,14 +11,43 @@ and deterministic execution behavior.
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
+from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
+from kilin.tools import ToolRequest
 from kilin.tools import find_fact as tool
+from kilin.tools._shared.planning import PLAN_CHOICE_QUICK
 
 from tests.kilin.tools._contract_support import (
     assert_packaged_defaults,
     assert_registry_entry,
 )
+from tests.kilin.tools._shared._support import chunk
+
+
+def _quick_context(passages, terms):
+    """Return tool services that choose the quick answer."""
+
+    reply = json.dumps({"terms": list(terms)})
+    return SimpleNamespace(
+        chunks=passages,
+        ask_router=Mock(return_value=reply),
+        rank=Mock(return_value=[
+            HybridResult(1.0, passage, ("semantic",))
+            for passage in reversed(passages)
+        ]),
+        retrieval_count=2,
+        confirm=Mock(return_value=PLAN_CHOICE_QUICK),
+        write=Mock(return_value="The languages are MATLAB and C++ [3]."),
+        progress=Mock(),
+        done=Mock(),
+        trace=SimpleNamespace(emit=Mock(), include_content=True),
+        trace_turn_id="test",
+        model_id="fake",
+    )
 
 
 class TestFindFact(unittest.TestCase):
@@ -73,6 +102,38 @@ class TestFindFact(unittest.TestCase):
         self.assertIn("Notes by document", full)
         self.assertIn("Passages by document", quick)
         self.assertIn("Be brief", quick)
+
+    def test_quick_answer_ranks_when_no_passage_has_the_terms(self) -> None:
+        """Answer from ranked passages when the exact terms are absent.
+
+        """
+
+        passages = [
+            chunk("a", "Introduction to brain networks.", path="a.md"),
+            chunk("b", "Graph measures and statistics.", path="a.md"),
+            chunk("c", "Implemented in MATLAB with C++ parts.", path="a.md"),
+        ]
+        question = "Which languages does metadata table C6 list?"
+        context = _quick_context(passages, ["metadata table C6"])
+
+        result = tool.run(
+            tool.FactSettings(), ToolRequest(question, question), context
+        )
+
+        context.write.assert_called_once()
+        prompt = context.write.call_args.args[1]
+        self.assertIn("Passages by document", prompt)
+        self.assertIn("[3] Implemented in MATLAB", prompt)
+        self.assertNotIn("Introduction to brain networks", prompt)
+        self.assertIn("best-ranked passages", result.answer)
+        self.assertIn("“metadata table C6”", result.answer)
+        self.assertEqual(
+            result.summary["terms_without_hits"], ["metadata table C6"]
+        )
+        self.assertEqual([item["citation"] for item in result.evidence], [3])
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.quick_label, "Quick answer")
+        self.assertIn("No passage mentions", plan.quick_note)
 
 
 if __name__ == "__main__":
