@@ -10,9 +10,12 @@ intent's default applies otherwise. It is KíLín's reference example of a
 custom tool (see tutorial 160): it composes existing capabilities instead
 of re-implementing them.
 
-1. Choose the paper: a file in ``outputs/`` the question names, the only
-   ``outputs/`` file when the question says "my paper", or else the
-   indexed source ``choose_document`` picks (asking the user when unclear).
+1. Choose the paper: a file in ``outputs/`` the question names by its
+   file name, the only ``outputs/`` file when the question says "my paper"
+   and names no indexed source, or else the indexed source
+   ``choose_document`` picks (asking the user when unclear). Reports KíLín
+   saved in ``outputs/`` are never taken for a paper the question names
+   only by its source's name.
 2. Show the plan; a guessed paper is always confirmed before any work.
 3. Read it in parts: the shared note-taking service writes notes with passage
    numbers, because a whole paper is too long for one small-model prompt.
@@ -259,9 +262,10 @@ __all__ = [
 # One or more passage citations, with separators: " [1], [3]", "[2][24]".
 # They are removed from the saved file, where passage numbers mean nothing.
 _CITATION = re.compile(r"(?:\s*,?\s*\[\d+(?:\s*[,–-]\s*\d+)*\])+")
-# Words that point at the user's own paper in outputs/.
+# Words that point at the user's own paper in outputs/. "This paper" is
+# not among them: it usually means the paper the conversation is about.
 _OWN_PAPER = re.compile(
-    r"\b(outputs?|my (paper|manuscript|pdf|draft|article)|this (pdf|paper))\b",
+    r"\b(outputs?|my (paper|manuscript|pdf|draft|article))\b",
     flags=re.I,
 )
 # File types in outputs/ that can be a paper.
@@ -475,10 +479,14 @@ def choose_paper(
 
     Notes
     -----
-    A file in ``outputs/`` the question names, or the only one when it
-    says "outputs" or "my paper", comes first. Otherwise
-    ``choose_document`` decides from the question and the earlier turns it
-    points back to, and asks the user when the paper is unclear.
+    A file in ``outputs/`` the question names by its file name or path, or
+    the only one when it says "outputs" or "my paper" and names no indexed
+    source, comes first. A looser match (by file stem or author, as in
+    ``named_paths``) never selects an ``outputs/`` file, so a report such
+    as ``smith20_reference_check.md`` is not taken for ``smith20.pdf``.
+    Otherwise ``choose_document`` decides from the question and the
+    earlier turns it points back to, and asks the user when the paper is
+    unclear.
 
     """
 
@@ -511,11 +519,21 @@ def choose_paper(
         document = load_output(root, name)
         return document.path, document.passages, reason, False
 
-    hits = named_paths(request.question, outputs, authors=True)
+    # Only an exact file name or path selects an outputs/ file: by stem or
+    # author, "tiunn26braph2.pdf" would also match the saved report
+    # "tiunn26braph2_reference_check.md".
+    text = request.question.replace("\\", "/").casefold()
+    hits = [
+        path for path in outputs
+        if path.as_posix().casefold() in text or path.name.casefold() in text
+    ]
     if len(hits) == 1:
         return from_outputs(hits[0], "named in the question")
 
-    if _OWN_PAPER.search(request.question):
+    sources = list(dict.fromkeys(chunk.path for chunk in context.chunks))
+    if _OWN_PAPER.search(request.question) and not named_paths(
+        request.question, sources, authors=True
+    ):
         only = find_output(request.question, root, suffixes=_SUFFIXES)
         if only is not None:
             return from_outputs(only, "the only outputs file")

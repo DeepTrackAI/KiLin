@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from kilin.chunking import Chunk
 from kilin.project_type import project_type
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_GENERATE_PAPER_SUMMARY, TOOL_REGISTRY
@@ -37,6 +38,7 @@ from kilin.tools.generate_paper_summary import (
     workspace_resources,
 )
 from kilin.tools.generate_paper_summary import _configuration as config
+from kilin.tools.generate_paper_summary.tool import choose_paper
 from kilin.workspace_resources import templates_folder
 
 
@@ -369,6 +371,59 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(result.answer, "No matching paper")
         self.assertEqual(result.evidence, ())
         done.assert_called_once()
+
+
+class TestChoosePaper(unittest.TestCase):
+    """Choose saved outputs only when the question names them exactly."""
+
+    def setUp(self) -> None:
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        (self.root / "outputs").mkdir()
+        (self.root / "outputs" / "smith20_reference_check.md").write_text(
+            "# Reference check: smith20.pdf\n\nThree references.\n",
+            encoding="utf-8",
+        )
+        source = Chunk("s1", Path("smith20.pdf"), "Sleep study.", 1, 2,
+                       "pdf_page", None, "Page 1")
+        self.context = SimpleNamespace(project_root=self.root,
+                                       chunks=[source])
+        chosen = patch(
+            "kilin.tools.generate_paper_summary.tool.choose_document",
+            return_value=(Path("smith20.pdf"), "named in the question",
+                          False),
+        )
+        self.choose_document = chosen.start()
+        self.addCleanup(chosen.stop)
+
+    def _choose(self, question: str):
+        return choose_paper(ToolRequest(question, question), self.context)
+
+    def test_source_named_by_file_name_is_not_a_saved_report(self) -> None:
+        for question in ("Prepare a research briefing for smith20.pdf.",
+                         "Summarize my paper smith20.pdf for the public."):
+            with self.subTest(question=question):
+                path, passages, _, _ = self._choose(question)
+                self.assertEqual(path, Path("smith20.pdf"))
+                self.assertEqual(len(passages), 1)
+
+    def test_output_named_by_file_name_is_used(self) -> None:
+        path, _, reason, guessed = self._choose(
+            "Write a briefing of smith20_reference_check.md."
+        )
+        self.assertEqual(path.name, "smith20_reference_check.md")
+        self.assertEqual((reason, guessed), ("named in the question", False))
+        self.choose_document.assert_not_called()
+
+    def test_my_paper_uses_the_only_output_but_this_paper_does_not(
+        self,
+    ) -> None:
+        path, _, reason, _ = self._choose("Summarize my paper.")
+        self.assertEqual(path.name, "smith20_reference_check.md")
+        self.assertEqual(reason, "the only outputs file")
+        path, _, _, _ = self._choose("Summarize this paper.")
+        self.assertEqual(path, Path("smith20.pdf"))
 
 
 if __name__ == "__main__":
