@@ -11,8 +11,9 @@ custom tool (see tutorial 160): it composes existing capabilities instead
 of re-implementing them.
 
 1. Choose the paper: a file in ``outputs/`` the question names by its
-   file name, the only ``outputs/`` file when the question says "my paper"
-   and names no indexed source, or else the indexed source
+   file name or path, the only ``outputs/`` file for "my paper"
+   without a named source, the sole saved PDF for "this PDF" when no
+   sources are indexed, or else the indexed source
    ``choose_document`` picks (asking the user when unclear). Reports KíLín
    saved in ``outputs/`` are never taken for a paper the question names
    only by its source's name.
@@ -176,7 +177,6 @@ from kilin.tools._contract import (
 )
 from kilin.tools._shared.outputs import (
     OUTPUTS_FOLDER,
-    find_output,
     load_output,
     output_files,
     publish_output_file,
@@ -266,6 +266,14 @@ _CITATION = re.compile(r"(?:\s*,?\s*\[\d+(?:\s*[,–-]\s*\d+)*\])+")
 # not among them: it usually means the paper the conversation is about.
 _OWN_PAPER = re.compile(
     r"\b(outputs?|my (paper|manuscript|pdf|draft|article))\b",
+    flags=re.I,
+)
+# "This PDF" can identify a sole PDF in an outputs-only workspace.
+_THIS_PDF = re.compile(r"\bthis pdf\b", flags=re.I)
+# An explicitly mentioned filename must prevent a loose "my paper" fallback.
+_FILE_REFERENCE = re.compile(
+    r"(?<![\w./-])[\w./-]+\.[a-z][a-z0-9_-]+"
+    r"(?!(?:[\w/-]|\.[\w./-]))",
     flags=re.I,
 )
 # File types in outputs/ that can be a paper.
@@ -447,6 +455,34 @@ def workspace_resources(
     return (WorkspaceResource(source, f"templates/{name}"),)
 
 
+def _mentions_output_name(text: str, name: str) -> bool:
+    """Whether a question names one complete filename or relative path.
+
+    Parameters
+    ----------
+    text: str
+        Question normalized to forward slashes and case-folded.
+    name: str
+        File name or path, normalized in the same way.
+
+    Returns
+    -------
+    bool
+        True only for a complete name, not a suffix of a longer name
+        or part of another directory path. A final sentence period is
+        allowed, but an extra filename extension is not.
+
+    """
+
+    return bool(
+        re.search(
+            rf"(?<![\w./-]){re.escape(name)}"
+            r"(?!(?:[\w/-]|\.[\w./-]))",
+            text,
+        )
+    )
+
+
 def choose_paper(
     request: ToolRequest, context: ToolContext, what: str = "summary"
 ) -> tuple[Path, tuple[Chunk, ...], str, bool] | str:
@@ -479,14 +515,15 @@ def choose_paper(
 
     Notes
     -----
-    A file in ``outputs/`` the question names by its file name or path, or
-    the only one when it says "outputs" or "my paper" and names no indexed
-    source, comes first. A looser match (by file stem or author, as in
-    ``named_paths``) never selects an ``outputs/`` file, so a report such
-    as ``smith20_reference_check.md`` is not taken for ``smith20.pdf``.
-    Otherwise ``choose_document`` decides from the question and the
-    earlier turns it points back to, and asks the user when the paper is
-    unclear.
+    An explicitly named ``outputs/`` filename or relative path comes
+    first. Names must match completely; ambiguous basenames require a
+    relative path. Without a filename, "my paper" or "outputs" can use
+    the only output when no indexed source is named. "This PDF" may use
+    the sole saved PDF only if the project has no indexed sources.
+    Otherwise ``choose_document`` decides from the question and earlier
+    turns, asking the user when the paper is unclear. Stem or author
+    matching never silently chooses a generated report for an indexed
+    source.
 
     """
 
@@ -519,24 +556,52 @@ def choose_paper(
         document = load_output(root, name)
         return document.path, document.passages, reason, False
 
-    # Only an exact file name or path selects an outputs/ file: by stem or
-    # author, "tiunn26braph2.pdf" would also match the saved report
-    # "tiunn26braph2_reference_check.md".
+    # Prefer a complete outputs/ path over an unqualified basename.
+    # A full path disambiguates reports with the same name in subfolders.
     text = request.question.replace("\\", "/").casefold()
-    hits = [
+    qualified = [
         path for path in outputs
-        if path.as_posix().casefold() in text or path.name.casefold() in text
+        if _mentions_output_name(
+            text, f"{OUTPUTS_FOLDER}/{path.as_posix().casefold()}"
+        ) or (
+            path.parent != Path(".")
+            and _mentions_output_name(text, path.as_posix().casefold())
+        )
     ]
-    if len(hits) == 1:
-        return from_outputs(hits[0], "named in the question")
+    bare = [
+        path for path in outputs
+        if _mentions_output_name(text, path.name.casefold())
+    ]
+    if len(qualified) > 1 or (qualified and any(
+        path not in qualified for path in bare
+    )):
+        return "Name one saved file in outputs/, including its relative path."
+    if len(qualified) == 1:
+        return from_outputs(qualified[0], "named in the question")
+    if len(bare) > 1:
+        return (
+            "Several files in outputs/ have that name. Include the "
+            "relative path to select one."
+        )
+    if len(bare) == 1:
+        return from_outputs(bare[0], "named in the question")
 
     sources = list(dict.fromkeys(chunk.path for chunk in context.chunks))
-    if _OWN_PAPER.search(request.question) and not named_paths(
-        request.question, sources, authors=True
+    has_file_name = bool(_FILE_REFERENCE.search(text))
+    if (
+        not has_file_name
+        and _OWN_PAPER.search(request.question)
+        and not named_paths(request.question, sources, authors=True)
     ):
-        only = find_output(request.question, root, suffixes=_SUFFIXES)
-        if only is not None:
-            return from_outputs(only, "the only outputs file")
+        if len(outputs) == 1:
+            return from_outputs(outputs[0], "the only outputs file")
+
+    if not sources and not has_file_name and _THIS_PDF.search(text):
+        pdfs = [path for path in outputs if path.suffix.lower() == ".pdf"]
+        if len(pdfs) == 1:
+            return from_outputs(pdfs[0], "the only outputs PDF")
+        if len(pdfs) > 1:
+            return "Several PDFs are in outputs/. Name the one to use."
 
     chosen = choose_document(
         request,
