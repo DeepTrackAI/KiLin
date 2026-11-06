@@ -60,12 +60,12 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         self.assertNotIn("change-project", source)
 
     def test_logo_is_the_qilin(self):
-        """Project sidebar shows the face; launch retains the full qilin."""
+        """Project sidebar and launch both use the full unchanged qilin."""
 
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         start = styles.index(".sidebar-logo-mark {")
         rule = styles[start : styles.index("}", start)]
-        self.assertIn("var(--sidebar-head-image)", rule)
+        self.assertIn("var(--logo-image)", rule)
         start = styles.index(".setup-brand-figure {")
         rule = styles[start : styles.index("}", start)]
         self.assertIn("var(--logo-image)", rule)
@@ -76,20 +76,6 @@ class TestSidebarLogoFrontend(unittest.TestCase):
         self.assertEqual(
             styles.count(
                 '--logo-image: url("../icons/kilin-qilin-dark.png");'
-            ),
-            2,
-        )
-        self.assertEqual(
-            styles.count(
-                '--sidebar-head-image: '
-                'url("../icons/kilin-qilin-head.png");'
-            ),
-            1,
-        )
-        self.assertEqual(
-            styles.count(
-                '--sidebar-head-image: '
-                'url("../icons/kilin-qilin-head-dark.png");'
             ),
             2,
         )

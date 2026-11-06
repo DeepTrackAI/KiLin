@@ -154,8 +154,8 @@ class TestVisualIdentity(unittest.TestCase):
                 self.assertEqual(len(root.findall(
                     f".//{namespace}path[@class='kilin-accent']")), 2)
 
-    def test_sidebar_uses_face_but_home_retains_full_mascot(self):
-        """Project navigation is compact without changing the start logo."""
+    def test_sidebar_and_home_use_full_mascot(self):
+        """Project navigation and launch both use the unchanged mascot."""
         full = _png_header(_ICONS / "kilin-qilin.png")
         for name in ("kilin-qilin-head.png",
                      "kilin-qilin-head-dark.png"):
@@ -168,9 +168,9 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertIn(".setup-brand-figure {", css)
         self.assertIn("background: var(--logo-image)", css)
         self.assertIn(".sidebar-logo-mark {", css)
-        self.assertIn("background: var(--sidebar-head-image)", css)
+        self.assertIn("background: var(--logo-image)", css)
         self.assertIn(".sidebar-logo { display: flex;", css)
-        self.assertIn(".sidebar-logo-wordmark { display: block;", css)
+        self.assertIn("justify-content: center;", css)
         self.assertIn(".sidebar-logo-wordmark { display: none; }", css)
 
     def test_light_dark_and_system_theme_use_matching_assets(self):
@@ -181,12 +181,6 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertEqual(css.count(
             '--logo-image: url("../icons/kilin-qilin-dark.png");'), 2)
         self.assertEqual(css.count(
-            '--sidebar-head-image: url("../icons/kilin-qilin-head.png");'),
-            1)
-        self.assertEqual(css.count(
-            '--sidebar-head-image: '
-            'url("../icons/kilin-qilin-head-dark.png");'), 2)
-        self.assertEqual(css.count(
             '--wordmark-image: url("../icons/kilin-wordmark-light.svg");'),
             1)
         self.assertEqual(css.count(
@@ -195,7 +189,6 @@ class TestVisualIdentity(unittest.TestCase):
         self.assertIn(':root[data-appearance="dark"]', css)
         self.assertIn(':root[data-appearance="system"]', css)
         self.assertIn('var(--logo-image)', css)
-        self.assertIn('var(--sidebar-head-image)', css)
         self.assertIn('var(--wordmark-image)', css)
         self.assertIn('var(--mosaic-image)', css)
 
@@ -218,12 +211,19 @@ class TestVisualIdentity(unittest.TestCase):
                       html)
         self.assertIn('class="setup-brand-wordmark" aria-hidden="true"',
                       html)
-        self.assertIn('class="sidebar-logo-wordmark" aria-hidden="true"',
-                      html)
         self.assertIn('<span class="visually-hidden">KíLín</span>', html)
         self.assertIn('id="home-logo"', html)
         self.assertIn('aria-label="Back to the start screen"', html)
         self.assertIn('Your AI. Your Knowledge. Your Control.', html)
+
+
+    def test_launch_layout_is_compact_enough_for_initial_view(self):
+        """Landing screen reduces vertical padding to avoid initial scroll."""
+        css = (_WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('.setup { width: min(100%, 650px); margin: 0 auto auto; padding: 16px 0 10px; }', css)
+        self.assertIn('.setup-brand { position: relative; display: flex; align-items: center; gap: 12px; min-height: 146px;', css)
+        self.assertIn('.setup-card { display: grid; gap: 8px; padding: 20px; }', css)
+        self.assertIn('.drop-zone { width: 100%; min-height: 102px; padding: 24px;', css)
 
     def test_monochrome_marks_remain_monochrome(self):
         """Black and white brand marks do not inherit colored accents."""

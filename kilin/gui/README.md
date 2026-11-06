@@ -271,11 +271,13 @@ for light, `icons/kilin-dark.png` for dark, and the operating system's color
 scheme for System. Missing icon files leave Qt's default icon.
 The welcome screen displays the locally packaged, full-body
 Gaudí-inspired mosaic qilin (dragon head, deer body, cow tail).
-In an open project, the sidebar uses only a crop of the dragon
-head, alongside a separate vector wordmark with evenly spaced
-letters and tapered accents above both i characters. Dark mode
-keeps the vivid ceramic colors against navy surfaces. The window and Dock use a close-up of the dragon head;
-`icons/README.md` documents the artwork and the attribution history.
+In an open project, the sidebar now shows the full mascot alone,
+without a separate wordmark, while the welcome card continues to
+use the refined vector KíLín logotype with evenly spaced letters
+and tapered accents above both i characters. Dark mode keeps the
+vivid ceramic colors against navy surfaces. The window and Dock
+use a close-up of the dragon head; `icons/README.md` documents the
+artwork and the attribution history.
 The palette and decorations are CSS-only and do not alter interaction,
 project settings, model selection, or accessibility labels.
 
