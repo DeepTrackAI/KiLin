@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from kilin.chunking import Chunk
 from kilin.project_type import project_type
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_GENERATE_PAPER_SUMMARY, TOOL_REGISTRY
@@ -37,6 +38,7 @@ from kilin.tools.generate_paper_summary import (
     workspace_resources,
 )
 from kilin.tools.generate_paper_summary import _configuration as config
+from kilin.tools.generate_paper_summary.tool import choose_paper
 from kilin.workspace_resources import templates_folder
 
 
@@ -369,6 +371,300 @@ class TestGeneratePaperSummary(unittest.TestCase):
         self.assertEqual(result.answer, "No matching paper")
         self.assertEqual(result.evidence, ())
         done.assert_called_once()
+
+
+class TestChoosePaper(unittest.TestCase):
+    """Choose saved outputs only when the question names them exactly."""
+
+    def setUp(self) -> None:
+        """Prepare an indexed source and an unrelated saved report.
+
+        """
+
+        folder = TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.root = Path(folder.name)
+        (self.root / "outputs").mkdir()
+        (self.root / "outputs" / "smith20_reference_check.md").write_text(
+            "# Reference check: smith20.pdf\n\nThree references.\n",
+            encoding="utf-8",
+        )
+        source = Chunk("s1", Path("smith20.pdf"), "Sleep study.", 1, 2,
+                       "pdf_page", None, "Page 1")
+        self.context = SimpleNamespace(
+            project_root=self.root,
+            chunks=[source],
+            retrieval_count=8,
+            choose=None,
+        )
+        chosen = patch(
+            "kilin.tools.generate_paper_summary.tool.choose_document",
+            return_value=(Path("smith20.pdf"), "named in the question",
+                          False),
+        )
+        self.choose_document = chosen.start()
+        self.addCleanup(chosen.stop)
+
+    def _choose(self, question: str):
+        """Run paper selection with the test's fixed indexed source.
+
+        """
+
+        return choose_paper(ToolRequest(question, question), self.context)
+
+    def test_source_named_by_file_name_is_not_a_saved_report(self) -> None:
+        """Never substitute a report sharing the original paper's stem.
+
+        """
+
+        for question in ("Prepare a research briefing for smith20.pdf.",
+                         "Summarize my paper smith20.pdf for the public."):
+            with self.subTest(question=question):
+                path, passages, _, _ = self._choose(question)
+                self.assertEqual(path, Path("smith20.pdf"))
+                self.assertEqual(len(passages), 1)
+
+    def test_output_named_by_file_name_is_used(self) -> None:
+        """Select a report only when its complete name is mentioned.
+
+        """
+
+        path, _, reason, guessed = self._choose(
+            "Write a briefing of smith20_reference_check.md."
+        )
+        self.assertEqual(path.name, "smith20_reference_check.md")
+        self.assertEqual((reason, guessed), ("named in the question", False))
+        self.choose_document.assert_not_called()
+
+    def test_my_paper_uses_the_only_output_but_this_paper_does_not(
+        self,
+    ) -> None:
+        """Keep the limited my-paper fallback and source precedence.
+
+        """
+
+        for question in ("Summarize my paper.", "Summarize outputs."):
+            with self.subTest(question=question):
+                path, _, reason, _ = self._choose(question)
+                self.assertEqual(path.name, "smith20_reference_check.md")
+                self.assertEqual(reason, "the only outputs file")
+        path, _, _, _ = self._choose("Summarize this paper.")
+        self.assertEqual(path, Path("smith20.pdf"))
+
+    def test_nearby_file_names_do_not_select_a_report(self) -> None:
+        """Reject prefixed names, backup extensions and other folders.
+
+        """
+
+        for name in (
+            "draft_smith20_reference_check.md",
+            "smith20_reference_check.md.bak",
+            "smith20_reference_check.md2",
+            "other/smith20_reference_check.md",
+        ):
+            with self.subTest(name=name):
+                self.choose_document.reset_mock()
+                path, _, _, _ = self._choose(f"Summarize {name}.")
+                self.assertEqual(path, Path("smith20.pdf"))
+                self.choose_document.assert_called_once()
+
+    def test_my_paper_does_not_bypass_exact_name_matching(self) -> None:
+        """Do not turn a mistaken output filename into a sole-file match.
+
+        """
+
+        for name in (
+            "draft_smith20_reference_check.md",
+            "smith20_reference_check.md.bak",
+            "smith20_reference_check.md2",
+        ):
+            with self.subTest(name=name):
+                self.choose_document.reset_mock()
+                path, _, _, _ = self._choose(
+                    f"Summarize my paper {name}."
+                )
+                self.assertEqual(path, Path("smith20.pdf"))
+                self.choose_document.assert_called_once()
+
+    def test_my_paper_does_not_use_loose_stems_with_many_outputs(
+        self,
+    ) -> None:
+        """Require a complete name instead of the shared stem heuristic.
+
+        """
+
+        (self.root / "outputs" / "other_report.md").write_text(
+            "# Other\n\nAnother output.\n", encoding="utf-8"
+        )
+        path, _, _, _ = self._choose(
+            "Summarize my paper smith20_reference_check."
+        )
+        self.assertEqual(path, Path("smith20.pdf"))
+        self.choose_document.assert_called_once()
+
+    def test_output_name_is_case_insensitive_and_can_end_a_sentence(
+        self,
+    ) -> None:
+        """Allow explicit filenames in ordinary sentence punctuation.
+
+        """
+
+        path, _, _, _ = self._choose(
+            "Summarize SMITH20_REFERENCE_CHECK.MD."
+        )
+        self.assertEqual(path, Path("outputs/smith20_reference_check.md"))
+        self.choose_document.assert_not_called()
+
+    def test_same_basename_requires_a_relative_path(self) -> None:
+        """Do not select arbitrarily between identically named reports.
+
+        """
+
+        for folder in ("drafts", "completed"):
+            subfolder = self.root / "outputs" / folder
+            subfolder.mkdir()
+            (subfolder / "report.md").write_text(
+                "# Report\n\nSeparate text for the test.\n",
+                encoding="utf-8",
+            )
+
+        answer = self._choose("Summarize report.md.")
+        self.assertIsInstance(answer, str)
+        self.assertIn("relative path", answer)
+        self.choose_document.assert_not_called()
+
+        for name in ("drafts/report.md", "outputs/completed/report.md"):
+            with self.subTest(name=name):
+                path, _, reason, guessed = self._choose(
+                    f"Summarize {name}."
+                )
+                expected = Path("outputs") / name.removeprefix("outputs/")
+                self.assertEqual(path, expected)
+                self.assertEqual(
+                    (reason, guessed), ("named in the question", False)
+                )
+        self.choose_document.assert_not_called()
+
+    def test_qualified_path_disambiguates_root_and_nested_names(self) -> None:
+        """Select the named output, not another with the same basename.
+
+        """
+
+        subfolder = self.root / "outputs" / "archive"
+        subfolder.mkdir()
+        (subfolder / "smith20_reference_check.md").write_text(
+            "# Archive\n\nA second report.\n", encoding="utf-8"
+        )
+        self.assertIn("relative path", self._choose(
+            "Summarize smith20_reference_check.md."
+        ))
+        for name, expected in (
+            ("outputs/smith20_reference_check.md",
+             Path("outputs/smith20_reference_check.md")),
+            ("archive/smith20_reference_check.md",
+             Path("outputs/archive/smith20_reference_check.md")),
+        ):
+            with self.subTest(name=name):
+                path, _, _, _ = self._choose(f"Summarize {name}.")
+                self.assertEqual(path, expected)
+
+    def test_multiple_output_files_in_question_are_ambiguous(self) -> None:
+        """Require one file even when a full path identifies one of two.
+
+        """
+
+        (self.root / "outputs" / "second.md").write_text(
+            "# Second\n\nThe second report.\n", encoding="utf-8"
+        )
+        answer = self._choose(
+            "Summarize outputs/smith20_reference_check.md and second.md."
+        )
+        self.assertIsInstance(answer, str)
+        self.assertIn("Name one saved file", answer)
+        self.choose_document.assert_not_called()
+
+    def test_source_selection_uses_the_real_shared_picker(self) -> None:
+        """Validate named-source precedence without mocking the picker.
+
+        """
+
+        from kilin.tools._shared.choose_document import choose_document
+
+        with patch(
+            "kilin.tools.generate_paper_summary.tool.choose_document",
+            choose_document,
+        ):
+            path, passages, reason, guessed = self._choose(
+                "Summarize smith20.pdf."
+            )
+        self.assertEqual(path, Path("smith20.pdf"))
+        self.assertEqual(len(passages), 1)
+        self.assertEqual((reason, guessed),
+                         ("named in the question", False))
+
+    def test_this_pdf_without_sources_uses_the_only_saved_pdf(self) -> None:
+        """Restore the safe PDF fallback in an outputs-only workspace.
+
+        """
+
+        self.context.chunks = []
+        (self.root / "outputs" / "paper.pdf").write_bytes(b"placeholder")
+        fake = SimpleNamespace(path=Path("outputs/paper.pdf"), passages=())
+        with patch(
+            "kilin.tools.generate_paper_summary.tool.load_output",
+            return_value=fake,
+        ) as loader:
+            path, passages, reason, guessed = self._choose(
+                "Summarize this PDF."
+            )
+        self.assertEqual(path, Path("outputs/paper.pdf"))
+        self.assertEqual(passages, ())
+        self.assertEqual((reason, guessed), ("the only outputs PDF", False))
+        loader.assert_called_once_with(self.root, Path("paper.pdf"))
+        self.choose_document.assert_not_called()
+
+    def test_this_pdf_does_not_override_indexed_sources(self) -> None:
+        """Preserve the earlier indexed-paper conversational reference.
+
+        """
+
+        (self.root / "outputs" / "paper.pdf").write_bytes(b"placeholder")
+        path, _, _, _ = self._choose("Summarize this PDF.")
+        self.assertEqual(path, Path("smith20.pdf"))
+        self.choose_document.assert_called_once()
+
+    def test_this_pdf_without_a_saved_pdf_is_not_a_saved_report(
+        self,
+    ) -> None:
+        """Avoid treating a Markdown report as an unnamed PDF.
+
+        """
+
+        from kilin.tools._shared.choose_document import choose_document
+
+        self.context.chunks = []
+        with patch(
+            "kilin.tools.generate_paper_summary.tool.choose_document",
+            choose_document,
+        ):
+            response = self._choose("Summarize this PDF.")
+        self.assertIsInstance(response, str)
+        self.assertIn("couldn't tell which file", response)
+
+    def test_this_pdf_with_multiple_saved_pdfs_requests_a_name(
+        self,
+    ) -> None:
+        """Prevent an arbitrary choice among saved PDFs.
+
+        """
+
+        self.context.chunks = []
+        for name in ("first.pdf", "second.pdf"):
+            (self.root / "outputs" / name).write_bytes(b"placeholder")
+        answer = self._choose("Summarize this PDF.")
+        self.assertIsInstance(answer, str)
+        self.assertIn("Several PDFs", answer)
+        self.choose_document.assert_not_called()
 
 
 if __name__ == "__main__":

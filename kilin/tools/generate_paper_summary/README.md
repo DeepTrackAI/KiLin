@@ -6,6 +6,35 @@ sections, checks their structure and length, and saves the report to the
 project's `outputs/` directory. The model can still make factual errors:
 validation checks structure, not scientific correctness.
 
+## Selecting the source paper or a saved output
+
+An explicitly named file in `outputs/` can be used as input to a new report.
+The tool matches a **complete filename**, ignoring letter case, or a path
+relative to `outputs/` (for example, `outputs/reports/notes.md` or
+`reports/notes.md`). A shorter stem, an author name, or a filename embedded
+inside another name does not select a saved report. If files in separate
+subfolders have the same basename, specify their relative path. A request
+naming multiple output files asks for one file rather than guessing.
+
+Otherwise the shared indexed-source selector identifies the paper from its
+filename, earlier conversation or retrieval evidence, asking when unclear.
+This prevents `smith20_reference_check.md` in `outputs/` from being
+mistaken for the indexed `smith20.pdf` just because the author/year matches.
+
+There are two limited shortcuts for saved files:
+
+- **"My paper"** (similar first-person wording, or a request mentioning
+  **"outputs"**) can use a sole readable output when no indexed source or
+  other file is explicitly named.
+- **"This PDF"** can use a sole PDF in `outputs/` if the workspace contains
+  no indexed sources and the request does not name another file. It does not
+  treat a Markdown report as a PDF. If there are multiple saved PDFs, the
+  user must name one.
+
+"This paper" normally refers to the indexed paper under discussion; it does
+not automatically select a generated report. Files in `outputs/` are never
+indexed and are read only when explicitly selected by a tool.
+
 The tool is a self-contained package:
 
 - `tool.py`: settings validation, resource declarations, and execution.
@@ -18,7 +47,7 @@ The tool is a self-contained package:
 
 The `SETTINGS` section supplies defaults for the tool's
 `SummarySettings`. Each intent's `tool` entry in
-`kilin/project_types/<type>.json` may override these eight settings.
+`kilin/project_types/<type>.json` may override these six settings.
 Missing keys use this tool's packaged defaults, **not** values from
 `kilin_defaults.json`. The remaining sections are tool-internal
 heuristics and estimation parameters; they are not project-type settings.
