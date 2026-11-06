@@ -623,6 +623,7 @@ def _router_prompt(
     project: ProjectType,
     representations: list[dict[str, object]],
     question: str,
+    exclude: frozenset[str] = frozenset(),
 ) -> tuple[str, str]:
     """Build the router's system and user prompts.
 
@@ -636,6 +637,8 @@ def _router_prompt(
         listed.
     question: str
         The new question.
+    exclude: frozenset[str], optional
+        Intent IDs left out of the list. Defaults to none.
 
     Returns
     -------
@@ -649,6 +652,7 @@ def _router_prompt(
     intents = "\n".join(
         f"- {intent_id}: {intent.description}"
         for intent_id, intent in project.intents.items()
+        if intent_id not in exclude
     )
     listed = [item for item in representations if not item.get("skip")]
     listed = listed[-MAX_LISTED_TURNS:]
@@ -689,6 +693,7 @@ Example: {{"intent": "{project.default_intent}", "standalone": true}}"""
             intent_id
             for intent_id, intent in project.intents.items()
             if intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+            and intent_id not in exclude
         ),
         None,
     )
@@ -836,9 +841,10 @@ def route_question(
     neither reads history nor retrieves (small talk) are not listed to the
     router and are never related. A question left with no related turns
     is standalone. A tool that works on an earlier answer (``follows_up``)
-    is replaced by the default intent when the question names a file and
-    says nothing of earlier answers ("In Figure 1G of smith20.pdf, what
-    does 79.7 represent?").
+    is not meant when the question names a file and says nothing of
+    earlier answers ("In Figure 1G of smith20.pdf, what does 79.7
+    represent?"): the router is asked once more without those tools, and
+    the default intent is used when that fails.
 
     """
 
@@ -901,14 +907,35 @@ def route_question(
         and _NAMED_FILE.search(question)
         and not _EARLIER_ANSWER.search(question)
     ):
-        # A new question about a named file, not about an earlier answer.
-        decision = RouteDecision(
-            **{**_fields(decision), "intent": project.default_intent}
+        # A new question about a named file, not about an earlier answer:
+        # ask again without the tools that work on earlier answers.
+        replaced = decision.intent
+        excluded = frozenset(
+            intent_id
+            for intent_id, item in project.intents.items()
+            if item.tool is not None
+            and TOOL_REGISTRY[item.tool.name].follows_up
         )
-        intent = project.intents[project.default_intent]
+        system, prompt = _router_prompt(
+            project, representations, question, excluded
+        )
+        try:
+            retry = _parse_route(
+                side_reply(
+                    chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
+                ),
+                project,
+                len(turns),
+            ).intent
+        except Exception:  # The default intent is always safe.
+            retry = project.default_intent
+        if retry in excluded:
+            retry = project.default_intent
+        decision = RouteDecision(**{**_fields(decision), "intent": retry})
+        intent = project.intents[retry]
         fallback = (
-            "follow-up intent replaced: the question names a file and "
-            "no earlier answer"
+            f"follow-up intent {replaced} replaced by {retry}: the "
+            "question names a file and no earlier answer"
         )
     if (
         not kept

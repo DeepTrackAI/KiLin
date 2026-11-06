@@ -35,6 +35,10 @@ Module Structure
 
     Find invalid passage citations in a generated answer.
 
+- ``quote_citations``
+
+    Move the citation of a quoted phrase to the passage that contains it.
+
 - ``take_notes``
 
     Read each part using the caller's model and tracing callbacks.
@@ -49,7 +53,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import re
 from time import perf_counter
 from typing import Final
@@ -65,11 +69,22 @@ __all__ = [
     "clean_notes",
     "notes_prompt",
     "plan_parts",
+    "quote_citations",
     "take_notes",
 ]
 
 NOTHING: Final[str] = "NOTHING"
 _CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# A citation group such as [3], [3, 5], or [3-5] (hyphen or en dash).
+_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
+    r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
+)
+# A phrase in straight or curly double quotes.
+_QUOTE: Final[re.Pattern[str]] = re.compile(r'["“]([^"“”]+)["”]')
+# A sentence ends at ., !, or ? followed by space, or at a line break.
+_SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+|\n+")
+# Fewer words than this are too common to place a quote ("BRAPH").
+_QUOTE_MIN_WORDS: Final[int] = 3
 
 
 def plan_parts(chunks: Sequence[Chunk], part_tokens: int) -> list[list[int]]:
@@ -210,6 +225,120 @@ def answer_citations(answer: str, passages: int) -> list[int]:
     }
     return sorted(number for number in cited if not 1 <= number <= passages)
 
+
+
+def quote_citations(
+    answer: str, passages: Mapping[int, str]
+) -> tuple[str, dict[str, int]]:
+    """Move the citation of a quoted phrase to the passage that contains it.
+
+    Small models cite a neighbouring number ([1] for [10]). A sentence that
+    quotes a phrase of at least three words, and has one citation group,
+    is checked: when no cited passage contains the phrase, and exactly one
+    other passage the model was given does, the group cites that passage
+    instead. Text is compared ignoring case, spacing, and line-end
+    hyphenation.
+
+    Parameters
+    ----------
+    answer: str
+        The generated answer.
+    passages: Mapping[int, str]
+        The citation numbers the model was given, with their passage text.
+
+    Returns
+    -------
+    tuple[str, dict[str, int]]
+        The answer with moved citations, and counts: ``moved`` citation
+        groups, and ``unplaced`` quotes that no given passage contains.
+
+    """
+
+    texts = {number: _plain(text) for number, text in passages.items()}
+    counts = {"moved": 0, "unplaced": 0}
+    pieces: list[str] = []
+    position = 0
+    for end in [*_SENTENCE_END.finditer(answer), None]:
+        stop = end.start() if end is not None else len(answer)
+        sentence = answer[position:stop]
+        groups = list(_CITATION_GROUP.finditer(sentence))
+        quotes = [
+            _plain(quote)
+            for quote in _QUOTE.findall(sentence)
+            if len(quote.split()) >= _QUOTE_MIN_WORDS
+        ]
+        if quotes and len(groups) == 1:
+            cited = _numbers(groups[0].group(1))
+            if not any(
+                quote in texts.get(number, "")
+                for quote in quotes for number in cited
+            ):
+                found = {
+                    number
+                    for quote in quotes
+                    for number, text in texts.items()
+                    if quote in text
+                }
+                if len(found) == 1:
+                    group = groups[0]
+                    sentence = (
+                        sentence[:group.start()]
+                        + f"[{found.pop()}]"
+                        + sentence[group.end():]
+                    )
+                    counts["moved"] += 1
+                elif not found:
+                    counts["unplaced"] += len(quotes)
+        pieces.append(sentence)
+        if end is not None:
+            pieces.append(end.group(0))
+            position = end.end()
+    return "".join(pieces), counts
+
+
+def _plain(text: str) -> str:
+    """Return text for quote matching: no line-end hyphens, one space.
+
+    Parameters
+    ----------
+    text: str
+        Passage or quoted text.
+
+    Returns
+    -------
+    str
+        Casefolded text with single spaces and words rejoined across
+        line-end hyphens ("advan- tage" becomes "advantage").
+
+    """
+
+    text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
+    text = text.replace("’", "'")
+    return " ".join(text.split()).casefold()
+
+
+def _numbers(group: str) -> set[int]:
+    """Return the numbers of a citation group such as "3, 5-7".
+
+    Parameters
+    ----------
+    group: str
+        Text inside the brackets.
+
+    Returns
+    -------
+    set[int]
+        Every number listed or in a range.
+
+    """
+
+    numbers: set[int] = set()
+    for piece in re.split(r"\s*,\s*", group):
+        match = re.fullmatch(r"(\d+)(?:\s*[–-]\s*(\d+))?", piece)
+        if match is not None:
+            first = int(match.group(1))
+            numbers.update(range(first, int(match.group(2) or first) + 1))
+    return numbers
 
 
 def take_notes(

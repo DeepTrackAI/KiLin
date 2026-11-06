@@ -41,7 +41,9 @@ def _quick_context(passages, terms):
         ]),
         retrieval_count=2,
         confirm=Mock(return_value=PLAN_CHOICE_QUICK),
-        write=Mock(return_value="The languages are MATLAB and C++ [3]."),
+        write=Mock(return_value=(
+            'It is "implemented in MATLAB with C++" [1].'
+        )),
         progress=Mock(),
         done=Mock(),
         trace=SimpleNamespace(emit=Mock(), include_content=True),
@@ -123,14 +125,24 @@ class TestFindFact(unittest.TestCase):
         context.write.assert_called_once()
         prompt = context.write.call_args.args[1]
         self.assertIn("Passages by document", prompt)
-        self.assertIn("[3] Implemented in MATLAB", prompt)
+        # Ranked passages are numbered 1, 2... in reading order.
+        self.assertIn("[1] Graph measures", prompt)
+        self.assertIn("[2] Implemented in MATLAB", prompt)
         self.assertNotIn("Introduction to brain networks", prompt)
+        # The quote is in passage [2], so the citation moves there.
+        self.assertIn('C++" [2].', result.answer)
+        self.assertEqual(
+            result.summary["quote_citations"], {"moved": 1, "unplaced": 0}
+        )
         self.assertIn("best-ranked passages", result.answer)
         self.assertIn("“metadata table C6”", result.answer)
         self.assertEqual(
             result.summary["terms_without_hits"], ["metadata table C6"]
         )
-        self.assertEqual([item["citation"] for item in result.evidence], [3])
+        self.assertEqual(
+            [(item["citation"], item["text"]) for item in result.evidence],
+            [(2, "Implemented in MATLAB with C++ parts.")],
+        )
         plan = context.confirm.call_args.args[0]
         self.assertEqual(plan.quick_label, "Quick answer")
         self.assertIn("No passage mentions", plan.quick_note)

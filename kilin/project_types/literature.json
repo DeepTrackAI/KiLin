@@ -33,7 +33,7 @@
       }
     },
     "fact_finding": {
-      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), and not for listing sentences, passages, or files.",
+      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), not for whether two papers share or differ in a fact (compare_sources), and not for listing sentences, passages, or files.",
       "history": {
         "policy": "relevant"
       },
@@ -49,7 +49,7 @@
       }
     },
     "compare_sources": {
-      "description": "Compare papers, methods, findings, or claims across sources.",
+      "description": "Compare two or more papers: how they differ or agree in methods, data, findings, software, or claims ('how does version 2 of the toolbox differ from the original one?', 'does the Smith paper use the same dataset as the Lee paper?', 'do all the papers use the same evaluation metric?', 'which of the papers reports the best accuracy, and why?', 'compare the methods of these two studies'). Whenever the question sets one paper, version, or method against another, even when it asks for a single fact of each. Not for one paper on its own (question_answering or fact_finding).",
       "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
       "history": {
         "policy": "relevant"
@@ -237,7 +237,7 @@
       }
     },
     "mention_classification": {
-      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; judges each mention.",
+      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; scans the papers again and judges each mention. Not for the mentions, sentences, or items an earlier answer already listed ('of the mentions you listed, which…', 'among those sentences…' are refine_results).",
       "history": {
         "policy": "none"
       },
@@ -273,7 +273,7 @@
       }
     },
     "refine_results": {
-      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?'). Judges each listed item.",
+      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?', 'of the Python mentions you listed, which are about the authors' own code rather than citations?'). Whenever the question narrows what an earlier answer listed, even when it names the groups to sort them into. Judges each listed item.",
       "history": {
         "policy": "relevant"
       },

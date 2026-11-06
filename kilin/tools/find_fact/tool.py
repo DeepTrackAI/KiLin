@@ -37,8 +37,10 @@ Key Features
 
 - **Checked citations**
 
-    One passage numbering across all files; invalid citations are counted,
-    and only cited passages become evidence.
+    One passage numbering across all files (the quick answer from ranked
+    passages numbers them 1, 2, 3...); a quoted phrase cited to the wrong
+    passage is moved to the one that contains it; invalid citations are
+    counted, and only cited passages become evidence.
 
 Module Structure
 ----------------
@@ -92,6 +94,7 @@ from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.document_notes import (
     answer_citations,
     plan_parts,
+    quote_citations,
     take_notes,
 )
 from kilin.tools._shared.choose_document import document_scope
@@ -401,6 +404,10 @@ def run(
         )
 
     failures: list[dict[str, object]] = []
+    # Citation number -> passage index. Notes cite the shared numbering;
+    # ranked passages are numbered 1, 2, 3... in reading order, because
+    # small models confuse gapped numbers such as [1] and [10].
+    numbering = {index + 1: index for index in range(len(passages))}
     if choice == PLAN_CHOICE_QUICK and terms:
         material = _notes(
             request.question,
@@ -412,17 +419,23 @@ def run(
             failures=failures,
         )
         read = len(hits)
+        given = sorted(hits)
     elif choice == PLAN_CHOICE_QUICK:
+        numbering = {
+            number: index
+            for number, index in enumerate(sorted(ranked), start=1)
+        }
         material = []
         for path in files:
             lines = [
-                f"[{index + 1}] {texts[index].strip()}"
-                for index in sorted(ranked)
+                f"[{number}] {texts[index].strip()}"
+                for number, index in numbering.items()
                 if passages[index].path == path
             ]
             if lines:
                 material.append((path.name, lines))
         read = len(ranked)
+        given = sorted(ranked)
     else:
         # Parts beyond the model-call budget are left out.
         allowed = {id(part) for part in budget}
@@ -440,6 +453,7 @@ def run(
             failures=failures,
         )
         read = sum(len(part) for part in budget)
+        given = sorted(index for part in budget for index in part)
     read -= sum(int(item["passages"]) for item in failures)
     if failures and not any(lines for _, lines in material):
         return partial_result(
@@ -465,7 +479,11 @@ def run(
             "notes; do not infer absence from missing notes."
         )
     answer = context.write(system, prompt, None)
-    invalid = answer_citations(answer, len(passages))
+    number_of = {index: number for number, index in numbering.items()}
+    answer, quotes = quote_citations(
+        answer, {number_of[index]: texts[index] for index in given}
+    )
+    invalid = answer_citations(answer, len(numbering))
     if choice == PLAN_CHOICE_QUICK:
         which = (
             "passages that mention " + " or ".join(terms)
@@ -491,27 +509,28 @@ def run(
             "passages": len(passages),
             "passages_read": read,
             "invalid_citations": invalid,
+            "quote_citations": quotes,
             "seconds": round(perf_counter() - started, 1),
         }
     )
 
-    # Citations keep their numbers, so evidence ``n`` is passage ``n``.
-    cited = _cited(answer, len(passages)) - {
+    # Evidence ``n`` is the passage the answer cites as [n].
+    cited = _cited(answer, len(numbering)) - {
         number for failure in failures
         for number in failure["passage_numbers"]
     }
     evidence = tuple(
         {
-            "citation": index + 1,
-            "path": chunk.path,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line,
-            "symbol": chunk.symbol,
-            "text": chunk.text,
-            "cell": chunk.cell,
+            "citation": number,
+            "path": passages[index].path,
+            "start_line": passages[index].start_line,
+            "end_line": passages[index].end_line,
+            "symbol": passages[index].symbol,
+            "text": passages[index].text,
+            "cell": passages[index].cell,
         }
-        for index, chunk in enumerate(passages)
-        if index + 1 in cited
+        for number, index in numbering.items()
+        if number in cited
     )
     return partial_result(
         ToolResult(answer, evidence, summary, streamed=True), failures,
