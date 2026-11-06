@@ -33,7 +33,7 @@
       }
     },
     "fact_finding": {
-      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), not for whether two papers share or differ in a fact (compare_sources), and not for listing sentences, passages, or files.",
+      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), and not for listing sentences, passages, or files.",
       "history": {
         "policy": "relevant"
       },
@@ -49,7 +49,15 @@
       }
     },
     "compare_sources": {
-      "description": "Compare two or more papers: how they differ or agree in methods, data, findings, software, or claims ('how does version 2 of the toolbox differ from the original one?', 'does the Smith paper use the same dataset as the Lee paper?', 'do all the papers use the same evaluation metric?', 'which of the papers reports the best accuracy, and why?', 'compare the methods of these two studies'). Whenever the question sets one paper, version, or method against another, even when it asks for a single fact of each. Not for one paper on its own (question_answering or fact_finding).",
+      "description": "Compare papers, methods, findings, or claims across sources.",
+      "cues": [
+        "^(?!.*\\breport\\b).*\\bdiffer(?:s|ent)?\\s+from\\b",
+        "^(?!.*\\breport\\b).*\\bthe\\s+same\\s+[\\w-]+(?:\\s+[\\w-]+)?\\s+as\\b",
+        "^(?!.*\\breport\\b).*\\b(?:all|both)\\s+(?:the\\s+)?(?:\\w+\\s+)?(?:papers|articles|studies)\\s+use\\s+the\\s+same\\b",
+        "^\\s*(?:now\\s+)?compare\\b",
+        "\\bcompare\\s+(?:it|them|this|that)\\s+(?:with|to)\\b",
+        "\\bhow\\s+does\\s+(?:it|this|that)\\s+compare\\b"
+      ],
       "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
       "history": {
         "policy": "relevant"
@@ -80,6 +88,11 @@
     },
     "paper_overview": {
       "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Lee paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a named report format (research_briefing, popular_science_summary, technical_summary, or experimental_protocol), whether or not the user asks to save a file, and not for what several papers say about a topic (question_answering).",
+      "cues": [
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b).*\\b(?:an?\\s+)?(?:short\\s+|brief\\s+|quick\\s+)?overview\\s+of\\b",
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)(?!.*\\b(?:its|their|main|contributions|limitations|results|methods|findings)\\b)\\s*(?:now\\s+)?summari[sz]e\\s+(?:the|this|that|[\\w-]+\\.pdf)\\b",
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)\\s*(?:now\\s+)?tell\\s+me\\s+about\\s+(?:the|this|that)\\s+[\\w\\s-]+?\\s(?:paper|article|study)[.?!]?\\s*$"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -93,6 +106,9 @@
     },
     "reference_check": {
       "description": "Only about one paper's references and citations. Check them against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Provides offline search links for missing references, and optionally resolves them online with explicit user approval ('find web links for missing references in that paper'). Link-only requests do not recheck scientific claims. Asks which paper when none is named. Not for what a paper says about a topic, or whether a paper supports, offers, or includes a feature or capability ('did that paper already support plug-ins?' is question_answering), and not for a summary of one paper (paper_overview).",
+      "requires": [
+        "\\b(?:referenc\\w*|citation\\w*|cit(?:e|es|ed|ing)|bibliograph\\w*)\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -220,6 +236,9 @@
     },
     "topic_listing": {
       "description": "Only when the user asks for the sentences, passages, or files that match a description judged by meaning, not by an exact word: 'list the sentences that discuss the study's limitations', 'which files use method X to study Y?', 'how many of the files are related to X?', 'list the papers that apply X to Y'. Reads every passage. Not for whether or where a word, name, or phrase appears, or the sentences that contain or mention it ('does it mention X?', 'how many papers mention X?', 'list the sentences that mention X' are mention_listing), and not for summarizing what the papers say.",
+      "cues": [
+        "^\\s*(?:now\\s+)?(?:find|show|list)\\s+(?:me\\s+)?(?:new\\s+|more\\s+|other\\s+|the\\s+)?passages?\\b"
+      ],
       "history": {
         "policy": "none"
       },
@@ -237,7 +256,7 @@
       }
     },
     "mention_classification": {
-      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; scans the papers again and judges each mention. Not for the mentions, sentences, or items an earlier answer already listed ('of the mentions you listed, which…', 'among those sentences…' are refine_results).",
+      "description": "Sort every mention of an exact word, name, or phrase into groups the user names, then count each group ('which mentions of Python in the Smith paper are the authors' own code and which are citations?', 'where is random forest used as a method and where is it only mentioned?'). Exhaustive; judges each mention.",
       "history": {
         "policy": "none"
       },
@@ -273,7 +292,10 @@
       }
     },
     "refine_results": {
-      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?', 'of the Python mentions you listed, which are about the authors' own code rather than citations?'). Whenever the question narrows what an earlier answer listed, even when it names the groups to sort them into. Judges each listed item.",
+      "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?'). Judges each listed item.",
+      "cues": [
+        "^(?!.*\\b(?:find|search)\\b).*\\b(?:you\\s+(?:just\\s+)?listed|previously\\s+listed|listed\\s+(?:earlier|before|above))\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
