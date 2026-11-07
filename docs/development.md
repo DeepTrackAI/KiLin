@@ -373,10 +373,27 @@ console.
    `--publish-url https://test.pypi.org/legacy/` and a token from
    test.pypi.org, a separate site and account.
 4. Build the macOS app, which installs that version from PyPI on first
-   launch: `sh setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
+   launch: `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
    `dist/KíLín.dmg`; set `CODESIGN_IDENTITY` to sign with a Developer ID.
    `--wheel` puts a wheel built from the checkout inside the app instead,
    to test before publishing.
+
+The builder resolves `uv` symlinks (including Homebrew's), checks that
+its target is an Apple-silicon executable, and bundles the resolved binary.
+`UV_BINARY` may specify an executable path instead of searching `PATH`.
+It builds in a private temporary directory under `dist/`. The builder
+leaves existing `dist/kilin-*.whl` files untouched and no longer deletes
+the checkout's `build/` directory; the packaging backend may still use
+`build/` for its own intermediate files. With `--wheel`, the temporary
+wheel is embedded in the app rather than written to public `dist/`.
+The existing named app
+and DMG outputs are retained until the replacement build is complete.
+Ordinary publication errors restore the previous pair of outputs. Build
+interruption during the final two renames is not a power-loss-atomic
+transaction; retain separately archived release artifacts as needed.
+Temporary staging directories are removed after successful builds and
+handled failures. The macOS Finder layout operation may still request
+permission; denying it leaves a DMG with the default layout.
 
 The app holds only a launcher, the icon and `uv`. First launch installs
 Python 3.12 and `kilin[app]` under

@@ -1,60 +1,125 @@
 #!/bin/bash
 # Build KíLín.app and KíLín.dmg for Apple-silicon Macs.
 #
-#   sh setup/macos/build_app.sh           the app installs KíLín from PyPI
-#   sh setup/macos/build_app.sh --wheel   builds a wheel from this checkout
-#                                         and puts it inside the app, to
-#                                         test before a PyPI release
+#   bash setup/macos/build_app.sh           install KíLín from PyPI
+#   bash setup/macos/build_app.sh --wheel   bundle a local checkout wheel
 #
-# Output: dist/KíLín.app and dist/KíLín.dmg. Set CODESIGN_IDENTITY to sign
-# with a Developer ID; otherwise the app is signed ad hoc, and users open it
-# the first time with right-click > Open. The disk image's window is laid
-# out through Finder, so the first build asks to let the terminal control
-# Finder. dmg-background.png (and @2x) is the window's background.
+# Output: dist/KíLín.app and dist/KíLín.dmg. Set CODESIGN_IDENTITY for
+# Developer ID signing; otherwise the app is signed ad hoc. Finder may
+# request automation permission when arranging the disk image window.
 set -euo pipefail
+
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--wheel" ]; }; then
+    echo "Usage: bash setup/macos/build_app.sh [--wheel]" >&2
+    exit 2
+fi
+
+# Homebrew commonly exposes uv through a symlink. Inspect and embed the
+# executable itself, rather than checking the symlink's file type.
+uv_candidate=${UV_BINARY:-$(command -v uv || true)}
+if [ -z "$uv_candidate" ] || [ ! -x "$uv_candidate" ]; then
+    echo "uv is needed to build the app; install it or set UV_BINARY." >&2
+    exit 1
+fi
+if ! uv_binary=$(realpath "$uv_candidate"); then
+    echo "Cannot resolve the uv executable: $uv_candidate" >&2
+    exit 1
+fi
+if [ ! -x "$uv_binary" ] || ! uv_type=$(file -b "$uv_binary"); then
+    echo "Cannot inspect the uv executable: $uv_candidate" >&2
+    exit 1
+fi
+if [[ "$uv_type" != *Mach-O* || "$uv_type" != *arm64* ]]; then
+    echo "$uv_candidate is not an Apple-silicon uv binary." >&2
+    exit 1
+fi
 
 project_dir=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$project_dir"
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -n 1)
+if [ -z "$version" ]; then
+    echo "Cannot find the KíLín version in pyproject.toml." >&2
+    exit 1
+fi
+
 dist="$project_dir/dist"
-app="$dist/KíLín.app"
+final_app="$dist/KíLín.app"
+final_dmg="$dist/KíLín.dmg"
 bundle_id=${KILIN_BUNDLE_ID:-"org.kilin.app"}
-uv_binary=${UV_BINARY:-$(command -v uv || true)}
+mkdir -p "$dist"
 
-if [ -z "$uv_binary" ] || [ ! -x "$uv_binary" ]; then
-    echo "uv is needed to build the app; install it or set UV_BINARY." >&2
-    exit 1
-fi
-if ! file "$uv_binary" | grep -q "arm64"; then
-    echo "$uv_binary is not an Apple-silicon uv binary." >&2
-    exit 1
-fi
+# Work on the same filesystem as the final outputs. A failed build leaves
+# previous distributions and unrelated wheel/build artifacts untouched.
+build_dir=$(mktemp -d "$dist/.kilin-build.XXXXXXXX")
+app="$build_dir/KíLín.app"
+dmg="$build_dir/KíLín.dmg"
+mount_point="$build_dir/mounted-dmg"
+mounted=0
+promoting=0
+old_app_saved=0
+old_dmg_saved=0
+new_app_moved=0
+new_dmg_moved=0
 
-rm -rf "$app" "$dist/KíLín.dmg"
+cleanup() {
+    status=$?
+    trap - EXIT
+    set +e
+    if [ "$mounted" -eq 1 ]; then
+        if ! hdiutil detach "$mount_point" >/dev/null; then
+            echo "Cannot detach $mount_point; inspect it manually." >&2
+            echo "Build files kept at $build_dir" >&2
+            exit 1
+        fi
+    fi
+    if [ "$promoting" -eq 1 ]; then
+        # Ordinary promotion errors must not cost the last working build.
+        [ "$new_app_moved" -eq 0 ] || rm -rf "$final_app"
+        [ "$new_dmg_moved" -eq 0 ] || rm -f "$final_dmg"
+        if [ "$old_app_saved" -eq 1 ]; then
+            if ! mv "$build_dir/previous.app" "$final_app"; then
+                echo "Restore $final_app from $build_dir/previous.app" >&2
+                exit 1
+            fi
+        fi
+        if [ "$old_dmg_saved" -eq 1 ]; then
+            if ! mv "$build_dir/previous.dmg" "$final_dmg"; then
+                echo "Restore $final_dmg from $build_dir/previous.dmg" >&2
+                exit 1
+            fi
+        fi
+    fi
+    rm -rf "$build_dir"
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-
-# What the launcher installs on first launch.
 spec="kilin[app]==$version"
-# A bundled wheel's checksum: a rebuilt app with the same version still
-# reinstalls KíLín. A PyPI version is uploaded only once, so needs none.
 wheel_sha=""
 if [ "${1:-}" = "--wheel" ]; then
-    rm -f "$dist"/kilin-*.whl
-    "$uv_binary" build --wheel --out-dir "$dist"
-    rm -rf build
-    wheel=$(basename "$(ls "$dist"/kilin-*.whl)")
-    cp "$dist/$wheel" "$app/Contents/Resources/"
-    spec="@RESOURCES@/$wheel[app]"
-    wheel_sha=$(shasum -a 256 "$dist/$wheel" | cut -d " " -f 1)
+    mkdir -p "$build_dir/wheels"
+    "$uv_binary" build --wheel --out-dir "$build_dir/wheels"
+    wheels=("$build_dir"/wheels/kilin-*.whl)
+    if [ "${#wheels[@]}" -ne 1 ] || [ ! -f "${wheels[0]}" ]; then
+        echo "Expected exactly one KíLín wheel from uv build." >&2
+        exit 1
+    fi
+    wheel=${wheels[0]}
+    cp "$wheel" "$app/Contents/Resources/"
+    spec="@RESOURCES@/$(basename "$wheel")[app]"
+    wheel_sha=$(shasum -a 256 "$wheel" | cut -d ' ' -f 1)
 fi
 
-sed -e "s|@KILIN_SPEC@|$spec|" -e "s|@KILIN_WHEEL_SHA@|$wheel_sha|" \
+sed -e "s|@KILIN_SPEC@|$spec|" \
+    -e "s|@KILIN_WHEEL_SHA@|$wheel_sha|" \
     setup/macos/launcher.sh >"$app/Contents/MacOS/KiLin"
 chmod +x "$app/Contents/MacOS/KiLin"
 cp "$uv_binary" "$app/Contents/Resources/uv"
 
-# The app icon, from the same artwork as the window icon.
-iconset="$(mktemp -d)/KiLin.iconset"
+iconset="$build_dir/KiLin.iconset"
 mkdir -p "$iconset"
 for size in 16 32 128 256 512; do
     double=$((size * 2))
@@ -84,26 +149,23 @@ cat >"$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-
 codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$app"
 
-# The disk image: the app beside a link to Applications, to drag onto,
-# over a background that says so. Finder keeps the window's layout in the
-# image, so it is laid out on a writable copy, then compressed.
-staging=$(mktemp -d)
+# Assemble and customize the DMG inside the isolated build directory.
+# Finder permission is optional; a denied request keeps the plain layout.
+staging="$build_dir/dmg-source"
+mkdir -p "$staging/.background" "$mount_point"
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
-mkdir "$staging/.background"
 tiffutil -cathidpicheck setup/macos/dmg-background.png \
     setup/macos/dmg-background@2x.png \
     -out "$staging/.background/background.tiff" >/dev/null 2>&1
-writable="$staging.dmg"
-hdiutil create -volname "KíLín" -srcfolder "$staging" -ov -format UDRW \
+writable="$build_dir/writable.dmg"
+hdiutil create -volname "KíLín" -srcfolder "$staging" -format UDRW \
     "$writable" >/dev/null
-mount_point=$(mktemp -d)
 hdiutil attach "$writable" -readwrite -noverify -noautoopen \
     -mountpoint "$mount_point" >/dev/null
-# 640 x 400 window, the icons centred on the background's arrow.
+mounted=1
 if ! osascript >/dev/null <<APPLESCRIPT
 tell application "Finder"
     set dmgFolder to folder (POSIX file "$mount_point" as alias)
@@ -130,9 +192,29 @@ then
 fi
 sync
 hdiutil detach "$mount_point" >/dev/null
-rm -f "$dist/KíLín.dmg"
-hdiutil convert "$writable" -format UDZO -o "$dist/KíLín.dmg" >/dev/null
-rm -rf "$staging" "$writable" "$mount_point"
+mounted=0
+hdiutil convert "$writable" -format UDZO -o "$dmg" >/dev/null
+if [ ! -f "$dmg" ]; then
+    echo "The disk image was not created: $dmg" >&2
+    exit 1
+fi
 
-echo "Built $app"
-echo "Built $dist/KíLín.dmg (installs $spec)"
+# Only the two named outputs belong to this builder. Back them up during
+# publication so that ordinary move failures can be rolled back.
+promoting=1
+if [ -e "$final_app" ] || [ -L "$final_app" ]; then
+    mv "$final_app" "$build_dir/previous.app"
+    old_app_saved=1
+fi
+if [ -e "$final_dmg" ] || [ -L "$final_dmg" ]; then
+    mv "$final_dmg" "$build_dir/previous.dmg"
+    old_dmg_saved=1
+fi
+mv "$app" "$final_app"
+new_app_moved=1
+mv "$dmg" "$final_dmg"
+new_dmg_moved=1
+promoting=0
+
+echo "Built $final_app"
+echo "Built $final_dmg (installs $spec)"
