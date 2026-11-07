@@ -385,6 +385,21 @@ download cache is removed afterwards), and reinstalls when the app's
 version changes. Deleting `runtime/` removes the installed KíLín; projects
 and preferences beside it stay.
 
+The macOS launcher serializes runtime installation using the system `lockf`
+utility and a persistent `runtime/.install.lock` file. The kernel releases
+the lock when an installer exits, including after a crash; **do not delete
+the lock file** to clear a stale install. A concurrent launch waits up to
+five minutes by default and reports an error instead of waiting forever.
+For diagnostics, `KILIN_INSTALL_LOCK_TIMEOUT` sets a wait of 0–600 seconds.
+If the runtime directory or lock file cannot be created, installation stops
+with an error without invoking `uv`. An older app may have left an
+`runtime/.installing` directory: the new launcher does not remove it because
+an old installer might still be running. Quit older KíLín instances, verify
+no installation is in progress, and only then manually remove that legacy
+directory before retrying. The lock file and legacy directory are distinct.
+Runtime updates are not yet transactional; recovery of the previous
+installation after a failed update is a separate change.
+
 For reproducible PR review, compare against the **actual** last approved
 archive/commit, not an earlier working directory. Provide a Git patch and a
 ZIP of only changed/new files in repository-relative paths, with explicit
