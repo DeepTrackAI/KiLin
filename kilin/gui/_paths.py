@@ -1,7 +1,8 @@
 """Resolve user-owned GUI data paths without importing Qt.
 
 Packaged GUI resources are read-only. Development checkouts retain their
-``sandbox/`` workspace parent; installed distributions use user data folders.
+``sandbox/`` workspace parent; installed distributions use the user's
+``Documents/KíLín`` folder.
 No directories are created while resolving a path.
 
 Key Features
@@ -14,7 +15,8 @@ Key Features
 
 - **Installed workspace and preferences**
 
-    Use platform-specific user data and configuration directories.
+    Keep projects in ``Documents/KíLín`` and preferences in the platform's
+    configuration directory.
 
 Module Structure
 ----------------
@@ -32,10 +34,19 @@ Module Structure
 
     Resolve the standard parent, ignoring the folder chosen in Settings.
 
+- ``gui_install_command``
+
+    Tell how to install the GUI and its backend, for a checkout or an
+    installed package.
+
+- ``projects_folder_confirmed``
+
+    Tell whether the user confirmed a projects folder that still exists.
+
 Examples
 --------
 >>> from kilin.gui._paths import default_workspace_directory
->>> default_workspace_directory().name in ("sandbox", "workspaces")
+>>> default_workspace_directory().name in ("sandbox", "KíLín")
 True
 
 """
@@ -49,7 +60,9 @@ from typing import Final
 
 __all__ = [
     "default_workspace_directory",
+    "gui_install_command",
     "preferences_path",
+    "projects_folder_confirmed",
     "saved_workspace_folder",
     "standard_workspace_directory",
 ]
@@ -69,7 +82,7 @@ def _user_config_directory() -> Path:
     Notes
     -----
     On Linux, ``XDG_CONFIG_HOME`` takes precedence when it is absolute.
-    On macOS, Application Support holds both settings and workspaces.
+    On macOS, Application Support holds the settings.
     On Windows, ``APPDATA`` is preferred for roaming preferences.
 
     """
@@ -87,30 +100,23 @@ def _user_config_directory() -> Path:
     return base / "kilin"
 
 
-def _user_data_directory() -> Path:
-    """Return the user-owned base directory for installed GUI workspaces.
+def _user_projects_directory() -> Path:
+    """Return the standard projects folder for installed copies of KíLín.
 
     Returns
     -------
     pathlib.Path
-        Directory containing GUI workspaces on the current platform.
+        ``KíLín`` in the user's Documents folder, on every platform.
+
+    Notes
+    -----
+    Projects are user documents: a visible folder is easy to find, back up
+    and move. The folder is created only when it is confirmed in KíLín
+    setup or a project needs it.
 
     """
 
-    home = Path.home()
-    if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / "kilin"
-    if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA")
-        return Path(base) / "kilin" if base else (
-            home / "AppData" / "Local" / "kilin"
-        )
-    configured = Path(os.environ.get("XDG_DATA_HOME", ""))
-    base = (
-        configured if configured.is_absolute()
-        else home / ".local" / "share"
-    )
-    return base / "kilin"
+    return Path.home() / "Documents" / "KíLín"
 
 
 def _development_checkout() -> Path | None:
@@ -205,7 +211,7 @@ def standard_workspace_directory() -> Path:
     -------
     pathlib.Path
         Explicit ``KILIN_WORKSPACES_DIR`` directory, checkout sandbox,
-        or user-owned installed-application workspace directory.
+        or ``Documents/KíLín`` in the user's home for an installed copy.
 
     Raises
     ------
@@ -225,7 +231,7 @@ def standard_workspace_directory() -> Path:
     checkout = _development_checkout()
     if checkout is not None:
         return checkout / "sandbox"
-    return _user_data_directory() / "workspaces"
+    return _user_projects_directory()
 
 
 def saved_workspace_folder() -> str:
@@ -250,3 +256,47 @@ def saved_workspace_folder() -> str:
         return str(app_defaults()["workspace_folder"])
     except (OSError, ValueError, KeyError):
         return ""
+
+
+def gui_install_command(backend: str) -> str:
+    """Tell how to install the GUI and its backend in this KíLín.
+
+    A source checkout installs them with uv; an installed package (from
+    PyPI or the macOS app) with pip, into the same Python, using the
+    ``app`` extra that picks the backend for the platform.
+
+    Parameters
+    ----------
+    backend: str
+        Backend that is missing: ``mlx`` or ``torch``.
+
+    Returns
+    -------
+    str
+        The command to run.
+
+    """
+
+    if _development_checkout() is not None:
+        return f"uv sync --extra gui --extra {backend}"
+    return f'{Path(sys.executable).name} -m pip install "kilin[app]"'
+
+
+def projects_folder_confirmed() -> bool:
+    """Return whether the user confirmed a projects folder that exists.
+
+    Returns
+    -------
+    bool
+        True when a folder is saved in the preferences and is present.
+
+    Notes
+    -----
+    KíLín setup asks for the folder until it is confirmed. A saved folder
+    that was removed or is not mounted counts as unconfirmed, so setup asks
+    again instead of silently using another folder.
+
+    """
+
+    saved = saved_workspace_folder()
+    return bool(saved) and Path(saved).expanduser().is_dir()

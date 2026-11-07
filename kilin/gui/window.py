@@ -92,6 +92,7 @@ from kilin.gui._paths import (
 )
 from kilin.gui.preferences import (
     BACKEND_CHOICES,
+    TERMS_VERSION,
     default_appearance,
     write_defaults,
 )
@@ -136,7 +137,7 @@ class ChatBridge(QObject):
     appearanceChanged: Signal(str)
         Requested ``system``, ``light``, or ``dark`` appearance mode.
     projectsFolderChosen: Signal(str)
-        Folder chosen to hold the projects, or "" for the standard one.
+        Folder chosen or confirmed to hold the projects.
     commandRequested: Signal(dict)
         Backend command handed to the window process controller.
     stopRequested: Signal()
@@ -170,7 +171,11 @@ class ChatBridge(QObject):
     chooseProjectsFolder()
         Choose the folder where KíLín keeps its projects.
     useDefaultProjectsFolder()
-        Go back to the standard projects folder.
+        Choose the standard projects folder.
+    confirmProjectsFolder()
+        Confirm the projects folder in use, as KíLín setup asks.
+    acceptTerms(version)
+        Record that the user agreed to the terms of use shown in setup.
     requestProjectsFolder()
         Report the projects folder in use and the one saved in Settings.
     setSourceDropTarget(bounds_json)
@@ -414,9 +419,65 @@ class ChatBridge(QObject):
 
     @Slot()
     def useDefaultProjectsFolder(self) -> None:
-        """Go back to the standard projects folder."""
+        """Choose the standard projects folder.
 
-        self.projectsFolderChosen.emit("")
+        Notes
+        -----
+        The standard folder is saved by its path, like a folder chosen with
+        Browse, so choosing it also confirms it in KíLín setup.
+
+        """
+
+        try:
+            folder = str(standard_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({"event": "error", "message": str(error)})
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot()
+    def confirmProjectsFolder(self) -> None:
+        """Confirm the projects folder in use, as KíLín setup asks."""
+
+        try:
+            folder = str(default_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({"event": "error", "message": str(error)})
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot(str)
+    def acceptTerms(self, version: str) -> None:
+        """Record that the user agreed to the terms of use shown in setup.
+
+        Parameters
+        ----------
+        version: str
+            Version of the terms the page showed. Only the current
+            ``TERMS_VERSION`` is saved; an outdated page is ignored.
+
+        Notes
+        -----
+        The version is saved in the app-wide preferences; readiness is
+        checked again after a successful write.
+
+        """
+
+        if version != TERMS_VERSION:
+            return
+        try:
+            write_defaults({"terms_accepted": version})
+        except (OSError, ValueError) as error:
+            self.event.emit(json.dumps({
+                "event": "error",
+                "message": f"Could not save the agreement: {error}",
+            }))
+            return
+        self.commandRequested.emit({"action": "readiness"})
 
     @Slot()
     def requestProjectsFolder(self) -> None:
@@ -1646,11 +1707,14 @@ class ChatWindow(QMainWindow):
         Parameters
         ----------
         folder: str
-            Chosen absolute folder, or "" for the standard folder.
+            Chosen absolute folder, created if it does not exist yet.
 
         """
 
         try:
+            # A confirmed folder exists from now on, even before a project.
+            if folder:
+                Path(folder).expanduser().mkdir(parents=True, exist_ok=True)
             write_defaults({"workspace_folder": folder})
         except (OSError, ValueError) as error:
             self.bridge.event.emit(

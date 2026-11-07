@@ -9,7 +9,27 @@ Please cite KíLín using the metadata in [CITATION.cff](CITATION.cff).
 The citation lists Io̍k-uí Tiunn, Joana B. Pereira, Carlo Manzo, and
 Giovanni Volpe as authors.
 
-## Setup
+## Install
+
+**macOS app** (Apple silicon, macOS 14+): open `KíLín.dmg`, drag KíLín
+to Applications and open it. The first launch installs KíLín, which takes
+a few minutes.
+
+KíLín is not yet signed by Apple, so macOS may block the first launch.
+Allow it in System Settings → Privacy & Security → **Open Anyway**, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/KíLín.app
+```
+
+**pip** (Windows, macOS, Linux; Python 3.12):
+
+```sh
+pip install "kilin[app]"
+kilin-gui
+```
+
+## Setup for development
 
 After downloading the code, open a terminal in the KíLín folder and run
 the setup command for your operating system.

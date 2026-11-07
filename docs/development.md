@@ -347,7 +347,43 @@ defaults/templates. A new packaged data file must be added to the package
 data configuration and verified in a **built and installed wheel**, not only
 with a local checkout import. Optional native dependencies are split into
 `mlx`, `torch`, `gui` and `bench` extras; avoid adding GUI requirements to
-the core dependencies merely to make a test run.
+the core dependencies merely to make a test run. The `app` extra is what
+users install: Qt plus the platform's backend, chosen by environment
+markers. `kilin-gui` is a GUI script, so Windows opens it without a
+console.
+
+### Releasing
+
+1. Raise `version` in `pyproject.toml` (and `CITATION.cff`).
+2. Build and check the package: `uv build`, then install the wheel into a
+   fresh environment with `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`
+   and open `kilin-gui`.
+3. Publish it to PyPI. PyPI has no upload page; `uv publish` sends the
+   named files and nothing else:
+
+   ```sh
+   uv publish dist/kilin-<version>-py3-none-any.whl dist/kilin-<version>.tar.gz
+   ```
+
+   It asks for an API token (or reads `UV_PUBLISH_TOKEN`). Create one on
+   pypi.org under Account settings → API tokens, scoped to the `kilin`
+   project, with an account that maintains the project. A version can be
+   uploaded only once, even after it is deleted, so a fix needs a new
+   version. To rehearse, upload to TestPyPI first with
+   `--publish-url https://test.pypi.org/legacy/` and a token from
+   test.pypi.org, a separate site and account.
+4. Build the macOS app, which installs that version from PyPI on first
+   launch: `sh setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
+   `dist/KíLín.dmg`; set `CODESIGN_IDENTITY` to sign with a Developer ID.
+   `--wheel` puts a wheel built from the checkout inside the app instead,
+   to test before publishing.
+
+The app holds only a launcher, the icon and `uv`. Its first launch installs
+Python 3.12 and `kilin[app]` into
+`~/Library/Application Support/kilin/runtime/` (with `install.log`; the
+download cache is removed afterwards), and reinstalls when the app's
+version changes. Deleting `runtime/` removes the installed KíLín; projects
+and preferences beside it stay.
 
 For reproducible PR review, compare against the **actual** last approved
 archive/commit, not an earlier working directory. Provide a Git patch and a

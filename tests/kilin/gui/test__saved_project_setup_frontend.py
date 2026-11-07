@@ -41,7 +41,9 @@ class Element {
     this.children = [];
     this.handlers = {};
     this.classList = {add() {}, remove() {}, toggle() {}};
+    this.dataset = {};
   }
+  querySelector() { return null; }
   append(...nodes) { this.children.push(...nodes); }
   replaceChildren(...nodes) { this.children = nodes; }
   addEventListener(name, callback) { this.handlers[name] = callback; }
@@ -93,6 +95,69 @@ console.log("saved project resume bypass passed");
         self.assertIn(
             "saved project resume bypass passed", result.stdout
         )
+
+    def test_refreshing_the_same_projects_keeps_the_list_scroll(
+        self,
+    ) -> None:
+        """The periodic refresh leaves an unchanged list in place."""
+
+        source = _WEB.read_text(encoding="utf-8")
+        home = extract_function(source, "renderSavedProjects")
+        if shutil.which("node") is None:
+            self.assertIn("host.dataset.shown === shown", home)
+            return
+        script = r"""
+const assert = require("node:assert/strict");
+class Element {
+  constructor() {
+    this.children = [];
+    this.className = "";
+    this.scrollTop = 0;
+    this.dataset = {};
+    this.classList = {add() {}, remove() {}, toggle() {}};
+  }
+  querySelector(selector) {
+    for (const child of this.children) {
+      if (`.${child.className}` === selector) return child;
+      const found = child.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+  append(...nodes) { this.children.push(...nodes); }
+  replaceChildren(...nodes) { this.children = nodes; }
+  addEventListener() {}
+}
+const fields = {};
+const byId = (id) => (fields[id] ??= new Element());
+const document = {createElement: () => new Element()};
+let savedProjects = [];
+const projectTypes = {literature: {label: "Literature collection"}};
+""" + home + r"""
+const projects = [
+  {name: "One", type_id: "literature", project: "/projects/one"},
+  {name: "Two", type_id: "literature", project: "/projects/two"},
+];
+const host = byId("saved-projects");
+renderSavedProjects(projects);
+const list = host.querySelector(".saved-project-list");
+list.scrollTop = 120;
+// The refresh brings the same projects: nothing is rebuilt.
+renderSavedProjects(projects.map((project) => ({...project})));
+assert.equal(host.querySelector(".saved-project-list"), list);
+assert.equal(list.scrollTop, 120);
+// A new project rebuilds the list at the same scroll position.
+renderSavedProjects([...projects,
+  {name: "Three", type_id: "literature", project: "/projects/three"}]);
+const rebuilt = host.querySelector(".saved-project-list");
+assert.notEqual(rebuilt, list);
+assert.equal(rebuilt.children.length, 3);
+assert.equal(rebuilt.scrollTop, 120);
+console.log("saved project scroll passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("saved project scroll passed", result.stdout)
 
     def test_failed_switch_does_not_display_a_closed_project(self) -> None:
         """Post-release errors return to launch; pre-release errors do not."""

@@ -93,6 +93,7 @@ let answer = false;
 const setBusy = (value) => { busy = value; };
 const askKilin = async () => answer;
 const hideModels = () => calls.push(["hideModels"]);
+const showSetupConfirmations = () => {};
 const returnToLaunch = () => {
   calls.push(["returnToLaunch"]);
   ready = false;
@@ -376,6 +377,8 @@ let pending = true;
 let sent = true;
 let applyingModels = false;
 let closeAfterModelsApply = false;
+let folderConfirmed = true;
+let termsAccepted = true;
 const calls = [];
 const modelEditsPending = () => pending;
 const applyModelEdits = async () => {

@@ -45,6 +45,8 @@ let busy = false;
 let ready = false;
 // The Settings status text that showError last wrote, cleared with it.
 let shownErrorStatus = "";
+// The setup reminder shown in the Settings status line, until it is done.
+let shownSetupReminder = "";
 const selectedSources = [];
 const previewRoots = new Map();
 const previewSkipped = new Map();
@@ -109,6 +111,15 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
+// How to install the GUI and backend here: uv in a checkout, pip otherwise.
+let installCommand = "";
+// KíLín setup also asks to confirm the projects folder and to agree to the
+// current terms of use (``termsVersion``), once each.
+let folderConfirmed = true;
+let termsAccepted = true;
+let termsVersion = "";
+// Continue was clicked; Qt is saving the agreement.
+let acceptingTerms = false;
 // New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
@@ -304,6 +315,14 @@ function applyAppearance(value) {
 function renderSavedProjects(projects) {
   savedProjects = projects;
   const host = byId("saved-projects");
+  // The list is refreshed every few seconds; rebuilding it unchanged would
+  // jump a scrolled list back to the top.
+  const shown = JSON.stringify(projects.map((project) => [
+    project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
+  ]));
+  if (host.dataset.shown === shown) return;
+  host.dataset.shown = shown;
+  const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
   if (projects.length) {
     // One list of every project type, most recently used first (engine order).
@@ -320,21 +339,22 @@ function renderSavedProjects(projects) {
       button.type = "button";
       const name = document.createElement("span");
       name.className = "saved-project-name";
-      name.textContent = `Resume ${project.name}`;
+      name.textContent = project.name;
       const typeLabel = document.createElement("span");
       typeLabel.className = "saved-project-type";
       // The type's own name, or its ID until the types have arrived.
       typeLabel.textContent = projectTypes[project.type_id]?.label || project.type_id;
       button.append(name, typeLabel);
-      button.title = `Resume ${project.type_id} project from ${project.project}`;
+      button.title = `Open ${project.type_id} project from ${project.project}`;
       button.addEventListener("click", () => {
         if (busy) return;
-        setBusy(true, "Resuming project…");
+        setBusy(true, "Opening project…");
         bridge.resumeProject(project.project);
       });
       list.append(button);
     }
     host.append(group);
+    list.scrollTop = scroll;
   }
   host.classList.toggle("hidden", !host.children.length);
 }
@@ -1095,7 +1115,7 @@ function renderModelsPanel() {
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Run uv sync --extra gui --extra ${activeBackend} from the KíLín folder first.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${installCommand.replace(/--extra (mlx|torch)\b/, `--extra ${activeBackend}`) || "the KíLín installer"}, then restart KíLín.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -1669,6 +1689,91 @@ function showSavedModels() {
 }
 
 /**
+ * Update one required model's line in the KíLín setup steps.
+ *
+ * @param modelId Model whose line to update; unknown models are ignored.
+ * @param text New text, such as "Downloading: <model> · 40%".
+ * @param complete Whether the model is now ready.
+ */
+function showModelStep(modelId, text, complete = false) {
+  const item = [...byId("readiness-steps").children]
+    .find((step) => step.dataset.model === modelId);
+  if (!item) return;
+  item.textContent = text;
+  item.classList.toggle("complete", complete);
+}
+
+/**
+ * Show the terms of use in KíLín setup, one paragraph per blank-line block.
+ *
+ * @param text Terms of use from the readiness check.
+ */
+function renderTerms(text) {
+  const host = byId("terms-text");
+  // Readiness is checked often; keep the reader's place in unchanged terms.
+  if (host.dataset.shown === text) return;
+  host.dataset.shown = text;
+  host.replaceChildren(...text.split(/\n\s*\n/).filter(Boolean).map((block) => {
+    const paragraph = document.createElement("p");
+    // A short lead such as "Research software." is the paragraph's title.
+    const [, lead, rest] = block.trim().match(/^([^.]{1,40}\.)\s+(.*)$/s) || [];
+    if (lead && lead.split(" ").length <= 5) {
+      const title = document.createElement("strong");
+      title.textContent = lead;
+      paragraph.append(title, ` ${rest}`);
+    } else {
+      paragraph.textContent = block.trim();
+    }
+    return paragraph;
+  }));
+}
+
+/**
+ * Show the welcome dialog with the terms of use. Until they are accepted it
+ * cannot be dismissed; afterwards it only shows them again.
+ */
+function showWelcome() {
+  const dialog = byId("welcome");
+  byId("terms-agree").checked = termsAccepted;
+  byId("terms-agree").closest("label").classList.toggle("hidden", termsAccepted);
+  byId("accept-terms").textContent = termsAccepted ? "Close" : "Continue";
+  byId("welcome-hint").classList.add("hidden");
+  showSetupConfirmations();
+  if (dialog.open) return;
+  dialog.showModal();
+  // Opening focuses "Read the full terms of use"; the dialog takes it.
+  dialog.focus?.();
+}
+
+/**
+ * Answer an attempt to leave the welcome dialog before the terms are
+ * accepted: scroll to its end and say what is still needed there.
+ */
+function remindWelcome() {
+  const dialog = byId("welcome");
+  const hint = byId("welcome-hint");
+  hint.classList.remove("hidden");
+  dialog.scrollTo?.({ top: dialog.scrollHeight, behavior: "smooth" });
+  byId("terms-agree").focus?.({ preventScroll: true });
+  drawAttention(hint);
+}
+
+/**
+ * Show Confirm projects folder until it is done, and enable Continue in the
+ * welcome dialog. The folder is confirmed only on the start screen.
+ */
+function showSetupConfirmations() {
+  const confirm = byId("confirm-workspace");
+  confirm.classList.toggle("hidden", folderConfirmed);
+  byId("confirm-workspace-note").classList.toggle("hidden", folderConfirmed);
+  confirm.disabled = busy || ready || !bridge;
+  confirm.title = ready ? "Confirm it from the start screen." : "";
+  // Continue needs the box ticked; Close (terms already accepted) does not.
+  byId("accept-terms").disabled = !termsAccepted
+    && (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked);
+}
+
+/**
  * Show the setup buttons, Close and Prepare project for the current setup
  * state: while the required models download, Install becomes Stop and
  * new-project preparation waits for setup. Settings can always close.
@@ -1681,6 +1786,7 @@ function showSetupLock() {
   byId("open").disabled = busy || !bridge || !kilinReady;
   byId("close-models").disabled = false;
   byId("close-models").title = "";
+  showSetupConfirmations();
 }
 
 /**
@@ -1697,9 +1803,66 @@ function needsNewProjectSetup() {
 }
 
 /**
- * Close Settings; every change has been saved when it was made.
+ * Keep Settings open and point to the projects folder or terms of use that
+ * KíLín setup still needs.
+ */
+function remindSetupConfirmations() {
+  byId("first-run-setup").open = true;
+  if (!termsAccepted) showWelcome();
+  else pointToProjectsFolder();
+  byId("model-download-status").textContent = !folderConfirmed && !termsAccepted
+    ? "Confirm the projects folder and accept the terms of use to continue."
+    : !folderConfirmed
+      ? "Confirm the projects folder to continue."
+      : "Accept the terms of use to continue.";
+  shownSetupReminder = byId("model-download-status").textContent;
+  // The terms have their own reminder in the welcome dialog.
+  if (termsAccepted) drawAttention(byId("model-download-status"));
+}
+
+/**
+ * Remove the setup reminder and its highlights once it no longer applies.
+ *
+ * The status line is cleared only while it still shows the reminder, so a
+ * later message there (such as download progress) stays.
+ */
+function clearSetupReminder() {
+  const status = byId("model-download-status");
+  if (shownSetupReminder && status.textContent === shownSetupReminder) {
+    status.textContent = "";
+  }
+  shownSetupReminder = "";
+  status.classList.remove("attention");
+  byId("confirm-workspace").classList.remove("attention");
+}
+
+/**
+ * Bring the Confirm projects folder button into view and highlight it.
+ */
+function pointToProjectsFolder() {
+  const confirm = byId("confirm-workspace");
+  confirm.scrollIntoView?.({ block: "center" });
+  confirm.focus?.({ preventScroll: true });
+  drawAttention(confirm);
+}
+
+/**
+ * Briefly highlight an element (see `.attention` in the styles).
+ * @param element Button or message to point to.
+ */
+function drawAttention(element) {
+  // Restarting the animation highlights again on every reminder.
+  element.classList.remove("attention");
+  void element.offsetWidth;
+  element.classList.add("attention");
+}
+
+/**
+ * Close Settings; every change has been saved when it was made. Until the
+ * projects folder and terms of use are confirmed, Settings stays open.
  */
 function closeModels() {
+  if (!folderConfirmed || !termsAccepted) return remindSetupConfirmations();
   if (document.activeElement?.matches(".model-id-input")) document.activeElement.blur();
   // A save still running closes Settings once it is done.
   if (applyingModels) closeAfterModelsApply = true;
@@ -5211,6 +5374,7 @@ function onEvent(raw) {
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
+    installCommand = data.install_command || installCommand;
     cachedModels = new Set(data.cached_models || []);
     const card = byId("first-run-setup");
     const steps = byId("readiness-steps");
@@ -5219,7 +5383,7 @@ function onEvent(raw) {
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
       : data.unavailable_reason
-        || `${String(data.backend).toUpperCase()} runtime is missing; restart through uv run kilin --gui --backend ${data.backend}`;
+        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommand}, then restart KíLín`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -5232,32 +5396,72 @@ function onEvent(raw) {
           ? `Missing: ${modelId} (installed alternative: ${replacements[modelId]})`
           : `Missing: ${modelId}`;
       item.classList.toggle("complete", present);
+      // Found again while downloading, to show that model's progress.
+      item.dataset.model = modelId;
       steps.append(item);
     }
+    // After the models: confirm the projects folder, then agree to the terms.
+    folderConfirmed = Boolean(data.folder_confirmed);
+    termsAccepted = Boolean(data.terms_accepted);
+    termsVersion = data.terms_version || "";
+    const folderStep = document.createElement("li");
+    folderStep.textContent = folderConfirmed
+      ? `Projects folder: ${data.projects_folder}`
+      : "Confirm the projects folder below";
+    folderStep.classList.toggle("complete", folderConfirmed);
+    const termsStep = document.createElement("li");
+    termsStep.textContent = termsAccepted
+      ? "Terms of use accepted"
+      : "Accept the terms of use";
+    termsStep.classList.toggle("complete", termsAccepted);
+    steps.append(folderStep, termsStep);
+    renderTerms(data.terms || "");
+    byId("copyright").textContent = data.copyright || "";
+    // Just accepted in the welcome dialog: the folder is the next step.
+    const termsJustAccepted = acceptingTerms && termsAccepted;
+    acceptingTerms = false;
+    // The terms come first: the welcome dialog stays until they are accepted.
+    if (!termsAccepted && termsVersion) showWelcome();
+    else if (termsAccepted && byId("accept-terms").textContent === "Continue") byId("welcome").close?.();
+    const setupReady = Boolean(data.ready) && folderConfirmed && termsAccepted;
+    if (folderConfirmed && termsAccepted) clearSetupReminder();
     // Always available; it opens by itself when something is missing.
     card.classList.remove("hidden");
-    if (!data.ready) card.open = true;
-    const missing = data.missing_models.length + (data.environment_ready ? 0 : 1);
-    byId("readiness-status").textContent = data.ready ? "Ready" : `${missing} missing`;
-    byId("readiness-status").classList.toggle("ready", Boolean(data.ready));
-    byId("readiness-summary").textContent = data.ready
+    if (!setupReady) card.open = true;
+    const missing = data.missing_models.length + (data.environment_ready ? 0 : 1)
+      + (folderConfirmed ? 0 : 1) + (termsAccepted ? 0 : 1);
+    byId("readiness-status").textContent = setupReady ? "Ready" : `${missing} missing`;
+    byId("readiness-status").classList.toggle("ready", setupReady);
+    byId("readiness-summary").textContent = setupReady
       ? "KíLín is ready."
+      : data.ready
+        ? !folderConfirmed && !termsAccepted
+          ? "Confirm the projects folder and accept the terms of use to finish setup."
+          : !folderConfirmed
+            ? "Confirm the projects folder to finish setup."
+            : "Accept the terms of use to finish setup."
       : !data.environment_ready
         ? data.unavailable_reason || `${String(data.backend).toUpperCase()} runtime is not installed.`
       : data.missing_models.length === 1
         ? "1 required model needs to be downloaded."
         : `${data.missing_models.length} required models need to be downloaded.`;
-    kilinReady = Boolean(data.ready);
+    // The user's last setup step completed it: back to the normal view.
+    const setupJustFinished = setupReady && !kilinReady;
+    kilinReady = setupReady;
     readinessMissingCount = data.missing_models.length;
     byId("install-required").classList.toggle("hidden", !data.missing_models.length);
     // Compatible models already on this computer can be used instead.
     byId("use-installed").classList.toggle("hidden", !data.can_use_installed);
     showSetupLock();
     refreshModelStatus();
-    if (!data.ready) {
+    if (!setupReady) {
       // Explain missing new-project requirements without locking Settings.
       byId("models-panel").classList.remove("hidden");
       byId("first-run-setup").focus?.();
+      if (termsJustAccepted && !folderConfirmed) pointToProjectsFolder();
+    } else if (setupJustFinished) {
+      card.open = false;
+      closeModels();
     }
   } else if (data.event === "installed_models_used") {
     savedLevels = data.effort_levels || savedLevels;
@@ -5281,6 +5485,8 @@ function onEvent(raw) {
     showSetupLock();
     byId("readiness-time").textContent = "Starting download. Remaining time depends on model size and network speed.";
     updateDownloadMeter(null);
+    // One model downloads at a time; the others wait their turn.
+    for (const modelId of data.models || []) showModelStep(modelId, `Waiting: ${modelId}`);
   } else if (data.event === "installation_progress") {
     const progress = downloadProgress(data);
     const percent = progress.percent == null ? "" : ` · ${progress.percent.toFixed(1)}%`;
@@ -5292,8 +5498,10 @@ function onEvent(raw) {
     byId("activity-text").textContent = `Downloading ${data.model_id}`;
     byId("activity-detail").textContent = progress.text;
     updateDownloadMeter(progress.percent);
+    showModelStep(data.model_id, `Downloading: ${data.model_id}${percent}`);
   } else if (data.event === "installation_model_complete") {
     cachedModels.add(data.model_id);
+    showModelStep(data.model_id, `Ready: ${data.model_id}`, true);
     byId("readiness-time").textContent = `${data.model_id} completed in ${seconds(data.model_seconds)} · ${seconds(data.elapsed_seconds)} total`;
   } else if (data.event === "installation_complete") {
     installingModels = false;
@@ -5773,6 +5981,50 @@ function onEvent(raw) {
 // UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("confirm-workspace").addEventListener("click", () => {
+  if (!bridge || busy) return;
+  if (ready) return changeProjectsFolder(false);
+  clearSetupReminder();
+  // The engine restarts with the confirmed folder, then setup is rechecked.
+  switchingProjectsFolder = true;
+  setBusy(true, "Confirming the projects folder…");
+  bridge.confirmProjectsFolder();
+});
+byId("terms-agree").addEventListener("change", () => {
+  if (byId("terms-agree").checked) byId("welcome-hint").classList.add("hidden");
+  showSetupConfirmations();
+});
+byId("accept-terms").addEventListener("click", () => {
+  if (termsAccepted) return byId("welcome").close();
+  if (!bridge || !termsVersion || !byId("terms-agree").checked) return;
+  // Qt saves the agreement; the next readiness check closes the dialog.
+  acceptingTerms = true;
+  showSetupConfirmations();
+  bridge.acceptTerms(termsVersion);
+});
+// Escape cannot skip the terms before they are accepted. The browser may
+// close a dialog opened without a click despite a cancelled "cancel", so
+// Escape is stopped first and a dialog closed anyway is reopened.
+byId("welcome").addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
+byId("welcome").addEventListener("cancel", (event) => {
+  if (termsAccepted) return;
+  event.preventDefault();
+  remindWelcome();
+});
+byId("welcome").addEventListener("close", () => {
+  if (termsAccepted || !termsVersion) return;
+  byId("welcome").showModal();
+  remindWelcome();
+});
+byId("view-terms").addEventListener("click", showWelcome);
+for (const link of document.querySelectorAll("#welcome .external-link")) {
+  // Opened by the system browser, never inside KíLín.
+  link.addEventListener("click", () => bridge?.openExternalLink(link.dataset.url));
+}
 byId("project-title").addEventListener("change", renameProjectFromSettings);
 byId("project-title").addEventListener("keydown", (event) => {
   if (event.key === "Enter") { event.preventDefault(); event.target.blur(); }
@@ -5995,7 +6247,10 @@ function showProjectSettings() {
   // and Use default also while the default folder is in use.
   const why = ready ? "Change it from the start screen." : "";
   byId("browse-workspace").disabled = ready;
-  byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved;
+  // Also disabled while the standard folder is the one saved; without a
+  // saved folder, Confirm projects folder confirms the one in use.
+  byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved
+    || projectsFolderInfo.saved === projectsFolderInfo.standard;
   byId("browse-workspace").title = why;
   byId("default-workspace").title = why;
   // A note only when the chosen folder is missing.
@@ -6004,6 +6259,7 @@ function showProjectSettings() {
     ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
     : "";
   byId("workspace-note").classList.toggle("hidden", !missing);
+  showSetupConfirmations();
   // An open project keeps the backend it was made with.
   byId("backend").title = ready ? "Set when the project was created." : "";
   // On the start screen the name is for the next new project.

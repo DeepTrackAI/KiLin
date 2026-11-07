@@ -115,6 +115,25 @@ def check_installed_package() -> None:
     )
     if "--gui" not in result.stdout:
         raise AssertionError("The CLI help does not expose --gui")
+
+    # pip install "kilin[app]" brings the window and the platform's backend,
+    # and kilin-gui opens it (on Windows without a console).
+    gui = scripts / (
+        "kilin-gui.exe" if sys.platform == "win32" else "kilin-gui"
+    )
+    if not gui.is_file():
+        raise AssertionError("The kilin-gui script was not installed")
+    app = " ".join(
+        item for item in metadata.requires("kilin") or []
+        if 'extra == "app"' in item
+    )
+    for package_name in ("PySide6", "mlx-lm", "torch", "transformers"):
+        if package_name not in app:
+            raise AssertionError(f"The app extra does not list {package_name}")
+    from kilin.gui._paths import gui_install_command
+
+    if 'pip install "kilin[app]"' not in gui_install_command("mlx"):
+        raise AssertionError("An installed copy must suggest kilin[app]")
     print(f"Verified kilin {metadata.version('kilin')} wheel resources")
 
 

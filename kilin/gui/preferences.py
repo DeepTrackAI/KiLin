@@ -36,6 +36,15 @@ Module Structure
 
     Supply the effective settings used to create a new project.
 
+- ``terms_text`` and ``terms_accepted``
+
+    Read the terms of use shown in KíLín setup and whether the user has
+    agreed to the current version.
+
+- ``copyright_notice``
+
+    Build the copyright line shown in Settings from the package authors.
+
 Examples
 --------
 >>> from kilin.gui.preferences import default_search_depth
@@ -48,8 +57,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from copy import deepcopy
+from importlib import metadata
 import json
 from pathlib import Path
+import tomllib
 from typing import Final
 
 from huggingface_hub.utils import validate_repo_id
@@ -64,13 +75,17 @@ from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 __all__ = [
     "APPEARANCE_CHOICES",
     "BACKEND_CHOICES",
+    "COPYRIGHT_YEAR",
     "DEFAULTS_ENVIRONMENT",
     "DEFAULTS_FILE",
     "LEVEL_COUNT",
     "MAX_LEVEL_NAME",
     "MAX_SEARCH_DEPTH",
+    "TERMS_FILE",
+    "TERMS_VERSION",
     "app_defaults",
     "built_in_defaults",
+    "copyright_notice",
     "default_appearance",
     "default_backend",
     "default_effort_levels",
@@ -81,9 +96,12 @@ __all__ = [
     "defaults_file",
     "preferences_file",
     "required_models",
+    "terms_accepted",
+    "terms_text",
     "validate_effort_levels",
     "validate_model_id",
     "validate_search_depth",
+    "validate_terms_accepted",
     "validate_workspace_folder",
     "write_defaults",
 ]
@@ -101,6 +119,13 @@ MAX_LEVEL_NAME: Final[int] = 24
 MAX_SEARCH_DEPTH: Final[int] = 200
 _BACKENDS: Final[tuple[str, ...]] = (BACKEND_MLX, BACKEND_TORCH)
 _QUERY_FORMATS: Final[tuple[str, ...]] = ("qwen3", "plain")
+# The terms of use shown in KíLín setup. Change the version whenever the
+# text changes, so every user is asked to agree again.
+TERMS_FILE: Final[Path] = Path(__file__).with_name("terms.txt")
+TERMS_VERSION: Final[str] = "2026-11-05.2"
+# Year of first publication, which a copyright notice states; the names
+# come from the package authors (``pyproject.toml``).
+COPYRIGHT_YEAR: Final[int] = 2026
 
 
 def validate_model_id(value: str) -> str:
@@ -326,6 +351,36 @@ def validate_workspace_folder(value: object) -> str:
     return folder
 
 
+def validate_terms_accepted(value: object) -> str:
+    """Return the version of the terms the user agreed to, or "" for none.
+
+    Parameters
+    ----------
+    value: object
+        Saved terms version, or an empty string.
+
+    Returns
+    -------
+    str
+        The trimmed version text.
+
+    Raises
+    ------
+    TypeError
+        If the value is not a string.
+
+    Notes
+    -----
+    Any earlier version stays valid here, so changed terms ask the user to
+    agree again instead of making the preferences file invalid.
+
+    """
+
+    if not isinstance(value, str):
+        raise TypeError("The accepted terms version must be text.")
+    return value.strip()
+
+
 # Validated complete packaged defaults, cached by modification time and size.
 _CACHE: dict[Path, tuple[int, int, dict[str, object]]] = {}
 
@@ -376,6 +431,7 @@ def _checks() -> dict[str, Callable[[object], object]]:
         "embedding_models": _per_backend(validate_model_id),
         "query_format": _choice(_QUERY_FORMATS),
         "workspace_folder": validate_workspace_folder,
+        "terms_accepted": validate_terms_accepted,
     }
 
 
@@ -782,3 +838,74 @@ def required_models(backend: str) -> list[str]:
     models.append(default_router_model(backend))
     models.append(default_embedding_model(backend))
     return list(dict.fromkeys(models))
+
+
+def terms_text() -> str:
+    """Return the terms of use shown in KíLín setup.
+
+    Returns
+    -------
+    str
+        The text of ``terms.txt``, with paragraphs separated by blank
+        lines.
+
+    """
+
+    return TERMS_FILE.read_text(encoding="utf-8").strip()
+
+
+def copyright_notice() -> str:
+    """Return the copyright line shown in Settings.
+
+    Returns
+    -------
+    str
+        For example "Copyright © 2026 A, B, and C", or "" when the
+        authors cannot be read.
+
+    Notes
+    -----
+    The authors are those of the installed package, which come from
+    ``pyproject.toml``; an uninstalled checkout reads that file directly,
+    like ``kilin.__version__``. Changing the authors there changes this
+    line, with no second list to update.
+
+    """
+
+    try:
+        authors = metadata.metadata("kilin")["Author"] or ""
+        names = [name.strip() for name in authors.split(",")]
+    except metadata.PackageNotFoundError:
+        manifest = Path(__file__).resolve().parents[2] / "pyproject.toml"
+        try:
+            with manifest.open("rb") as stream:
+                project = tomllib.load(stream)["project"]
+        except (OSError, KeyError, tomllib.TOMLDecodeError):
+            return ""
+        names = [author.get("name", "") for author in project["authors"]]
+    names = [name for name in names if name]
+    if not names:
+        return ""
+    listed = (
+        names[0] if len(names) == 1
+        else " and ".join(names) if len(names) == 2
+        else f"{', '.join(names[:-1])}, and {names[-1]}"
+    )
+    return f"Copyright © {COPYRIGHT_YEAR} {listed}"
+
+
+def terms_accepted() -> bool:
+    """Return whether the user agreed to the current terms of use.
+
+    Returns
+    -------
+    bool
+        True when the saved version is ``TERMS_VERSION``. An unreadable
+        preferences file counts as not agreed.
+
+    """
+
+    try:
+        return app_defaults()["terms_accepted"] == TERMS_VERSION
+    except (OSError, ValueError):
+        return False

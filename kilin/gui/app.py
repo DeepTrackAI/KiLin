@@ -63,9 +63,12 @@ def main(arguments: Sequence[str] | None = None) -> int:
 
         from kilin.gui.window import ChatWindow
     except ImportError as error:
+        from kilin.gui._paths import gui_install_command
+        from kilin.runtime import BACKEND_AUTO, choose_backend
+
         print(
             f"GUI dependency missing: {error}. Install with "
-            "uv sync --extra gui --extra mlx (or --extra torch).",
+            f"{gui_install_command(choose_backend(BACKEND_AUTO))}.",
             file=sys.stderr,
         )
         return 1

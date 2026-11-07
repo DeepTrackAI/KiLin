@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -253,6 +254,40 @@ class TestGUIPreferences(unittest.TestCase):
         preferences.write_defaults({"backend": "auto"})
         saved = json.loads(self.path.read_text(encoding="utf-8"))
         self.assertNotIn("backend", saved)
+
+    def test_copyright_names_every_package_author(self) -> None:
+        """The Settings line lists the pyproject.toml authors, in order."""
+
+        manifest = Path(preferences.__file__).parents[2] / "pyproject.toml"
+        authors = tomllib.loads(manifest.read_text(encoding="utf-8"))[
+            "project"
+        ]["authors"]
+        names = [author["name"] for author in authors]
+        expected = f"{', '.join(names[:-1])}, and {names[-1]}"
+        self.assertEqual(
+            preferences.copyright_notice(),
+            f"Copyright © {preferences.COPYRIGHT_YEAR} {expected}",
+        )
+
+    def test_terms_are_agreed_to_once_per_version(self) -> None:
+        """Only the current version counts; older ones ask again."""
+
+        self.assertTrue(preferences.terms_text())
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults({"terms_accepted": "an older version"})
+        # Still a valid file, but the user is asked again.
+        self.assertFalse(preferences.terms_accepted())
+        preferences.write_defaults(
+            {"terms_accepted": preferences.TERMS_VERSION}
+        )
+        self.assertTrue(preferences.terms_accepted())
+        saved = json.loads(self.path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["terms_accepted"], preferences.TERMS_VERSION)
+        with self.assertRaises(ValueError):
+            preferences.write_defaults({"terms_accepted": 1})
+        # A broken preferences file counts as not agreed.
+        self.path.write_text("{", encoding="utf-8")
+        self.assertFalse(preferences.terms_accepted())
 
     def test_empty_update_does_not_write(self) -> None:
         """Do not create a preference file for a no-op update."""

@@ -428,6 +428,7 @@ class TestPreferredBackendSetup(unittest.TestCase):
             if event["event"] == "installation_started"
         )
         self.assertEqual(started["backend"], "torch")
+        self.assertEqual(started["models"], missing)
         self.assertEqual(self.events[-1]["event"], "readiness")
         self.assertTrue(self.events[-1]["ready"])
 
