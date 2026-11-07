@@ -735,6 +735,10 @@ class ChatEngine:
                 and bool(missing) and len(replacements) == len(missing),
                 ready=environment_ready and not missing,
                 install_command=gui_install_command(backend),
+                install_commands={
+                    selected: gui_install_command(selected)
+                    for selected in (BACKEND_MLX, BACKEND_TORCH)
+                },
                 projects_folder=str(default_workspace_directory()),
                 folder_confirmed=projects_folder_confirmed(),
                 terms=terms_text(),

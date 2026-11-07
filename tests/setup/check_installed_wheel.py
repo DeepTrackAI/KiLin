@@ -149,8 +149,12 @@ def check_installed_package() -> None:
             raise AssertionError(f"The app extra does not list {package_name}")
     from kilin.gui._paths import gui_install_command
 
-    if 'pip install "kilin[app]"' not in gui_install_command("mlx"):
-        raise AssertionError("An installed copy must suggest kilin[app]")
+    for backend in ("mlx", "torch"):
+        command = gui_install_command(backend)
+        if f"kilin[gui,{backend}]" not in command:
+            raise AssertionError(
+                f"Installed repair advice must target {backend}: {command}"
+            )
     print(f"Verified kilin {metadata.version('kilin')} wheel resources")
 
 

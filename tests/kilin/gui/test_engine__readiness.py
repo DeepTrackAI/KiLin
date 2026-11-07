@@ -188,6 +188,16 @@ class TestPreferredBackendSetup(unittest.TestCase):
                 self.assertEqual(event["event"], "readiness")
                 self.assertEqual(event["backend"], selected)
                 self.assertEqual(
+                    event["install_commands"][selected],
+                    event["install_command"],
+                )
+                self.assertEqual(
+                    set(event["install_commands"]), {"mlx", "torch"}
+                )
+                self.assertIn(
+                    "torch", event["install_commands"]["torch"]
+                )
+                self.assertEqual(
                     event["required_models"], required_models(selected)
                 )
                 self.assertEqual(event["missing_models"], [])

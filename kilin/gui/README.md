@@ -39,6 +39,20 @@ controls dependency preparation; it does not override the project's backend
 selection in the GUI. `python -m kilin.gui` delegates directly to the GUI
 application and does not perform that synchronization step.
 
+When a selected backend is missing, setup displays a command for that
+backend, not the platform-default `app` extra. A checkout uses
+`uv sync --extra gui --extra mlx` or `--extra torch`. An ordinary
+installed Python environment uses the matching `kilin[gui,mlx]` or
+`kilin[gui,torch]` extra with that interpreter; if pip is absent, uv
+can install into the same interpreter using `uv pip install --python`.
+The macOS application uses the copy of uv inside its `.app` bundle and
+its original wheel or pinned PyPI distribution, since its managed Python
+environment does not include pip. This permits adding PyTorch even when
+Apple Silicon initially installed MLX through `kilin[app]`. Run the
+displayed repair command explicitly and restart the application. These
+instructions do not auto-install packages, replace the current project
+backend preference, or download model weights.
+
 ## Components and communication
 
 `app.py` creates the Qt application and window. `window.py` hosts the local

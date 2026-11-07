@@ -74,6 +74,7 @@ let busy = false;
 let requiredModels = [];
 let readinessEnvironmentReady = true;
 let installCommand = "";
+let installCommands = {};
 let readinessMissingCount = 0;
 let cachedModels = new Set();
 let kilinReady = false;

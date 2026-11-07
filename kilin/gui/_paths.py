@@ -36,8 +36,8 @@ Module Structure
 
 - ``gui_install_command``
 
-    Tell how to install the GUI and its backend, for a checkout or an
-    installed package.
+    Select an installer and an explicit backend extra for the current
+    checkout, installed environment, or macOS application runtime.
 
 - ``projects_folder_confirmed``
 
@@ -53,10 +53,16 @@ True
 
 from __future__ import annotations
 
+from importlib.util import find_spec
 import os
 from pathlib import Path
+import shlex
+import shutil
+import subprocess
 import sys
 from typing import Final
+
+from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
     "default_workspace_directory",
@@ -69,6 +75,11 @@ __all__ = [
 
 PREFERENCES_ENVIRONMENT: Final[str] = "KILIN_DEFAULTS_FILE"
 WORKSPACES_ENVIRONMENT: Final[str] = "KILIN_WORKSPACES_DIR"
+
+# Set by the macOS .app launcher; the CLI must use that exact bundled wheel
+# or pinned PyPI version, rather than accidentally installing another build.
+APP_INSTALL_UV: Final[str] = "KILIN_APP_UV"
+APP_INSTALL_SPEC: Final[str] = "KILIN_APP_SPEC"
 
 
 def _user_config_directory() -> Path:
@@ -258,28 +269,99 @@ def saved_workspace_folder() -> str:
         return ""
 
 
-def gui_install_command(backend: str) -> str:
-    """Tell how to install the GUI and its backend in this KíLín.
-
-    A source checkout installs them with uv; an installed package (from
-    PyPI or the macOS app) with pip, into the same Python, using the
-    ``app`` extra that picks the backend for the platform.
+def _shell_command(*arguments: str) -> str:
+    """Quote a command for the host platform's interactive shell.
 
     Parameters
     ----------
-    backend: str
-        Backend that is missing: ``mlx`` or ``torch``.
+    *arguments: str
+        Executable and arguments, without shell operators.
 
     Returns
     -------
     str
-        The command to run.
+        Safely quoted command for POSIX shells or Windows command prompt.
 
     """
 
+    if sys.platform == "win32":
+        return subprocess.list2cmdline(arguments)
+    return shlex.join(arguments)
+
+
+def gui_install_command(backend: str) -> str:
+    """Recommend installing the selected GUI computation backend.
+
+    A source checkout uses ``uv sync``. The macOS bundle exposes its own
+    ``uv`` and original installation specification, so a bundled wheel
+    remains the source of truth when adding another backend. Ordinary
+    installed environments use their current Python and pip, or uv when
+    pip is absent. No installation occurs merely to generate the advice.
+
+    Parameters
+    ----------
+    backend: str
+        Missing backend: ``mlx`` or ``torch``.
+
+    Returns
+    -------
+    str
+        Shell command targeting this installation, or instructions for
+        obtaining uv if neither pip nor uv is available.
+
+    Raises
+    ------
+    ValueError
+        If ``backend`` does not identify a supported computation backend.
+
+    Notes
+    -----
+    The ``app`` extra selects the platform default, not a requested
+    backend. Use the explicit backend extra for repairs. The macOS bundle
+    retains its original ``app`` extra and adds the requested backend.
+
+    """
+
+    if backend not in (BACKEND_MLX, BACKEND_TORCH):
+        raise ValueError("Choose the `mlx` or `torch` backend.")
+
     if _development_checkout() is not None:
         return f"uv sync --extra gui --extra {backend}"
-    return f'{Path(sys.executable).name} -m pip install "kilin[app]"'
+
+    bundled_uv = os.environ.get(APP_INSTALL_UV, "")
+    bundled_spec = os.environ.get(APP_INSTALL_SPEC, "")
+    if (
+        bundled_uv
+        and Path(bundled_uv).is_absolute()
+        and Path(bundled_uv).is_file()
+        and os.access(bundled_uv, os.X_OK)
+        and bundled_spec.count("[app]") == 1
+    ):
+        requirement = bundled_spec.replace(
+            "[app]", f"[app,{backend}]", 1
+        )
+        return _shell_command(
+            bundled_uv, "pip", "install", "--python",
+            sys.executable, requirement,
+        )
+
+    requirement = f"kilin[gui,{backend}]"
+    if find_spec("pip") is not None:
+        return _shell_command(
+            sys.executable, "-m", "pip", "install", requirement,
+        )
+
+    uv = shutil.which("uv")
+    command = _shell_command(
+        uv or "uv", "pip", "install", "--python",
+        sys.executable, requirement,
+    )
+    if uv:
+        return command
+    return (
+        "Install uv (https://docs.astral.sh/uv/getting-started/"
+        "installation/), then run: " + command
+    )
 
 
 def projects_folder_confirmed() -> bool:

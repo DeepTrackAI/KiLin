@@ -111,8 +111,9 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
-// How to install the GUI and backend here: uv in a checkout, pip otherwise.
+// Repair commands from Python, one per backend and installation type.
 let installCommand = "";
+let installCommands = {};
 // KíLín setup also asks to confirm the projects folder and to agree to the
 // current terms of use (``termsVersion``), once each.
 let folderConfirmed = true;
@@ -1117,8 +1118,9 @@ function renderModelsPanel() {
   const installed = installedBackends[activeBackend];
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
+  const repair = installCommands[activeBackend] || "the KíLín installer";
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${installCommand.replace(/--extra (mlx|torch)\b/, `--extra ${activeBackend}`) || "the KíLín installer"}, then restart KíLín.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${repair}, then restart KíLín.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -5425,6 +5427,9 @@ function onEvent(raw) {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
     installCommand = data.install_command || installCommand;
+    installCommands = data.install_commands || {
+      [data.backend]: installCommand,
+    };
     cachedModels = new Set(data.cached_models || []);
     const card = byId("first-run-setup");
     const steps = byId("readiness-steps");
@@ -5433,7 +5438,7 @@ function onEvent(raw) {
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
       : data.unavailable_reason
-        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommand}, then restart KíLín`;
+        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommands[data.backend] || "the KíLín installer"}, then restart KíLín`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};

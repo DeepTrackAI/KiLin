@@ -36,6 +36,10 @@ fi
 
 # A wheel inside the app is installed from there.
 spec=${KILIN_SPEC//@RESOURCES@/$resources}
+# The running GUI and engine can offer an exact backend-repair command.
+# Point to this app's uv and original wheel/version; runtime has no pip.
+export KILIN_APP_UV="$resources/uv"
+export KILIN_APP_SPEC="$spec"
 # What is installed: the spec, plus the wheel's checksum, so a rebuilt
 # wheel with an unchanged version and file name is installed too.
 build="$spec${KILIN_WHEEL_SHA:+ $KILIN_WHEEL_SHA}"
