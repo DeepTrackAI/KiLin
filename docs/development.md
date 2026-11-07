@@ -391,6 +391,14 @@ ZIP of only changed/new files in repository-relative paths, with explicit
 deletions when needed. A separate full source export is useful when requested
 for release or transfer; it is not needed to apply a focused revision.
 
+The root `LICENSE` holds the Apache License 2.0 text declared by
+`pyproject.toml`. It must be committed to Git and present in source ZIPs,
+source distributions, and installed wheels. The source-export notebook
+requires `"LICENSE": True` and refuses missing or untracked licence files.
+The isolated wheel check verifies the actual installed licence text; the
+release test verifies the checkout file. Check the generated source
+archive and source distribution as part of release verification.
+
 A source export is not a user-data backup. It should exclude `.DS_Store`,
 `__MACOSX`, AppleDouble files, caches, model weights, `sandbox/` contents,
 `.env` secrets, generated build files and unselected top-level entries. The

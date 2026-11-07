@@ -118,6 +118,8 @@ class TestReleaseMetadata(unittest.TestCase):
         licence = (_ROOT / "LICENSE").read_text(encoding="utf-8")
         self.assertIn("Apache License\n", licence)
         self.assertIn("Version 2.0, January 2004", licence)
+        self.assertIn("END OF TERMS AND CONDITIONS", licence)
+        self.assertIn("APPENDIX: How to apply", licence)
         page = (_ROOT / "kilin/gui/web/index.html").read_text(
             encoding="utf-8"
         )

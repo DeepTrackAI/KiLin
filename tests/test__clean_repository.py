@@ -90,7 +90,12 @@ class TestCleanRepository(unittest.TestCase):
         (article / "benchmarks/sandbox/workspace.db").write_text(
             "PRIVATE", encoding="utf-8"
         )
-        self.selection = {"_si_article_/": True, "sandbox/": True}
+        shutil.copyfile(ROOT / "LICENSE", self.root / "LICENSE")
+        self.selection = {
+            "LICENSE": True,
+            "_si_article_/": True,
+            "sandbox/": True,
+        }
 
     def git(self, *args: str) -> None:
         subprocess.run(
@@ -102,12 +107,45 @@ class TestCleanRepository(unittest.TestCase):
 
     def track_sources(self) -> None:
         self.git("init", "-q")
-        self.git("add", "-f", "_si_article_")
+        self.git("add", "-f", "LICENSE", "_si_article_")
 
     def test_default_selection_uses_si_article(self) -> None:
         choices = self.helpers["ZIP_TOP_LEVEL_SELECTION"]
         self.assertTrue(choices["_si_article_/"])
+        self.assertIs(choices["LICENSE"], True)
         self.assertNotIn("benchmarks/", choices)
+
+    def test_source_zip_requires_licence_selection(self) -> None:
+        """Reject archive creation when the licence is disabled.
+
+        """
+
+        disabled = {**self.selection, "LICENSE": False}
+        selected = self.helpers["resolve_top_level_selection"]
+        with self.assertRaisesRegex(RuntimeError, "LICENSE must"):
+            selected(self.root, disabled)
+
+    def test_source_zip_rejects_missing_licence(self) -> None:
+        """Reject export if the selected licence file is absent.
+
+        """
+
+        (self.root / "LICENSE").unlink()
+        selected = self.helpers["resolve_top_level_selection"]
+        with self.assertRaisesRegex(RuntimeError, "Missing source file"):
+            selected(self.root, self.selection)
+
+    def test_source_zip_requires_tracked_licence(self) -> None:
+        """Prevent silent omission of an untracked licence.
+
+        """
+
+        self.git("init", "-q")
+        self.git("add", "-f", "_si_article_")
+        with self.assertRaisesRegex(RuntimeError, "Git-tracked: LICENSE"):
+            self.helpers["list_source_files"](
+                self.root, self.selection
+            )
 
     def test_source_policy_excludes_local_repositories(self) -> None:
         allowed = self.helpers["should_export"]
@@ -130,7 +168,7 @@ class TestCleanRepository(unittest.TestCase):
     def test_required_directories_include_empty_placeholders(self) -> None:
         selected = self.helpers["resolve_top_level_selection"]
         files, folders = selected(self.root, self.selection)
-        self.assertFalse(files)
+        self.assertEqual(files, {"LICENSE"})
         self.assertIn("_si_article_/", folders)
         for relative in self.helpers["SI_ARTICLE_REQUIRED_DIRECTORIES"]:
             self.assertIn(relative, folders)
@@ -149,7 +187,7 @@ class TestCleanRepository(unittest.TestCase):
 
         selected = self.helpers["resolve_top_level_selection"]
         files, directories = selected(alias, self.selection)
-        self.assertFalse(files)
+        self.assertEqual(files, {"LICENSE"})
         self.assertIn("_si_article_/", directories)
 
         source_files, untracked = self.helpers["list_source_files"](
@@ -213,7 +251,7 @@ class TestCleanRepository(unittest.TestCase):
 
     def test_missing_tracked_reference_placeholder_rejected(self) -> None:
         self.git("init", "-q")
-        self.git("add", "-f", "_si_article_/code_analysis")
+        self.git("add", "-f", "LICENSE", "_si_article_/code_analysis")
         with self.assertRaisesRegex(RuntimeError, "reference-analysis"):
             self.helpers["list_source_files"](
                 self.root, self.selection
@@ -232,6 +270,11 @@ class TestCleanRepository(unittest.TestCase):
 
         with zipfile.ZipFile(output) as archive:
             entries = set(archive.namelist())
+            self.assertIn("LICENSE", entries)
+            self.assertEqual(
+                archive.read("LICENSE"),
+                (ROOT / "LICENSE").read_bytes(),
+            )
             self.assertIn("_si_article_/benchmarks/common.py", entries)
             self.assertIn("_si_article_/code_analysis/article.tex", entries)
             self.assertIn(
