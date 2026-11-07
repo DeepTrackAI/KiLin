@@ -148,8 +148,12 @@ A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
 selected explicitly or created under the GUI's default workspace parent. In
 a source checkout (containing `pyproject.toml`, `tests/kilin/`, and the GUI
 source), the default is the repository's `sandbox/` folder. In an installed
-package (the macOS app or pip), it is `Documents/KíLín` in the user's home
-folder, on every platform.
+package (the macOS app or pip), the suggested folder is `KíLín` under
+Documents. On Linux, KíLín uses the XDG Documents location when configured;
+on Windows it uses the registered Documents location (which may be redirected
+into OneDrive). On macOS it uses `~/Documents/KíLín`. If a platform setting
+cannot be resolved, it falls back to `~/Documents/KíLín`. KíLín does not
+create this folder until it is confirmed.
 
 `KILIN_WORKSPACES_DIR` overrides this default in both cases and must
 be an absolute path (or a home-expanded `~/...` path). Otherwise the
@@ -161,6 +165,24 @@ standard folder (Use default); each saves the folder by its path and
 creates it. A chosen folder that is missing or not mounted is skipped with
 a note, and setup asks again. Changing it restarts the engine, so it is
 offered only on the start screen. Existing projects are never moved.
+
+For installed versions upgraded from before 7 November 2026, KíLín also
+checks the previous user-data `workspaces/` location for a direct subfolder
+containing `profile.ini`. If found, setup offers **Use existing projects**
+and displays the old directory; the user must explicitly select it. The
+folder is rechecked before saving and the engine restarts to discover its
+projects normally. This only changes the saved projects-folder preference:
+there is no automatic copy, deletion, or migration of sources, indexes, or
+conversations. A saved choice (or `KILIN_WORKSPACES_DIR`) remains authoritative.
+Projects with outdated or invalid profiles may still require separate repair.
+Cancelling Browse and failures when choosing a folder return to setup so the
+user can choose again.
+
+The project folder is a local filesystem path, but the operating system or
+services such as iCloud or OneDrive may synchronize it. For sensitive data,
+choose a directory that is not synchronized. KíLín does not control external
+filesystem synchronization, and it cannot guarantee that Documents is
+strictly local.
 
 Before anything else, a welcome dialog summarizes KíLín and shows the full
 terms of use (`kilin/gui/terms.txt`), with links to the Apache 2.0 licence

@@ -1802,6 +1802,7 @@ function showSetupLock() {
   install.textContent = installingModels ? "Stop downloading" : "Install required models";
   install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
   byId("use-installed").disabled = busy || !readinessEnvironmentReady;
+  byId("use-legacy-workspace").disabled = busy || ready;
   byId("open").disabled = busy || !bridge || !kilinReady;
   byId("close-models").disabled = false;
   byId("close-models").title = "";
@@ -5869,6 +5870,10 @@ function onEvent(raw) {
     showSourceSync(data);
   } else if (data.event === "projects_folder") {
     showProjectsFolder(data);
+  } else if (data.event === "projects_folder_cancelled") {
+    finishProjectsFolderSwitch();
+  } else if (data.event === "projects_folder_failed") {
+    finishProjectsFolderSwitch(data.message);
   } else if (data.event === "sources_checked") {
     if (attachedAsk) return addAttachedSources(data);
     setBusy(false);
@@ -6045,6 +6050,9 @@ function onEvent(raw) {
 // UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("use-legacy-workspace").addEventListener(
+  "click", useLegacyProjectsFolder,
+);
 byId("confirm-workspace").addEventListener("click", () => {
   if (!bridge || busy) return;
   if (ready) return changeProjectsFolder(false);
@@ -6317,6 +6325,8 @@ function showProjectSettings() {
   // saved folder, Confirm projects folder confirms the one in use.
   byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved
     || projectsFolderInfo.saved === projectsFolderInfo.standard;
+  byId("use-legacy-workspace").disabled = ready || busy;
+  byId("use-legacy-workspace").title = why;
   byId("browse-workspace").title = why;
   byId("default-workspace").title = why;
   // A note only when the chosen folder is missing.
@@ -6325,6 +6335,18 @@ function showProjectSettings() {
     ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
     : "";
   byId("workspace-note").classList.toggle("hidden", !missing);
+  const legacy = projectsFolderInfo?.legacy || "";
+  const canReuseLegacy = Boolean(
+    legacy && legacy !== projectsFolderInfo?.folder,
+  );
+  byId("legacy-workspace-choice").classList.toggle(
+    "hidden", !canReuseLegacy,
+  );
+  byId("legacy-workspace-note").textContent = canReuseLegacy
+    ? `Existing KíLín projects may be at ${legacy}. Use that folder to `
+      + "keep working with them, or confirm a different folder. "
+      + "No project files will be moved."
+    : "";
   showSetupConfirmations();
   // An open project keeps the backend it was made with.
   byId("backend").title = ready ? "Set when the project was created." : "";
@@ -6423,6 +6445,32 @@ function changeProjectsFolder(useDefault) {
   if (!useDefault) return bridge.chooseProjectsFolder();
   setBusy(true, "Switching to the default projects folder…");
   bridge.useDefaultProjectsFolder();
+}
+
+/**
+ * Reuse a previous installed-app projects directory without moving files.
+ *
+ * Qt rechecks the old folder before saving it as the user's choice.
+ */
+function useLegacyProjectsFolder() {
+  if (!bridge || busy || !projectsFolderInfo?.legacy) return;
+  if (ready) return changeProjectsFolder(false);
+  switchingProjectsFolder = true;
+  setBusy(true, "Opening the previous projects folder…");
+  bridge.useLegacyProjectsFolder();
+}
+
+/**
+ * Restore the start screen after a cancelled or failed folder selection.
+ *
+ * @param message Error text, or an empty string for a cancelled chooser.
+ */
+function finishProjectsFolderSwitch(message = "") {
+  if (switchingProjectsFolder) {
+    switchingProjectsFolder = false;
+    setBusy(false);
+  }
+  if (message) showError(message);
 }
 
 /**

@@ -64,6 +64,7 @@ const byId = (id) => (fields[id] = fields[id] || {
   id, textContent: "", disabled: false, title: "", open: false,
 });
 let busy = false;
+let ready = false;
 const bridge = {};
 let kilinReady = false;
 let readinessEnvironmentReady = true;

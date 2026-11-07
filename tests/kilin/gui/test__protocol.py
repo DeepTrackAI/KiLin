@@ -727,6 +727,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "model_download_progress", "model_download_started",
             "model_downloaded", "models_applied", "opened", "preview",
             "progress", "projects", "projects_folder", "readiness",
+            "projects_folder_cancelled", "projects_folder_failed",
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
             "sources_checked", "status", "stopped", "tool_settings",
@@ -1003,12 +1004,14 @@ class TestGUIProtocolBridge(unittest.TestCase):
             return_value=Path("/sandbox"),
         ), patch.object(
             window, "saved_workspace_folder", return_value="/Gone/Projects",
+        ), patch.object(
+            window, "available_legacy_workspace_directory", return_value=None,
         ):
             self.bridge.requestProjectsFolder()
         self.assertEqual(json.loads(self.events[-1]), {
             "event": "projects_folder", "folder": "/sandbox",
             "standard": "/sandbox", "saved": "/Gone/Projects",
-            "missing": True,
+            "legacy": "", "missing": True,
         })
         with patch.object(
             window, "standard_workspace_directory",
@@ -1017,6 +1020,69 @@ class TestGUIProtocolBridge(unittest.TestCase):
             self.bridge.useDefaultProjectsFolder()
         self.assertEqual(chosen, [str(Path("/sandbox"))])
         self.assertEqual(self.commands, [])
+
+    def test_previous_projects_choice_is_explicit_and_revalidated(
+        self,
+    ) -> None:
+        """Only a real legacy candidate can be passed to folder selection."""
+
+        window = importlib.import_module("kilin.gui.window")
+        old = Path("/previous/kilin/workspaces")
+        chosen: list[str] = []
+        self.bridge.projectsFolderChosen.connect(chosen.append)
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=old,
+        ):
+            self.bridge.requestProjectsFolder()
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1])["legacy"], str(old)
+        )
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(self.commands, [])
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=None,
+        ):
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"],
+            "projects_folder_failed",
+        )
+
+    def test_cancelled_projects_folder_dialog_emits_its_own_event(
+        self,
+    ) -> None:
+        """Cancelling Browse unblocks setup without changing any folder."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "QFileDialog") as picker:
+            picker.getExistingDirectory.return_value = ""
+            self.bridge.chooseProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1]),
+            {"event": "projects_folder_cancelled"},
+        )
+        self.assertEqual(self.commands, [])
+
+    def test_failed_projects_folder_save_reports_recoverable_event(
+        self,
+    ) -> None:
+        """A preference failure must not kill the running GUI engine."""
+
+        window = importlib.import_module("kilin.gui.window")
+        fake = MagicMock()
+        with patch.object(
+            window, "write_defaults", side_effect=OSError("read-only")
+        ):
+            window.ChatWindow._set_projects_folder(fake, "")
+        fake.process.kill.assert_not_called()
+        fake._process_finished.assert_not_called()
+        emitted = json.loads(fake.bridge.event.emit.call_args.args[0])
+        self.assertEqual(emitted["event"], "projects_folder_failed")
+        self.assertIn("read-only", emitted["message"])
 
     def test_accepting_the_terms_saves_the_current_version(self) -> None:
         """Confirm only a persisted current-version agreement."""

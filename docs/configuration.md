@@ -214,11 +214,22 @@ user preferences file (despite its historic name). It does **not** point to
 the immutable shipped defaults during normal use.
 
 A recognized development checkout defaults GUI workspaces to its repository
-`sandbox/`; an installed package uses a user data folder. Explicit
-`KILIN_WORKSPACES_DIR` (absolute or home-expanded) overrides the default,
-and a workspace explicitly chosen in the GUI overrides the suggested
+`sandbox/`; an installed package suggests `KíLín` under the OS Documents
+location (Linux XDG user directories; Windows registered Documents;
+`~/Documents` on macOS or when the location cannot be resolved). The user
+must confirm or browse to a directory. Explicit `KILIN_WORKSPACES_DIR`
+(absolute or home-expanded) takes precedence over the GUI's saved folder;
+a workspace explicitly selected for one project overrides the suggested
 parent. No installed package directory should become the normal writable
-location for conversations, workspaces or preferences. See
+location for conversations, workspaces or preferences. Documents may be
+synchronized by iCloud, OneDrive or another external service; users needing
+strictly local project storage should choose a non-synchronized path.
+
+If the previous installed-app `workspaces/` data directory contains project
+profiles, GUI setup offers to reuse that folder. Choosing it records a
+folder preference without moving or rewriting any project files. Otherwise
+KíLín keeps the proposed Documents folder. An existing confirmed choice or
+environment override is never silently replaced by legacy detection. See
 [GUI architecture](gui_architecture.md) and [GUI README](../kilin/gui/README.md).
 
 ### Saved project settings take precedence

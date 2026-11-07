@@ -188,6 +188,11 @@
               <label for="workspace-path">Projects folder</label>
               <div class="folder-row"><input id="workspace-path" type="text" readonly><button id="browse-workspace" type="button" class="secondary">Browse</button><button id="default-workspace" type="button" class="secondary">Use default</button></div>
               <p id="workspace-note" class="hint hidden"></p>
+              <div id="legacy-workspace-choice" class="hidden">
+                <p id="legacy-workspace-note" class="hint"></p>
+                <button id="use-legacy-workspace" type="button" class="secondary">Use existing projects</button>
+              </div>
+              <p class="hint">Projects remain in the folder you choose. iCloud, OneDrive, or another service may synchronize that folder; choose a non-synchronized location for sensitive data.</p>
               <button id="confirm-workspace" type="button" class="primary hidden">Confirm projects folder</button>
               <p id="confirm-workspace-note" class="hint hidden">This is where KíLín keeps your projects. Confirm it, or choose another folder with Browse.</p>
               <!-- Who made KíLín, from the package authors (pyproject.toml). -->
