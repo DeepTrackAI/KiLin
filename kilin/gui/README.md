@@ -151,8 +151,11 @@ offered only on the start screen. Existing projects are never moved.
 Before anything else, a welcome dialog summarizes KíLín and shows the full
 terms of use (`kilin/gui/terms.txt`), with links to the Apache 2.0 licence
 and Hugging Face's terms and privacy policy, opened in the system browser.
-The user ticks the agreement and clicks Continue; until then the dialog
-cannot be dismissed. The agreed version is saved as `terms_accepted`;
+The user ticks the agreement and clicks Continue; until Qt confirms the
+saved agreement, the dialog cannot be dismissed. A failed save displays an
+error inside the dialog and allows a manual retry without clearing the
+checkbox. If the version changed, setup reloads the terms and requires a
+fresh agreement. The agreed version is saved as `terms_accepted`;
 changing the text needs a new `TERMS_VERSION` in `kilin/gui/preferences.py`,
 so every user is asked again. Settings reopens the terms from its Terms of
 use link, under a copyright line built from the package authors. Settings stays open until the folder is confirmed and the terms

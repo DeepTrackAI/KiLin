@@ -118,8 +118,11 @@ let installCommand = "";
 let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
-// Continue was clicked; Qt is saving the agreement.
+// The in-flight terms version identifies the Qt acknowledgement to accept.
 let acceptingTerms = false;
+let pendingTermsVersion = "";
+// Retain a successful Qt write if an earlier readiness reply arrives late.
+let acknowledgedTermsVersion = "";
 // New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
@@ -1734,15 +1737,26 @@ function renderTerms(text) {
  */
 function showWelcome() {
   const dialog = byId("welcome");
-  byId("terms-agree").checked = termsAccepted;
+  // Do not erase a checked agreement after a failed save: retry is allowed.
+  if (termsAccepted) byId("terms-agree").checked = true;
   byId("terms-agree").closest("label").classList.toggle("hidden", termsAccepted);
-  byId("accept-terms").textContent = termsAccepted ? "Close" : "Continue";
   byId("welcome-hint").classList.add("hidden");
   showSetupConfirmations();
   if (dialog.open) return;
   dialog.showModal();
   // Opening focuses "Read the full terms of use"; the dialog takes it.
   dialog.focus?.();
+}
+
+/**
+ * Display a recoverable save error inside the non-dismissible terms dialog.
+ *
+ * @param message Message to display, or an empty string to clear it.
+ */
+function setWelcomeError(message) {
+  const host = byId("welcome-error");
+  host.textContent = message;
+  host.classList.toggle("hidden", !message);
 }
 
 /**
@@ -1768,8 +1782,11 @@ function showSetupConfirmations() {
   byId("confirm-workspace-note").classList.toggle("hidden", folderConfirmed);
   confirm.disabled = busy || ready || !bridge;
   confirm.title = ready ? "Confirm it from the start screen." : "";
-  // Continue needs the box ticked; Close (terms already accepted) does not.
-  byId("accept-terms").disabled = !termsAccepted
+  // Continue needs the box ticked; Close needs no additional confirmation.
+  const continueButton = byId("accept-terms");
+  continueButton.textContent = termsAccepted ? "Close"
+    : acceptingTerms ? "Saving agreement…" : "Continue";
+  continueButton.disabled = !termsAccepted
     && (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked);
 }
 
@@ -5371,6 +5388,39 @@ function onEvent(raw) {
     error.textContent = data.message;
     error.classList.remove("hidden");
     byId("model-download-status").textContent = data.message;
+  } else if (data.event === "terms_acceptance_saved") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    if (data.version !== termsVersion) {
+      // The page now shows different terms than the version Qt saved.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      setWelcomeError("The terms have changed. Review and accept them again.");
+      bridge?.requestReadiness();
+    } else {
+      acknowledgedTermsVersion = data.version;
+      termsAccepted = true;
+      setWelcomeError("");
+      byId("welcome").close?.();
+    }
+    showSetupConfirmations();
+  } else if (data.event === "terms_acceptance_failed") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    setWelcomeError(data.message || "Could not save the agreement. Try again.");
+    if (data.reason === "outdated_version") {
+      // Do not reuse a checkbox checked for terms that are no longer current.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      bridge?.requestReadiness();
+    }
+    showSetupConfirmations();
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
@@ -5400,10 +5450,22 @@ function onEvent(raw) {
       item.dataset.model = modelId;
       steps.append(item);
     }
-    // After the models: confirm the projects folder, then agree to the terms.
+    // A readiness reply can predate a Qt terms-write acknowledgement.
     folderConfirmed = Boolean(data.folder_confirmed);
-    termsAccepted = Boolean(data.terms_accepted);
-    termsVersion = data.terms_version || "";
+    const nextTermsVersion = data.terms_version || "";
+    if (termsVersion && termsVersion !== nextTermsVersion) {
+      byId("terms-agree").checked = false;
+    }
+    termsVersion = nextTermsVersion;
+    const savedReadiness = acknowledgedTermsVersion === termsVersion
+      && Boolean(acknowledgedTermsVersion);
+    const termsJustAccepted = savedReadiness && Boolean(data.terms_accepted);
+    if (termsJustAccepted || (acknowledgedTermsVersion && !savedReadiness)) {
+      acknowledgedTermsVersion = "";
+    }
+    if (!acceptingTerms) {
+      termsAccepted = Boolean(data.terms_accepted) || savedReadiness;
+    }
     const folderStep = document.createElement("li");
     folderStep.textContent = folderConfirmed
       ? `Projects folder: ${data.projects_folder}`
@@ -5417,12 +5479,9 @@ function onEvent(raw) {
     steps.append(folderStep, termsStep);
     renderTerms(data.terms || "");
     byId("copyright").textContent = data.copyright || "";
-    // Just accepted in the welcome dialog: the folder is the next step.
-    const termsJustAccepted = acceptingTerms && termsAccepted;
-    acceptingTerms = false;
-    // The terms come first: the welcome dialog stays until they are accepted.
+    // The terms dialog closes only on a confirmed write, not on readiness.
     if (!termsAccepted && termsVersion) showWelcome();
-    else if (termsAccepted && byId("accept-terms").textContent === "Continue") byId("welcome").close?.();
+    else if (termsAccepted && !acceptingTerms) byId("welcome").close?.();
     const setupReady = Boolean(data.ready) && folderConfirmed && termsAccepted;
     if (folderConfirmed && termsAccepted) clearSetupReminder();
     // Always available; it opens by itself when something is missing.
@@ -5996,11 +6055,13 @@ byId("terms-agree").addEventListener("change", () => {
 });
 byId("accept-terms").addEventListener("click", () => {
   if (termsAccepted) return byId("welcome").close();
-  if (!bridge || !termsVersion || !byId("terms-agree").checked) return;
-  // Qt saves the agreement; the next readiness check closes the dialog.
+  if (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked) return;
+  // Only the Qt write acknowledgement permits closing the dialog.
   acceptingTerms = true;
+  pendingTermsVersion = termsVersion;
+  setWelcomeError("");
   showSetupConfirmations();
-  bridge.acceptTerms(termsVersion);
+  bridge.acceptTerms(pendingTermsVersion);
 });
 // Escape cannot skip the terms before they are accepted. The browser may
 // close a dialog opened without a click despite a cancelled "cancel", so

@@ -621,6 +621,7 @@ button.question-attachment:hover, button.question-attachment:focus-visible { bor
 .welcome-agree input:checked::after { position: absolute; top: 3px; left: 7px; width: 5px; height: 10px; border: solid white; border-width: 0 2px 2px 0; transform: rotate(45deg); content: ""; }
 .welcome-agree input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .welcome-hint { margin: 18px 0 -6px; color: var(--accent); font-size: 13px; font-weight: 650; }
+.welcome-error { margin: 16px 0 -6px; padding: 10px 12px; border-radius: 8px; color: var(--error-text); background: var(--error-surface); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .welcome-dialog #accept-terms { width: 100%; margin-top: 24px; }
 .welcome-dialog #accept-terms:disabled { opacity: .5; cursor: default; }
 .sync-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }

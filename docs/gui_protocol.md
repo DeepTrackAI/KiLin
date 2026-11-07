@@ -182,9 +182,24 @@ KíLín setup is complete when `ready` (runtime and models), `folder_confirmed`
 and `terms_accepted` are all true. `confirmProjectsFolder` saves the folder in
 use, and `useDefaultProjectsFolder` the standard folder, by its path; like a
 folder chosen with Browse, this creates the folder and restarts the engine.
-`acceptTerms(version)` saves `version` as `terms_accepted` when it is the
-current `terms_version`, then sends the `readiness` engine command; a failed
-write emits `error` instead.
+`acceptTerms(version)` accepts only the current `TERMS_VERSION`. Qt emits
+`terms_acceptance_saved` with the submitted `version` **after** successfully
+writing `terms_accepted`, then sends the `readiness` engine command. A write
+error emits `terms_acceptance_failed` with `version`, `reason: "save_failed"`,
+and `message`, without requesting readiness. An outdated submission emits
+`terms_acceptance_failed` with `reason: "outdated_version"`, `version`,
+`current_version`, and `message`; it makes no preferences change. The page
+requests fresh readiness in that case, clears the old checkbox, and requires
+agreement to the current text. On a write failure it retains the checkbox
+and offers a manual retry. A terms-specific error appears in the modal
+welcome dialog rather than in the engine's generic error display.
+
+The page matches the acknowledgement to its pending version. While waiting,
+an unrelated or stale `readiness` event cannot acknowledge the write, close
+the welcome dialog, or enable another Continue request. A confirmed save is
+retained until a matching readiness response confirms the new preferences;
+only then can the folder-confirmation follow-up run. A backend or model
+failure still affects normal setup readiness independently of terms saving.
 
 ### Indexing-settings failure recovery
 
@@ -250,7 +265,7 @@ can accompany an event.
 
 | Group | Events and representative payloads |
 | --- | --- |
-| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`, `copyright` (the Settings copyright line, built from the package authors)); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`) |
+| Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`, `copyright` (the Settings copyright line, built from the package authors)); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`); `terms_acceptance_saved` (`version`); `terms_acceptance_failed` (`version`, `reason`, `message`, and `current_version` for outdated terms) |
 | Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether the saved directory is unavailable) |
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |

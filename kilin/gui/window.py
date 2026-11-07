@@ -458,25 +458,41 @@ class ChatBridge(QObject):
         ----------
         version: str
             Version of the terms the page showed. Only the current
-            ``TERMS_VERSION`` is saved; an outdated page is ignored.
+            ``TERMS_VERSION`` is saved; an outdated version is rejected.
 
         Notes
         -----
-        The version is saved in the app-wide preferences; readiness is
-        checked again after a successful write.
+        Qt acknowledges successful persistence before requesting readiness.
+        Failures are reported to the welcome dialog for user-controlled retry.
 
         """
 
         if version != TERMS_VERSION:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "outdated_version",
+                "current_version": TERMS_VERSION,
+                "message": (
+                    "The terms of use have changed. Review the current "
+                    "version and accept it again."
+                ),
+            }))
             return
         try:
             write_defaults({"terms_accepted": version})
         except (OSError, ValueError) as error:
             self.event.emit(json.dumps({
-                "event": "error",
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "save_failed",
                 "message": f"Could not save the agreement: {error}",
             }))
             return
+        self.event.emit(json.dumps({
+            "event": "terms_acceptance_saved",
+            "version": version,
+        }))
         self.commandRequested.emit({"action": "readiness"})
 
     @Slot()

@@ -730,6 +730,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
             "sources_checked", "status", "stopped", "tool_settings",
+            "terms_acceptance_failed", "terms_acceptance_saved",
             "trace_ready",
             "usage_progress",
         })
@@ -1018,7 +1019,7 @@ class TestGUIProtocolBridge(unittest.TestCase):
         self.assertEqual(self.commands, [])
 
     def test_accepting_the_terms_saves_the_current_version(self) -> None:
-        """Only the current terms are saved, then readiness is rechecked."""
+        """Confirm only a persisted current-version agreement."""
 
         window = importlib.import_module("kilin.gui.window")
         with patch.object(window, "write_defaults") as write:
@@ -1030,6 +1031,45 @@ class TestGUIProtocolBridge(unittest.TestCase):
             {"terms_accepted": window.TERMS_VERSION}
         )
         self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{
+            "event": "terms_acceptance_failed",
+            "version": "an outdated version",
+            "reason": "outdated_version",
+            "current_version": window.TERMS_VERSION,
+            "message": (
+                "The terms of use have changed. Review the current "
+                "version and accept it again."
+            ),
+        }, {
+            "event": "terms_acceptance_saved",
+            "version": window.TERMS_VERSION,
+        }])
+
+    def test_terms_write_failures_allow_retry(self) -> None:
+        """Do not send readiness for unwritten acceptance."""
+
+        window = importlib.import_module("kilin.gui.window")
+        for problem in (OSError("read-only"), ValueError("invalid file")):
+            with self.subTest(problem=problem):
+                with patch.object(
+                    window, "write_defaults", side_effect=problem,
+                ):
+                    self.bridge.acceptTerms(window.TERMS_VERSION)
+                self.assertEqual(self.commands, [])
+                event = json.loads(self.events[-1])
+                self.assertEqual(event["event"], "terms_acceptance_failed")
+                self.assertEqual(event["reason"], "save_failed")
+                self.assertEqual(event["version"], window.TERMS_VERSION)
+                self.assertIn(str(problem), event["message"])
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once()
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"], "terms_acceptance_saved"
+        )
 
     def test_answer_settings_command_payload(self) -> None:
         """The bridge sends the settings as a command of their own."""
