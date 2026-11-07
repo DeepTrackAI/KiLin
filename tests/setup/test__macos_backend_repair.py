@@ -13,10 +13,16 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+
+from tests.setup._macos_launcher_support import (
+    LauncherSandbox,
+    executable,
+)
 
 _LAUNCHER = (
     Path(__file__).resolve().parents[2] / "setup/macos/launcher.sh"
@@ -58,6 +64,12 @@ class TestMacOSBackendRepair(unittest.TestCase):
                 "#!/bin/sh\nprintf 'arm64\\n'\n", encoding="utf-8"
             )
             uname.chmod(0o755)
+            # Failure-path tests must never open a native alert.
+            mock_alert = mock_bin / "osascript"
+            executable(mock_alert, "#!/bin/sh\nexit 0\n")
+            template = template.replace(
+                "/usr/bin/osascript", shlex.quote(str(mock_alert))
+            )
             for spec in (
                 "kilin[app]==0.1.0",
                 "@RESOURCES@/kilin-0.1.0-py3-none-any.whl[app]",
@@ -94,6 +106,42 @@ class TestMacOSBackendRepair(unittest.TestCase):
                         result.stdout.strip().splitlines(),
                         [str(uv), expanded],
                     )
+
+    @unittest.skipUnless(shutil.which("bash"), "bash is required")
+    def test_versioned_release_passes_bundled_repair_context(self) -> None:
+        """The active release must inherit the app's original wheel.
+
+        """
+
+        spec = "@RESOURCES@/kilin-0.1.0-py3-none-any.whl[app]"
+        sandbox = LauncherSandbox(spec, "b" * 64)
+        try:
+            installed = sandbox.run()
+            self.assertEqual(installed.returncode, 0, installed.stderr)
+            release = sandbox.release_runtime()
+            executable(
+                release / "bin/kilin-gui",
+                "#!/bin/sh\n"
+                'printf "%s\\n%s\\n" '
+                '"$KILIN_APP_UV" "$KILIN_APP_SPEC"\n',
+            )
+            result = sandbox.run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.strip().splitlines(),
+                [
+                    str(sandbox.resources / "uv"),
+                    str(sandbox.resources / "kilin-0.1.0-"
+                        "py3-none-any.whl") + "[app]",
+                ],
+            )
+            self.assertEqual(
+                (sandbox.runtime_root / "active")
+                .read_text(encoding="utf-8").strip(),
+                "releases/" + release.name,
+            )
+        finally:
+            sandbox.close()
 
 
 if __name__ == "__main__":

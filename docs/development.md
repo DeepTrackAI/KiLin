@@ -378,27 +378,61 @@ console.
    `--wheel` puts a wheel built from the checkout inside the app instead,
    to test before publishing.
 
-The app holds only a launcher, the icon and `uv`. Its first launch installs
-Python 3.12 and `kilin[app]` into
+The app holds only a launcher, the icon and `uv`. First launch installs
+Python 3.12 and `kilin[app]` under
 `~/Library/Application Support/kilin/runtime/` (with `install.log`; the
-download cache is removed afterwards), and reinstalls when the app's
-version changes. Deleting `runtime/` removes the installed KíLín; projects
-and preferences beside it stay.
+application-owned download cache is removed after activation). Models
+are downloaded later by the desktop setup flow. Removing `runtime/`
+removes application environments, not projects or preferences beside it.
 
-The macOS launcher serializes runtime installation using the system `lockf`
-utility and a persistent `runtime/.install.lock` file. The kernel releases
-the lock when an installer exits, including after a crash; **do not delete
+The macOS launcher uses stable, **version-specific virtual environments**
+at `runtime/releases/<release-id>/`. The identifier is the SHA-256 digest
+of the expanded installation requirement plus the bundled wheel checksum,
+when provided. A rebuilt wheel with the same version but different bytes
+therefore receives a distinct destination. Python virtual environments are
+never renamed after installation: console scripts may contain absolute
+interpreter paths that would break after relocation.
+
+The small `runtime/active` file selects the current environment as
+`releases/<release-id>`. The launcher validates the `kilin-gui` and Python
+entry points and installed distribution metadata, records a complete
+`.installed` marker, and **atomically replaces** the active pointer only
+after installation succeeds. A crash before activation leaves the previous
+pointer intact; a crash afterwards selects the completed new release. On
+retry, an incomplete *inactive* directory for the requested release is
+rebuilt, while a completed but not yet active release can be reused.
+
+Older versions used `runtime/app` without an active pointer. Such a
+complete installation remains usable when its requirement matches the
+running application; installing a different version preserves the legacy
+environment and activates the versioned release only after validation.
+Failed updates preserve the previous working installation and selection,
+but **do not silently launch the previous version** from a newer app. The
+launcher reports the failure for correction and retry. Previous releases
+are **not** automatically removed: another desktop process may
+still be using one, and model/backend environments can consume significant
+disk space. Keep this in mind when upgrading or rebuilding wheels.
+
+The installer serializes runtime changes using the system `lockf` utility
+and a persistent `runtime/.install.lock` file. The kernel releases the
+lock when an installer exits, including after a crash; **do not delete
 the lock file** to clear a stale install. A concurrent launch waits up to
 five minutes by default and reports an error instead of waiting forever.
-For diagnostics, `KILIN_INSTALL_LOCK_TIMEOUT` sets a wait of 0–600 seconds.
-If the runtime directory or lock file cannot be created, installation stops
-with an error without invoking `uv`. An older app may have left an
-`runtime/.installing` directory: the new launcher does not remove it because
-an old installer might still be running. Quit older KíLín instances, verify
-no installation is in progress, and only then manually remove that legacy
-directory before retrying. The lock file and legacy directory are distinct.
-Runtime updates are not yet transactional; recovery of the previous
-installation after a failed update is a separate change.
+For diagnostics, `KILIN_INSTALL_LOCK_TIMEOUT` sets a wait of 0-600 seconds.
+If the runtime directory or lock file cannot be created, installation
+stops with an error without invoking `uv`. An older app may have left a
+`runtime/.installing` directory: the launcher does not remove it because
+an old installer might still be running. Quit older instances, verify
+that no installation is in progress, and only then manually remove that
+legacy directory before retrying. The file lock and legacy directory are
+distinct.
+
+The launcher continues to show native macOS alerts and notifications for
+real installations. Unit tests use temporary copies with `osascript`
+redirected to an isolated test executable; negative-path tests must not
+open modal dialogs, require approval, or depend on a desktop session. The
+mocked locking/installation suite does not replace a native Apple Silicon
+acceptance test of the actual application and the system `lockf` utility.
 
 For reproducible PR review, compare against the **actual** last approved
 archive/commit, not an earlier working directory. Provide a Git patch and a
