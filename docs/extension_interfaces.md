@@ -105,6 +105,30 @@ Code relationship extractors for Python and MATLAB live under
 execution or complete semantic analysis. Adding another language may also
 require source-unit conventions, graph entity typing and retrieval tests.
 
+## Source-card kind contract (PR3)
+
+`retrievals/source_cards/` introduces an optional, currently inactive
+contract for whole-source cards. A `SourceDescriptor` carries the file's
+identity and existing chunk identifiers, without assigning a content kind
+from a filename suffix. `SourceCard` holds immutable metadata, substantive
+statements with original-chunk provenance, and source/generation/validation
+fingerprints. `SourceCardResult` records `valid`, `not_applicable` or
+`failed` separately from card content.
+
+A trusted Python `SourceCardKind` supplies `identifier`, `schema_version`,
+`validation_version`, `precheck(source)` and `validate(card)`.
+`precheck` must be conservative: `False` means definitely ineligible, while
+`True` does not establish eligibility. It is not a model inference call.
+`SourceCardRegistry` refuses duplicate/unknown names and obsolete card
+versions, verifies generic provenance, then delegates to the kind's own
+schema checks. Kind registration must be explicit in source code; project
+JSON must not contain executable import paths.
+
+This stage adds only data and validation contracts. Neither `paper_index`
+nor the `papers` retrieval path uses the new registry yet. Scientific-paper
+registration, model generation and project-type configuration follow in
+separate PRs. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+
 ## Implementing a built-in tool
 
 ![Validated project intents resolve registered built-in tools, which consume ToolRequest and ToolContext and return ToolResult for checkpointing.](figures/tool-contract.svg)

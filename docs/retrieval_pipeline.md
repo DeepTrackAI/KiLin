@@ -144,6 +144,39 @@ scales does not directly influence fusion, but changing **order** does;
 (2) an optimization must preserve the content and ordering of evidence,
 not just the number of embeddings or the final answer string.
 
+## Generic source-card contracts (PR3)
+
+The `retrievals/source_cards/` package defines reusable **source-card
+records** without activating a new indexing or retrieval path yet. A
+`SourceDescriptor` describes a selected file by its relative path, known
+title, suffix and existing chunk identifiers, including files without
+extractable text. A file extension **does not classify its content**: a PDF
+is not necessarily a scientific paper, and a chunkless image need not have
+a card.
+
+A `SourceCard` contains the source path, registered card-kind ID, schema and
+validation versions, source SHA-256, optional model/generation fingerprints,
+kind-specific metadata and substantive `CardStatement` records. Statements
+refer to original chunk identifiers rather than PDF-only page coordinates.
+Generic validation checks source ownership, nonempty fields, duplicate
+references and that citations resolve to chunks permitted for card creation.
+A kind-specific validator remains responsible for content rules; citations
+establish traceability, **not proof of semantic support**. Only original
+source chunks can provide final answer evidence.
+
+`SourceCardResult` separately represents `valid`, `not_applicable` and
+`failed` outcomes. The `SourceCardRegistry` stores trusted Python kind
+implementations and rejects unknown/duplicate IDs or obsolete versions.
+A kind's deterministic `precheck` may rule out clearly ineligible sources;
+positive results are only candidates, with full eligibility deferred to the
+kind's generation/verification logic. Project JSON never imports kind code.
+
+**This is a contract-only addition.** `paper_cards.py`, the existing
+`paper_index` capability, `indexes/paper_cards.json` and the `papers`
+retrieval strategy continue unchanged. Independent card indexing,
+registration of `scientific_paper`, new generation models and automatic
+card creation are separate later PRs; no migration layer is needed.
+
 ## Paper cards and paper retrieval
 
 In project types with `paper_index`, every document may get a **paper
