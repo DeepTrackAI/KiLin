@@ -69,7 +69,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/descriptors.py`](../kilin/retrievals/source_cards/descriptors.py) | Build source descriptions from the existing selected files and chunks. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/index.py`](../kilin/retrievals/source_cards/index.py) | Validate and search separate source-card records and embeddings, and plan incremental reuse. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/models.py`](../kilin/retrievals/source_cards/models.py) | Represent source cards independently of any particular source kind. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/persistence.py`](../kilin/retrievals/source_cards/persistence.py) | Atomically store source-card outcomes and bound vectors in separate, checksummed files. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/registry.py`](../kilin/retrievals/source_cards/registry.py) | Register trusted source-card kinds without project-defined code imports. | [Tool extension contracts](extension_interfaces.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/context_expansion.py`](../kilin/retrievals/context_expansion.py) | Expand retrieval context from explicit source references in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/__init__.py`](../kilin/retrievals/strategies/__init__.py) | Expose the concrete retrieval strategies and their result records. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
@@ -169,13 +171,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 7 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 21 |
+| Retrieval pipeline | 23 |
 | Source pipeline | 12 |
 | Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 134.**
+**Total production Python modules: 136.**
 
 ## Non-Python resources and UI assets
 

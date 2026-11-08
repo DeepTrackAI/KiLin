@@ -124,10 +124,12 @@ versions, verifies generic provenance, then delegates to the kind's own
 schema checks. Kind registration must be explicit in source code; project
 JSON must not contain executable import paths.
 
-This stage adds only data and validation contracts. Neither `paper_index`
-nor the `papers` retrieval path uses the new registry yet. Scientific-paper
-registration, model generation and project-type configuration follow in
-separate PRs. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+PR3 established the kind and provenance contracts. PR4 adds an independent
+index for cards and their vectors, with separate checked persistence and
+incremental reuse. Neither `paper_index` nor the active `papers` retrieval
+path uses it yet. A future project type can select registered kinds without
+loading arbitrary modules. Scientific-paper registration, generation and
+automatic indexing remain separate PRs. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
 
 ## Implementing a built-in tool
 

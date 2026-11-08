@@ -171,11 +171,49 @@ A kind's deterministic `precheck` may rule out clearly ineligible sources;
 positive results are only candidates, with full eligibility deferred to the
 kind's generation/verification logic. Project JSON never imports kind code.
 
-**This is a contract-only addition.** `paper_cards.py`, the existing
-`paper_index` capability, `indexes/paper_cards.json` and the `papers`
-retrieval strategy continue unchanged. Independent card indexing,
-registration of `scientific_paper`, new generation models and automatic
-card creation are separate later PRs; no migration layer is needed.
+The generic contracts were introduced in PR3. PR4 adds an **independent,
+optional source-card index**, without changing `paper_cards.py`, the existing
+`paper_index` capability, `indexes/paper_cards.json`, or the active `papers`
+retrieval strategy. Registration of `scientific_paper`, dedicated generation
+models, automatic indexing, and retrieval integration follow in later PRs.
+No migration layer for old paper-card files is provided.
+
+### Independent source-card index (PR4)
+
+`retrievals/source_cards/index.py` stores `IndexedSourceCard` outcomes by
+`(source_path, card_kind)` and prepared `SourceCardVector` groups in separate
+containers. A valid card must pass the registered kind's schema checks and
+original-chunk provenance validation before admission with
+`prepare_source_card_index()`. Cached `not_applicable` and `failed` outcomes
+record source SHA-256 and schema/validation versions, so they need not be
+regenerated on every indexing attempt. Failed attempts can be retried on a
+change of generation model/settings or by explicit request; changing the
+model does not invalidate complete valid cards. Missing and stale records
+are identified by `plan_source_card_updates()`, which does not call a model.
+
+`retrievals/source_cards/persistence.py` uses **two separate atomic files**:
+
+- `indexes/source_cards.json` holds content, chunk references and outcomes.
+- `indexes/source_card_vectors.json` holds vector groups and the resolved
+  embedding model identity, without duplicating card content.
+
+Each file has a distinct format identifier and canonical SHA-256 payload
+checksum. Every vector group is also tied to the digest of its corresponding
+card and the exact ordered search texts from its card kind. An embedding
+model or text-projection change invalidates only the affected vectors; an
+unrelated card update does not force all vectors to be regenerated. Missing
+vector files are normal. After a partial two-file update, loading the vector
+file drops outdated groups individually, while retaining matching groups.
+Corrupt or unsupported files raise `ValueError` instead of silently loading
+bad data. Atomic writes protect each individual file, not the pair as a
+transaction; concurrent writers still need higher-level coordination.
+
+`search_source_cards()` performs standalone cosine search over already
+prepared vectors. A caller supplies a query embedding; it does not construct
+one, start a model, or add card text to the evidence presented to an answer.
+The active RAG pipeline does not yet call this channel. The former
+`paper_cards.json` continues to be used until the later cutover; the new
+persistence format intentionally has no migration or compatibility reader.
 
 ## Paper cards and paper retrieval
 
