@@ -16,7 +16,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 from kilin import rag
 from kilin._model_completion import IncompleteModelResponse
@@ -248,6 +248,9 @@ class TestSessionCards(unittest.TestCase):
         folder = TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.session = fixtures._session(Path(folder.name))
+        # This fixture has no real answering model; refresh still releases
+        # and restores its mocked conversation during card generation.
+        self.session._new_chat_session = Mock(return_value=MagicMock())
         self.session.project.profile = SimpleNamespace(
             **{**vars(fixtures._profile()), "type_id": "literature"}
         )

@@ -136,8 +136,9 @@ dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -243,6 +244,7 @@ from kilin.retrievals.source_cards import (
     SourceCardVectorIndex,
 )
 from kilin.retrievals.source_cards.indexing import reconcile_source_cards
+from kilin.source_card_policy import read_source_card_policy
 from kilin.retrievals.papers import (
     DOCUMENT_HEADER_FORMAT,
     DOCUMENT_KINDS,
@@ -2361,6 +2363,158 @@ class RAGSession:
         self.source_changes = source_changes
         self.source_cards = cards
         self.source_card_vectors = vectors
+
+    def regenerate_source_cards(self: RAGSession) -> None:
+        """Regenerate selected cards without rebuilding ordinary indexes.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed or source cards are disabled.
+
+        Notes
+        -----
+        The card model is loaded only while the answering and router
+        models are released. The conversation is restored afterwards.
+        Existing chunk, semantic, lexical, and graph indexes are retained.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        policy = read_source_card_policy(
+            self.project.root, project_type(self.project.profile.type_id)
+        )
+        if not policy.enabled:
+            raise RuntimeError("Enable source cards before regenerating.")
+        cards, vectors = self._prepare_source_cards(
+            self.chunks, self.indexes, self.embedding_session,
+            force_regenerate=True,
+        )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
+
+    def refresh_source_cards(self: RAGSession) -> None:
+        """Reconcile cards without touching ordinary retrieval indexes.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed.
+
+        Notes
+        -----
+        Only missing or outdated cards need inference. A changed model
+        configuration does not invalidate previously valid cards.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        cards, vectors = self._prepare_source_cards(
+            self.chunks, self.indexes, self.embedding_session,
+        )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
+
+    @contextmanager
+    def _card_generation_guard(self: RAGSession) -> Iterator[None]:
+        """Release interactive models while card inference uses memory.
+
+        Yields
+        ------
+        None
+            Source-card inference may run after interactive models close.
+
+        Raises
+        ------
+        RuntimeError
+            If restoring the interactive session fails. The incomplete
+            session is closed explicitly, requiring a project reopen.
+
+        Notes
+        -----
+        The answering history, generation settings, and token totals are
+        restored. A separately loaded router is released and reloaded
+        lazily on its next use. A warm no-generation reconciliation never
+        enters this guard.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        previous = self.chat_session
+        messages = [dict(message) for message in previous.messages]
+        options = {
+            "thinking": previous.thinking,
+            "temperature": previous.temperature,
+            "max_new_tokens": previous.max_new_tokens,
+        }
+        totals = (
+            previous.input_token_total, previous.output_token_total
+        )
+        router = getattr(self, "_router_session", None)
+        self._router_session = None
+        self.chat_session = None
+        release_error = None
+        for model in (
+            router if router is not previous else None, previous
+        ):
+            if model is None:
+                continue
+            try:
+                model.close()
+            except BaseException as error:
+                if release_error is None:
+                    release_error = error
+                else:
+                    release_error.add_note(
+                        f"Additional model release failure: {error!r}"
+                    )
+        if release_error is not None:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                release_error.add_note(
+                    f"Session cleanup failed: {cleanup_error!r}"
+                )
+            raise RuntimeError(
+                "Could not release interactive models for card generation. "
+                "Reopen the project."
+            ) from release_error
+        try:
+            self.trace.emit(
+                "source_cards.chat.released", component="rag"
+            )
+            yield
+        finally:
+            try:
+                restored = self._new_chat_session(
+                    previous.model_id, **options
+                )
+                try:
+                    restored.restore_history(messages)
+                    restored.input_token_total = totals[0]
+                    restored.output_token_total = totals[1]
+                except BaseException:
+                    restored.close()
+                    raise
+                self.chat_session = restored
+                self.trace.emit(
+                    "source_cards.chat.restored", component="rag"
+                )
+            except BaseException as error:
+                self.chat_session = None
+                try:
+                    self.close()
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"Session cleanup failed: {cleanup_error!r}"
+                    )
+                raise RuntimeError(
+                    "Could not restore the answering model after card "
+                    "generation. Reopen the project."
+                ) from error
 
     def use_chat_model(self: RAGSession, model_id: str) -> None:
         """Switch the answering model while preserving conversation state.
@@ -5160,6 +5314,8 @@ class RAGSession:
         chunks: Sequence[Chunk],
         indexes: PersistentIndexes,
         embedding_session: EmbeddingSession,
+        *,
+        force_regenerate: bool = False,
     ) -> tuple[SourceCardIndex, SourceCardVectorIndex | None]:
         """Reconcile cards after ordinary indexes without answering inference.
 
@@ -5171,6 +5327,8 @@ class RAGSession:
             Existing indexes, used to check the card vector dimension.
         embedding_session: EmbeddingSession
             Shared embedding model; no additional model is loaded for vectors.
+        force_regenerate: bool, optional
+            Recreate all selected cards. Defaults to ``False``.
 
         Returns
         -------
@@ -5216,6 +5374,12 @@ class RAGSession:
                 and indexes.semantic.embeddings else None
             ),
             trace=self.trace, progress=report,
+            force_regenerate=force_regenerate,
+            generation_guard=(
+                self._card_generation_guard
+                if getattr(self, "chat_session", None) is not None
+                else None
+            ),
         )
 
     def _parameters(

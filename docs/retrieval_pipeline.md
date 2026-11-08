@@ -595,6 +595,24 @@ See [Tool retrieval and settings](tool_packages.md#tool-retrieval-and-settings)
 and [suggest_reference](../kilin/tools/suggest_reference/README.md) for the
 first opt-in consumer.
 
+### Regeneration and memory-safe refresh
+
+`RAGSession.refresh_source_cards()` reconciles only the derived card and
+embedding caches. `RAGSession.regenerate_source_cards()` explicitly forces
+new card-generation attempts but leaves extracted chunks and semantic,
+lexical and graph indexes unchanged. Both honor the saved project-wide card
+policy and per-source overrides. Model parameters and source eligibility are
+validated by the core, independently of the GUI.
+
+During initial project opening, card generation precedes interactive model
+loading. On refresh, the core checks for pending generation before releasing
+interactive resources. If new cards are needed, it saves the answering
+history, generation settings, and token totals; releases the answering
+and any separately loaded router model; generates cards with the dedicated
+model; then restores the answering session. A warm refresh requiring no
+cards does not reload interactive models. Failure to restore the answering
+model closes the session explicitly, requiring the project to be reopened.
+
 ## Related
 
 [Source pipeline](source_pipeline.md),

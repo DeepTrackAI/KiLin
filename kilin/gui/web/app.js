@@ -105,6 +105,9 @@ let applyingModels = false;
 let closeAfterModelsApply = false;
 // Set while the engine saves indexing settings and rebuilds the index.
 let applyingIndexing = false;
+// Source-card settings are project-owned and independent of answering models.
+let sourceCardSettings = null;
+let applyingSourceCards = false;
 let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
@@ -2093,6 +2096,7 @@ function showSettings(data) {
   }
   if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
+  if (data.source_cards) showSourceCardSettings(data.source_cards);
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
     renderWorkspace(data.workspace_files);
@@ -2123,6 +2127,7 @@ function collectSettings() {
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
     _gui_router_models: { [activeBackend]: currentRouter() },
+    _gui_source_cards: sourceCardValues(),
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
@@ -2134,6 +2139,124 @@ function collectSettings() {
     // Models are downloaded from Settings, never silently while preparing.
     allow_download: false,
   };
+}
+
+/**
+ * Display the core-owned card policy and independent backend models.
+ * @param settings Validated settings supplied by the engine.
+ */
+function showSourceCardSettings(settings) {
+  sourceCardSettings = JSON.parse(JSON.stringify(settings));
+  byId("source-card-enabled").checked = settings.policy.enabled;
+  byId("source-card-automatic").checked = settings.policy.automatic;
+  byId("source-card-kind").value = settings.policy.kind || "";
+  byId("source-card-mlx").value = settings.models.mlx.model_id;
+  byId("source-card-torch").value = settings.models.torch.model_id;
+  const model = settings.models[activeBackend] || settings.models.mlx;
+  byId("source-card-thinking").checked = model.thinking;
+  byId("source-card-temperature").value = model.temperature;
+  byId("source-card-input").value = model.max_input_tokens;
+  byId("source-card-output").value = model.max_new_tokens;
+  byId("regenerate-source-cards").disabled = !ready || !settings.policy.enabled;
+}
+
+/**
+ * Read source-card controls, with shared inference parameters per backend.
+ * @returns Complete request for the core-owned settings validator.
+ */
+function sourceCardValues() {
+  const common = {
+    thinking: byId("source-card-thinking").checked,
+    temperature: Number(byId("source-card-temperature").value),
+    max_input_tokens: Number(byId("source-card-input").value),
+    max_new_tokens: Number(byId("source-card-output").value),
+  };
+  return {
+    policy: {
+      enabled: byId("source-card-enabled").checked,
+      kind: byId("source-card-kind").value || null,
+      automatic: byId("source-card-automatic").checked,
+    },
+    models: {
+      mlx: { ...common, model_id: byId("source-card-mlx").value.trim() },
+      torch: { ...common, model_id: byId("source-card-torch").value.trim() },
+    },
+  };
+}
+
+/**
+ * Reject malformed numerical card settings before submitting them to core.
+ * @returns Error message, or an empty string for valid values.
+ */
+function sourceCardProblem() {
+  const config = sourceCardValues();
+  if (!config.models.mlx.model_id || !config.models.torch.model_id) {
+    return "Choose valid MLX and PyTorch source-card model identifiers.";
+  }
+  const value = config.models.mlx;
+  if (!Number.isFinite(value.temperature) || value.temperature < 0
+      || byId("source-card-temperature").value.trim() === "") {
+    return "Source-card temperature must be finite and nonnegative.";
+  }
+  for (const key of ["max_input_tokens", "max_new_tokens"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 1
+        || value[key] > 200000) {
+      return "Source-card token limits must be between 1 and 200,000.";
+    }
+  }
+  if (config.policy.enabled && !config.policy.kind) {
+    return "Choose a registered card kind when cards are enabled.";
+  }
+  return "";
+}
+
+/**
+ * Report valid, excluded, failed and embedded cards from current indexing.
+ * @param summary Core-provided persisted card outcome counts.
+ */
+function showSourceCardSummary(summary) {
+  if (!summary) return;
+  byId("source-card-summary").textContent =
+    `${summary.valid} valid · ${summary.not_applicable} ineligible · `
+    + `${summary.failed} failed · ${summary.embedded} embedded `
+    + `(${summary.total} recorded)`;
+}
+
+/**
+ * Persist card settings independently of normal model and index settings.
+ */
+function saveSourceCardSettings() {
+  if (!bridge || busy) return;
+  const problem = sourceCardProblem();
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  if (!ready) {
+    sourceCardSettings = sourceCardValues();
+    byId("model-download-status").textContent =
+      "Source-card settings kept for the new project.";
+    return;
+  }
+  applyingSourceCards = true;
+  setBusy(true, "Updating source-card settings…");
+  bridge.saveSourceCardSettings(JSON.stringify(sourceCardValues()));
+}
+
+/**
+ * Request fresh cards only after confirmation; never rebuild chunk indexes.
+ */
+async function regenerateSourceCards() {
+  if (!ready || !bridge || busy) return;
+  if (!await askKilin(
+    "Regenerate source cards?",
+    "This replaces derived card summaries using the saved generation "
+      + "model. Original sources and passage indexes are unchanged.",
+    "Regenerate",
+  )) return;
+  applyingSourceCards = true;
+  setBusy(true, "Regenerating source cards…");
+  bridge.regenerateSourceCards();
 }
 
 /**
@@ -3368,6 +3491,10 @@ function showProgress(data) {
     details.push(`about ${seconds(data.eta_seconds)} left`);
   }
   byId("activity-detail").textContent = details.join(" · ");
+  if (data.stage === "building_source_cards") {
+    byId("source-card-progress").textContent =
+      `Generating source cards: ${data.current ?? 0} / ${data.total ?? 0}`;
+  }
 }
 
 /**
@@ -5732,6 +5859,17 @@ function onEvent(raw) {
     answerSettingsSaved(data);
   } else if (data.event === "answer_settings_failed") {
     answerSettingsFailed(data);
+  } else if (data.event === "source_cards_applied"
+      || data.event === "source_cards_regenerated") {
+    applyingSourceCards = false;
+    if (data.source_cards) showSourceCardSettings(data.source_cards);
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "Card indexing complete.";
+    byId("model-download-status").textContent =
+      data.event === "source_cards_applied"
+        ? "Saved source-card settings in profile.ini."
+        : "Source cards regenerated; other indexes unchanged.";
+    setBusy(false);
   } else if (data.event === "indexing_applied") {
     applyingIndexing = false;
     profile = data.profile;
@@ -5773,7 +5911,10 @@ function onEvent(raw) {
       byId("backend").value = profile.backend;
       showIndexingFields();
       showModelFields();
+      if (data.source_cards) showSourceCardSettings(data.source_cards);
     }
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "";
     activeProjectTypeId = data.type_id;
     // Reopening the same project need not discard a queued save that has
     // not yet been acknowledged. A different project starts fresh.
@@ -6022,6 +6163,10 @@ function onEvent(raw) {
     // A failed switch may already have released the previous session.
     // Do not show its stale conversation or claim it is still active.
     if (data.resume_released) returnToLaunch();
+    if (typeof applyingSourceCards !== "undefined" && applyingSourceCards) {
+      applyingSourceCards = false;
+      if (sourceCardSettings) showSourceCardSettings(sourceCardSettings);
+    }
     if (applyingIndexing) {
       // Not saved: show the settings still in effect.
       applyingIndexing = false;
@@ -6216,6 +6361,11 @@ byId("project-form").addEventListener("submit", (event) => {
     openModels();
     byId("model-download-status").textContent = "Download the selected models in Settings before preparing the project.";
     return;
+  }
+  const cardProblem = sourceCardProblem();
+  if (cardProblem) {
+    openModels();
+    return showError(cardProblem);
   }
   const selected = Object.fromEntries(
     selectedSources.map((path) => [path, [...(checkedFiles.get(path) || [])]]),
@@ -6730,6 +6880,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
+
+byId("save-source-card-models").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("save-source-card-policy").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("regenerate-source-cards").addEventListener(
+  "click", regenerateSourceCards,
+);
 
 // Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {

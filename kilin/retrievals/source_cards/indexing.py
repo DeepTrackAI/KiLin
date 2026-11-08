@@ -42,6 +42,8 @@ Examples
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
+from typing import ContextManager
 from pathlib import Path
 from typing import Final
 
@@ -106,6 +108,8 @@ def reconcile_source_cards(
     generator_factory: Callable[..., SourceCardGenerator] = (
         SourceCardGenerator
     ),
+    generation_guard: Callable[[], ContextManager[None]] | None = None,
+    force_regenerate: bool = False,
 ) -> tuple[SourceCardIndex, SourceCardVectorIndex | None]:
     """Reconcile saved cards and vectors with current selected sources.
 
@@ -131,6 +135,12 @@ def reconcile_source_cards(
         Count-based callback for pending generations. Defaults to ``None``.
     generator_factory: Callable[..., SourceCardGenerator], optional
         Isolated generation-session factory for deterministic tests.
+    generation_guard: Callable[[], ContextManager[None]] | None, optional
+        Invoked only when generation is pending, enclosing model loading.
+        Used to release interactive models before the dedicated model.
+    force_regenerate: bool, optional
+        Recreate selected card outcomes even if previously valid.
+        Defaults to ``False``.
 
     Returns
     -------
@@ -180,7 +190,8 @@ def reconcile_source_cards(
         _log_error(trace, "source_cards.load.failed", error)
         previous = SourceCardIndex(())
     plan = plan_source_card_updates(
-        previous, sources, hashes, kinds, chunks, SOURCE_CARD_KINDS,
+        SourceCardIndex(()) if force_regenerate else previous,
+        sources, hashes, kinds, chunks, SOURCE_CARD_KINDS,
         generation_model_id=settings.model_id,
         generation_settings=settings.fingerprint(),
     )
@@ -188,38 +199,77 @@ def reconcile_source_cards(
     by_path: dict[Path, list[Chunk]] = {}
     for chunk in chunks:
         by_path.setdefault(chunk.path, []).append(chunk)
-    pending = plan.pending if policy.automatic else ()
+    pending = plan.pending if policy.automatic or force_regenerate else ()
     if pending:
-        with generator_factory(
-            settings, backend=backend,
-            allow_download=project.profile.allow_download, trace=trace,
-        ) as generator:
-            for number, (path, kind_id) in enumerate(pending, 1):
-                kind = SOURCE_CARD_KINDS.get(kind_id)
-                if kind_id != "scientific_paper":
-                    raise ValueError("Card generation kind is unsupported.")
-                try:
-                    result = generate_card(
-                        sources[path], by_path.get(path, ()),
-                        source_sha256=hashes[path], generator=generator,
-                    )
-                    if result.status == CARD_STATUS_VALID:
-                        SOURCE_CARD_KINDS.validate(
-                            result.card, sources[path], by_path.get(path, ())
-                        )
-                except Exception as error:
-                    _log_error(trace, "source_cards.generate.failed", error)
-                    result = SourceCardResult(
-                        path, kind_id, CARD_STATUS_FAILED,
-                        reason=f"Generation failed: {type(error).__name__}.",
-                    )
-                records.append(IndexedSourceCard(
-                    result, hashes[path], kind.schema_version,
-                    kind.validation_version, settings.model_id,
-                    settings.fingerprint(),
-                ))
-                if progress is not None:
-                    progress(number, len(pending))
+        guard = (
+            generation_guard() if generation_guard is not None
+            else nullcontext()
+        )
+        with guard:
+            try:
+                with generator_factory(
+                    settings, backend=backend,
+                    allow_download=project.profile.allow_download,
+                    trace=trace,
+                ) as generator:
+                    for number, (path, kind_id) in enumerate(pending, 1):
+                        kind = SOURCE_CARD_KINDS.get(kind_id)
+                        if kind_id != "scientific_paper":
+                            raise ValueError(
+                                "Card generation kind is unsupported."
+                            )
+                        try:
+                            result = generate_card(
+                                sources[path], by_path.get(path, ()),
+                                source_sha256=hashes[path],
+                                generator=generator,
+                            )
+                            if result.status == CARD_STATUS_VALID:
+                                SOURCE_CARD_KINDS.validate(
+                                    result.card, sources[path],
+                                    by_path.get(path, ()),
+                                )
+                        except Exception as error:
+                            _log_error(
+                                trace, "source_cards.generate.failed", error
+                            )
+                            result = SourceCardResult(
+                                path, kind_id, CARD_STATUS_FAILED,
+                                reason=(
+                                    "Generation failed: "
+                                    f"{type(error).__name__}."
+                                ),
+                            )
+                        records.append(IndexedSourceCard(
+                            result, hashes[path], kind.schema_version,
+                            kind.validation_version, settings.model_id,
+                            settings.fingerprint(),
+                        ))
+                        if progress is not None:
+                            progress(number, len(pending))
+            except Exception as error:
+                # Model load/entry failures do not prevent ordinary
+                # passage retrieval. Only unfinished sources are failed.
+                _log_error(trace, "source_cards.model.failed", error)
+                completed = {record.key for record in records}
+                for number, (path, kind_id) in enumerate(pending, 1):
+                    if (path, kind_id) in completed:
+                        continue
+                    kind = SOURCE_CARD_KINDS.get(kind_id)
+                    records.append(IndexedSourceCard(
+                        SourceCardResult(
+                            path, kind_id, CARD_STATUS_FAILED,
+                            reason=(
+                                "Model unavailable: "
+                                f"{type(error).__name__}."
+                            ),
+                        ),
+                        hashes[path], kind.schema_version,
+                        kind.validation_version, settings.model_id,
+                        settings.fingerprint(),
+                    ))
+                    if progress is not None:
+                        progress(number, len(pending))
     cards = prepare_source_card_index(
         sorted(records, key=lambda record: (
             record.result.path.as_posix(), record.result.kind

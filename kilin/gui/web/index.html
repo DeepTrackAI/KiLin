@@ -224,6 +224,27 @@
                 <select id="query-format"><option value="qwen3">Qwen3</option><option value="plain">Plain text</option></select>
               </div>
 
+          <section class="source-card-settings" aria-labelledby="card-model-title">
+            <h4 id="card-model-title">Source-card generation</h4>
+            <p class="hint">Independent Qwen3-8B models create scientific-paper cards during indexing. Models are loaded only when cards need generation.</p>
+            <label for="source-card-mlx">MLX generation model</label>
+            <input id="source-card-mlx" type="text" autocomplete="off">
+            <label for="source-card-torch">PyTorch generation model</label>
+            <input id="source-card-torch" type="text" autocomplete="off">
+            <div class="settings-grid">
+              <label for="source-card-temperature">Temperature
+                <input id="source-card-temperature" type="number" min="0" step="0.1">
+              </label>
+              <label for="source-card-input">Maximum input tokens
+                <input id="source-card-input" type="number" min="1" max="200000">
+              </label>
+              <label for="source-card-output">Maximum output tokens
+                <input id="source-card-output" type="number" min="1" max="200000">
+              </label>
+            </div>
+            <label class="check-row" for="source-card-thinking"><input id="source-card-thinking" type="checkbox"> Request thinking during card generation</label>
+            <button id="save-source-card-models" class="secondary" type="button">Save source-card settings</button>
+          </section>
           <p id="models-backend" class="hint hidden"></p>
           <div id="model-list"></div>
           </section>
@@ -249,6 +270,20 @@
               <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
               <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
               <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+              <section class="source-card-settings" aria-labelledby="card-index-title">
+                <h4 id="card-index-title">Source cards</h4>
+                <p class="hint">Scientific-paper cards are optional derived indexes. Original passages remain the evidence for answers. Other document kinds may be added later.</p>
+                <label class="check-row" for="source-card-enabled"><input id="source-card-enabled" type="checkbox"> Enable source cards</label>
+                <label for="source-card-kind">Preferred card kind</label>
+                <select id="source-card-kind"><option value="">None</option><option value="scientific_paper">Scientific paper</option></select>
+                <label class="check-row" for="source-card-automatic"><input id="source-card-automatic" type="checkbox"> Generate missing cards during indexing</label>
+                <p id="source-card-summary" class="hint" role="status">No card status available.</p>
+                <p id="source-card-progress" class="hint" role="status"></p>
+                <div class="source-card-actions">
+                  <button id="save-source-card-policy" class="secondary" type="button">Save source-card settings</button>
+                  <button id="regenerate-source-cards" class="secondary" type="button">Regenerate source cards</button>
+                </div>
+              </section>
             </div>
           </section>
         </div>

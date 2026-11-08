@@ -15,6 +15,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from contextlib import contextmanager
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
@@ -298,6 +299,96 @@ class TestCardIndexing(unittest.TestCase):
         _, vectors = self._run()
         self.assertFalse(self.calls)
         self.assertEqual(len(vectors.records), 2)
+
+    def test_generation_guard_only_when_pending_and_releases_on_error(self):
+        events = []
+
+        @contextmanager
+        def guard():
+            events.append("released")
+            try:
+                yield
+            finally:
+                events.append("restored")
+
+        def factory(settings, **_kwargs):
+            events.append("generator_created")
+            return _Generator(
+                settings, calls=self.calls, events=events,
+                response=self.response,
+            )
+
+        args = (
+            self.project, self.chunks, self._manifest(), self.embed,
+        )
+        options = {
+            "backend": "torch", "generation_guard": guard,
+            "generator_factory": factory,
+        }
+        reconcile_source_cards(*args, **options)
+        self.assertEqual(events[0:3], [
+            "released", "generator_created", "created",
+        ])
+        self.assertEqual(events[-2:], ["closed", "restored"])
+        events.clear()
+        reconcile_source_cards(*args, **options)
+        self.assertFalse(events)
+        self.response = RuntimeError("generation failed")
+        reconcile_source_cards(*args, force_regenerate=True, **options)
+        self.assertEqual(events[-1], "restored")
+
+    def test_manual_regeneration_ignores_valid_and_automatic_caches(self):
+        self._run()
+        self.calls.clear()
+        write_source_card_policy(
+            self.root, SourceCardPolicy(True, "scientific_paper", False)
+        )
+        self.embed.embed_documents.reset_mock()
+        calls = self.calls
+
+        def factory(settings, **_kwargs):
+            return _Generator(
+                settings, calls=calls, events=self.events,
+                response=_answer(),
+            )
+
+        cards, vectors = reconcile_source_cards(
+            self.project, self.chunks, self._manifest(), self.embed,
+            backend="torch", force_regenerate=True,
+            generator_factory=factory,
+        )
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(cards.records), 2)
+        self.assertEqual(len(vectors.records), 2)
+        self.embed.embed_documents.assert_not_called()
+
+    def test_unavailable_generation_model_records_failures_not_crash(self):
+        events = []
+
+        @contextmanager
+        def guard():
+            events.append("released")
+            try:
+                yield
+            finally:
+                events.append("restored")
+
+        def factory(*_args, **_kwargs):
+            raise OSError("model missing")
+
+        cards, vectors = reconcile_source_cards(
+            self.project, self.chunks, self._manifest(), self.embed,
+            backend="torch", generator_factory=factory,
+            generation_guard=guard,
+        )
+        self.assertEqual(events, ["released", "restored"])
+        self.assertEqual(len(cards.records), 2)
+        self.assertTrue(all(
+            record.result.status == CARD_STATUS_FAILED
+            for record in cards.records
+        ))
+        self.assertFalse(vectors.records)
+        self.assertTrue(self._files()[0].exists())
 
 
 if __name__ == "__main__":

@@ -207,6 +207,24 @@ suites, plus the relevant source/model/reference tests. Native dialogs,
 rendering and PDF behavior still require isolated supported-host checks,
 including the opt-in [WebEngine smoke suite](../tests/kilin/gui/test__webengine_smoke.py).
 
+## Source-card project controls
+
+The Models panel includes independent source-card generation models for MLX
+and PyTorch, plus thinking, temperature, input- and output-token limits.
+The Indexing panel exposes the project-wide enable switch, preferred kind
+(`scientific_paper`), automatic generation, outcome counts, and a confirmed
+Regenerate action. Both panels submit complete settings to the core; they
+neither construct cards nor manage cached vector files directly.
+
+Settings are available before creating a project. `ChatEngine` validates and
+writes them after the project is prepared but before indexing starts, so a
+user can disable source cards and avoid loading the generation model. Cards
+are derived and independently regenerable; changing their model does not
+invalidate valid cached cards. Failed card generation leaves ordinary
+semantic, lexical, and graph retrieval available. Per-source settings remain
+in the core-owned `source_card_sources.json` file, without an editor in the
+initial GUI integration.
+
 ## Related
 
 [Architecture](architecture.md),
