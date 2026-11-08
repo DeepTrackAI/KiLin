@@ -15,7 +15,7 @@ rewrite an existing project's configuration.
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
-| Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort/router choices | Persistent, authoritative for the opened project |
+| Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort choices and core-owned router settings | Persistent, authoritative for the opened project |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
 | Runtime state | Backend availability, cached revisions, loaded sessions | Selected implementation state | Resolved at execution, not a package default |
 
@@ -46,12 +46,14 @@ backend and model IDs, then reports project-specific loading failures without
 silently substituting current creation defaults.
 
 `kilin.project.configure_project()` is the core API for validated project
-settings. GUI-specific project settings (effort levels, search-depth steps,
-router model) are saved in additional `profile.ini` sections by
-`kilin.gui.model_settings`. They are not a separate active
-`effort_levels.json` database. The module still supports a controlled
-migration of recognized older files on first use; moving or deleting files
-outside that migration is not authorized.
+profile settings. The router is separately managed by the GUI-independent
+`kilin.model_settings.read_router_model()` and `write_router_model()`
+functions, which use the project's `[router]` section. The GUI maintains
+effort levels and search-depth steps in the same `profile.ini` through
+`kilin.gui.model_settings`; it no longer owns router persistence. These
+settings are not a separate active `effort_levels.json` database. The GUI
+still supports controlled migration of recognized older files on first use;
+moving or deleting files outside that migration is not authorized.
 
 ### Important distinctions
 
@@ -86,10 +88,10 @@ validator does not rewrite or repair the shipped resource.
 
 The sections are `DEFAULT_MODELS`, `REPOSITORY`, `ANSWERING`, `RAG`, `CHAT`,
 `PROJECT_PROFILE`, `CHUNKING`, `PROJECT_TYPES`, and `RETRIEVAL`. The
-`DEFAULT_MODELS` section provides initial MLX/PyTorch chat and embedding
-identifiers. `PROJECT_TYPES` provides bounded fallbacks for fields omitted
-in an intent (for example a default document token budget); it does not
-select which intent should answer an arbitrary question. `CHAT` owns the
+`DEFAULT_MODELS` section provides initial MLX/PyTorch chat, router, and
+embedding identifiers. `PROJECT_TYPES` provides bounded fallbacks for
+fields omitted in an intent (for example a default document token budget);
+it does not select which intent should answer an arbitrary question. `CHAT` owns the
 language/script vocabulary used in positive CJK output requests; a keyword
 mention alone does not grant permission. The per-project `[generation]`
 `block_unrequested_cjk` flag controls whether suppression is enabled, with

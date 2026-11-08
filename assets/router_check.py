@@ -6,9 +6,9 @@ and questions about code that selects, reads, or skips files, which belong
 to ``code_explanation``. Both groups must route correctly; a change to the
 intent descriptions that fixes one group must not break the other.
 
-Only the router runs: no project is opened and nothing is retrieved. The
-router uses the code project type's default chat model, as a session does
-when no separate router model is configured.
+Only the router runs: no project is opened and nothing is retrieved.
+The router uses the packaged core router default unless ``--model``
+overrides it. No project or GUI session is required.
 
 Usage, from the repository root::
 
@@ -88,7 +88,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--model",
-        help="Router model; defaults to the code project's chat model.",
+        help="Router model; defaults to the core router model.",
     )
     parser.add_argument(
         "--backend",
@@ -105,11 +105,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     import kilin
     from kilin.answering import route_question
-    from kilin.project import default_project_profile
 
     backend = kilin.choose_backend(args.backend)
-    profile = default_project_profile(kilin.PROJECT_TYPE_ID_CODE)
-    model = args.model or profile.chat_model(backend)
+    from kilin.model_settings import default_router_model
+    model = args.model or default_router_model(backend)
     project = kilin.project_type(kilin.PROJECT_TYPE_ID_CODE)
     print(f"Router model: {model} ({backend})")
     router = kilin.ChatSession(

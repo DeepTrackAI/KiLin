@@ -23,12 +23,17 @@ identifiers supplied by a project or caller. The identifiers use the form
 | --- | --- | --- |
 | `DEFAULT_CHAT_MODEL_MLX` | `Qwen/Qwen3-8B-MLX-4bit` | Initial chat model identifier for the MLX backend. |
 | `DEFAULT_CHAT_MODEL_TORCH` | `Qwen/Qwen3-8B` | Initial chat model identifier for the PyTorch backend. |
+| `DEFAULT_ROUTER_MODEL_MLX` | `Qwen/Qwen3-4B-MLX-4bit` | Core default intent router for MLX when a project has no saved router. |
+| `DEFAULT_ROUTER_MODEL_TORCH` | `Qwen/Qwen3-4B` | Core default intent router for PyTorch when a project has no saved router. |
 | `DEFAULT_EMBEDDING_MODEL_MLX` | `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` | Initial embedding model identifier for MLX. |
 | `DEFAULT_EMBEDDING_MODEL_TORCH` | `Qwen/Qwen3-Embedding-0.6B` | Initial embedding model identifier for PyTorch. |
 
-All four values must be nonempty strings. The selected model and backend may
-be overridden in a project profile. These defaults do not automatically
-download a model.
+All six values must be nonempty strings. Core router selection reads the
+project's saved ``[router]`` setting first; the packaged router default
+is used only when the project has no saved or legacy router. Explicit
+``RAGSession(router_model=...)`` overrides the saved selection for that
+session. The GUI may save a user-preference router for a newly created
+project. These defaults do not automatically download a model.
 
 ## `REPOSITORY` — source-file selection
 

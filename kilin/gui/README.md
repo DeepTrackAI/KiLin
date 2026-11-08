@@ -427,7 +427,9 @@ default is Qwen3-4B on both backends, with backend-specific model IDs in
 `defaults.json`. A change applies at once: a separately loaded router
 model is released, and the replacement loads when first needed. Project
 choices are saved per backend in the `[router]` section of `profile.ini`;
-application-wide choices are saved as user-preference overrides.
+application-wide choices are saved as user-preference overrides. The
+core (`kilin.model_settings`) reads these same project settings when
+`RAGSession` is opened directly from Python, without starting the GUI.
 
 **GUI defaults** ship in the read-only
 `kilin/gui/defaults.json`: appearance, the backend new projects are made
