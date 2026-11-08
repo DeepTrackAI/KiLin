@@ -14,8 +14,11 @@ cells", the tool:
    colon; otherwise the router model copies it out of the question, and
    its copy is used only when most of its words are the question's. A
    statement shorter than `MIN_WORDS` words gets a request to write it.
-2. Ranks project passages with KíLín's hybrid ranking and keeps the
-   `FILES` papers with the best-ranked passages. An independent paper is
+2. Uses the configured `DISCOVERY_STRATEGY`: `hybrid` (default) ranks
+   project passages and keeps the `FILES` best-related papers, while
+   `source_first` ranks sources across semantic, lexical, graph, and
+   scientific-paper-card channels within a separate `DISCOVERY_TOKENS`
+   evidence budget. An independent paper is
    **not** excluded merely because it contains the requested sentence
    verbatim; only a positively identified draft should be excluded.
 3. Judges each paper with the answering model (`_shared/claims.py`): its
@@ -64,6 +67,12 @@ maximum output tokens by default (`ANSWER_TOKENS` is `null`). An explicit
 `ANSWER_TOKENS` value imposes a per-call cap. Router calls remain
 deterministic.
 
+With `source_first`, card matches identify candidates but do not establish
+claim support. The tool still calls the complete hybrid `rank()` interface
+for each candidate's original passages and may therefore perform a second
+query embedding. Without the shared retrieval callback, opting in raises
+an explicit error rather than silently reverting to hybrid discovery.
+
 Its `defaults.json` is independent of `kilin_defaults.json`.
 Project-type tool settings override the keys in `SETTINGS`. Other sections
 are internal thresholds. All values are read and validated on import.
@@ -88,6 +97,13 @@ are internal thresholds. All values are read and validated on import.
   papers. Allowed values: always, when_large, never.
 - `LARGE_BATCHES` (default `5`): With `when_large`, plans with more papers
   than this ask first. Allowed range: 0–1000.
+- `DISCOVERY_STRATEGY` (default `"hybrid"`): Candidate selection by
+  complete passage ranking (`hybrid`) or four-channel source ranking
+  (`source_first`); both preserve the existing model-based evidence check.
+- `DISCOVERY_TOKENS` (default `8000`): Maximum estimated evidence tokens
+  in a bounded `source_first` discovery request. Allowed range: 300–16000.
+  This is separate from per-paper `PASSAGE_TOKENS`, model output tokens,
+  and ordinary answering-intent retrieval limits.
 
 ### `STATEMENT`
 

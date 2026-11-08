@@ -569,6 +569,32 @@ labels, old-cache rejection and explicit failure cases. A deterministic
 unit substitute validates structure, not live embedding quality; evaluate
 ranking quality separately before claiming a retrieval improvement.
 
+## Tool-owned bounded retrieval (PR10)
+
+The core `RetrievalRequest` and `RetrievalResult` records in
+`retrievals/requests.py` provide an explicit, model-free retrieval boundary
+for registered tools. `ToolContext.retrieve(request)` delegates to the same
+`RAGSession._retrieve()` path used by ordinary answering. The request owns
+its strategy (`hybrid` or `source_first`), `EvidenceLimits`, optional
+source-relative scope, comparison behavior, and optional registered
+source-card-kind filter. The result returns original indexed `Chunk` objects
+in citation order, the source-ranked candidates, and a deterministic coverage
+report. A selected source may not have a passage that fits the token budget;
+selection is **not** evidence that it supports the user's question.
+
+Tools must opt in; `ToolContext.rank(query)` still returns a complete hybrid
+ranking without source cards or hard evidence limits. Exhaustive scanners
+continue using full rankings or original chunks. `retrieve()` never inherits
+ordinary answering-intent limits: tools must declare their own budgets in
+validated tool settings. The hard limits cover selected original passages,
+source headers and estimated evidence tokens, not model output, full chat
+history, or the complete source contents. Unknown card kinds are rejected,
+and card-kind filtering applies only to source-first discovery.
+
+See [Tool retrieval and settings](tool_packages.md#tool-retrieval-and-settings)
+and [suggest_reference](../kilin/tools/suggest_reference/README.md) for the
+first opt-in consumer.
+
 ## Related
 
 [Source pipeline](source_pipeline.md),

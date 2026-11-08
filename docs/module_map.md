@@ -66,6 +66,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/document_reading.py`](../kilin/retrievals/document_reading.py) | Read one whole document or function as evidence. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/paper_cards.py`](../kilin/retrievals/paper_cards.py) | Retain the former paper-card helpers for standalone regressions (inactive in live RAG). | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/requests.py`](../kilin/retrievals/requests.py) | Define bounded retrieval requests and results for core and tools. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/papers.py`](../kilin/retrievals/papers.py) | Describe the documents of a literature project for searching. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
@@ -178,13 +179,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 28 |
+| Retrieval pipeline | 29 |
 | Source pipeline | 12 |
 | Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 143.**
+**Total production Python modules: 144.**
 
 ## Non-Python resources and UI assets
 

@@ -75,6 +75,10 @@ Module Structure
 
     One chunk returned by lexical ranking.
 
+- ``RetrievalRequest`` and ``RetrievalResult``
+
+    Tool-owned bounded retrieval inputs and original-chunk outputs.
+
 - ``PersistentIndexes``
 
     Retrieval data saved for the same repository state.
@@ -178,6 +182,10 @@ Examples
 
 """
 
+from kilin.retrievals.requests import (
+    RetrievalRequest,
+    RetrievalResult,
+)
 from kilin.retrievals.persistence import (
     PersistentIndexes,
     indexes_are_current,
@@ -247,6 +255,8 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "RetrievalRequest",
+    "RetrievalResult",
     "ContextExpansionPlan",
     "SemanticIndex",
     "SemanticResult",

@@ -216,6 +216,7 @@ from kilin.retrievals.evidence_budget import (
     evidence_block,
 )
 from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
 from kilin.retrievals.strategies.retrieval_semantic import (
     _validate_semantic_embeddings,
 )
@@ -237,6 +238,7 @@ from kilin.retrievals.source_cards.index import (
     search_source_cards,
 )
 from kilin.retrievals.source_cards import (
+    SOURCE_CARD_KINDS,
     SourceCardIndex,
     SourceCardVectorIndex,
 )
@@ -3300,6 +3302,7 @@ class RAGSession:
         source_first: tuple[int, bool] | None = None,
         source_limits: EvidenceLimits | None = None,
         source_report: dict[str, object] | None = None,
+        card_kinds: tuple[str, ...] = (),
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3347,6 +3350,9 @@ class RAGSession:
         source_report: dict[str, object] | None, optional
             Optional mutable output for selected and available source paths
             and evidence-budget diagnostics. Defaults to ``None``.
+        card_kinds: tuple[str, ...], optional
+            Only these card kinds participate in source-first discovery.
+            Empty permits every kind. Defaults to ``()``.
 
         Returns
         -------
@@ -3396,6 +3402,8 @@ class RAGSession:
             raise ValueError("Invalid source_first retrieval settings.")
         if source_limits is not None and source_first is None:
             raise ValueError("Source limits require source_first retrieval.")
+        if card_kinds and source_first is None:
+            raise ValueError("Card filters require source_first retrieval.")
         if not self.chunks:
             report("No indexed source passages; skipping retrieval")
             return ()
@@ -3465,7 +3473,10 @@ class RAGSession:
             query_vector = None
             has_source_cards = (
                 isinstance(vector_index, SourceCardVectorIndex)
-                and bool(vector_index.records)
+                and any(
+                    not card_kinds or entry.kind in card_kinds
+                    for entry in vector_index.records
+                )
             )
             if (
                 (papers is not None and card_vectors)
@@ -3612,6 +3623,11 @@ class RAGSession:
                 if query_vector is not None and has_source_cards
                 else ()
             )
+            if card_kinds:
+                card_matches = tuple(
+                    match for match in card_matches
+                    if match.kind in card_kinds
+                )
             chosen = self._source_passages(
                 semantic_results,
                 lexical_results,
@@ -3875,6 +3891,130 @@ class RAGSession:
         )
         return evidence
 
+    def _retrieve_for_tool(
+        self: RAGSession,
+        request: RetrievalRequest,
+        trace_turn_id: str | None = None,
+    ) -> RetrievalResult:
+        """Return bounded original chunks through the shared tool API.
+
+        Parameters
+        ----------
+        request: RetrievalRequest
+            Tool-owned retrieval strategy, source scope, and hard limits.
+        trace_turn_id: str | None, optional
+            Active tool turn, used for retrieval trace events.
+
+        Returns
+        -------
+        RetrievalResult
+            Source-ranked candidates, original chunks, and coverage.
+
+        Raises
+        ------
+        TypeError
+            If the request is not a validated retrieval request.
+        RuntimeError
+            If returned evidence cannot be located in the source index.
+
+        Notes
+        -----
+        Reuse the answering pipeline's indexing and query embeddings.
+        This method makes no language-model calls and does not change the
+        active conversation. Caller limits are independent of project-type
+        answering intents; full ``ToolContext.rank`` remains available.
+
+        """
+
+        if not isinstance(request, RetrievalRequest):
+            raise TypeError("Expected a RetrievalRequest.")
+        limits = request.limits
+        for kind in request.card_kinds:
+            SOURCE_CARD_KINDS.get(kind)
+        source_first = (
+            (limits.max_sources, request.compare)
+            if request.strategy == "source_first" else None
+        )
+        details: dict[str, object] = {}
+        evidence = self._retrieve(
+            request.query,
+            retrieval_count=limits.max_passages,
+            trace_turn_id=trace_turn_id,
+            scope=request.scope,
+            source_first=source_first,
+            source_limits=(
+                limits if source_first is not None else None
+            ),
+            source_report=details,
+            card_kinds=request.card_kinds,
+        )
+        if request.scope and (
+            len(request.scope) > 1 or not request.compare
+        ):
+            allowed = set(request.scope)
+            evidence = tuple(
+                item for item in evidence if item.path in allowed
+            )
+        chosen_sources = tuple(details.get("selected_sources", ()))
+        final = allocate_evidence(
+            evidence, limits,
+            priority_sources=chosen_sources or request.scope,
+        )
+        evidence = final.items
+        keys = {
+            (
+                item.path, item.start_line, item.end_line,
+                item.text, item.symbol, item.cell,
+            ): item
+            for item in self.chunks
+        }
+        passages = []
+        for item in evidence:
+            key = (
+                item.path, item.start_line, item.end_line,
+                item.text, item.symbol, item.cell,
+            )
+            if key not in keys:
+                raise RuntimeError(
+                    "Retrieved evidence is absent from indexed chunks."
+                )
+            passages.append(keys[key])
+        if request.strategy == "source_first":
+            sources = chosen_sources
+        else:
+            sources = tuple(dict.fromkeys(
+                item.path for item in passages
+            ))
+        if limits.coverage == COVERAGE_EXHAUSTIVE:
+            requested = request.scope or tuple(dict.fromkeys((
+                *(item.path for item in self.chunks),
+                *self._source_files(),
+            )))
+        else:
+            requested = sources or request.scope
+        indexed = {item.path for item in self.chunks}
+        candidates = details.get("candidate_sources", ())
+        hits = set(final.limits_hit)
+        hits.update(details.get("budget_limits_hit", ()))
+        if len(candidates) > len(sources):
+            if len(sources) >= limits.max_sources:
+                hits.add("sources")
+            if len(sources) >= limits.max_passages:
+                hits.add("passages")
+        coverage = coverage_report(
+            requested, evidence,
+            mode=limits.coverage,
+            unavailable=tuple(
+                path for path in requested if path not in indexed
+            ),
+            limits_hit=tuple(sorted(hits)),
+        )
+        getattr(self, "trace", NullTraceLogger()).emit(
+            "retrieval.tool.coverage", component="retrieval",
+            data=coverage, turn_id=trace_turn_id,
+        )
+        return RetrievalResult(tuple(passages), sources, coverage)
+
     def _run_tool(
         self: RAGSession,
         use: ToolUse,
@@ -4098,6 +4238,9 @@ class RAGSession:
             trace_turn_id=trace_turn_id,
             write_pdf=pdf_writer,
             choose=choice_callback,
+            retrieve=lambda query: self._retrieve_for_tool(
+                query, trace_turn_id
+            ),
         )
 
         request = ToolRequest(
