@@ -207,6 +207,16 @@ modules are private implementation helpers. Prefer them when semantics match,
 but do not silently move a tool's policy into a shared service unless
 multiple tools really need the same contract.
 
+Document-reading tools validate passage citations through
+`tools/_shared/citations.py`. Valid individual references and bounded
+ranges may contribute evidence; invalid range parts never contribute
+partial evidence. Numeric missing references remain in
+`invalid_citations`, while malformed or invalid ranges appear in
+`invalid_citation_groups` when present. Citation validation checks
+identifiers, not factual support. The maximum expansion of an individual
+citation range is 100 passages.
+
+
 The report-generation package has an additional `_report_template.py` and
 `_report_format.py` to validate Markdown templates and report formatting.
 The GUI offers PDF rendering through its optional `_report_pdf.py`; core

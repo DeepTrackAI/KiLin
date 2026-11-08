@@ -206,6 +206,9 @@ from kilin.repository import (
     scan_repository,
 )
 from kilin.retrievals.model_identity import embedding_model_identity
+from kilin.retrievals.strategies.retrieval_semantic import (
+    _validate_semantic_embeddings,
+)
 from kilin.retrievals.strategies.retrieval_papers import (
     asks_for_all_papers,
     card_similarities,
@@ -973,7 +976,12 @@ class RAGSession:
                 block_unrequested_cjk=profile.block_unrequested_cjk,
             )
             paper_cards, paper_card_vectors = self._prepare_paper_cards(
-                chunks, chat_session, embedding_session
+                chunks, chat_session, embedding_session,
+                expected_dimension=(
+                    len(indexes.semantic.embeddings[0])
+                    if isinstance(indexes, PersistentIndexes)
+                    and indexes.semantic.embeddings else None
+                ),
             )
             self._emit_progress(
                 "loading_conversation",
@@ -2199,7 +2207,12 @@ class RAGSession:
         self.source_changes = source_changes
         self.paper_cards, self.paper_card_vectors = (
             self._prepare_paper_cards(
-                chunks, self.chat_session, self.embedding_session
+                chunks, self.chat_session, self.embedding_session,
+                expected_dimension=(
+                    len(indexes.semantic.embeddings[0])
+                    if isinstance(indexes, PersistentIndexes)
+                    and indexes.semantic.embeddings else None
+                ),
             )
         )
 
@@ -4616,6 +4629,8 @@ class RAGSession:
         chunks: Sequence[Chunk],
         chat_session: ChatSession,
         embedding_session: EmbeddingSession,
+        *,
+        expected_dimension: int | None = None,
     ) -> tuple[
         dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
     ]:
@@ -4629,6 +4644,9 @@ class RAGSession:
             Answering model, asked without thinking for each new card.
         embedding_session: EmbeddingSession
             Embedding model for the cards' search vectors.
+        expected_dimension: int | None, optional
+            Embedding dimension of the ordinary semantic index.
+            Defaults to ``None`` for callers without an index.
 
         Returns
         -------
@@ -4652,7 +4670,8 @@ class RAGSession:
             return {}, {}
         try:
             return self._build_paper_cards(
-                chunks, chat_session, embedding_session
+                chunks, chat_session, embedding_session,
+                expected_dimension=expected_dimension,
             )
         except Exception as error:  # pylint: disable=broad-exception-caught
             # Cards only guide retrieval; passage search still works.
@@ -4666,6 +4685,8 @@ class RAGSession:
         chunks: Sequence[Chunk],
         chat_session: ChatSession,
         embedding_session: EmbeddingSession,
+        *,
+        expected_dimension: int | None = None,
     ) -> tuple[
         dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
     ]:
@@ -4679,6 +4700,9 @@ class RAGSession:
             Answering model for new cards.
         embedding_session: EmbeddingSession
             Embedding model for the cards' search vectors.
+        expected_dimension: int | None, optional
+            Embedding dimension of the ordinary semantic index.
+            Defaults to ``None`` for callers without an index.
 
         Returns
         -------
@@ -4689,6 +4713,10 @@ class RAGSession:
 
         file = self.project.indexes / _PAPER_CARDS
         saved, saved_vectors, saved_identity = load_cards(file)
+        if expected_dimension is not None:
+            for path, stored in saved_vectors.items():
+                if stored and len(stored[0]) != expected_dimension:
+                    saved_vectors[path] = ()
         manifest = getattr(self, "_current_source_manifest", None) or {}
         hashes = {
             Path(name): str(item.get("sha256", ""))
@@ -4774,7 +4802,22 @@ class RAGSession:
             )
         ]
         texts = [text for path in to_embed for text in card_texts(cards[path])]
-        fresh = embedding_session.embed_documents(texts) if texts else []
+        try:
+            fresh = embedding_session.embed_documents(texts) if texts else []
+            if texts:
+                _validate_semantic_embeddings(fresh, len(texts))
+                if (
+                    expected_dimension is not None
+                    and len(fresh[0]) != expected_dimension
+                ):
+                    raise ValueError(
+                        "Card and chunk vector dimensions differ."
+                    )
+        except (ValueError, TypeError, RuntimeError) as error:
+            self.trace.exception(
+                "paper_card.embedding_failed", error, component="rag"
+            )
+            fresh = []
         position = 0
         for path, card in cards.items():
             if path in to_embed:
@@ -4788,7 +4831,10 @@ class RAGSession:
                 vectors[path] = saved_vectors[path]
             else:
                 vectors[path] = ()
-        if to_embed or set(saved) != set(cards):
+        if (
+            pending or to_embed or set(saved) != set(cards)
+            or saved_identity != identity
+        ):
             save_cards(file, cards, vectors, identity)
         self.trace.emit(
             "paper_cards.ready", component="rag",

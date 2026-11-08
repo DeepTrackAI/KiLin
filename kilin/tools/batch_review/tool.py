@@ -57,9 +57,9 @@ Examples
 from __future__ import annotations
 
 from kilin.tools._shared.model_results import partial_result
+from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import (
     NOTHING,
-    answer_citations,
     plan_parts,
     take_notes,
 )
@@ -436,7 +436,8 @@ def run(
             "notes; do not infer absence from missing notes."
         )
     answer = context.write(system, prompt, None)
-    invalid = answer_citations(answer, len(passages))
+    citation_report = inspect_citations(answer, len(passages))
+    invalid = list(citation_report.invalid_numbers)
     if choice == PLAN_CHOICE_QUICK or len(read) < len(passages):
         answer += (
             f"\n\n*Read {len(read)} of {len(passages)} passages of {name}"
@@ -464,6 +465,10 @@ def run(
             "model": context.model_id,
         }
     )
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
     trace.emit(
         "tool.batch_review.result",
         component="tool",

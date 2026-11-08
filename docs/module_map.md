@@ -90,6 +90,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_model_calls.py`](../kilin/tools/_model_calls.py) | Validate and resolve tool-owned internal thinking policies. | [Tool packages](tool_packages.md) | [Policy tests](../tests/kilin/tools/test__model_calls.py) |
 | [`kilin/tools/_registry.py`](../kilin/tools/_registry.py) | Register KíLín's tools and resolve an intent's tool. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/__init__.py`](../kilin/tools/_shared/__init__.py) | Private services shared by registered KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_shared/citations.py`](../kilin/tools/_shared/citations.py) | Validate bounded passage citations for document tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_citations.py) |
 | [`kilin/tools/_shared/claims.py`](../kilin/tools/_shared/claims.py) | Judge whether a cited work supports the sentence that cites it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/_rating.py`](../kilin/tools/_shared/_rating.py) | Rate citation suitability from checked evidence, not search rank. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
 | [`kilin/tools/_shared/choose_document.py`](../kilin/tools/_shared/choose_document.py) | Choose the source document a request is about, or ask the user. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -166,11 +167,11 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Project workspaces | 6 |
 | Retrieval pipeline | 18 |
 | Source pipeline | 12 |
-| Tool extension contracts | 20 |
+| Tool extension contracts | 21 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 128.**
+**Total production Python modules: 130.**
 
 ## Non-Python resources and UI assets
 

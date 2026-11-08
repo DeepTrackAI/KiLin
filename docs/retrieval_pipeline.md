@@ -146,21 +146,29 @@ not just the number of embeddings or the final answer string.
 
 ## Paper cards and paper retrieval
 
-In project types with `paper_index`, every document also gets a **paper
+In project types with `paper_index`, every document may get a **paper
 card** (`retrievals/paper_cards.py`): title, authors, year, a short
 abstract, and one or two sentences each on its aim, methods, data, main
 findings and limitations, with the pages each field cites. The answering
 model writes a card once per document, without thinking, from the
 document's opening passages and the passages that best match each field,
-within about 5,000 estimated tokens. Citations of passages the model was
-not shown are dropped. Cards are saved in `indexes/paper_cards.json` with
-the SHA-256 of the file's bytes and are written again only when the file or
-the card format changes; a card the model could not write keeps its title
-only, gets no search vectors, and is retried when the file or the answering
-model changes. Three texts of each complete card (abstract and aim; methods
-and data; findings and limitations) are embedded and reused while the
-embedding model is the same. Card writing never stops a session from
-opening. Cards guide retrieval only: answers cite passages, never cards.
+within about 5,000 estimated tokens. Only summary fields citing a passage
+the model was shown are retained. At least one substantive cited field is
+required; unusable replies produce a title-only incomplete card without
+embeddings.
+
+Cards are saved in `indexes/paper_cards.json` under a versioned format
+(`paper-card-v2`), with the SHA-256 of the source bytes. Cards are reused
+while the source and card format are unchanged. An incomplete card is
+retried when the source or answering model changes; failed regeneration
+still updates the saved card state. Three texts of each complete card
+(abstract and aim; methods and data; findings and limitations) are
+embedded separately. Missing, malformed or non-finite cached embeddings
+are rebuilt without repeating card generation when the embedding model
+is available. A cached card marked complete without summary content is
+discarded and regenerated. Card-generation or embedding failures never stop a session
+from opening. Cards guide retrieval only: answers cite passages, never
+cards.
 
 Intents whose retrieval strategy is `papers` (in `literature`:
 `question_answering`, `compare_sources` and `report_generation`) choose

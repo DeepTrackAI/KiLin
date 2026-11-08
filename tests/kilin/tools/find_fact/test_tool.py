@@ -19,6 +19,7 @@ from unittest.mock import Mock
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 from kilin.tools import ToolRequest
 from kilin.tools import find_fact as tool
+from kilin.tools.find_fact.tool import _cited
 from kilin.tools._shared.planning import PLAN_CHOICE_QUICK
 
 from tests.kilin.tools._contract_support import (
@@ -104,6 +105,37 @@ class TestFindFact(unittest.TestCase):
         self.assertIn("Notes by document", full)
         self.assertIn("Passages by document", quick)
         self.assertIn("Be brief", quick)
+
+    def test_evidence_uses_only_valid_bounded_citations(self) -> None:
+        """Reject oversized ranges without admitting partial evidence.
+
+        """
+
+        self.assertEqual(_cited("Found [1, 3-9]", 3), {1})
+        self.assertEqual(_cited("Found [1-99999999]", 2), set())
+        self.assertEqual(_cited("Found [1–2]", 2), {1, 2})
+
+    def test_invalid_ranges_are_reported_in_tool_summary(self) -> None:
+        """Preserve numeric diagnostics and report invalid range parts.
+
+        """
+
+        passages = [
+            chunk("a", "An observation.", path="a.md"),
+            chunk("b", "Another observation.", path="a.md"),
+        ]
+        context = _quick_context(passages, ["unmatched phrase"])
+        context.write.return_value = "Supported [1, 2-9] and [7]."
+        result = tool.run(
+            tool.FactSettings(),
+            ToolRequest("Which evidence?", "Which evidence?"),
+            context,
+        )
+        self.assertEqual(result.summary["invalid_citations"], [7])
+        self.assertEqual(
+            result.summary["invalid_citation_groups"], ["2-9"]
+        )
+        self.assertEqual([e["citation"] for e in result.evidence], [1])
 
     def test_quick_answer_ranks_when_no_passage_has_the_terms(self) -> None:
         """Answer from ranked passages when the exact terms are absent.

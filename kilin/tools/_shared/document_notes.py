@@ -62,6 +62,7 @@ from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._contract import ToolContext
+from kilin.tools._shared.citations import inspect_citations
 
 __all__ = [
     "NOTHING",
@@ -74,10 +75,9 @@ __all__ = [
 ]
 
 NOTHING: Final[str] = "NOTHING"
-_CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
-# A citation group such as [3], [3, 5], or [3-5] (hyphen or en dash).
+# A citation group such as [3], [3, 5], or [3-5].
 _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
-    r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
+    r"\[\s*(\d[^\[\]\r\n]*)\]"
 )
 # A phrase in straight or curly double quotes.
 _QUOTE: Final[re.Pattern[str]] = re.compile(r'["“]([^"“”]+)["”]')
@@ -190,12 +190,11 @@ def clean_notes(reply: str, numbers: Sequence[int]) -> list[str]:
     kept: list[str] = []
     for line in reply.splitlines():
         line = line.strip().lstrip("-*• ").strip()
-        cited = {
-            int(number)
-            for group in _CITATION.findall(line)
-            for number in re.split(r"\s*,\s*", group)
-        }
-        if line and cited and cited <= allowed:
+        cited = inspect_citations(line, max(allowed, default=0))
+        if (
+            line and cited.valid and cited.valid <= allowed
+            and not cited.invalid_numbers and not cited.invalid_groups
+        ):
             kept.append(f"- {line}")
     return kept
 
@@ -218,12 +217,7 @@ def answer_citations(answer: str, passages: int) -> list[int]:
 
     """
 
-    cited = {
-        int(number)
-        for group in _CITATION.findall(answer)
-        for number in re.split(r"\s*,\s*", group)
-    }
-    return sorted(number for number in cited if not 1 <= number <= passages)
+    return list(inspect_citations(answer, passages).invalid_numbers)
 
 
 
@@ -268,7 +262,19 @@ def quote_citations(
             if len(quote.split()) >= _QUOTE_MIN_WORDS
         ]
         if quotes and len(groups) == 1:
-            cited = _numbers(groups[0].group(1))
+            citation = inspect_citations(
+                groups[0].group(0), max(passages, default=0)
+            )
+            if (
+                not citation.valid or citation.invalid_numbers
+                or citation.invalid_groups
+            ):
+                pieces.append(sentence)
+                if end is not None:
+                    pieces.append(end.group(0))
+                    position = end.end()
+                continue
+            cited = citation.valid
             if not any(
                 quote in texts.get(number, "")
                 for quote in quotes for number in cited
@@ -315,30 +321,6 @@ def _plain(text: str) -> str:
     text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
     text = text.replace("’", "'")
     return " ".join(text.split()).casefold()
-
-
-def _numbers(group: str) -> set[int]:
-    """Return the numbers of a citation group such as "3, 5-7".
-
-    Parameters
-    ----------
-    group: str
-        Text inside the brackets.
-
-    Returns
-    -------
-    set[int]
-        Every number listed or in a range.
-
-    """
-
-    numbers: set[int] = set()
-    for piece in re.split(r"\s*,\s*", group):
-        match = re.fullmatch(r"(\d+)(?:\s*[–-]\s*(\d+))?", piece)
-        if match is not None:
-            first = int(match.group(1))
-            numbers.update(range(first, int(match.group(2) or first) + 1))
-    return numbers
 
 
 def take_notes(

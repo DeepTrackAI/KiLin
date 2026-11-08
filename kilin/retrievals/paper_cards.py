@@ -100,6 +100,9 @@ from typing import Final
 from kilin.atomic_writes import atomic_write_text
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.retrievals.strategies.retrieval_semantic import (
+    _validate_semantic_embeddings,
+)
 from kilin.retrievals.strategies.retrieval_lexical import (
     build_lexical_index,
     lexical_search,
@@ -119,7 +122,7 @@ __all__ = [
 ]
 
 # Saved with every card; a change writes every card again.
-PAPER_CARD_FORMAT: Final[str] = "paper-card-v1"
+PAPER_CARD_FORMAT: Final[str] = "paper-card-v2"
 CARD_FIELDS: Final[tuple[str, ...]] = (
     "aim",
     "methods",
@@ -394,10 +397,10 @@ def parse_card(
     Returns
     -------
     PaperCard
-        A complete card when the reply holds a JSON object; otherwise an
-        incomplete card with the title only. Citations of passages the
-        model was not shown are dropped, and citations are removed from the
-        text after their pages are recorded.
+        A complete card when a substantive field cites at least one
+        supplied passage; otherwise a title-only incomplete card.
+        Unsupported summary fields are dropped. Valid citations supply
+        page metadata when the source has page numbers.
 
     """
 
@@ -405,7 +408,9 @@ def parse_card(
     if data is None:
         return _title_card(path, sha256, title, model)
 
-    def text(key: str, limit: int) -> tuple[str, tuple[int, ...]]:
+    def text(
+        key: str, limit: int, *, cited: bool = False
+    ) -> tuple[str, tuple[int, ...]]:
         """Return one reply value without citations, and its cited pages.
 
         Parameters
@@ -414,12 +419,14 @@ def parse_card(
             Key of the reply's JSON object.
         limit: int
             Most characters kept.
+        cited: bool, optional
+            Require a citation to a supplied passage. Defaults to False.
 
         Returns
         -------
         tuple[str, tuple[int, ...]]
-            The value on one line, and the pages of the shown passages it
-            cites; empty text for a missing or non-text value.
+            The validated value and its cited pages, if available.
+            Unsupported substantive fields return empty text.
 
         """
 
@@ -427,25 +434,38 @@ def parse_card(
         if not isinstance(value, str):
             return "", ()
         pages: set[int] = set()
+        supported = False
         for match in _CITATION.finditer(value):
             for number in match.group(1).split(","):
-                index = int(number) - 1
+                normalized = number.strip().lstrip("0") or "0"
+                if len(normalized) > 15:
+                    continue
+                index = int(normalized) - 1
                 if 0 <= index < len(passages):
+                    supported = True
                     page = _page(passages[index])
                     if page is not None:
                         pages.add(page)
-        clean = " ".join(_CITATION.sub("", value).split())
-        return clean[:limit], tuple(sorted(pages))
+        clean = " ".join(_CITATION.sub("", value).split())[:limit]
+        if cited and not supported:
+            return "", ()
+        return clean, tuple(sorted(pages))
 
-    abstract, abstract_pages = text("abstract", _ABSTRACT_MAX_CHARACTERS)
+    abstract, abstract_pages = text(
+        "abstract", _ABSTRACT_MAX_CHARACTERS, cited=True
+    )
     fields = []
     pages = [("abstract", abstract_pages)] if abstract_pages else []
     for field in CARD_FIELDS:
-        value, cited = text(field, _FIELD_MAX_CHARACTERS)
+        value, cited_pages = text(
+            field, _FIELD_MAX_CHARACTERS, cited=True
+        )
         if value:
             fields.append((field, value))
-        if cited:
-            pages.append((field, cited))
+        if cited_pages:
+            pages.append((field, cited_pages))
+    if not abstract and not fields:
+        return _title_card(path, sha256, title, model)
     model_title, _ = text("title", _FIELD_MAX_CHARACTERS)
     authors, _ = text("authors", _FIELD_MAX_CHARACTERS)
     year, _ = text("year", 20)
@@ -527,9 +547,10 @@ def load_cards(
             return {}, {}, None
         cards: dict[Path, PaperCard] = {}
         vectors: dict[Path, tuple[tuple[float, ...], ...]] = {}
+        dimension: int | None = None
         for name, item in data["cards"].items():
             path = Path(name)
-            cards[path] = PaperCard(
+            card = PaperCard(
                 path=path,
                 sha256=str(item["sha256"]),
                 title=str(item["title"]),
@@ -545,12 +566,35 @@ def load_cards(
                     for key, value in item["pages"].items()
                 ),
                 model=str(item["model"]),
-                complete=bool(item["complete"]),
+                complete=item["complete"],
             )
-            vectors[path] = tuple(
-                tuple(float(value) for value in vector)
-                for vector in item.get("vectors", [])
-            )
+            if type(card.complete) is not bool:
+                continue
+            if card.complete and not (
+                card.abstract.strip()
+                or any(value.strip() for _, value in card.fields)
+            ):
+                # A corrupt title-only success must be regenerated.
+                continue
+            if not card.complete and (card.abstract or card.fields):
+                continue
+            cards[path] = card
+            try:
+                candidate = tuple(
+                    tuple(float(value) for value in vector)
+                    for vector in item.get("vectors", [])
+                )
+                if candidate:
+                    if not cards[path].complete:
+                        raise ValueError("Incomplete card has vectors.")
+                    _validate_card_vectors(cards[path], candidate)
+                    if dimension is None:
+                        dimension = len(candidate[0])
+                    elif len(candidate[0]) != dimension:
+                        raise ValueError("Card dimensions differ.")
+                vectors[path] = candidate
+            except (ValueError, TypeError, OverflowError):
+                vectors[path] = ()
         identity = data.get("embedding_model_identity")
         return cards, vectors, identity if isinstance(identity, str) else None
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
@@ -578,6 +622,17 @@ def save_cards(
 
     """
 
+    dimension: int | None = None
+    for path, card in cards.items():
+        candidate = tuple(tuple(vector) for vector in vectors.get(path, ()))
+        if candidate:
+            if not card.complete:
+                raise ValueError("Incomplete cards cannot have vectors.")
+            _validate_card_vectors(card, candidate)
+            if dimension is None:
+                dimension = len(candidate[0])
+            elif len(candidate[0]) != dimension:
+                raise ValueError("Card vector dimensions do not match.")
     data = {
         "format": PAPER_CARD_FORMAT,
         "embedding_model_identity": embedding_model_identity,
@@ -603,6 +658,28 @@ def save_cards(
     atomic_write_text(
         file, json.dumps(data, ensure_ascii=False, indent=1) + "\n"
     )
+
+
+def _validate_card_vectors(
+    card: PaperCard, vectors: tuple[tuple[float, ...], ...]
+) -> None:
+    """Validate a card's embeddings like ordinary semantic index vectors.
+
+    Parameters
+    ----------
+    card: PaperCard
+        Completed card whose texts were embedded.
+    vectors: tuple[tuple[float, ...], ...]
+        Candidate vectors for its indexed card texts.
+
+    Raises
+    ------
+    ValueError
+        If count, dimension, numeric values, or norms are invalid.
+
+    """
+
+    _validate_semantic_embeddings(vectors, len(card_texts(card)))
 
 
 def _title_card(

@@ -109,12 +109,48 @@ class TestParseCard(unittest.TestCase):
         self.assertEqual(self._parse(REPLY, "PDF title").title, "PDF title")
 
     def test_unusable_replies_give_a_title_card(self):
-        for reply in ("", "no json here", "[1, 2]", "{broken"):
+        for reply in (
+            "", "no json here", "[1, 2]", "{broken", "{}",
+            '{"title": "A study", "authors": "A. Smith"}',
+            '{"methods": "Unsupported claim [99]."}',
+            '{"methods": "Uncited claim."}',
+        ):
             with self.subTest(reply=reply):
                 card = self._parse(reply, None)
                 self.assertFalse(card.complete)
                 self.assertEqual(card.title, "a")
                 self.assertEqual(card.fields, ())
+
+    def test_uncited_fields_are_not_used_for_card_search(self):
+        reply = json.dumps({
+            "abstract": "Supported abstract [1].",
+            "methods": "Unsupported method.",
+            "findings": "Invalid passage [8].",
+        })
+        card = self._parse(reply)
+        self.assertTrue(card.complete)
+        self.assertEqual(card.abstract, "Supported abstract.")
+        self.assertEqual(card.field("methods"), "")
+        self.assertEqual(card.field("findings"), "")
+
+    def test_enormous_card_citations_are_ignored_safely(self):
+        reply = json.dumps({
+            "methods": "Unsupported [" + "9" * 12000 + "].",
+        })
+        self.assertFalse(self._parse(reply).complete)
+
+    def test_non_pdf_sources_can_have_cited_content(self):
+        passage = Chunk(
+            "md", Path("notes.md"), "Relevant description.",
+            1, 2, "markdown_section", None, "Introduction"
+        )
+        card = pc.parse_card(
+            '{"aim": "Description [1]."}', [passage],
+            path=Path("notes.md"), sha256="h", title=None, model="m",
+        )
+        self.assertTrue(card.complete)
+        self.assertEqual(card.field("aim"), "Description.")
+        self.assertEqual(card.field_pages("aim"), ())
 
     def test_card_texts_group_fields(self):
         card = self._parse(REPLY)
@@ -134,11 +170,12 @@ class TestSavedCards(unittest.TestCase):
                              model="m")
         with TemporaryDirectory() as folder:
             file = Path(folder) / "indexes" / "paper_cards.json"
+            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
             pc.save_cards(file, {card.path: card},
-                          {card.path: ((1.0, 0.0),)}, "embed:1")
+                          {card.path: embeddings}, "embed:1")
             cards, vectors, identity = pc.load_cards(file)
             self.assertEqual(cards, {card.path: card})
-            self.assertEqual(vectors, {card.path: ((1.0, 0.0),)})
+            self.assertEqual(vectors, {card.path: embeddings})
             self.assertEqual(identity, "embed:1")
             data = json.loads(file.read_text(encoding="utf-8"))
             data["format"] = "old"
@@ -146,6 +183,63 @@ class TestSavedCards(unittest.TestCase):
             self.assertEqual(pc.load_cards(file), ({}, {}, None))
             self.assertEqual(pc.load_cards(Path(folder) / "none"),
                              ({}, {}, None))
+
+    def test_reject_corrupt_vectors_on_write(self):
+        card = pc.parse_card(
+            REPLY, pc.card_passages(_paper()),
+            path=Path("a.pdf"), sha256="h", title=None, model="m",
+        )
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "cards.json"
+            for invalid in (
+                ((float("nan"), 0.0),) * 3,
+                ((0.0, 0.0),) * 3,
+                ((1.0, 0.0),),
+                ((1.0, 0.0), (1.0,), (1.0, 0.0)),
+            ):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaises(ValueError):
+                        pc.save_cards(
+                            path, {card.path: card},
+                            {card.path: invalid}, "embed:1",
+                        )
+
+    def test_corrupt_complete_cards_are_regenerated(self):
+        card = pc.parse_card(
+            REPLY, pc.card_passages(_paper()),
+            path=Path("a.pdf"), sha256="h", title=None, model="m",
+        )
+        with TemporaryDirectory() as folder:
+            file = Path(folder) / "cards.json"
+            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
+            pc.save_cards(
+                file, {card.path: card}, {card.path: embeddings},
+                "embed:1",
+            )
+            data = json.loads(file.read_text(encoding="utf-8"))
+            data["cards"]["a.pdf"]["abstract"] = ""
+            data["cards"]["a.pdf"]["fields"] = {}
+            file.write_text(json.dumps(data), encoding="utf-8")
+            self.assertEqual(pc.load_cards(file)[0], {})
+
+    def test_invalid_loaded_vectors_keep_valid_card_text(self):
+        card = pc.parse_card(
+            REPLY, pc.card_passages(_paper()),
+            path=Path("a.pdf"), sha256="h", title=None, model="m",
+        )
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "cards.json"
+            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
+            pc.save_cards(
+                path, {card.path: card}, {card.path: embeddings},
+                "embed:1",
+            )
+            data = json.loads(path.read_text(encoding="utf-8"))
+            data["cards"]["a.pdf"]["vectors"][1][0] = "NaN"
+            path.write_text(json.dumps(data), encoding="utf-8")
+            cards, vectors, _ = pc.load_cards(path)
+            self.assertEqual(cards[card.path], card)
+            self.assertEqual(vectors[card.path], ())
 
 
 class TestSessionCards(unittest.TestCase):
@@ -233,6 +327,53 @@ class TestSessionCards(unittest.TestCase):
         self.assertEqual(model.call_count, 2)
         self.assertEqual(len(vectors[Path("b.pdf")]), 3)
 
+    def test_invalid_vector_cache_reembeds_without_rewriting(self):
+        self._prepare()
+        file = self.session.project.indexes / "paper_cards.json"
+        data = json.loads(file.read_text(encoding="utf-8"))
+        data["cards"]["a.pdf"]["vectors"][0][0] = "NaN"
+        file.write_text(json.dumps(data), encoding="utf-8")
+        self.embedding.embed_documents.reset_mock()
+        cards, vectors, model = self._prepare()
+        model.assert_not_called()
+        self.assertTrue(cards[Path("a.pdf")].complete)
+        self.assertEqual(len(vectors[Path("a.pdf")]), 3)
+        self.embedding.embed_documents.assert_called_once()
+
+    def test_wrong_vector_dimension_reembeds_without_card_generation(self):
+        self._prepare()
+        self.embedding.embed_documents.side_effect = (
+            lambda texts: [[1.0, 0.0, 0.0] for _ in texts]
+        )
+        self.embedding.embed_documents.reset_mock()
+        with patch.object(rag, "side_reply") as model:
+            cards, vectors = self.session._prepare_paper_cards(
+                self.chunks, self.session.chat_session, self.embedding,
+                expected_dimension=3,
+            )
+        model.assert_not_called()
+        self.assertEqual(len(vectors[Path("a.pdf")][0]), 3)
+        self.assertEqual(len(cards), 2)
+        self.embedding.embed_documents.assert_called_once()
+
+    def test_changed_source_failed_generation_is_persisted(self):
+        self._prepare()
+        self._hashes({"a.pdf": "new", "b.pdf": "hb"})
+        cards, vectors, model = self._prepare("{}")
+        self.assertEqual(model.call_count, 1)
+        self.assertFalse(cards[Path("a.pdf")].complete)
+        self.assertEqual(vectors[Path("a.pdf")], ())
+        file = self.session.project.indexes / "paper_cards.json"
+        stored, _, _ = pc.load_cards(file)
+        self.assertEqual(stored[Path("a.pdf")].sha256, "new")
+        self.assertFalse(stored[Path("a.pdf")].complete)
+        _, _, model = self._prepare()
+        model.assert_not_called()
+        self.session.chat_session.model_id = "chat-b"
+        _, vectors, model = self._prepare()
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(len(vectors[Path("a.pdf")]), 3)
+
     def test_code_projects_and_errors_give_no_cards(self):
         self.session.project.profile = fixtures._profile()
         self.assertEqual(self._prepare()[:2], ({}, {}))
@@ -240,7 +381,12 @@ class TestSessionCards(unittest.TestCase):
             **{**vars(fixtures._profile()), "type_id": "literature"}
         )
         self.embedding.embed_documents.side_effect = RuntimeError("closed")
-        self.assertEqual(self._prepare()[:2], ({}, {}))
+        cards, vectors, _ = self._prepare()
+        self.assertTrue(all(card.complete for card in cards.values()))
+        self.assertTrue(all(not vector for vector in vectors.values()))
+        self.assertEqual(len(pc.load_cards(
+            self.session.project.indexes / "paper_cards.json"
+        )[0]), 2)
 
 
 if __name__ == "__main__":
