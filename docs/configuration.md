@@ -48,7 +48,11 @@ silently substituting current creation defaults.
 `kilin.project.configure_project()` is the core API for validated project
 profile settings. The router is separately managed by the GUI-independent
 `kilin.model_settings.read_router_model()` and `write_router_model()`
-functions, which use the project's `[router]` section. The GUI maintains
+functions, which use the project's `[router]` section. Independently,
+`kilin.model_settings.read_source_card_generation_settings()` and
+`write_source_card_generation_settings()` own the dedicated card-generation
+model and parameters in `[source_card_generation]`. These are core settings,
+not a way to change active answering or routing sessions. The GUI maintains
 effort levels and search-depth steps in the same `profile.ini` through
 `kilin.gui.model_settings`; it no longer owns router persistence. These
 settings are not a separate active `effort_levels.json` database. The GUI

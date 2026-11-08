@@ -174,8 +174,9 @@ kind's generation/verification logic. Project JSON never imports kind code.
 The generic contracts were introduced in PR3. PR4 adds an **independent,
 optional source-card index**, without changing `paper_cards.py`, the existing
 `paper_index` capability, `indexes/paper_cards.json`, or the active `papers`
-retrieval strategy. Registration of `scientific_paper`, dedicated generation
-models, automatic indexing, and retrieval integration follow in later PRs.
+retrieval strategy. A dedicated generation adapter is introduced in PR5;
+registration of `scientific_paper`, automatic indexing, and retrieval
+integration follow in later PRs.
 No migration layer for old paper-card files is provided.
 
 ### Independent source-card index (PR4)
@@ -214,6 +215,22 @@ one, start a model, or add card text to the evidence presented to an answer.
 The active RAG pipeline does not yet call this channel. The former
 `paper_cards.json` continues to be used until the later cutover; the new
 persistence format intentionally has no migration or compatibility reader.
+
+### Dedicated generation adapter (PR5)
+
+`source_cards/generation.py` provides `SourceCardGenerator`, an optional
+model-inference adapter independent of the active RAG answering and routing
+sessions. The model and inference parameters come from core-owned
+`[source_card_generation]` settings (see `model_management.md`). The
+model is loaded only on the first requested card and is released at the
+end of the generation batch. It uses the established validated completion
+contract; prompt selection and scientific content rules remain the
+responsibility of the registered kind added in PR6. The input budget is
+validated but is not enforced until PR6 selects passages.
+
+The independent source-card index remains inactive for live RAG until PR7.
+No additional model calls are made merely by loading an existing project or
+searching the precomputed source-card vector index at this stage.
 
 ## Paper cards and paper retrieval
 

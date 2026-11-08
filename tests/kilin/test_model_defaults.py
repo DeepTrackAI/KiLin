@@ -49,6 +49,8 @@ class TestDefaultModels(unittest.TestCase):
             "DEFAULT_CHAT_MODEL_TORCH",
             "DEFAULT_ROUTER_MODEL_MLX",
             "DEFAULT_ROUTER_MODEL_TORCH",
+            "DEFAULT_SOURCE_CARD_MODEL_MLX",
+            "DEFAULT_SOURCE_CARD_MODEL_TORCH",
             "DEFAULT_EMBEDDING_MODEL_MLX",
             "DEFAULT_EMBEDDING_MODEL_TORCH",
         )
@@ -68,6 +70,8 @@ class TestDefaultModels(unittest.TestCase):
             model_defaults.DEFAULT_CHAT_MODEL_TORCH,
             model_defaults.DEFAULT_ROUTER_MODEL_MLX,
             model_defaults.DEFAULT_ROUTER_MODEL_TORCH,
+            model_defaults.DEFAULT_SOURCE_CARD_MODEL_MLX,
+            model_defaults.DEFAULT_SOURCE_CARD_MODEL_TORCH,
             model_defaults.DEFAULT_EMBEDDING_MODEL_MLX,
             model_defaults.DEFAULT_EMBEDDING_MODEL_TORCH,
         )

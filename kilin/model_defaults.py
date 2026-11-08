@@ -20,7 +20,7 @@ Key Features
 
 - **Shared default models**
 
-    Define default chat, router, and embedding models for both backends.
+    Define default chat, router, embedding, and source-card models.
 
 Module Structure
 ----------------
@@ -40,6 +40,10 @@ Module Structure
 - ``DEFAULT_ROUTER_MODEL_MLX`` and ``DEFAULT_ROUTER_MODEL_TORCH``
 
     Default independent router-model IDs for the two backends.
+
+- ``DEFAULT_SOURCE_CARD_MODEL_MLX`` and ``DEFAULT_SOURCE_CARD_MODEL_TORCH``
+
+    Independent source-card generation model IDs for both backends.
 
 - ``DEFAULT_EMBEDDING_MODEL_MLX`` and ``DEFAULT_EMBEDDING_MODEL_TORCH``
 
@@ -78,6 +82,8 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL_TORCH",
     "DEFAULT_ROUTER_MODEL_MLX",
     "DEFAULT_ROUTER_MODEL_TORCH",
+    "DEFAULT_SOURCE_CARD_MODEL_MLX",
+    "DEFAULT_SOURCE_CARD_MODEL_TORCH",
 ]
 
 ModelRole: TypeAlias = Literal["chat", "embedding"]
@@ -109,4 +115,11 @@ DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = require_default_string(
 )
 DEFAULT_EMBEDDING_MODEL_TORCH: Final[str] = require_default_string(
     _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_TORCH", "DEFAULT_MODELS"
+)
+
+DEFAULT_SOURCE_CARD_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_SOURCE_CARD_MODEL_MLX", "DEFAULT_MODELS"
+)
+DEFAULT_SOURCE_CARD_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_SOURCE_CARD_MODEL_TORCH", "DEFAULT_MODELS"
 )

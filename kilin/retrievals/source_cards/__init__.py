@@ -13,6 +13,10 @@ Key Features
     Keep source identity, kind-specific statements, and provenance separate
     from source extraction and the ordinary chunk indexes.
 
+- **Independent card-generation session**
+
+    Expose an optional lazy model adapter configured by KíLín core settings.
+
 - **Trusted kinds**
 
     Register Python implementations explicitly instead of importing code
@@ -37,6 +41,10 @@ Module Structure
 
     Build source identities and check card provenance without model calls.
 
+- ``SourceCardGenerator``
+
+    Load and release a dedicated model for a card-generation batch.
+
 - ``SourceCardIndex`` and ``SourceCardVectorIndex``
 
     Independently maintained card outcomes and prepared search vectors.
@@ -55,6 +63,7 @@ Examples
 """
 
 from .descriptors import describe_sources
+from .generation import SourceCardGenerator
 from .models import (
     CARD_STATUS_FAILED,
     CARD_STATUS_NOT_APPLICABLE,
@@ -105,6 +114,7 @@ __all__ = [
     "SOURCE_CARD_KINDS",
     "SourceCard",
     "SourceCardIndex",
+    "SourceCardGenerator",
     "SourceCardMatch",
     "SourceCardUpdatePlan",
     "SourceCardVector",

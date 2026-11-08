@@ -252,6 +252,31 @@ fallback, terminates the process and loses those live sessions. See the
 [GUI Stop contract](gui_protocol.md#errors-stop-and-restart) for the grace
 period, terminal events and restart behavior.
 
+## Dedicated source-card generation model (PR5)
+
+The core owns the independent `[source_card_generation]` settings in each
+project's `profile.ini`, with backend-specific `mlx`/`torch` identifiers.
+The packaged defaults select Qwen3-8B (MLX 4-bit / PyTorch), not the router's
+Qwen3-4B. `kilin.read_source_card_generation_settings()` and
+`kilin.write_source_card_generation_settings()` validate and persist these
+settings without importing or initializing the GUI. The generation model
+never inherits the active answering model or its temperature, thinking, or
+output-token settings. There is no implicit fallback to another model.
+
+`SourceCardGenerator`, from `kilin.retrievals.source_cards`, uses a separate
+`ChatSession`. It loads on its first `generate()` request and reuses the
+model across a `with` block. `close()` releases the session on normal or
+exceptional exit; no dedicated model is loaded when there are no pending
+cards. The adapter uses established completion validation and temporary
+message handling, without changing conversational state.
+
+The project-wide `allow_download` setting is passed to this generator;
+source-card settings do not grant permission to download additional models.
+An explicit input-token budget is available for source-kind prompt selection
+in PR6, while PR5 enforces the output cap. The new adapter is inactive
+until the source-card indexer uses it in PR7. Existing `PaperCard` generation
+and retrieval are unchanged.
+
 ## Failure and cleanup
 
 Missing model cache entries, unsupported native backends, incompatible

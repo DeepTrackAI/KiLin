@@ -69,6 +69,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/descriptors.py`](../kilin/retrievals/source_cards/descriptors.py) | Build source descriptions from the existing selected files and chunks. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/generation.py`](../kilin/retrievals/source_cards/generation.py) | Run isolated, lazy source-card model generation with dedicated project settings. | [Model management](model_management.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/index.py`](../kilin/retrievals/source_cards/index.py) | Validate and search separate source-card records and embeddings, and plan incremental reuse. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/models.py`](../kilin/retrievals/source_cards/models.py) | Represent source cards independently of any particular source kind. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/persistence.py`](../kilin/retrievals/source_cards/persistence.py) | Atomically store source-card outcomes and bound vectors in separate, checksummed files. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
@@ -168,7 +169,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Configuration | 3 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
-| Model management | 7 |
+| Model management | 8 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 23 |
@@ -177,7 +178,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 136.**
+**Total production Python modules: 137.**
 
 ## Non-Python resources and UI assets
 
