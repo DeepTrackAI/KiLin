@@ -9,7 +9,7 @@ Model downloads are separate, user-initiated operations. The runtime
 and project data are not bundled into the disk image.
 
 **The current application is for development and trusted internal tests.**
-By default, the build uses ad-hoc rather than Developer ID signing,
+The build uses ad-hoc signing only, not Developer ID signing,
 and it is **not notarized**. No Apple Developer credentials are required.
 macOS Gatekeeper may prevent ordinary opening of these builds. We do not
 claim that they are suitable for frictionless public distribution.
@@ -48,6 +48,10 @@ The `.github/workflows/macos_app.yml` workflow performs this native
 build and inspection on an Apple Silicon runner, plus the deterministic
 launcher, updater, backend-repair and builder tests. It uses no Apple
 Developer credentials and does not notarize or publish the artifacts.
+Automatic runs are path-filtered to relevant build, setup, GUI and
+packaging files; manual execution remains available. Because skipped
+path-filtered jobs may remain pending as required checks, do not make
+this workflow an unconditional branch-protection requirement.
 A manually downloaded CI image is a **development artifact**, not a
 validated public release.
 
@@ -92,8 +96,9 @@ security prompt on other machines.
 We are deliberately **not implementing notarization** or a credentialed
 Developer ID release process. Public distribution with the usual
 Gatekeeper experience would require separate decisions and access to an
-Apple Developer Program account. No developer credentials or notarization commands are needed for
-the documented build and verification workflow.
+Apple Developer Program account. No developer credentials or
+notarization commands are needed for the documented build and
+verification workflow.
 
 ## Related
 

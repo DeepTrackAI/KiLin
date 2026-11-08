@@ -4,8 +4,8 @@
 #   bash setup/macos/build_app.sh           install KíLín from PyPI
 #   bash setup/macos/build_app.sh --wheel   bundle a local checkout wheel
 #
-# Output: dist/KíLín.app and dist/KíLín.dmg. Set CODESIGN_IDENTITY for
-# Developer ID signing (optional); otherwise the app is signed ad hoc.
+# Output: dist/KíLín.app and dist/KíLín.dmg, signed ad hoc.
+# No Apple Developer credentials are used.
 # Finder layout may require permission unless explicitly skipped.
 set -euo pipefail
 
@@ -149,7 +149,7 @@ cat >"$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --deep --sign "${CODESIGN_IDENTITY:--}" "$app"
+codesign --force --deep --sign - "$app"
 
 # Assemble and customize the DMG inside the isolated build directory.
 # Finder permission is optional; a denied request keeps the plain layout.

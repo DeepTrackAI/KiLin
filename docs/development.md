@@ -378,7 +378,7 @@ console.
 4. Build a development macOS app using the version from PyPI:
    `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
    `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
-   are ad-hoc signed by default and are **not notarized**. See the
+   are signed ad hoc only and are **not notarized**. See the
    [macOS build guide](release.md) for native and manual validation.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that

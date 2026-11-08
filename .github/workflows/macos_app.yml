@@ -3,8 +3,24 @@ name: macOS application smoke
 on:
   push:
     branches: [main, develop]
+    paths:
+      - ".github/workflows/macos_app.yml"
+      - "setup/macos/**"
+      - "tests/setup/**"
+      - "kilin/gui/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "MANIFEST.in"
   pull_request:
     branches: [main, develop]
+    paths:
+      - ".github/workflows/macos_app.yml"
+      - "setup/macos/**"
+      - "tests/setup/**"
+      - "kilin/gui/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "MANIFEST.in"
   workflow_dispatch:
 
 permissions:

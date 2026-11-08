@@ -84,6 +84,31 @@ class TestMacOSRelease(unittest.TestCase):
         self.assertNotIn("secrets.", text)
         self.assertEqual(job["env"]["KILIN_SKIP_FINDER_LAYOUT"], "1")
 
+    def test_ci_is_path_filtered_and_manual(self) -> None:
+        """Run expensive builds only for relevant changes or on demand.
+
+        """
+        workflow = (_ROOT / ".github/workflows/macos_app.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("  workflow_dispatch:", workflow)
+        for path in (
+            "setup/macos/**", "tests/setup/**", "kilin/gui/**",
+            "pyproject.toml", ".github/workflows/macos_app.yml",
+        ):
+            self.assertEqual(workflow.count('"' + path + '"'), 2)
+
+    def test_builder_never_uses_developer_id_identity(self) -> None:
+        """Keep all builds credential-free, even on developer Macs.
+
+        """
+        builder = (_ROOT / "setup/macos/build_app.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('codesign --force --deep --sign - "$app"', builder)
+        self.assertNotIn("CODESIGN_IDENTITY", builder)
+
+
 
 if __name__ == "__main__":
     unittest.main()

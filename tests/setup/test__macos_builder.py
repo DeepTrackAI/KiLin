@@ -384,6 +384,20 @@ exit 0
         )
         self._assert_unrelated_files()
 
+    def test_host_signing_identity_does_not_change_build(self) -> None:
+        """Ignore Developer ID identities in the host environment.
+
+        """
+        result = self._run(
+            "--wheel", variables={
+                "CODESIGN_IDENTITY": "Developer ID Application"
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log.read_text(encoding="utf-8")
+        self.assertIn("codesign --force --deep --sign -", log)
+        self.assertNotIn("Developer ID Application", log)
+
     def test_pypi_build_replaces_only_named_outputs(self) -> None:
         """Do not build or overwrite a wheel in PyPI install mode.
 
