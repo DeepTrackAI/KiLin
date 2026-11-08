@@ -84,6 +84,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/strategies/retrieval_lexical.py`](../kilin/retrievals/strategies/retrieval_lexical.py) | Build and query a sparse TF-IDF index over retrieval chunks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_papers.py`](../kilin/retrievals/strategies/retrieval_papers.py) | Choose papers first, then passages inside them. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_semantic.py`](../kilin/retrievals/strategies/retrieval_semantic.py) | Build and query an embedding-based chunk index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/strategies/retrieval_sources.py`](../kilin/retrievals/strategies/retrieval_sources.py) | Rank sources across four channels, then select original passages. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/runtime.py`](../kilin/runtime.py) | Choose backend and device names without loading inference models. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/source_card_policy.py`](../kilin/source_card_policy.py) | Resolve core-owned source-card indexing policy for one project. | [Configuration](configuration.md) | [Policy tests](../tests/kilin/test_source_card_policy.py) |
 | [`kilin/sources/__init__.py`](../kilin/sources/__init__.py) | Expose source-file records and structured source extraction. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -176,13 +177,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 26 |
+| Retrieval pipeline | 27 |
 | Source pipeline | 12 |
 | Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 141.**
+**Total production Python modules: 142.**
 
 ## Non-Python resources and UI assets
 

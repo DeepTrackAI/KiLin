@@ -32,12 +32,13 @@ and validates **all** type files on load.
 
 `capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
 `paper_index` (`true` or `false`, default `false`). With `paper_index`,
-document passages are indexed with their paper's title, author, section and
-page, each document gets a paper card, and intents may use the `papers`
-retrieval strategy with `max_papers` (1-50, default 3) and
-`passages_per_paper` (0-10, default 0); see
-[Retrieval pipeline](retrieval_pipeline.md). A `papers` intent in a type
-without `paper_index` is rejected.
+document passages are indexed with title, author, section and page
+headers, and intents may use the existing `papers` retrieval strategy with
+`max_papers` (1-50, default 3) and `passages_per_paper` (0-10, default 0).
+The separate `capabilities.source_cards` policy controls whether eligible
+scientific papers receive card summaries and stored vectors; it is not
+implied by `paper_index`. See [Retrieval pipeline](retrieval_pipeline.md).
+A `papers` intent in a type without `paper_index` is rejected.
 
 The registry requires at least one valid definition, not either standard
 type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
@@ -63,8 +64,13 @@ mode/strategy, instruction, and a tool reference. `Intent` is the validated in-m
 always a literal one-to-one copy of keys in JSON because the loader applies
 defaults. Supported history modes are `none`, `recent`, `relevant`; supported
 retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
-retrieval strategy is `hybrid`. A missing tool name or an unregistered name
-fails validation rather than importing a module by string.
+retrieval strategies are `hybrid`, `papers` and `source_first`. The generic
+`source_first` strategy uses the optional source-card vector index plus
+semantic, lexical and applicable graph source rankings. It can be selected
+in custom project-type JSON without enabling `paper_index`; current
+packaged literature intents remain on `papers` until PR9. A missing tool
+name or an unregistered name fails validation rather than importing a
+module by string.
 
 Ordinary intents can also declare `thinking: true`, `false`, or `null`.
 An omitted or null field inherits the configured chat setting; a boolean

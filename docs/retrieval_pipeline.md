@@ -347,6 +347,47 @@ document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
 
+## Four-channel source-first retrieval (PR8, opt-in)
+
+The `source_first` retrieval strategy is implemented in
+`retrievals/strategies/retrieval_sources.py`. Unlike the existing `papers`
+strategy, it **does not gate sources by the global top-passage ranking**.
+It independently converts the complete semantic, lexical and applicable
+code-graph rankings to one ranked position per source, then combines those
+three source lists with the optional source-card vector ranking. Each
+available channel contributes the same Reciprocal Rank Fusion weight;
+repeated chunks or card kinds do not give a source extra credit. Equal
+source scores are ordered by source-relative path. The graph channel is
+omitted when the query names no applicable code entity.
+
+After ranking sources, the strategy ranks **original chunks** using the
+existing full passage fusion, selects the first passage of each selected
+source, and fills remaining places from the highest-ranked chunks of those
+sources. A card can discover a document whose passages were globally low,
+but generated card text never becomes answer evidence. Source cards are
+optional: without them, source-first ranking uses semantic, lexical and
+available graph signals. The semantic query and cards share one query
+embedding; neither card generation nor a second embedding call is added.
+
+`source_first` can be selected explicitly in an intent's
+`retrieval.strategy` field. It is not yet a packaged intent default:
+`hybrid` and `papers` retain their existing algorithms and results. In PR8,
+existing `max_papers` limits the preliminary number of source candidates,
+subject to the initial retrieval passage count. A positive
+`passages_per_paper` signals that a single named document may be compared
+with others; it does not yet impose a source quota. These existing setting
+names are a transitional reuse until PR9 specifies dedicated source
+budgets. Multiple explicitly named documents strictly restrict initial
+source candidates and source-first evidence. A single named document
+remains primary in the initial selection unless comparison is requested.
+
+The initial selection respects `retrieval_count`, but the shared explicit
+context-expansion stage may append additional original chunks, as in other
+strategies. PR9 will add hard passage/token budgets, bounded versus
+exhaustive coverage, and activate source-first defaults only after their
+coverage checks. PR8 intentionally retains the old `papers` strategy and
+`paper_cards.py`; obsolete-code removal is a separate cleanup.
+
 ## Named-document retrieval and full-document reading
 
 There are several distinct retrieval modes determined by the selected

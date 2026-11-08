@@ -708,6 +708,29 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, key):
                     self._load(f"paperslimit{index}", bad)
 
+    def test_source_first_strategy_is_generic_and_opt_in(self) -> None:
+        """Allow source-first without paper indexing or stored card kinds."""
+
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        intent["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+            "max_papers": 4, "passages_per_paper": 1,
+        }
+        config = self._load("sourcefirst", data)
+        self.assertFalse(config.paper_index)
+        self.assertFalse(config.source_cards_enabled)
+        selected = next(iter(config.intents.values()))
+        self.assertEqual(selected.retrieval_strategy, "source_first")
+        self.assertEqual(selected.max_papers, 4)
+        self.assertEqual(selected.passages_per_paper, 1)
+        self.assertEqual(
+            project_type("literature").intents[
+                "question_answering"
+            ].retrieval_strategy,
+            "papers",
+        )
+
     def test_packaged_literature_type_indexes_papers(self) -> None:
         """Index papers for literature projects but not for code projects."""
 

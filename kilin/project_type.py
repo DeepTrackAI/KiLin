@@ -74,10 +74,11 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID`` and ``RETRIEVAL_STRATEGY_PAPERS``
+- ``RETRIEVAL_STRATEGY_HYBRID``, ``RETRIEVAL_STRATEGY_PAPERS``,
+  and ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
 
-    Canonical string values for the hybrid search pipeline and for the
-    pipeline that chooses papers first.
+    Canonical string values for hybrid, legacy paper-first, and generic
+    four-channel source-first retrieval.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -110,7 +111,7 @@ Module Structure
 
 - ``RetrievalStrategy``
 
-    Type alias for ``"hybrid"``.
+    Type alias for ``"hybrid"``, ``"papers"``, or ``"source_first"``.
 
 - ``load_project_types``
 
@@ -169,6 +170,7 @@ __all__ = [
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
     "RETRIEVAL_STRATEGY_PAPERS",
+    "RETRIEVAL_STRATEGY_SOURCE_FIRST",
     "CodeGraphSetting",
     "HistoryPolicy",
     "Intent",
@@ -240,13 +242,17 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
 # Search pipeline used by RETRIEVAL_MODE_SEARCH: the hybrid pipeline
 # (semantic, lexical, code graph, fused), or the same pipeline choosing
 # papers first (``retrieval_papers.py``), for types that index papers.
-# New strategies need benchmarks before they are added.
-RetrievalStrategy: TypeAlias = Literal["hybrid", "papers"]
+# Source-first retrieval is available explicitly; packaged defaults stay as-is.
+RetrievalStrategy: TypeAlias = Literal[
+    "hybrid", "papers", "source_first"
+]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
 RETRIEVAL_STRATEGY_PAPERS: Final[RetrievalStrategy] = "papers"
+RETRIEVAL_STRATEGY_SOURCE_FIRST: Final[RetrievalStrategy] = "source_first"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
     RETRIEVAL_STRATEGY_PAPERS,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
 )
 # Papers the ``papers`` strategy chooses by default, and the accepted range.
 _DEFAULT_MAX_PAPERS: Final[int] = 3
@@ -283,7 +289,7 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid" | "papers"
+    retrieval_strategy: "hybrid" | "papers" | "source_first"
         Search pipeline used when searching: ``hybrid``, or ``papers``,
         which ranks papers first and fills the evidence from the best ones
         (only for project types with ``paper_index``).
@@ -317,11 +323,13 @@ class Intent:
         overrides it without changing the session. Defaults to ``None``.
         Tool-backed intents must leave this unset or null.
     max_papers: int
-        Papers the ``papers`` strategy fills the evidence from. Defaults to
-        ``3``.
+        Sources the ``papers`` or ``source_first`` strategy initially
+        considers. Defaults to ``3``.
     passages_per_paper: int
         Passages the ``papers`` strategy guarantees to each chosen paper;
-        zero guarantees one to the best paper only. Defaults to ``0``.
+        zero guarantees one to the best paper only. For ``source_first``,
+        a positive value enables comparisons around one named source.
+        Explicit quotas remain a PR9 concern. Defaults to ``0``.
 
     """
 

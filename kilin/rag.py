@@ -3,6 +3,7 @@
 ``RAGSession`` opens a configured project, loads an embedding session, reuses
 or builds source chunks and retrieval indexes, then loads a chat session.
 For each question it combines semantic, lexical, and code-based rankings,
+optionally selecting sources first using independent source-card vectors,
 expands explicitly requested context, and formats evidence into the model's
 user prompt. Returned ``Evidence`` records identify the supplied excerpts;
 the module checks citation identifiers against the supplied evidence
@@ -194,6 +195,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
     RETRIEVAL_STRATEGY_PAPERS,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
     project_type,
 )
 from kilin.query_formats import (
@@ -215,6 +217,16 @@ from kilin.retrievals.strategies.retrieval_papers import (
     rank_papers,
     relevant_papers,
     select_paper_passages,
+)
+from kilin.retrievals.strategies.retrieval_code import CodeResult
+from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
+from kilin.retrievals.strategies.retrieval_sources import (
+    select_source_passages,
+    source_first_search,
+)
+from kilin.retrievals.source_cards.index import (
+    SourceCardMatch,
+    search_source_cards,
 )
 from kilin.retrievals.source_cards import (
     SourceCardIndex,
@@ -1645,6 +1657,15 @@ class RAGSession:
                         if getattr(intent, "retrieval_strategy", None)
                         == RETRIEVAL_STRATEGY_PAPERS
                         else None
+                    ),
+                    **(
+                        {"source_first": (
+                            intent.max_papers,
+                            intent.passages_per_paper > 0,
+                        )}
+                        if getattr(intent, "retrieval_strategy", None)
+                        == RETRIEVAL_STRATEGY_SOURCE_FIRST
+                        else {}
                     ),
                 )
                 found = len(evidence)
@@ -3135,6 +3156,7 @@ class RAGSession:
         scope: Sequence[Path] = (),
         prefer_source_code: bool = False,
         papers: tuple[int, int] | None = None,
+        source_first: tuple[int, bool] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3170,6 +3192,11 @@ class RAGSession:
             passages guaranteed to each (``_paper_passages``); ignored when
             one document is named. ``None`` keeps hybrid retrieval.
             Defaults to ``None``.
+        source_first: tuple[int, bool] | None, optional
+            Activate the independent four-channel source ranking. The tuple
+            supplies the maximum selected sources and whether a named source
+            can be compared with others. ``None`` preserves the existing
+            retrieval strategies. Defaults to ``None``.
 
         Returns
         -------
@@ -3207,6 +3234,16 @@ class RAGSession:
             if status_callback is not None:
                 status_callback(message)
 
+        if papers is not None and source_first is not None:
+            raise ValueError("Choose either papers or source_first retrieval.")
+        if source_first is not None and (
+            type(source_first) is not tuple
+            or len(source_first) != 2
+            or type(source_first[0]) is not int
+            or source_first[0] < 1
+            or type(source_first[1]) is not bool
+        ):
+            raise ValueError("Invalid source_first retrieval settings.")
         if not self.chunks:
             report("No indexed source passages; skipping retrieval")
             return ()
@@ -3272,7 +3309,14 @@ class RAGSession:
                 if entry.kind == "scientific_paper"
             }
             query_vector = None
-            if papers is not None and card_vectors:
+            has_source_cards = (
+                isinstance(vector_index, SourceCardVectorIndex)
+                and bool(vector_index.records)
+            )
+            if (
+                (papers is not None and card_vectors)
+                or (source_first is not None and has_source_cards)
+            ):
                 query_vector = (
                     self.embedding_session.embed_query(query_text)
                     if trace_turn_id is None
@@ -3311,13 +3355,15 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Running lexical search")
-            lexical = keep(
-                lexical_search(
-                    self.indexes.lexical,
-                    question,
-                    count=depth,
-                )
+            lexical_results = lexical_search(
+                self.indexes.lexical,
+                question,
+                count=(
+                    max(depth, len(self.chunks))
+                    if source_first is not None else depth
+                ),
             )
+            lexical = keep(lexical_results[:depth])
         trace.emit(
             "retrieval.lexical.ranked",
             component="retrieval",
@@ -3333,6 +3379,7 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            code_results: list[CodeResult] = []
             if not self.indexes.code_graph.entities:
                 code = []
                 report(
@@ -3345,14 +3392,16 @@ class RAGSession:
                 report("No code named in the question; skipping graph search")
             else:
                 report("Searching relationships between source entities")
-                code = keep(
-                    code_search(
-                        self.indexes.code_graph,
-                        self.chunks,
-                        question,
-                        count=depth,
-                    )
+                code_results = code_search(
+                    self.indexes.code_graph,
+                    self.chunks,
+                    question,
+                    count=(
+                        max(depth, len(self.chunks))
+                        if source_first is not None else depth
+                    ),
                 )
+                code = keep(code_results[:depth])
                 report(
                     "Relationship search ranked "
                     f"{len(code)} results"
@@ -3396,6 +3445,35 @@ class RAGSession:
         # Paper search chooses papers first. One named paper keeps its own
         # passages, except in a comparison, which needs other papers too.
         named = list(scope)
+        sources_chosen = False
+        if source_first is not None:
+            card_matches = (
+                search_source_cards(
+                    vector_index,
+                    query_vector,
+                    count=len(vector_index.records),
+                )
+                if query_vector is not None and has_source_cards
+                else ()
+            )
+            chosen = self._source_passages(
+                semantic_results,
+                lexical_results,
+                code_results,
+                card_matches,
+                count=count,
+                max_sources=source_first[0],
+                compare=source_first[1],
+                scope=named,
+                trace_turn_id=trace_turn_id,
+            )
+            if chosen:
+                combined = chosen
+                sources_chosen = True
+                report(
+                    f"Selected {len(combined)} original passages from "
+                    f"{len({r.chunk.path for r in combined})} sources"
+                )
         papers_chosen = False
         if papers is not None and (len(named) != 1 or papers[1] > 0):
             chosen = self._paper_passages(
@@ -3419,7 +3497,7 @@ class RAGSession:
 
         # A named document supplies the primary passages; expansion may
         # still add useful context from elsewhere in the repository.
-        if len(named) == 1 and not papers_chosen:
+        if len(named) == 1 and not papers_chosen and not sources_chosen:
             focused = [
                 result
                 for result in self._rank_everything(
@@ -3502,6 +3580,12 @@ class RAGSession:
             expansion_plan,
             relevance,
         )
+        if source_first is not None and len(named) > 1:
+            # Explicit multi-document scopes are strict for this strategy.
+            allowed = set(named)
+            expanded = [
+                chunk for chunk in expanded if chunk.path in allowed
+            ]
         direct_paths = set(plan.paths) | set(scope)
         direct_ids = {
             chunk.identifier for chunk in _chunks_for_functions(
@@ -4001,6 +4085,114 @@ class RAGSession:
 
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
+
+    def _source_passages(
+        self: RAGSession,
+        semantic: Sequence[SemanticResult],
+        lexical: Sequence[LexicalResult],
+        code: Sequence[CodeResult],
+        cards: Sequence[SourceCardMatch],
+        *,
+        count: int,
+        max_sources: int,
+        compare: bool,
+        scope: Sequence[Path],
+        trace_turn_id: str | None,
+    ) -> list[HybridResult]:
+        """Select sources by four-channel RRF, then original passages.
+
+        Parameters
+        ----------
+        semantic: Sequence[SemanticResult]
+            Complete semantic chunk ranking for the current query.
+        lexical: Sequence[LexicalResult]
+            Complete lexical chunk ranking for the same query.
+        code: Sequence[CodeResult]
+            Complete applicable code-graph chunk ranking.
+        cards: Sequence[SourceCardMatch]
+            Ranked source-card matches from the same query embedding.
+        count: int
+            Maximum initial original passages.
+        max_sources: int
+            Maximum sources to consider, within the passage count.
+        compare: bool
+            Whether a single named source may include additional sources.
+        scope: Sequence[pathlib.Path]
+            Explicit source selections; several form a strict restriction.
+        trace_turn_id: str | None
+            Trace identifier for this retrieval turn.
+
+        Returns
+        -------
+        list[HybridResult]
+            Original chunks selected from independently ranked sources.
+
+        Notes
+        -----
+        This initial selection is bounded by passage count. Explicit
+        exhaustive-coverage and token budgets are deferred to PR9.
+
+        """
+
+        ranked_sources = source_first_search(
+            semantic=semantic,
+            lexical=lexical,
+            code=code,
+            cards=cards,
+            count=max(len(self.chunks), len(cards), 1),
+        )
+        indexed_paths = {chunk.path for chunk in self.chunks}
+        available = [
+            item for item in ranked_sources if item.path in indexed_paths
+        ]
+        named = list(dict.fromkeys(scope))
+        if len(named) > 1:
+            allowed = set(named)
+            available = [
+                item for item in available if item.path in allowed
+            ]
+        elif len(named) == 1:
+            target = [
+                item for item in available if item.path == named[0]
+            ]
+            others = [
+                item for item in available if item.path != named[0]
+            ]
+            available = [*target, *others] if compare else target
+
+        limit = min(max_sources, count)
+        chosen = [item.path for item in available[:limit]]
+        full_passages = hybrid_search(
+            semantic=semantic,
+            lexical=lexical,
+            code=code,
+            count=len(self.chunks),
+        )
+        passages = select_source_passages(
+            full_passages, chosen, count=count
+        )
+        trace = getattr(self, "trace", NullTraceLogger())
+        trace.emit(
+            "retrieval.sources.ranked",
+            component="retrieval",
+            data={
+                "sources": [
+                    {
+                        "path": item.path,
+                        "score": item.score,
+                        "channel_ranks": item.channel_ranks,
+                        "chosen": item.path in chosen,
+                    }
+                    for item in ranked_sources
+                ],
+                "max_sources": max_sources,
+                "selected_count": len(chosen),
+                "passage_count": len(passages),
+                "scope": named,
+            },
+            turn_id=trace_turn_id,
+        )
+        return passages
 
     def _paper_passages(
         self: RAGSession,
