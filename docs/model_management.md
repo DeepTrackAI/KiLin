@@ -272,10 +272,11 @@ message handling, without changing conversational state.
 
 The project-wide `allow_download` setting is passed to this generator;
 source-card settings do not grant permission to download additional models.
-The scientific-paper kind uses the configured input-token budget for the
-whole prompt in PR6, while the adapter enforces the output cap. The new
-indexing path remains inactive until the indexer uses it in PR7. Existing `PaperCard` generation
-and retrieval are unchanged.
+The scientific-paper kind uses the configured input-token budget for
+the whole prompt, while the adapter enforces the output cap. The PR7
+indexer generates missing cards on project opening or source refresh and
+closes the generator before the answering model loads. Retrieval still
+uses the original paper-ranking algorithm and original chunks as evidence.
 
 ## Failure and cleanup
 

@@ -21,6 +21,10 @@ from kilin.chunking import Chunk
 from kilin.retrievals import build_lexical_index
 from kilin.retrievals.code_graph import CodeEntity, CodeGraph
 from kilin.retrievals.strategies import retrieval_papers as rp
+from kilin.retrievals.source_cards.index import (
+    SourceCardVector,
+    SourceCardVectorIndex,
+)
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 from tests.kilin import _rag_support as fixtures
 
@@ -192,11 +196,22 @@ def _paper_session() -> rag.RAGSession:
     )
     session.embedding_session = Mock()
     session.embedding_session.embed_query.return_value = [1.0, 0.0]
-    session.paper_card_vectors = {
-        Path("a.pdf"): ((1.0, 0.0),),
-        Path("b.pdf"): ((0.0, 1.0),),
-        Path("c.pdf"): ((0.5, 0.5),),
-    }
+    session.source_card_vectors = SourceCardVectorIndex(
+        "embed:test", (
+            SourceCardVector(
+                Path("a.pdf"), "scientific_paper", "a" * 64,
+                "b" * 64, ((1.0, 0.0),),
+            ),
+            SourceCardVector(
+                Path("b.pdf"), "scientific_paper", "a" * 64,
+                "b" * 64, ((0.0, 1.0),),
+            ),
+            SourceCardVector(
+                Path("c.pdf"), "scientific_paper", "a" * 64,
+                "b" * 64, ((0.5, 0.5),),
+            ),
+        ),
+    )
     return session
 
 
@@ -238,6 +253,37 @@ class TestPaperRetrieval(unittest.TestCase):
         evidence = session._retrieve("memory", 2)
         self.assertEqual(self._paths(evidence), ["a.pdf", "a.pdf"])
 
+    def test_indexed_cards_influence_paper_ranks(self):
+        session = _paper_session()
+        session.source_card_vectors = SourceCardVectorIndex(
+            "embed:test", (
+                SourceCardVector(
+                    Path("a.pdf"), "scientific_paper", "a" * 64,
+                    "b" * 64, ((-1.0, 0.0),),
+                ),
+                SourceCardVector(
+                    Path("b.pdf"), "scientific_paper", "a" * 64,
+                    "b" * 64, ((0.0, 1.0),),
+                ),
+                SourceCardVector(
+                    Path("c.pdf"), "scientific_paper", "a" * 64,
+                    "b" * 64, ((1.0, 0.0),),
+                ),
+            ),
+        )
+        evidence = session._retrieve("memory", 2, papers=(2, 1))
+        self.assertEqual(set(self._paths(evidence)), {"a.pdf", "c.pdf"})
+        session.embedding_session.embed_query.assert_called_once_with(
+            "memory"
+        )
+        session.source_card_vectors = None
+        session.embedding_session.embed_query.reset_mock()
+        evidence = session._retrieve("memory", 2, papers=(2, 1))
+        self.assertEqual(set(self._paths(evidence)), {"a.pdf", "b.pdf"})
+        session.embedding_session.embed_query.assert_called_once_with(
+            "memory"
+        )
+
     def test_max_papers_limits_the_chosen_papers(self):
         session = _paper_session()
         evidence = session._retrieve("memory", 3, papers=(1, 0))
@@ -274,7 +320,7 @@ class TestPaperRetrieval(unittest.TestCase):
 
     def test_without_cards_papers_are_ranked_by_passages(self):
         session = _paper_session()
-        session.paper_card_vectors = {}
+        session.source_card_vectors = None
         evidence = session._retrieve("memory", 2, papers=(2, 1))
         self.assertEqual(len(set(self._paths(evidence))), 2)
         session.embedding_session.embed_query.assert_called_once_with(

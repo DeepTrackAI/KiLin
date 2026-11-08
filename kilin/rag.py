@@ -20,9 +20,9 @@ parameters. One authoritative conversation JSON path stores resumable state.
 When tracing is enabled for a RAG session, its trace output is required to use
 that same path; tracing therefore cannot silently redirect conversation
 persistence. The session has side effects: initialization may create files,
-rebuild indexes, load models, and download missing model files according to the
-profile. ``trace=None`` enables full tracing here, unlike
-the low-level chat and embedding classes.
+rebuild indexes, generate missing source cards with a separate model, and
+download missing model files according to the profile. ``trace=None``
+enables full tracing here, unlike the low-level chat and embedding classes.
 
 History and expanded evidence have no automatic summarization or shared
 prompt-token budget. A retrieval count limits the initial fused ranking, not
@@ -216,15 +216,11 @@ from kilin.retrievals.strategies.retrieval_papers import (
     relevant_papers,
     select_paper_passages,
 )
-from kilin.retrievals.paper_cards import (
-    PaperCard,
-    card_passages,
-    card_prompt,
-    card_texts,
-    load_cards,
-    parse_card,
-    save_cards,
+from kilin.retrievals.source_cards import (
+    SourceCardIndex,
+    SourceCardVectorIndex,
 )
+from kilin.retrievals.source_cards.indexing import reconcile_source_cards
 from kilin.retrievals.papers import (
     DOCUMENT_HEADER_FORMAT,
     DOCUMENT_KINDS,
@@ -367,10 +363,6 @@ _TEXT_CACHE: Final[str] = "source_text.json"
 # How indexed text is built from passages (``_retrieval_text``); a change
 # rebuilds saved indexes.
 RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
-# Saved paper cards (``paper_cards.py``), in the index folder.
-_PAPER_CARDS: Final[str] = "paper_cards.json"
-# Longest reply for one paper card.
-_CARD_MAX_NEW_TOKENS: Final[int] = 1_200
 # Longest module summary put in front of a code passage for searching.
 _SUMMARY_MAX_CHARACTERS: Final[int] = 200
 # Opening of a module docstring, after optional comment lines.
@@ -959,6 +951,9 @@ class RAGSession:
                 chunks, indexes, status, source_changes = (
                     self._prepare_retrieval(embedding_session)
                 )
+            source_cards, source_card_vectors = self._prepare_source_cards(
+                chunks, indexes, embedding_session,
+            )
             self._emit_progress(
                 "loading_chat_model",
                 90.0,
@@ -974,14 +969,6 @@ class RAGSession:
                 allow_download=profile.allow_download,
                 trace=self.trace,
                 block_unrequested_cjk=profile.block_unrequested_cjk,
-            )
-            paper_cards, paper_card_vectors = self._prepare_paper_cards(
-                chunks, chat_session, embedding_session,
-                expected_dimension=(
-                    len(indexes.semantic.embeddings[0])
-                    if isinstance(indexes, PersistentIndexes)
-                    and indexes.semantic.embeddings else None
-                ),
             )
             self._emit_progress(
                 "loading_conversation",
@@ -1045,8 +1032,8 @@ class RAGSession:
         self.embedding_session = embedding_session
         self.chat_session = chat_session
         self.chunks = chunks
-        self.paper_cards = paper_cards
-        self.paper_card_vectors = paper_card_vectors
+        self.source_cards = source_cards
+        self.source_card_vectors = source_card_vectors
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
@@ -2201,20 +2188,15 @@ class RAGSession:
             chunks, indexes, status, source_changes = self._prepare_retrieval(
                 self.embedding_session
             )
+        cards, vectors = self._prepare_source_cards(
+            chunks, indexes, self.embedding_session,
+        )
         self.chunks = chunks
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
-        self.paper_cards, self.paper_card_vectors = (
-            self._prepare_paper_cards(
-                chunks, self.chat_session, self.embedding_session,
-                expected_dimension=(
-                    len(indexes.semantic.embeddings[0])
-                    if isinstance(indexes, PersistentIndexes)
-                    and indexes.semantic.embeddings else None
-                ),
-            )
-        )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
 
     def use_chat_model(self: RAGSession, model_id: str) -> None:
         """Switch the answering model while preserving conversation state.
@@ -3279,7 +3261,16 @@ class RAGSession:
             report("Embedding the query and running semantic search")
             # Paper search compares the same query vector with the papers'
             # cards, so the query is embedded here, once.
-            card_vectors = getattr(self, "paper_card_vectors", None) or {}
+            vector_index = getattr(self, "source_card_vectors", None)
+            card_vectors = {
+                entry.path: entry.embeddings
+                for entry in (
+                    vector_index.records
+                    if isinstance(vector_index, SourceCardVectorIndex)
+                    else ()
+                )
+                if entry.kind == "scientific_paper"
+            }
             query_vector = None
             if papers is not None and card_vectors:
                 query_vector = (
@@ -4624,227 +4615,68 @@ class RAGSession:
         infos = self._document_infos(chunks)
         return document_headers(chunks, infos) if infos else {}
 
-    def _prepare_paper_cards(
+    def _prepare_source_cards(
         self: RAGSession,
         chunks: Sequence[Chunk],
-        chat_session: ChatSession,
+        indexes: PersistentIndexes,
         embedding_session: EmbeddingSession,
-        *,
-        expected_dimension: int | None = None,
-    ) -> tuple[
-        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
-    ]:
-        """Reuse or write the card of each paper, with its search vectors.
+    ) -> tuple[SourceCardIndex, SourceCardVectorIndex | None]:
+        """Reconcile cards after ordinary indexes without answering inference.
 
         Parameters
         ----------
         chunks: Sequence[Chunk]
-            Indexed passages.
-        chat_session: ChatSession
-            Answering model, asked without thinking for each new card.
+            Current source chunks, already indexed for ordinary retrieval.
+        indexes: PersistentIndexes
+            Existing indexes, used to check the card vector dimension.
         embedding_session: EmbeddingSession
-            Embedding model for the cards' search vectors.
-        expected_dimension: int | None, optional
-            Embedding dimension of the ordinary semantic index.
-            Defaults to ``None`` for callers without an index.
+            Shared embedding model; no additional model is loaded for vectors.
 
         Returns
         -------
-        tuple[dict, dict]
-            Cards and their search vectors by document path; empty unless
-            the project type indexes papers (``paper_index``).
+        tuple[SourceCardIndex, SourceCardVectorIndex | None]
+            Current derived card content and vector indexes.
 
         Notes
         -----
-        A saved card is reused while its file's SHA-256 and the card format
-        are unchanged and the model wrote it completely; its vectors are
-        reused while the embedding model is the same. A card that cannot be
-        written is kept with its title only, without search vectors, and
-        is written again when the file or the answering model changes.
-        Failures never stop the session from opening: without cards,
-        retrieval searches passages only.
+        The independent card generator is lazy and released on return,
+        before the interactive answering model is loaded. Ineligible and
+        failed cards never prevent passage-based retrieval.
 
         """
 
-        if not chunks or not self._indexes_papers():
-            return {}, {}
-        try:
-            return self._build_paper_cards(
-                chunks, chat_session, embedding_session,
-                expected_dimension=expected_dimension,
-            )
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            # Cards only guide retrieval; passage search still works.
-            self.trace.exception(
-                "paper_cards.failed", error, component="rag"
-            )
-            return {}, {}
-
-    def _build_paper_cards(
-        self: RAGSession,
-        chunks: Sequence[Chunk],
-        chat_session: ChatSession,
-        embedding_session: EmbeddingSession,
-        *,
-        expected_dimension: int | None = None,
-    ) -> tuple[
-        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
-    ]:
-        """Reuse, write, embed, and save the cards of every paper.
-
-        Parameters
-        ----------
-        chunks: Sequence[Chunk]
-            Indexed passages.
-        chat_session: ChatSession
-            Answering model for new cards.
-        embedding_session: EmbeddingSession
-            Embedding model for the cards' search vectors.
-        expected_dimension: int | None, optional
-            Embedding dimension of the ordinary semantic index.
-            Defaults to ``None`` for callers without an index.
-
-        Returns
-        -------
-        tuple[dict, dict]
-            Cards and search vectors by document path.
-
-        """
-
-        file = self.project.indexes / _PAPER_CARDS
-        saved, saved_vectors, saved_identity = load_cards(file)
-        if expected_dimension is not None:
-            for path, stored in saved_vectors.items():
-                if stored and len(stored[0]) != expected_dimension:
-                    saved_vectors[path] = ()
         manifest = getattr(self, "_current_source_manifest", None) or {}
-        hashes = {
-            Path(name): str(item.get("sha256", ""))
-            for name, item in dict(manifest.get("files", {})).items()
-        }
-        identity = getattr(
-            embedding_session, "_retrieval_model_identity", None
-        ) or str(getattr(embedding_session, "model_id", ""))
-        by_path: dict[Path, list[Chunk]] = {}
-        for chunk in chunks:
-            if chunk.kind in DOCUMENT_KINDS:
-                by_path.setdefault(chunk.path, []).append(chunk)
-        infos = self._document_infos(chunks)
-        cards: dict[Path, PaperCard] = {}
-        vectors: dict[Path, tuple[tuple[float, ...], ...]] = {}
-        model = str(getattr(chat_session, "model_id", ""))
-        # A card is written again when its file changed, or when a card
-        # the same model could not write may now succeed with another one.
-        pending = [
-            path for path in sorted(by_path)
-            if not (
-                path in saved
-                and saved[path].sha256 == hashes.get(path)
-                and (saved[path].complete or saved[path].model == model)
-            )
-        ]
         started = perf_counter()
-        for path in sorted(by_path):
-            if path not in pending:
-                cards[path] = saved[path]
-                continue
+
+        def report(current: int, total: int) -> None:
+            """Forward deterministic source-card generation progress.
+
+            Parameters
+            ----------
+            current: int
+                Completed card attempts.
+            total: int
+                Number of pending attempts.
+
+            """
+
             self._emit_count_progress(
-                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
-                pending.index(path), len(pending), started,
+                "building_source_cards", 86.0, 89.0,
+                "Summarizing papers", current, total, started,
             )
-            info = infos.get(path)
-            title = (
-                info.title if info is not None and info.title != path.stem
-                else None
-            )
-            passages = card_passages(by_path[path])
-            system, prompt = card_prompt(path.name, passages)
-            try:
-                reply = side_reply(
-                    chat_session, system, prompt,
-                    max_new_tokens=_CARD_MAX_NEW_TOKENS,
-                    require_complete=True,
-                )
-            except (
-                IncompleteModelResponse, RuntimeError, ValueError
-            ) as error:
-                self.trace.exception(
-                    "paper_card.failed", error, component="rag",
-                    data={"path": path.as_posix()},
-                )
-                reply = ""
-            cards[path] = parse_card(
-                reply, passages, path=path,
-                sha256=hashes.get(path, ""), title=title, model=model,
-            )
-            self.trace.emit(
-                "paper_card.written", component="rag",
-                data={
-                    "path": path.as_posix(),
-                    "complete": cards[path].complete,
-                    "passage_count": len(passages),
-                },
-            )
-        if pending:
-            self._emit_count_progress(
-                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
-                len(pending), len(pending), started,
-            )
-        # Vectors follow the embedding model, not the card text alone. A
-        # card with its title only adds nothing to the passages' headers,
-        # so it is not embedded and its paper is found by its passages.
-        to_embed = [
-            path for path, card in cards.items()
-            if card.complete and (
-                path in pending
-                or saved_identity != identity
-                or len(saved_vectors.get(path, ())) != len(card_texts(card))
-            )
-        ]
-        texts = [text for path in to_embed for text in card_texts(cards[path])]
-        try:
-            fresh = embedding_session.embed_documents(texts) if texts else []
-            if texts:
-                _validate_semantic_embeddings(fresh, len(texts))
-                if (
-                    expected_dimension is not None
-                    and len(fresh[0]) != expected_dimension
-                ):
-                    raise ValueError(
-                        "Card and chunk vector dimensions differ."
-                    )
-        except (ValueError, TypeError, RuntimeError) as error:
-            self.trace.exception(
-                "paper_card.embedding_failed", error, component="rag"
-            )
-            fresh = []
-        position = 0
-        for path, card in cards.items():
-            if path in to_embed:
-                count = len(card_texts(card))
-                vectors[path] = tuple(
-                    tuple(vector)
-                    for vector in fresh[position:position + count]
-                )
-                position += count
-            elif card.complete:
-                vectors[path] = saved_vectors[path]
-            else:
-                vectors[path] = ()
-        if (
-            pending or to_embed or set(saved) != set(cards)
-            or saved_identity != identity
-        ):
-            save_cards(file, cards, vectors, identity)
-        self.trace.emit(
-            "paper_cards.ready", component="rag",
-            data={
-                "card_count": len(cards),
-                "written": len(pending),
-                "embedded": len(to_embed),
-            },
+
+        infos = self._document_infos(chunks)
+        return reconcile_source_cards(
+            self.project, chunks, manifest, embedding_session,
+            backend=self.backend,
+            titles={path: item.title for path, item in infos.items()},
+            expected_dimension=(
+                len(indexes.semantic.embeddings[0])
+                if isinstance(indexes, PersistentIndexes)
+                and indexes.semantic.embeddings else None
+            ),
+            trace=self.trace, progress=report,
         )
-        return cards, vectors
 
     def _parameters(
         self: RAGSession, retrieval_count: int | None = None

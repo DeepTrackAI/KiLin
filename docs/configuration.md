@@ -59,6 +59,48 @@ settings are not a separate active `effort_levels.json` database. The GUI
 still supports controlled migration of recognized older files on first use;
 moving or deleting files outside that migration is not authorized.
 
+### Source-card indexing policy
+
+Project-type JSON can declare `capabilities.source_cards` with `enabled`,
+`kind`, and `automatic` defaults. The literature type enables automatic
+`scientific_paper` cards; other packaged types leave cards disabled. These
+indexing choices are independent of `[source_card_generation]`, which
+configures the dedicated generation model rather than selecting sources.
+
+Project-local `profile.ini` can override the type defaults:
+
+```ini
+[source_cards]
+enabled = true
+kind = scientific_paper
+automatic = true
+```
+
+`kilin.source_card_policy.read_source_card_policy()` and
+`write_source_card_policy()` validate these values and retain unrelated
+profile sections. The project-level enabled switch is authoritative.
+
+Individual source-relative paths can override the default or opt out in
+`source_card_sources.json` at the project root:
+
+```json
+{
+  "format": "source-card-source-settings-v1",
+  "sources": {
+    "certificates/certificate.pdf": {"enabled": false},
+    "papers/study.pdf": {"kind": "scientific_paper"}
+  }
+}
+```
+
+Keys are case-sensitive source-relative paths; absolute or traversing
+paths, unknown card kinds, and malformed settings are rejected. Overrides
+do not bypass the kind's deterministic and model-assisted eligibility
+checks. Cards are reconciled on project opening and source refresh.
+Missing/outdated cards are generated automatically only when policy permits;
+valid cached cards are reused, and other retrieval channels work without
+cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-indexing-and-paper-retrieval-pr7).
+
 ### Important distinctions
 
 - **Model role vs model ID:** role constants describe purposes such as chat

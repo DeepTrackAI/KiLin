@@ -75,7 +75,15 @@ class TestRAGLifecycle(unittest.TestCase):
         new_project = SimpleNamespace(root=Path("/new"))
         values = ([chunk("new")], sentinel.indexes, "reused", {"a": 1})
         session._prepare_retrieval = Mock(return_value=values)
+        session._prepare_source_cards = Mock(
+            return_value=(sentinel.cards, sentinel.card_vectors)
+        )
         session.refresh_sources(new_project)
+        session._prepare_source_cards.assert_called_once_with(
+            values[0], sentinel.indexes, session.embedding_session,
+        )
+        self.assertIs(session.source_cards, sentinel.cards)
+        self.assertIs(session.source_card_vectors, sentinel.card_vectors)
         self.assertIs(session.project, new_project)
         self.assertEqual(session.chunks, values[0])
         self.assertIs(session.indexes, sentinel.indexes)

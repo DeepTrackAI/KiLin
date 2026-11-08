@@ -4,7 +4,7 @@ Plain hybrid retrieval keeps the best few passages of the whole collection.
 In a literature project those can all come from one paper, and a paper
 that answers the question can be missing from them because none of its
 passages ranks high on its own. Paper retrieval ranks the papers first, by
-their cards (``paper_cards.py``) and by their best passages, then fills the
+their source-card vectors and by their best passages, then fills the
 evidence from the chosen papers: the best passages overall, with the best
 paper always represented, or a guaranteed number of passages from each
 chosen paper when sources are compared.

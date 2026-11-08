@@ -107,8 +107,8 @@ require source-unit conventions, graph entity typing and retrieval tests.
 
 ## Source-card kind contract (PR3)
 
-`retrievals/source_cards/` introduces an optional, currently inactive
-contract for whole-source cards. A `SourceDescriptor` carries the file's
+`retrievals/source_cards/` defines the active, optional whole-source
+card contract. A `SourceDescriptor` carries the file's
 identity and existing chunk identifiers, without assigning a content kind
 from a filename suffix. `SourceCard` holds immutable metadata, substantive
 statements with original-chunk provenance, and source/generation/validation
@@ -124,12 +124,12 @@ versions, verifies generic provenance, then delegates to the kind's own
 schema checks. Kind registration must be explicit in source code; project
 JSON must not contain executable import paths.
 
-PR3 established the kind and provenance contracts. PR4 adds an independent
-index for cards and their vectors, with separate checked persistence and
-incremental reuse. Neither `paper_index` nor the active `papers` retrieval
-path uses it yet. A future project type can select registered kinds without
-loading arbitrary modules. PR6 registers the `scientific_paper` kind and
-its one-call generator; automatic indexing remains part of PR7. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+PR3 established the kind and provenance contracts. PR4 added an
+independent card/vector index, PR5 the dedicated generation adapter and PR6
+the `scientific_paper` kind. PR7 activates automatic indexing and makes the
+existing `papers` retrieval path consume source-card vectors without
+changing its ranking algorithm. A future project type can select registered
+kinds without loading arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
 
 The `scientific_paper` kind keeps a consistent research-oriented schema,
 including bibliographic metadata and cited aims, methods, data, findings,

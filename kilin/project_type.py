@@ -380,6 +380,12 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
+    source_cards_enabled: bool
+        Enable the optional independent source-card index.
+    source_card_kind: str | None
+        Preferred card kind, or None for no default.
+    source_cards_automatic: bool
+        Generate missing cards during indexing.
     paper_index: bool
         Index documents as papers: search headers with each document's
         title, author, section and page, and paper cards that summarize
@@ -402,6 +408,9 @@ class ProjectType:
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
     paper_index: bool = False
+    source_cards_enabled: bool = False
+    source_card_kind: str | None = None
+    source_cards_automatic: bool = False
 
     @property
     def label(self) -> str:
@@ -819,7 +828,8 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
     # The type check rejects 1 and 0, which equal True and False.
     capabilities = _object(type_id, data, "capabilities")
     reject_unknown(
-        f"{type_id}.capabilities", capabilities, ("code_graph", "paper_index")
+        f"{type_id}.capabilities", capabilities,
+        ("code_graph", "paper_index", "source_cards"),
     )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
@@ -837,6 +847,25 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             f"Project type {type_id!r} capabilities.paper_index must be true "
             "or false."
         )
+
+    source_cards = _object(type_id, capabilities, "source_cards")
+    reject_unknown(
+        f"{type_id}.capabilities.source_cards", source_cards,
+        ("enabled", "kind", "automatic"),
+    )
+    source_cards_enabled = source_cards.get("enabled", False)
+    source_cards_automatic = source_cards.get(
+        "automatic", source_cards_enabled
+    )
+    for setting in (source_cards_enabled, source_cards_automatic):
+        if type(setting) is not bool:
+            raise ValueError("Source-card project capability must be boolean.")
+    source_card_kind = source_cards.get("kind")
+    if source_card_kind is not None and (
+        not isinstance(source_card_kind, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]*", source_card_kind)
+    ):
+        raise ValueError("Source-card kind must be a snake-case identifier.")
 
     history = _object(type_id, data, "history")
     reject_unknown(f"{type_id}.history", history, ("recent_turns",))
@@ -895,6 +924,9 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
         suggestions=_texts(type_id, data, "suggestions"),
         paper_index=paper_index,
+        source_cards_enabled=source_cards_enabled,
+        source_card_kind=source_card_kind,
+        source_cards_automatic=source_cards_automatic,
     )
 
 

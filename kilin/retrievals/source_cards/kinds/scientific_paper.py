@@ -90,6 +90,7 @@ __all__ = [
     "ScientificPaperKind",
     "card_passages",
     "card_prompt",
+    "card_texts",
     "generate_card",
     "parse_card",
 ]
@@ -217,6 +218,44 @@ class ScientificPaperKind:
             if len(statement.text) > maximum:
                 raise ValueError("Scientific-paper summary is too long.")
             seen.add(statement.field)
+
+
+def card_texts(card: SourceCard) -> tuple[str, ...]:
+    """Project a scientific-paper card onto three retrieval text groups.
+
+    Parameters
+    ----------
+    card: SourceCard
+        Valid scientific-paper card with structured summary statements.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Title-led abstract/aim, methods/data, and findings/limitations.
+        Empty groups are omitted except for the first, matching the
+        original paper-card search projection.
+
+    Raises
+    ------
+    ValueError
+        If the card has an incompatible kind or invalid fields.
+
+    """
+
+    ScientificPaperKind().validate(card)
+    title = dict(card.metadata)["title"]
+    fields = {item.field: item.text for item in card.statements}
+    groups = (
+        ("abstract", "aim"),
+        ("methods", "data"),
+        ("findings", "limitations"),
+    )
+    texts = []
+    for number, group in enumerate(groups):
+        parts = [fields[name] for name in group if fields.get(name)]
+        if parts or number == 0:
+            texts.append("\n".join([title, *parts]))
+    return tuple(texts)
 
 
 def card_passages(

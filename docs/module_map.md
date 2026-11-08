@@ -64,7 +64,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/code_graph/extensions/code_graph_py.py`](../kilin/retrievals/code_graph/extensions/code_graph_py.py) | Extract heuristic relationships from Python syntax trees. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/document_reading.py`](../kilin/retrievals/document_reading.py) | Read one whole document or function as evidence. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/paper_cards.py`](../kilin/retrievals/paper_cards.py) | Build, store, and describe paper cards. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/paper_cards.py`](../kilin/retrievals/paper_cards.py) | Retain the former paper-card helpers for standalone regressions (inactive in live RAG). | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/papers.py`](../kilin/retrievals/papers.py) | Describe the documents of a literature project for searching. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
@@ -73,6 +73,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/source_cards/kinds/__init__.py`](../kilin/retrievals/source_cards/kinds/__init__.py) | Expose trusted scientific-paper card kinds and extensible interfaces. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/kinds/) |
 | [`kilin/retrievals/source_cards/kinds/scientific_paper.py`](../kilin/retrievals/source_cards/kinds/scientific_paper.py) | Generate provenance-linked scientific-paper cards in one model call. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/kinds/) |
 | [`kilin/retrievals/source_cards/index.py`](../kilin/retrievals/source_cards/index.py) | Validate and search separate source-card records and embeddings, and plan incremental reuse. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/indexing.py`](../kilin/retrievals/source_cards/indexing.py) | Reconcile source cards and vectors after normal project retrieval indexing. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/models.py`](../kilin/retrievals/source_cards/models.py) | Represent source cards independently of any particular source kind. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/persistence.py`](../kilin/retrievals/source_cards/persistence.py) | Atomically store source-card outcomes and bound vectors in separate, checksummed files. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/source_cards/registry.py`](../kilin/retrievals/source_cards/registry.py) | Register trusted source-card kinds without project-defined code imports. | [Tool extension contracts](extension_interfaces.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
@@ -84,6 +85,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/strategies/retrieval_papers.py`](../kilin/retrievals/strategies/retrieval_papers.py) | Choose papers first, then passages inside them. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_semantic.py`](../kilin/retrievals/strategies/retrieval_semantic.py) | Build and query an embedding-based chunk index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/runtime.py`](../kilin/runtime.py) | Choose backend and device names without loading inference models. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
+| [`kilin/source_card_policy.py`](../kilin/source_card_policy.py) | Resolve core-owned source-card indexing policy for one project. | [Configuration](configuration.md) | [Policy tests](../tests/kilin/test_source_card_policy.py) |
 | [`kilin/sources/__init__.py`](../kilin/sources/__init__.py) | Expose source-file records and structured source extraction. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/__init__.py`](../kilin/sources/extensions/__init__.py) | Group optional suffix-specific source readers and extractors. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -168,19 +170,19 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | ---: |
 | Answering pipeline | 3 |
 | Architecture | 2 |
-| Configuration | 3 |
+| Configuration | 4 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 8 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 25 |
+| Retrieval pipeline | 26 |
 | Source pipeline | 12 |
 | Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 139.**
+**Total production Python modules: 141.**
 
 ## Non-Python resources and UI assets
 

@@ -251,7 +251,7 @@ class TestSessionCards(unittest.TestCase):
         self.session.project.profile = SimpleNamespace(
             **{**vars(fixtures._profile()), "type_id": "literature"}
         )
-        self.session.chat_session.model_id = "chat-a"
+        self.session.project.indexes.mkdir(parents=True)
         self.embedding = SimpleNamespace(
             _retrieval_model_identity="embed:1",
             embed_documents=Mock(
@@ -266,27 +266,73 @@ class TestSessionCards(unittest.TestCase):
         self.addCleanup(info.stop)
 
     def _hashes(self, hashes):
+        from hashlib import sha256
         self.session._current_source_manifest = {
-            "files": {name: {"sha256": value}
+            "files": {name: {"sha256": sha256(value.encode()).hexdigest()}
                       for name, value in hashes.items()}
         }
 
-    def _prepare(self, reply=REPLY):
-        with patch.object(rag, "side_reply", return_value=reply) as model:
-            cards, vectors = self.session._prepare_paper_cards(
-                self.chunks, self.session.chat_session, self.embedding
+    def _prepare(self, reply=REPLY, *, failure=None, dimension=None):
+        from kilin.retrievals.source_cards.indexing import (
+            reconcile_source_cards,
+        )
+        data = json.loads(reply) if reply.startswith("{") else {}
+        if data.get("methods"):
+            data["methods"] = "Actigraphy in a cohort [2]."
+        data.update({"applicable": True, "reason": "", "venue": "",
+                     "identifiers": "", "limitations": ""})
+        response = json.dumps(data) if data.get("abstract") else reply
+        model = Mock(side_effect=failure) if failure else Mock(
+            return_value=response
+        )
+
+        class FakeGenerator:
+            def __init__(self, settings, **_kwargs):
+                self.settings = settings
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def generate(self, system, prompt):
+                return model(system, prompt)
+
+        def coordinator(*args, **kwargs):
+            return reconcile_source_cards(
+                *args, **kwargs, generator_factory=FakeGenerator
+            )
+
+        with patch.object(rag, "reconcile_source_cards",
+                          side_effect=coordinator):
+            if dimension:
+                from kilin.retrievals import (
+                    PersistentIndexes, SemanticIndex, LexicalIndex,
+                )
+                from kilin.retrievals.code_graph import CodeGraph
+                indexes = PersistentIndexes(
+                    "fp", SemanticIndex((), ((1.0,) * dimension,)),
+                    LexicalIndex((), (), {}), CodeGraph((), ()),
+                )
+            else:
+                indexes = SimpleNamespace(semantic=SimpleNamespace(
+                    embeddings=[]
+                ))
+            cards, vectors = self.session._prepare_source_cards(
+                self.chunks, indexes, self.embedding
             )
         return cards, vectors, model
 
     def test_cards_are_written_embedded_and_reused(self):
         cards, vectors, model = self._prepare()
         self.assertEqual(model.call_count, 2)
-        self.assertEqual(model.call_args.kwargs["require_complete"], True)
-        self.assertEqual(set(cards), {Path("a.pdf"), Path("b.pdf")})
-        self.assertEqual(cards[Path("a.pdf")].title, "PDF title")
-        self.assertEqual(len(vectors[Path("a.pdf")]), 3)
+        self.assertEqual(len(cards.records), 2)
+        card = cards.get(Path("a.pdf"), "scientific_paper").result.card
+        self.assertEqual(dict(card.metadata)["title"], "Model title")
+        self.assertEqual(len(vectors.records[0].embeddings), 3)
         self.assertTrue(
-            (self.session.project.indexes / "paper_cards.json").is_file()
+            (self.session.project.indexes / "source_cards.json").is_file()
         )
         self.embedding.embed_documents.reset_mock()
         again, again_vectors, model = self._prepare()
@@ -310,34 +356,42 @@ class TestSessionCards(unittest.TestCase):
         self.embedding.embed_documents.assert_called_once()
 
     def test_failed_cards_are_not_embedded_or_retried_by_one_model(self):
-        with patch.object(
-            rag, "side_reply",
-            side_effect=IncompleteModelResponse("cut", reason="token_limit"),
-        ):
-            cards, vectors = self.session._prepare_paper_cards(
-                self.chunks, self.session.chat_session, self.embedding
-            )
-        self.assertFalse(cards[Path("a.pdf")].complete)
-        self.assertEqual(vectors[Path("a.pdf")], ())
+        from kilin.retrievals.source_cards import CARD_STATUS_FAILED
+        cards, vectors, model = self._prepare(
+            failure=IncompleteModelResponse("cut", reason="token_limit")
+        )
+        self.assertEqual(model.call_count, 2)
+        self.assertTrue(all(
+            entry.result.status == CARD_STATUS_FAILED
+            for entry in cards.records
+        ))
+        self.assertFalse(vectors.records)
         self.embedding.embed_documents.assert_not_called()
         _, _, model = self._prepare()
         model.assert_not_called()
-        self.session.chat_session.model_id = "chat-b"
-        _, vectors, model = self._prepare()
+        from kilin.model_settings import SourceCardGenerationSettings
+        from kilin.retrievals.source_cards import indexing
+        with patch.object(indexing, "read_source_card_generation_settings",
+                          side_effect=lambda root, backend: (
+                              SourceCardGenerationSettings(
+                                  "Qwen/Qwen3-4B", False, 0.0, 5000, 1200
+                              )
+                          )):
+            _, vectors, model = self._prepare()
         self.assertEqual(model.call_count, 2)
-        self.assertEqual(len(vectors[Path("b.pdf")]), 3)
+        self.assertEqual(len(vectors.records), 2)
 
     def test_invalid_vector_cache_reembeds_without_rewriting(self):
         self._prepare()
-        file = self.session.project.indexes / "paper_cards.json"
+        file = self.session.project.indexes / "source_card_vectors.json"
         data = json.loads(file.read_text(encoding="utf-8"))
-        data["cards"]["a.pdf"]["vectors"][0][0] = "NaN"
+        data["records"][0]["embeddings"][0][0] = "NaN"
         file.write_text(json.dumps(data), encoding="utf-8")
         self.embedding.embed_documents.reset_mock()
         cards, vectors, model = self._prepare()
         model.assert_not_called()
-        self.assertTrue(cards[Path("a.pdf")].complete)
-        self.assertEqual(len(vectors[Path("a.pdf")]), 3)
+        self.assertEqual(len(cards.records), 2)
+        self.assertEqual(len(vectors.records), 2)
         self.embedding.embed_documents.assert_called_once()
 
     def test_wrong_vector_dimension_reembeds_without_card_generation(self):
@@ -346,47 +400,49 @@ class TestSessionCards(unittest.TestCase):
             lambda texts: [[1.0, 0.0, 0.0] for _ in texts]
         )
         self.embedding.embed_documents.reset_mock()
-        with patch.object(rag, "side_reply") as model:
-            cards, vectors = self.session._prepare_paper_cards(
-                self.chunks, self.session.chat_session, self.embedding,
-                expected_dimension=3,
-            )
+        cards, vectors, model = self._prepare(dimension=3)
         model.assert_not_called()
-        self.assertEqual(len(vectors[Path("a.pdf")][0]), 3)
-        self.assertEqual(len(cards), 2)
+        self.assertEqual(len(vectors.records[0].embeddings[0]), 3)
+        self.assertEqual(len(cards.records), 2)
         self.embedding.embed_documents.assert_called_once()
 
     def test_changed_source_failed_generation_is_persisted(self):
+        from kilin.retrievals.source_cards import CARD_STATUS_FAILED
+        from kilin.retrievals.source_cards.persistence import (
+            load_source_cards,
+        )
         self._prepare()
         self._hashes({"a.pdf": "new", "b.pdf": "hb"})
         cards, vectors, model = self._prepare("{}")
         self.assertEqual(model.call_count, 1)
-        self.assertFalse(cards[Path("a.pdf")].complete)
-        self.assertEqual(vectors[Path("a.pdf")], ())
-        file = self.session.project.indexes / "paper_cards.json"
-        stored, _, _ = pc.load_cards(file)
-        self.assertEqual(stored[Path("a.pdf")].sha256, "new")
-        self.assertFalse(stored[Path("a.pdf")].complete)
+        self.assertEqual(
+            cards.get(Path("a.pdf"), "scientific_paper").result.status,
+            CARD_STATUS_FAILED,
+        )
+        self.assertEqual(len(vectors.records), 1)
+        stored = load_source_cards(
+            self.session.project.indexes / "source_cards.json"
+        )
+        self.assertEqual(stored, cards)
         _, _, model = self._prepare()
         model.assert_not_called()
-        self.session.chat_session.model_id = "chat-b"
-        _, vectors, model = self._prepare()
-        self.assertEqual(model.call_count, 1)
-        self.assertEqual(len(vectors[Path("a.pdf")]), 3)
 
     def test_code_projects_and_errors_give_no_cards(self):
         self.session.project.profile = fixtures._profile()
-        self.assertEqual(self._prepare()[:2], ({}, {}))
+        self.assertFalse(self._prepare()[0].records)
         self.session.project.profile = SimpleNamespace(
             **{**vars(fixtures._profile()), "type_id": "literature"}
         )
         self.embedding.embed_documents.side_effect = RuntimeError("closed")
         cards, vectors, _ = self._prepare()
-        self.assertTrue(all(card.complete for card in cards.values()))
-        self.assertTrue(all(not vector for vector in vectors.values()))
-        self.assertEqual(len(pc.load_cards(
-            self.session.project.indexes / "paper_cards.json"
-        )[0]), 2)
+        self.assertEqual(len(cards.records), 2)
+        self.assertFalse(vectors.records)
+        from kilin.retrievals.source_cards.persistence import (
+            load_source_cards,
+        )
+        self.assertEqual(len(load_source_cards(
+            self.session.project.indexes / "source_cards.json"
+        ).records), 2)
 
 
 if __name__ == "__main__":

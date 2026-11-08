@@ -6,8 +6,9 @@ individual cards and their projected search texts. An interrupted update can
 therefore reuse vectors for unchanged cards without trusting stale vectors.
 
 No language model, embedding model, GUI, or active RAG session is loaded here.
-Callers supply validated cards and precomputed embeddings. Generation and
-integration with project indexing follow in later PRs.
+Callers supply validated cards and precomputed embeddings; the separate
+indexing coordinator orchestrates generation and persistence during project
+indexing.
 
 Key Features
 ------------

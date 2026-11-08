@@ -147,7 +147,7 @@ not just the number of embeddings or the final answer string.
 ## Generic source-card contracts (PR3)
 
 The `retrievals/source_cards/` package defines reusable **source-card
-records** without activating a new indexing or retrieval path yet. A
+records** used by the active source-card index. A
 `SourceDescriptor` describes a selected file by its relative path, known
 title, suffix and existing chunk identifiers, including files without
 extractable text. A file extension **does not classify its content**: a PDF
@@ -171,12 +171,11 @@ A kind's deterministic `precheck` may rule out clearly ineligible sources;
 positive results are only candidates, with full eligibility deferred to the
 kind's generation/verification logic. Project JSON never imports kind code.
 
-The generic contracts were introduced in PR3. PR4 adds an **independent,
-optional source-card index**, without changing `paper_cards.py`, the existing
-`paper_index` capability, `indexes/paper_cards.json`, or the active `papers`
-retrieval strategy. A dedicated generation adapter is introduced in PR5; PR6 registers the
-`scientific_paper` kind. Automatic indexing and retrieval integration follow
-in PR7 and later PRs.
+The generic contracts were introduced in PR3. PR4 added the independent
+source-card index, PR5 the dedicated generation adapter, PR6 the
+`scientific_paper` kind, and PR7 connected these to project indexing.
+The `papers` retrieval strategy retains its original ranking and evidence
+selection while reading similarities from the new card-vector index.
 No migration layer for old paper-card files is provided.
 
 ### Independent source-card index (PR4)
@@ -212,9 +211,11 @@ transaction; concurrent writers still need higher-level coordination.
 `search_source_cards()` performs standalone cosine search over already
 prepared vectors. A caller supplies a query embedding; it does not construct
 one, start a model, or add card text to the evidence presented to an answer.
-The active RAG pipeline does not yet call this channel. The former
-`paper_cards.json` continues to be used until the later cutover; the new
-persistence format intentionally has no migration or compatibility reader.
+The existing `papers` strategy consumes these vector groups through
+`card_similarities()` and its original paper-ranking algorithm. PR8 will
+separately consider the four-channel source-first retrieval design.
+The new persistence format has no migration or compatibility reader for
+the former `paper_cards.json` file.
 
 ### Dedicated generation adapter (PR5)
 
@@ -228,9 +229,10 @@ contract; prompt selection and scientific content rules belong to the
 `scientific_paper` kind added in PR6. The adapter validates the configured
 input budget; the kind enforces it when composing prompts.
 
-The independent source-card index remains inactive for live RAG until PR7.
-No additional model calls are made merely by loading an existing project or
-searching the precomputed source-card vector index at this stage.
+In a literature project, PR7 invokes generation on opening or refreshing
+a project only for missing or stale selected cards. No generation model is
+loaded when the current cards are reusable, and retrieval itself never
+runs card generation.
 
 ### Scientific-paper cards (PR6)
 
@@ -264,39 +266,57 @@ cause their field to be omitted; at least one supported substantive field
 is required. Presence of a chunk reference does **not** prove that the
 statement is semantically entailed by that chunk.
 
-The implementation is currently callable directly with
-`SourceCardGenerator` and does not alter the active `PaperCard` pipeline,
-write source-card records, or change retrieval. PR7 will activate automatic
-indexing of eligible papers. The registry and generic persistence also allow
-future, independently validated kinds for grant proposals, patents, CVs,
-slide decks, technical manuals, policy documents, and other sources when
-needed. They are **not** implemented or inferred by file format in PR6.
+PR7 invokes this generator when missing scientific-paper cards need to
+be built; it does not alter the existing passage-based evidence rules.
+The registry and generic persistence also allow future, independently
+validated kinds for grant proposals, patents, CVs, slide decks, technical
+manuals, policy documents, and other sources when needed. These kinds
+are **not** implemented or inferred from file extensions.
 
-## Paper cards and paper retrieval
+## Automatic source-card indexing and paper retrieval (PR7)
 
-In project types with `paper_index`, every document may get a **paper
-card** (`retrievals/paper_cards.py`): title, authors, year, a short
-abstract, and one or two sentences each on its aim, methods, data, main
-findings and limitations, with the pages each field cites. The answering
-model writes a card once per document, without thinking, from the
-document's opening passages and the passages that best match each field,
-within about 5,000 estimated tokens. Only summary fields citing a passage
-the model was shown are retained. At least one substantive cited field is
-required; unusable replies produce a title-only incomplete card without
-embeddings.
+Literature projects enable the `scientific_paper` card kind by default.
+After normal extraction, chunking and semantic/lexical/graph indexing,
+`RAGSession` calls `reconcile_source_cards()` in
+`retrievals/source_cards/indexing.py` on both project opening and
+`refresh_sources()`. The coordinator checks source hashes, card-kind schema
+and validation versions, and existing records before calling the separate
+Qwen3-8B generation model. It generates only missing or outdated cards,
+then embeds only missing or stale card search texts with the current
+embedding session. The card-generation session is released before loading
+the interactive answering model on initial project opening. A failed or
+ineligible card does not prevent normal passage search.
 
-Cards are saved in `indexes/paper_cards.json` under a versioned format
-(`paper-card-v2`), with the SHA-256 of the source bytes. Cards are reused
-while the source and card format are unchanged. An incomplete card is
-retried when the source or answering model changes; failed regeneration
-still updates the saved card state. Three texts of each complete card
-(abstract and aim; methods and data; findings and limitations) are
-embedded separately. Missing, malformed or non-finite cached embeddings
-are rebuilt without repeating card generation when the embedding model
-is available. A cached card marked complete without summary content is
-discarded and regenerated. Card-generation or embedding failures never stop a session
-from opening. Cards guide retrieval only: answers cite passages, never
-cards.
+There are **two independent derived cache files** under `indexes/`:
+`source_cards.json` for validated content, outcomes and source identities,
+and `source_card_vectors.json` for per-card embedding groups. Card content
+is saved before vectors; interrupted writes and corrupt derived caches
+can be recovered incrementally. Unchanged valid cards survive a change of
+generation model, while vector groups are rebuilt if the embedding model
+or search-text projection changes. A failed generation attempt can be
+retried on a source, schema, model or generation-settings change;
+a cached `not_applicable` result is reused until its source or kind
+validation changes. The prerelease implementation does not migrate
+`paper_cards.json`; the old file is never used by active indexing. The
+older `paper_cards.py` module remains available for its standalone tests,
+but `RAGSession` no longer imports or executes it.
+
+Project-type `capabilities.source_cards` defines default `enabled`, `kind`
+and `automatic` values. Project-level overrides are saved in
+`[source_cards]` of `profile.ini`, independently of generation-model
+settings. Source-specific overrides use case-sensitive, source-relative
+paths in `source_card_sources.json`. The master `enabled` switch disables
+the card channel, even when a source override requests a card. Individual
+sources can opt out or select another registered kind; the selected kind
+must still pass content eligibility. With `automatic = false`, valid cached
+cards can be searched, but missing and outdated cards are not generated.
+See [Configuration](configuration.md#source-card-indexing-policy).
+
+For each valid `scientific_paper` card, the kind projects three search
+texts (abstract/aim, methods/data, findings/limitations), retaining the
+original patch's grouped representation. The existing `papers` strategy
+uses these vectors for card similarities. Card text is never answer
+evidence: answers continue citing original source chunks.
 
 Intents whose retrieval strategy is `papers` (in `literature`:
 `question_answering`, `compare_sources` and `report_generation`) choose
