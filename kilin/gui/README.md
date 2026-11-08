@@ -194,23 +194,28 @@ checkbox. If the version changed, setup reloads the terms and requires a
 fresh agreement. The agreed version is saved as `terms_accepted`;
 changing the text needs a new `TERMS_VERSION` in `kilin/gui/preferences.py`,
 so every user is asked again. Settings reopens the terms from its Terms of
-use link, under a copyright line built from the package authors. Settings stays open until the folder is confirmed and the terms
-are accepted. New projects also wait for the models; saved projects can
-still be resumed. Repeated creation from the same sources allocates
+use link, under a copyright line built from the package authors.
+The initial setup blocks project interaction until terms acceptance and
+projects-folder confirmation succeed. After that, saved projects can be
+resumed without downloading new models; creating and answering in new
+projects still requires the configured models. Repeated creation from the
+same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: they get a free
-`new-project` folder in the workspace folder. Their managed `sources/` folder is initially
-empty, and sources can be added later. No development example is selected
+A saved workspace can be reopened through Resume without adding
+sources. New projects may start without sources: they get a free
+`new-project` folder in the workspace folder. Their managed `sources/`
+folder is initially empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.
 
 Settings configure the profile before indexing and model loading.
 GUI projects never download models while preparing; missing models are
-downloaded from Settings with their Download buttons. Literature defaults permit larger files than code defaults; the
-profile and the current GUI fields remain the effective configuration.
+downloaded from Settings with their Download buttons. Literature defaults
+permit larger files than code defaults; the profile and current GUI fields
+remain the effective configuration.
 
 ## Project types
 

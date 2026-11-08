@@ -72,6 +72,12 @@ class TestMacOSBuilder(unittest.TestCase):
             (self.bin / name).symlink_to("macos-tools")
         self.log = self.root / "mock.log"
         self.environment = os.environ.copy()
+        # The local shell must not override signing or error fixtures.
+        for key in list(self.environment):
+            if key.startswith("KILIN_TEST_") or key in {
+                "CODESIGN_IDENTITY", "KILIN_SKIP_FINDER_LAYOUT",
+            }:
+                self.environment.pop(key)
         self.environment.update({
             "UV_BINARY": str(self.uv),
             "KILIN_MOCK_LOG": str(self.log),
@@ -489,6 +495,26 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("it keeps the plain layout", result.stderr)
         self.assertTrue((self.dist / "KíLín.dmg").is_file())
+
+    def test_headless_build_does_not_use_finder_or_credentials(self) -> None:
+        """Ad-hoc CI builds require neither Finder nor developer credentials.
+
+        """
+        result = self._run(variables={"KILIN_SKIP_FINDER_LAYOUT": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.log.read_text(encoding="utf-8")
+        self.assertNotIn("osascript ", log)
+        self.assertNotIn("xcrun ", log)
+        self.assertIn("codesign --force --deep --sign -", log)
+
+    def test_notarize_option_is_not_supported(self) -> None:
+        """Prevent an unsupported release mode from being accepted.
+
+        """
+        result = self._run("--notarize")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Usage:", result.stderr)
+        self.assertFalse(self.dist.exists())
 
     def test_mount_failure_does_not_touch_previous_outputs(self) -> None:
         """Do not publish an image that failed to mount.

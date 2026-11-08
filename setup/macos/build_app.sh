@@ -5,8 +5,8 @@
 #   bash setup/macos/build_app.sh --wheel   bundle a local checkout wheel
 #
 # Output: dist/KíLín.app and dist/KíLín.dmg. Set CODESIGN_IDENTITY for
-# Developer ID signing; otherwise the app is signed ad hoc. Finder may
-# request automation permission when arranging the disk image window.
+# Developer ID signing (optional); otherwise the app is signed ad hoc.
+# Finder layout may require permission unless explicitly skipped.
 set -euo pipefail
 
 if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != "--wheel" ]; }; then
@@ -166,7 +166,8 @@ hdiutil create -volname "KíLín" -srcfolder "$staging" -format UDRW \
 hdiutil attach "$writable" -readwrite -noverify -noautoopen \
     -mountpoint "$mount_point" >/dev/null
 mounted=1
-if ! osascript >/dev/null <<APPLESCRIPT
+if [ "${KILIN_SKIP_FINDER_LAYOUT:-0}" != "1" ] && \
+    ! osascript >/dev/null <<APPLESCRIPT
 tell application "Finder"
     set dmgFolder to folder (POSIX file "$mount_point" as alias)
     open dmgFolder

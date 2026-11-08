@@ -258,13 +258,14 @@ serialization policy.
 
 KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
 The `uv.lock` file is scoped to the same interpreter range. CI is divided
-into three independent workflows under `.github/workflows/`:
+into four independent workflows under `.github/workflows/`:
 
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
 | `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
 | `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
+| `macos_app.yml` | Real Apple Silicon .app/.dmg build, signature, mounted-image inspection and installer regression tests | macOS / Python 3.12, ad-hoc signing |
 
 Windows is a target platform, but support is not fully verified yet.
 Its Python 3.12 and Qt/PDF jobs run on every change and report their
@@ -312,7 +313,9 @@ checkout. This checks the installed import path, console entry point and
 packaged resources. The documentation job runs
 `tests.setup.test__documentation_assets`, which is also discovered by the
 two standard test runners. The package workflow uploads build artifacts
-for review but never publishes them to a package index.
+for review but never publishes them to a package index. The macOS
+application workflow can upload a development DMG on manual dispatch; it
+never uses Apple Developer credentials or publishes a public release.
 
 On a developer machine with Python 3.12 and the locked core dependencies,
 use these equivalent commands:
@@ -372,11 +375,11 @@ console.
    version. To rehearse, upload to TestPyPI first with
    `--publish-url https://test.pypi.org/legacy/` and a token from
    test.pypi.org, a separate site and account.
-4. Build the macOS app, which installs that version from PyPI on first
-   launch: `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
-   `dist/KíLín.dmg`; set `CODESIGN_IDENTITY` to sign with a Developer ID.
-   `--wheel` puts a wheel built from the checkout inside the app instead,
-   to test before publishing.
+4. Build a development macOS app using the version from PyPI:
+   `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
+   `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
+   are ad-hoc signed by default and are **not notarized**. See the
+   [macOS build guide](release.md) for native and manual validation.
 
 The builder resolves `uv` symlinks (including Homebrew's), checks that
 its target is an Apple-silicon executable, and bundles the resolved binary.
@@ -393,7 +396,8 @@ interruption during the final two renames is not a power-loss-atomic
 transaction; retain separately archived release artifacts as needed.
 Temporary staging directories are removed after successful builds and
 handled failures. The macOS Finder layout operation may still request
-permission; denying it leaves a DMG with the default layout.
+permission; denying it leaves a DMG with the default layout. Set
+`KILIN_SKIP_FINDER_LAYOUT=1` for noninteractive CI and test builds.
 
 The app holds only a launcher, the icon and `uv`. First launch installs
 Python 3.12 and `kilin[app]` under

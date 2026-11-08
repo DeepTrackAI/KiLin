@@ -1,9 +1,9 @@
 """Verify the version, authors, licence, and citation metadata.
 
 The tests compare the source manifest, installed distribution metadata,
-and the structured CFF citation. ``pyproject.toml`` is the one list of
-authors and the one version; the citation must repeat both unchanged, so
-the tests hold no third copy that would need manual release updates.
+and the structured CFF citation. The version has one owner in
+``pyproject.toml``. Release author identities are independently asserted
+so an unintended coordinated metadata edit cannot silently remove one.
 
 """
 
@@ -22,6 +22,12 @@ import yaml
 
 
 _ROOT = Path(__file__).resolve().parents[2]
+_EXPECTED_AUTHORS = (
+    "Io̍k-uí Tiunn",
+    "Joana B. Pereira",
+    "Carlo Manzo",
+    "Giovanni Volpe",
+)
 
 
 class TestReleaseMetadata(unittest.TestCase):
@@ -78,6 +84,20 @@ class TestReleaseMetadata(unittest.TestCase):
         self.assertEqual(project["readme"], "README.md")
         installed = metadata.metadata("kilin")
         self.assertEqual(installed["Author"], ", ".join(names))
+
+    def test_release_author_identities(self):
+        """Reject unintended changes to the credited release authors.
+
+        This assertion is independent of the manifest and citation, so
+        modifying both files together cannot silently drop an author.
+
+        """
+        with (_ROOT / "pyproject.toml").open("rb") as stream:
+            project = tomllib.load(stream)["project"]
+        self.assertEqual(
+            tuple(author["name"] for author in project["authors"]),
+            _EXPECTED_AUTHORS,
+        )
 
     def test_citation_metadata(self):
         """Validate the CFF structure, author order, and release version.

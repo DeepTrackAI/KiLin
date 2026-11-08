@@ -11,18 +11,19 @@ Giovanni Volpe as authors.
 
 ## Install
 
-**macOS app** (Apple silicon, macOS 14+): open `KíLín.dmg`, drag KíLín
-to Applications and open it. The first launch installs KíLín, which takes
-a few minutes.
+**macOS app** (Apple Silicon, macOS 14+): open a trusted `KíLín.dmg`,
+drag KíLín to Applications and open it. First launch installs Python 3.12
+and KíLín's dependencies, and therefore needs network access. Model
+weights are downloaded separately when explicitly requested in setup.
 
-KíLín is not yet signed by Apple, so macOS may block the first launch.
-Allow it in System Settings → Privacy & Security → **Open Anyway**, or run:
+Current DMGs are ad-hoc signed **development builds**, not Apple
+Developer ID signed or notarized. macOS may block them. Only if you trust
+the specific build, review the warning in System Settings → Privacy &
+Security after attempting to open it. Do not remove quarantine as a
+general installation step. See the
+[macOS build guide](docs/release.md) for verification and limitations.
 
-```sh
-xattr -dr com.apple.quarantine /Applications/KíLín.app
-```
-
-**pip** (Windows, macOS, Linux; Python 3.12):
+**pip** (macOS, Linux, experimental Windows; Python 3.12):
 
 ```sh
 pip install "kilin[app]"

@@ -23,7 +23,7 @@ replace one another. The supported environment is defined in
 | Import/update local data | [Source pipeline](source_pipeline.md) | [Workspaces](project_workspaces.md), [index identity](retrieval_pipeline.md#index-persistence-and-identity) |
 | Add a type, reader or tool | [Extension interfaces](extension_interfaces.md) | [Configuration](configuration.md), [tool services](tool_packages.md) |
 | Change desktop behavior | [GUI architecture](gui_architecture.md) | [Protocol](gui_protocol.md), [conversation ownership](conversation_ownership.md) |
-| Debug/test/release | [Development](development.md) | [Performance](performance.md), [Security](security.md) |
+| Debug/test/release | [Development](development.md) | [macOS builds](release.md), [Performance](performance.md), [Security](security.md) |
 
 ## Contract ownership
 
@@ -51,6 +51,7 @@ responsibility, not authority over the source implementation.
 | [Security](security.md) | Trust boundaries, sensitive data, deployment responsibilities and explicit non-guarantees. |
 | [Performance](performance.md) | Trace-derived measurements, reproducible workloads and limits of timing evidence. |
 | [Development](development.md) | Coding/documentation process, test runners, packaging and PR verification. |
+| [macOS builds](release.md) | Ad-hoc development builds, native artifact checks, limitations and manual testing. |
 | [Module map](module_map.md) | Complete production Python inventory and the primary reference for each module. |
 | [Architecture diagrams](diagrams.md) | Editable SVG inventory, ownership, accessibility and visual-maintenance rules. |
 
