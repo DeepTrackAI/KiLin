@@ -1,7 +1,7 @@
 """Verify trusted source-card kind registration and validation behavior.
 
-Small deterministic dummy kinds demonstrate an extensible contract without
-introducing a scientific-paper generator in this PR.
+Small deterministic dummy kinds demonstrate extensibility alongside the
+trusted scientific-paper kind registered by the core.
 
 """
 
@@ -55,7 +55,11 @@ def _example():
 class TestRegistry(unittest.TestCase):
 
     def test_empty_shared_registry_is_inert_in_this_pr(self):
-        self.assertEqual(SOURCE_CARD_KINDS.identifiers(), ())
+        """The shared registry now contains the first trusted kind."""
+
+        self.assertEqual(
+            SOURCE_CARD_KINDS.identifiers(), ("scientific_paper",)
+        )
 
     def test_register_get_and_validate(self):
         registry = SourceCardRegistry((DummyKind(),))

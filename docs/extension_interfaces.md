@@ -128,8 +128,23 @@ PR3 established the kind and provenance contracts. PR4 adds an independent
 index for cards and their vectors, with separate checked persistence and
 incremental reuse. Neither `paper_index` nor the active `papers` retrieval
 path uses it yet. A future project type can select registered kinds without
-loading arbitrary modules. Scientific-paper registration, generation and
-automatic indexing remain separate PRs. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+loading arbitrary modules. PR6 registers the `scientific_paper` kind and
+its one-call generator; automatic indexing remains part of PR7. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+
+The `scientific_paper` kind keeps a consistent research-oriented schema,
+including bibliographic metadata and cited aims, methods, data, findings,
+and limitations. Its candidate check does not classify a PDF as a paper.
+The generation response confirms or rejects the kind in the same inference
+call that writes the card. Only supplied chunk IDs may support statements.
+
+The design permits other registered kinds as requirements emerge: grant
+proposals could emphasize objectives and work packages; patents, claims and
+applications; technical manuals, procedures; presentations, main topics;
+policy decisions, rationale and scope. These are **extension possibilities**,
+not implemented kinds or implicit eligibility rules. Each future kind owns
+its own validation, fields and instructions while reusing the same generic
+card representation, indexing and persistence. See
+[Scientific-paper cards](retrieval_pipeline.md#scientific-paper-cards-pr6).
 
 ## Implementing a built-in tool
 

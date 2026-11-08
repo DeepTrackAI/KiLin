@@ -7,9 +7,9 @@ A generator loads its model only for the first requested card, reuses the
 session for subsequent cards, and releases it at the end of the batch.
 
 This module does not choose source kinds, compose scientific-paper prompts,
-or determine which cards need rebuilding. The card-kind implementation will
-provide the prompts in PR6; the indexing coordinator will call this adapter
-only for pending sources in PR7. No model is loaded during index searching.
+or determine which cards need rebuilding. The registered scientific-paper
+kind supplies its own prompts in PR6; the indexing coordinator will call
+this adapter for pending sources in PR7. Index search loads no model.
 
 Key Features
 ------------
@@ -84,8 +84,8 @@ class SourceCardGenerator:
     by ``side_reply``. Exiting the context releases the session, even if a
     generation raises. The generator cannot be reused after ``close``.
 
-    The input-token budget is metadata for passage selection in PR6, not
-    a tokenizer-based check in this adapter. The output limit is enforced
+    The input-token budget is enforced by each card-kind prompt builder, not
+    by tokenization in this adapter. The output limit is enforced
     through ``ChatSession`` and completion validation.
 
     """

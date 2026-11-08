@@ -174,9 +174,9 @@ kind's generation/verification logic. Project JSON never imports kind code.
 The generic contracts were introduced in PR3. PR4 adds an **independent,
 optional source-card index**, without changing `paper_cards.py`, the existing
 `paper_index` capability, `indexes/paper_cards.json`, or the active `papers`
-retrieval strategy. A dedicated generation adapter is introduced in PR5;
-registration of `scientific_paper`, automatic indexing, and retrieval
-integration follow in later PRs.
+retrieval strategy. A dedicated generation adapter is introduced in PR5; PR6 registers the
+`scientific_paper` kind. Automatic indexing and retrieval integration follow
+in PR7 and later PRs.
 No migration layer for old paper-card files is provided.
 
 ### Independent source-card index (PR4)
@@ -224,13 +224,53 @@ sessions. The model and inference parameters come from core-owned
 `[source_card_generation]` settings (see `model_management.md`). The
 model is loaded only on the first requested card and is released at the
 end of the generation batch. It uses the established validated completion
-contract; prompt selection and scientific content rules remain the
-responsibility of the registered kind added in PR6. The input budget is
-validated but is not enforced until PR6 selects passages.
+contract; prompt selection and scientific content rules belong to the
+`scientific_paper` kind added in PR6. The adapter validates the configured
+input budget; the kind enforces it when composing prompts.
 
 The independent source-card index remains inactive for live RAG until PR7.
 No additional model calls are made merely by loading an existing project or
 searching the precomputed source-card vector index at this stage.
+
+### Scientific-paper cards (PR6)
+
+`source_cards/kinds/scientific_paper.py` implements the first trusted kind,
+`scientific_paper` (schema version 1, validation version 1). It retains the
+original paper-card summary fields: `abstract`, `aim`, `methods`, `data`,
+`findings`, and `limitations`. Bibliographic metadata additionally records
+`title`, `authors`, `year`, `venue`, and `identifiers` when available. Each
+nonempty substantive statement must cite original chunk IDs; the generated
+card is never direct evidence for an answer.
+
+The kind covers research articles, preprints, reviews, conference papers,
+methods papers and scientific-software papers. File extensions alone do not
+establish eligibility. A deterministic precheck rejects sources with no
+extracted chunks or usable text. For the remaining candidates, **one**
+dedicated-model call jointly decides applicability and produces the card.
+An explicit non-paper verdict yields `not_applicable`; malformed, ambiguous,
+truncated or unsupported responses yield `failed`, not a speculative card.
+No separate eligibility or provenance model call is made. Non-paper sources
+remain available through ordinary retrieval.
+
+Following `paper_cards.py`, passage selection takes the first three chunks
+in reading order and up to two lexical matches per methods/data/findings/
+limitations query. The entire system and user prompt, including labels,
+source metadata and excerpt text, is bounded by the configured estimated
+input-token limit. The first excerpt can be clipped while retaining its
+chunk identifier. Passages are encoded as quoted untrusted data; instructions
+embedded inside them have no authority. Field citations use numbered prompt
+excerpts and are converted to existing chunk IDs. Invalid citation groups
+cause their field to be omitted; at least one supported substantive field
+is required. Presence of a chunk reference does **not** prove that the
+statement is semantically entailed by that chunk.
+
+The implementation is currently callable directly with
+`SourceCardGenerator` and does not alter the active `PaperCard` pipeline,
+write source-card records, or change retrieval. PR7 will activate automatic
+indexing of eligible papers. The registry and generic persistence also allow
+future, independently validated kinds for grant proposals, patents, CVs,
+slide decks, technical manuals, policy documents, and other sources when
+needed. They are **not** implemented or inferred by file format in PR6.
 
 ## Paper cards and paper retrieval
 

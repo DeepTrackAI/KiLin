@@ -3,11 +3,11 @@
 A card kind owns deterministic preliminary eligibility and content validation.
 The registry validates the common card structure and its exact chunk-level
 provenance before delegating to the kind. It does not generate cards or
-construct retrieval indexes; those capabilities are introduced in later PRs.
+construct retrieval indexes. The initial built-in kind is scientific_paper.
 
 Project types will select registered identifiers. They must not load arbitrary
-Python objects from configuration strings. No concrete kind is activated by
-this contract-only package; scientific-paper registration follows in PR6.
+Python objects from configuration strings. The scientific-paper kind is
+registered explicitly; it is not yet used by automatic indexing.
 
 Key Features
 ------------
@@ -37,7 +37,7 @@ Module Structure
 
 - ``SOURCE_CARD_KINDS``
 
-    Shared registry initially empty until real kinds are registered.
+    Shared registry with the trusted scientific-paper kind.
 
 Examples
 --------
@@ -290,4 +290,10 @@ class SourceCardRegistry:
         kind.validate(card)
 
 
-SOURCE_CARD_KINDS: Final[SourceCardRegistry] = SourceCardRegistry()
+from kilin.retrievals.source_cards.kinds.scientific_paper import (
+    ScientificPaperKind,
+)
+
+SOURCE_CARD_KINDS: Final[SourceCardRegistry] = SourceCardRegistry(
+    (ScientificPaperKind(),)
+)

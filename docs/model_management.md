@@ -272,9 +272,9 @@ message handling, without changing conversational state.
 
 The project-wide `allow_download` setting is passed to this generator;
 source-card settings do not grant permission to download additional models.
-An explicit input-token budget is available for source-kind prompt selection
-in PR6, while PR5 enforces the output cap. The new adapter is inactive
-until the source-card indexer uses it in PR7. Existing `PaperCard` generation
+The scientific-paper kind uses the configured input-token budget for the
+whole prompt in PR6, while the adapter enforces the output cap. The new
+indexing path remains inactive until the indexer uses it in PR7. Existing `PaperCard` generation
 and retrieval are unchanged.
 
 ## Failure and cleanup

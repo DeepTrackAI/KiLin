@@ -2,8 +2,8 @@
 
 Source cards are optional whole-source retrieval descriptions whose
 substantive statements refer to original chunks. This package introduces
-generic contracts and independently persisted card/vector indexes. The active
-scientific-paper generation and answer retrieval paths remain unchanged.
+generic contracts and independently persisted card/vector indexes. The
+scientific-paper kind can generate cards independently of active indexing.
 
 Key Features
 ------------
@@ -45,6 +45,10 @@ Module Structure
 
     Load and release a dedicated model for a card-generation batch.
 
+- ``ScientificPaperKind`` and ``generate_scientific_paper_card``
+
+    Validate and generate scientific-paper cards from selected excerpts.
+
 - ``SourceCardIndex`` and ``SourceCardVectorIndex``
 
     Independently maintained card outcomes and prepared search vectors.
@@ -63,6 +67,10 @@ Examples
 """
 
 from .descriptors import describe_sources
+from .kinds.scientific_paper import (
+    ScientificPaperKind,
+    generate_card as generate_scientific_paper_card,
+)
 from .generation import SourceCardGenerator
 from .models import (
     CARD_STATUS_FAILED,
@@ -123,10 +131,12 @@ __all__ = [
     "SourceCardKind",
     "SourceCardRegistry",
     "SourceCardResult",
+    "ScientificPaperKind",
     "SourceCardStatus",
     "SourceDescriptor",
     "card_digest",
     "describe_sources",
+    "generate_scientific_paper_card",
     "load_source_card_vectors",
     "load_source_cards",
     "plan_source_card_updates",
