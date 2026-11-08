@@ -69,10 +69,7 @@ class TestGUIPaths(unittest.TestCase):
 
         with patch.object(_paths.sys, "platform", "darwin"):
             workspace = _paths.default_workspace_directory()
-            self.assertEqual(
-                workspace,
-                self.home / "Library/Application Support/kilin/workspaces",
-            )
+            self.assertEqual(workspace, self.home / "Documents/KíLín")
             self.assertEqual(
                 _paths.preferences_path(),
                 self.home / "Library/Application Support/kilin/"
@@ -82,7 +79,7 @@ class TestGUIPaths(unittest.TestCase):
         self.assertFalse(self.home.exists())
 
     def test_linux_xdg_directories_and_relative_fallback(self) -> None:
-        """Use XDG absolute paths and ignore relative XDG locations."""
+        """Use an absolute XDG config path; projects go in Documents."""
 
         with (
             patch.object(_paths.sys, "platform", "linux"),
@@ -100,7 +97,7 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "xdg-data/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
         with (
             patch.object(_paths.sys, "platform", "linux"),
@@ -115,11 +112,11 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.home / ".local/share/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
 
     def test_windows_config_and_data_use_distinct_locations(self) -> None:
-        """Use roaming preferences and local workspace data on Windows."""
+        """Use roaming preferences and Documents for projects on Windows."""
 
         with (
             patch.object(_paths.sys, "platform", "win32"),
@@ -137,7 +134,7 @@ class TestGUIPaths(unittest.TestCase):
             )
             self.assertEqual(
                 _paths.default_workspace_directory(),
-                self.root / "local/kilin/workspaces",
+                self.home / "Documents/KíLín",
             )
 
     def test_environment_overrides_are_explicit(self) -> None:
@@ -167,7 +164,7 @@ class TestGUIPaths(unittest.TestCase):
         preferences.write_text(
             json.dumps({"workspace_folder": str(chosen)}), encoding="utf-8"
         )
-        standard = self.home / "Library/Application Support/kilin/workspaces"
+        standard = self.home / "Documents/KíLín"
         environment = {"KILIN_DEFAULTS_FILE": str(preferences)}
         with (
             patch.dict("os.environ", environment),
@@ -204,6 +201,126 @@ class TestGUIPaths(unittest.TestCase):
         with patch.dict("os.environ", {"KILIN_WORKSPACES_DIR": "sandbox"}):
             with self.assertRaisesRegex(ValueError, "absolute path"):
                 _paths.default_workspace_directory()
+
+    def test_backend_repair_targets_exact_installed_python(self) -> None:
+        """Pip installs the selected extra without assuming the default."""
+
+        python = self.root / "Python Folder/bin/python3.12"
+        with (
+            patch.object(_paths.sys, "executable", str(python)),
+            patch.object(_paths, "find_spec", return_value=object()),
+        ):
+            for backend in ("mlx", "torch"):
+                with self.subTest(backend=backend):
+                    command = _paths.gui_install_command(backend)
+                    self.assertEqual(
+                        _paths.shlex.split(command),
+                        [str(python), "-m", "pip", "install",
+                         f"kilin[gui,{backend}]"],
+                    )
+                    self.assertNotIn("kilin[app]", command)
+
+    def test_backend_repair_uses_bundled_uv_and_exact_wheel(
+        self,
+    ) -> None:
+        """The macOS app repairs its own pip-less runtime from its wheel."""
+
+        uv = self.root / "KíLín.app/Contents/Resources/uv"
+        uv.parent.mkdir(parents=True)
+        uv.write_text("#!/bin/sh\n", encoding="utf-8")
+        uv.chmod(0o755)
+        python = self.root / "Application Support/runtime/app/bin/python"
+        wheel = uv.parent / "kilin-0.1.0-py3-none-any.whl"
+        for spec in (str(wheel) + "[app]", "kilin[app]==0.1.0"):
+            with (
+                self.subTest(spec=spec),
+                patch.dict(
+                    "os.environ",
+                    {
+                        _paths.APP_INSTALL_UV: str(uv),
+                        _paths.APP_INSTALL_SPEC: spec,
+                    },
+                ),
+                patch.object(_paths.sys, "executable", str(python)),
+                patch.object(_paths, "find_spec", return_value=None),
+            ):
+                for backend in ("mlx", "torch"):
+                    command = _paths.gui_install_command(backend)
+                    self.assertEqual(
+                        _paths.shlex.split(command),
+                        [str(uv), "pip", "install", "--python",
+                         str(python), spec.replace(
+                             "[app]", f"[app,{backend}]"
+                         )],
+                    )
+                    self.assertNotIn(" -m pip ", command)
+
+    def test_backend_repair_uses_uv_without_pip(self) -> None:
+        """An ordinary uv venv needs no pip module to be repaired."""
+
+        python = self.root / "venv/bin/python"
+        uv = self.root / "bin/uv"
+        with (
+            patch.object(_paths.sys, "executable", str(python)),
+            patch.object(_paths, "find_spec", return_value=None),
+            patch.object(_paths.shutil, "which", return_value=str(uv)),
+        ):
+            self.assertEqual(
+                _paths.shlex.split(_paths.gui_install_command("torch")),
+                [str(uv), "pip", "install", "--python", str(python),
+                 "kilin[gui,torch]"],
+            )
+
+    def test_backend_repair_without_installer_is_actionable(self) -> None:
+        """Do not suggest python -m pip if no installer is available."""
+
+        with (
+            patch.object(_paths, "find_spec", return_value=None),
+            patch.object(_paths.shutil, "which", return_value=None),
+        ):
+            command = _paths.gui_install_command("torch")
+            self.assertIn("Install uv (https://", command)
+            self.assertIn("uv pip install --python", command)
+            self.assertIn("kilin[gui,torch]", command)
+            self.assertNotIn("-m pip", command)
+
+    def test_backend_repair_rejects_invalid_backend(self) -> None:
+        """Auto is a selection policy, not an installable backend extra."""
+
+        for backend in ("auto", "other", ""):
+            with self.subTest(backend=backend):
+                with self.assertRaisesRegex(ValueError, "mlx.*torch"):
+                    _paths.gui_install_command(backend)
+
+    def test_backend_repair_uses_platform_quoting(self) -> None:
+        """Windows instructions quote the active executable with spaces."""
+
+        python = r"C:\Program Files\Python312\python.exe"
+        with (
+            patch.object(_paths.sys, "platform", "win32"),
+            patch.object(_paths.sys, "executable", python),
+            patch.object(_paths, "find_spec", return_value=object()),
+        ):
+            self.assertEqual(
+                _paths.gui_install_command("torch"),
+                r'"C:\Program Files\Python312\python.exe" '
+                '-m pip install kilin[gui,torch]',
+            )
+
+    def test_checkout_backend_repair_remains_unchanged(self) -> None:
+        """A source checkout continues to use explicit uv extras."""
+
+        with patch.object(
+            _paths, "_development_checkout", return_value=self.root
+        ):
+            self.assertEqual(
+                _paths.gui_install_command("mlx"),
+                "uv sync --extra gui --extra mlx",
+            )
+            self.assertEqual(
+                _paths.gui_install_command("torch"),
+                "uv sync --extra gui --extra torch",
+            )
 
     def test_engine_entry_point_uses_resolved_workspace(self) -> None:
         """Inject a user-owned default sandbox into the engine process."""

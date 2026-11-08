@@ -85,8 +85,14 @@ from typing import Callable, Final
 
 from kilin._model_completion import GenerationCancelled
 from kilin.atomic_writes import atomic_write_text
-from kilin.gui._paths import default_workspace_directory
+from kilin.gui._paths import (
+    default_workspace_directory,
+    gui_install_command,
+    projects_folder_confirmed,
+)
 from kilin.gui.preferences import (
+    TERMS_VERSION,
+    copyright_notice,
     default_appearance,
     default_backend,
     default_effort_levels,
@@ -95,6 +101,8 @@ from kilin.gui.preferences import (
     default_router_model,
     default_search_depth,
     required_models,
+    terms_accepted,
+    terms_text,
     validate_effort_levels,
     validate_model_id,
     validate_search_depth,
@@ -684,6 +692,9 @@ class ChatEngine:
         choosing a replacement backend. For each missing model, the closest
         installed model of the same role may be offered as a replacement;
         ``can_use_installed`` also requires a usable backend runtime.
+        ``ready`` covers the runtime and models; setup also needs the
+        projects folder confirmed (``folder_confirmed``) and the current
+        terms of use accepted (``terms_accepted``).
 
         """
 
@@ -723,6 +734,17 @@ class ChatEngine:
                 can_use_installed=environment_ready
                 and bool(missing) and len(replacements) == len(missing),
                 ready=environment_ready and not missing,
+                install_command=gui_install_command(backend),
+                install_commands={
+                    selected: gui_install_command(selected)
+                    for selected in (BACKEND_MLX, BACKEND_TORCH)
+                },
+                projects_folder=str(default_workspace_directory()),
+                folder_confirmed=projects_folder_confirmed(),
+                terms=terms_text(),
+                terms_version=TERMS_VERSION,
+                terms_accepted=terms_accepted(),
+                copyright=copyright_notice(),
             )
         except Exception as error:
             self._report_error("gui.readiness.failed", error, str(error))
@@ -802,9 +824,9 @@ class ChatEngine:
             backend = _setup_backend()
             if not installed_backends().get(backend, False):
                 raise RuntimeError(
-                    f"The {backend.upper()} runtime is not installed. Restart "
-                    "KíLín through "
-                    f"`uv run kilin --gui --backend {backend}`."
+                    f"The {backend.upper()} runtime is not installed. Install "
+                    f"it with `{gui_install_command(backend)}`, then restart "
+                    "KíLín."
                 )
             cached = {str(item["model_id"]) for item in downloaded_models()}
             missing = [
@@ -817,7 +839,13 @@ class ChatEngine:
                 self._send("installation_complete", elapsed_seconds=0.0)
                 self.readiness()
                 return
-            self._send("installation_started", total=total, backend=backend)
+            # The models in download order, so the page can mark each one.
+            self._send(
+                "installation_started",
+                total=total,
+                backend=backend,
+                models=missing,
+            )
             for index, model_id in enumerate(missing, start=1):
                 model_seconds = self._download_with_progress(
                     model_id,
@@ -1920,9 +1948,7 @@ class ChatEngine:
             conversation
         )
         session = RAGSession(project.root, **options)
-        session.use_router_model(
-            read_router_model(project.root, session.backend)
-        )
+        # RAGSession resolves the same saved router setting in the core.
         self.session = session
         self._use_project_answer_settings()
         self._announce_project(project, conversation)

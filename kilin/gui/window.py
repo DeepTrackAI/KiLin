@@ -86,12 +86,14 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 from kilin._project_creation import cleanup_stopped_creation
 from kilin.conversation_format import conversation_state
 from kilin.gui._paths import (
+    available_legacy_workspace_directory,
     default_workspace_directory,
     saved_workspace_folder,
     standard_workspace_directory,
 )
 from kilin.gui.preferences import (
     BACKEND_CHOICES,
+    TERMS_VERSION,
     default_appearance,
     write_defaults,
 )
@@ -136,7 +138,7 @@ class ChatBridge(QObject):
     appearanceChanged: Signal(str)
         Requested ``system``, ``light``, or ``dark`` appearance mode.
     projectsFolderChosen: Signal(str)
-        Folder chosen to hold the projects, or "" for the standard one.
+        Folder chosen or confirmed to hold the projects.
     commandRequested: Signal(dict)
         Backend command handed to the window process controller.
     stopRequested: Signal()
@@ -170,7 +172,13 @@ class ChatBridge(QObject):
     chooseProjectsFolder()
         Choose the folder where KíLín keeps its projects.
     useDefaultProjectsFolder()
-        Go back to the standard projects folder.
+        Choose the standard projects folder.
+    useLegacyProjectsFolder()
+        Reuse the previous installed-app folder, without moving projects.
+    confirmProjectsFolder()
+        Confirm the projects folder in use, as KíLín setup asks.
+    acceptTerms(version)
+        Record that the user agreed to the terms of use shown in setup.
     requestProjectsFolder()
         Report the projects folder in use and the one saved in Settings.
     setSourceDropTarget(bounds_json)
@@ -411,12 +419,117 @@ class ChatBridge(QObject):
         )
         if path:
             self.projectsFolderChosen.emit(path)
+        else:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_cancelled",
+            }))
 
     @Slot()
     def useDefaultProjectsFolder(self) -> None:
-        """Go back to the standard projects folder."""
+        """Choose the standard projects folder.
 
-        self.projectsFolderChosen.emit("")
+        Notes
+        -----
+        The standard folder is saved by its path, like a folder chosen with
+        Browse, so choosing it also confirms it in KíLín setup.
+
+        """
+
+        try:
+            folder = str(standard_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot()
+    def useLegacyProjectsFolder(self) -> None:
+        """Reuse an existing legacy projects folder, without moving data.
+
+        Notes
+        -----
+        Resolve and validate the candidate again when clicked; the folder
+        may have changed since the frontend received its suggestion.
+
+        """
+
+        folder = available_legacy_workspace_directory()
+        if folder is None:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_failed",
+                "message": (
+                    "The previous projects folder is no longer available. "
+                    "Choose a folder with Browse instead."
+                ),
+            }))
+            return
+        self.projectsFolderChosen.emit(str(folder))
+
+    @Slot()
+    def confirmProjectsFolder(self) -> None:
+        """Confirm the projects folder in use, as KíLín setup asks."""
+
+        try:
+            folder = str(default_workspace_directory())
+        except ValueError as error:
+            self.event.emit(
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
+            )
+            return
+        self.projectsFolderChosen.emit(folder)
+
+    @Slot(str)
+    def acceptTerms(self, version: str) -> None:
+        """Record that the user agreed to the terms of use shown in setup.
+
+        Parameters
+        ----------
+        version: str
+            Version of the terms the page showed. Only the current
+            ``TERMS_VERSION`` is saved; an outdated version is rejected.
+
+        Notes
+        -----
+        Qt acknowledges successful persistence before requesting readiness.
+        Failures are reported to the welcome dialog for user-controlled retry.
+
+        """
+
+        if version != TERMS_VERSION:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "outdated_version",
+                "current_version": TERMS_VERSION,
+                "message": (
+                    "The terms of use have changed. Review the current "
+                    "version and accept it again."
+                ),
+            }))
+            return
+        try:
+            write_defaults({"terms_accepted": version})
+        except (OSError, ValueError) as error:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "save_failed",
+                "message": f"Could not save the agreement: {error}",
+            }))
+            return
+        self.event.emit(json.dumps({
+            "event": "terms_acceptance_saved",
+            "version": version,
+        }))
+        self.commandRequested.emit({"action": "readiness"})
 
     @Slot()
     def requestProjectsFolder(self) -> None:
@@ -424,10 +537,10 @@ class ChatBridge(QObject):
 
         Notes
         -----
-        Sends ``projects_folder`` with ``folder`` (in use), ``standard``
-        (used without a choice), ``saved`` (the choice, or ""), and
-        ``missing``: the saved folder is gone or not mounted, so the
-        standard one is used.
+        Sends ``projects_folder`` with the effective, standard, and saved
+        folders; ``missing`` reports an unavailable saved folder, while
+        ``legacy`` offers an existing old installed-app directory. No
+        project is moved or selected without user confirmation.
 
         """
 
@@ -440,6 +553,7 @@ class ChatBridge(QObject):
             )
             return
         saved = saved_workspace_folder()
+        legacy = available_legacy_workspace_directory()
         self.event.emit(
             json.dumps(
                 {
@@ -447,6 +561,7 @@ class ChatBridge(QObject):
                     "folder": folder,
                     "standard": standard,
                     "saved": saved,
+                    "legacy": str(legacy) if legacy else "",
                     "missing": bool(saved)
                     and not Path(saved).expanduser().is_dir(),
                 }
@@ -1646,17 +1761,20 @@ class ChatWindow(QMainWindow):
         Parameters
         ----------
         folder: str
-            Chosen absolute folder, or "" for the standard folder.
+            Chosen absolute folder, created if it does not exist yet.
 
         """
 
         try:
+            # A confirmed folder exists from now on, even before a project.
+            if folder:
+                Path(folder).expanduser().mkdir(parents=True, exist_ok=True)
             write_defaults({"workspace_folder": folder})
         except (OSError, ValueError) as error:
             self.bridge.event.emit(
                 json.dumps(
                     {
-                        "event": "error",
+                        "event": "projects_folder_failed",
                         "message": (
                             f"Could not save the projects folder: {error}"
                         ),

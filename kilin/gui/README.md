@@ -39,6 +39,20 @@ controls dependency preparation; it does not override the project's backend
 selection in the GUI. `python -m kilin.gui` delegates directly to the GUI
 application and does not perform that synchronization step.
 
+When a selected backend is missing, setup displays a command for that
+backend, not the platform-default `app` extra. A checkout uses
+`uv sync --extra gui --extra mlx` or `--extra torch`. An ordinary
+installed Python environment uses the matching `kilin[gui,mlx]` or
+`kilin[gui,torch]` extra with that interpreter; if pip is absent, uv
+can install into the same interpreter using `uv pip install --python`.
+The macOS application uses the copy of uv inside its `.app` bundle and
+its original wheel or pinned PyPI distribution, since its managed Python
+environment does not include pip. This permits adding PyTorch even when
+Apple Silicon initially installed MLX through `kilin[app]`. Run the
+displayed repair command explicitly and restart the application. These
+instructions do not auto-install packages, replace the current project
+backend preference, or download model weights.
+
 ## Components and communication
 
 `app.py` creates the Qt application and window. `window.py` hosts the local
@@ -134,35 +148,74 @@ A workspace also contains `profile.ini`, `indexes/`, and `logs/`. It can be
 selected explicitly or created under the GUI's default workspace parent. In
 a source checkout (containing `pyproject.toml`, `tests/kilin/`, and the GUI
 source), the default is the repository's `sandbox/` folder. In an installed
-package, it is a per-user application-data directory:
-
-- macOS: `~/Library/Application Support/kilin/workspaces/`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/kilin/workspaces/`
-- Windows: `%LOCALAPPDATA%/kilin/workspaces/` (with a home fallback)
+package (the macOS app or pip), the suggested folder is `KíLín` under
+Documents. On Linux, KíLín uses the XDG Documents location when configured;
+on Windows it uses the registered Documents location (which may be redirected
+into OneDrive). On macOS it uses `~/Documents/KíLín`. If a platform setting
+cannot be resolved, it falls back to `~/Documents/KíLín`. KíLín does not
+create this folder until it is confirmed.
 
 `KILIN_WORKSPACES_DIR` overrides this default in both cases and must
 be an absolute path (or a home-expanded `~/...` path). Otherwise the
-Workspace folder chosen in Settings → Project (Browse) is used: it is saved
-in the preferences file as `workspace_folder`, so it is kept after a
-restart, and Use default goes back to the standard folder. A chosen folder
-that is missing or not mounted is skipped with a note. Changing it restarts
-the engine, so it is offered only on the start screen. The engine
-does not create the default directory until a project needs it; existing
-projects are never moved. Repeated creation from the same sources allocates
+projects folder chosen in KíLín setup is used: it is saved in the
+preferences file as `workspace_folder`, so it is kept after a restart.
+KíLín setup asks the user to confirm it once, recommending the folder in
+use (Confirm projects folder), choose another (Browse), or choose the
+standard folder (Use default); each saves the folder by its path and
+creates it. A chosen folder that is missing or not mounted is skipped with
+a note, and setup asks again. Changing it restarts the engine, so it is
+offered only on the start screen. Existing projects are never moved.
+
+For installed versions upgraded from before 7 November 2026, KíLín also
+checks the previous user-data `workspaces/` location for a direct subfolder
+containing `profile.ini`. If found, setup offers **Use existing projects**
+and displays the old directory; the user must explicitly select it. The
+folder is rechecked before saving and the engine restarts to discover its
+projects normally. This only changes the saved projects-folder preference:
+there is no automatic copy, deletion, or migration of sources, indexes, or
+conversations. A saved choice (or `KILIN_WORKSPACES_DIR`) remains authoritative.
+Projects with outdated or invalid profiles may still require separate repair.
+Cancelling Browse and failures when choosing a folder return to setup so the
+user can choose again.
+
+The project folder is a local filesystem path, but the operating system or
+services such as iCloud or OneDrive may synchronize it. For sensitive data,
+choose a directory that is not synchronized. KíLín does not control external
+filesystem synchronization, and it cannot guarantee that Documents is
+strictly local.
+
+Before anything else, a welcome dialog summarizes KíLín and shows the full
+terms of use (`kilin/gui/terms.txt`), with links to the Apache 2.0 licence
+and Hugging Face's terms and privacy policy, opened in the system browser.
+The user ticks the agreement and clicks Continue; until Qt confirms the
+saved agreement, the dialog cannot be dismissed. A failed save displays an
+error inside the dialog and allows a manual retry without clearing the
+checkbox. If the version changed, setup reloads the terms and requires a
+fresh agreement. The agreed version is saved as `terms_accepted`;
+changing the text needs a new `TERMS_VERSION` in `kilin/gui/preferences.py`,
+so every user is asked again. Settings reopens the terms from its Terms of
+use link, under a copyright line built from the package authors.
+The initial setup blocks project interaction until terms acceptance and
+projects-folder confirmation succeed. After that, saved projects can be
+resumed without downloading new models; creating and answering in new
+projects still requires the configured models. Repeated creation from the
+same sources allocates
 independent numbered folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
-A saved workspace can be reopened through Resume without adding sources. New projects may also start without sources: they get a free
-`new-project` folder in the workspace folder. Their managed `sources/` folder is initially
-empty, and sources can be added later. No development example is selected
+A saved workspace can be reopened through Resume without adding
+sources. New projects may start without sources: they get a free
+`new-project` folder in the workspace folder. Their managed `sources/`
+folder is initially empty, and sources can be added later. No development example is selected
 automatically. A workspace is a directory organization convention, not an
 execution sandbox or a boundary for hostile inputs.
 
 Settings configure the profile before indexing and model loading.
 GUI projects never download models while preparing; missing models are
-downloaded from Settings with their Download buttons. Literature defaults permit larger files than code defaults; the
-profile and the current GUI fields remain the effective configuration.
+downloaded from Settings with their Download buttons. Literature defaults
+permit larger files than code defaults; the profile and current GUI fields
+remain the effective configuration.
 
 ## Project types
 
@@ -374,7 +427,9 @@ default is Qwen3-4B on both backends, with backend-specific model IDs in
 `defaults.json`. A change applies at once: a separately loaded router
 model is released, and the replacement loads when first needed. Project
 choices are saved per backend in the `[router]` section of `profile.ini`;
-application-wide choices are saved as user-preference overrides.
+application-wide choices are saved as user-preference overrides. The
+core (`kilin.model_settings`) reads these same project settings when
+`RAGSession` is opened directly from Python, without starting the GUI.
 
 **GUI defaults** ship in the read-only
 `kilin/gui/defaults.json`: appearance, the backend new projects are made

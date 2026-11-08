@@ -24,5 +24,6 @@
     "torch": "Qwen/Qwen3-Embedding-0.6B"
   },
   "query_format": "qwen3",
-  "workspace_folder": ""
+  "workspace_folder": "",
+  "terms_accepted": ""
 }

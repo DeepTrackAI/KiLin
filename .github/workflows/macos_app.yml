@@ -1,0 +1,63 @@
+name: macOS application smoke
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/macos_app.yml"
+      - "setup/macos/**"
+      - "tests/setup/**"
+      - "kilin/gui/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "MANIFEST.in"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - ".github/workflows/macos_app.yml"
+      - "setup/macos/**"
+      - "tests/setup/**"
+      - "kilin/gui/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "MANIFEST.in"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  app:
+    name: Apple Silicon build and DMG inspection
+    runs-on: macos-15
+    env:
+      KILIN_SKIP_FINDER_LAYOUT: "1"
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+      - name: Test installer and builder failure recovery
+        run: >-
+          python -m unittest
+          tests.setup.test__macos_builder
+          tests.setup.test__macos_launcher_lock
+          tests.setup.test__macos_launcher_update
+          tests.setup.test__macos_backend_repair -v
+      - name: Build ad-hoc signed application with bundled wheel
+        run: bash setup/macos/build_app.sh --wheel
+      - name: Inspect actual application, signing and disk image
+        run: bash tests/setup/check_macos_app.sh
+      - name: Upload ad-hoc signed development disk image
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kilin-macos-adhoc-development
+          path: dist/KíLín.dmg
+          if-no-files-found: error

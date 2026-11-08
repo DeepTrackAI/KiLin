@@ -185,6 +185,7 @@ from kilin.conversation_ownership import (
     conversation_write_ownership,
 )
 from kilin.project import QAProject, open_project
+from kilin.model_settings import read_router_model, validate_model_id
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
 from kilin.project_type import (
@@ -681,7 +682,7 @@ class RAGSession:
         output path consistently with this path. Defaults to ``None``.
     router_model: str | None, optional
         Chat model that classifies each question's intent. None uses the
-        profile's chat model. Defaults to ``None``.
+        saved project router or core router default. Defaults to ``None``.
 
     Attributes
     ----------
@@ -794,7 +795,7 @@ class RAGSession:
             Chat model that classifies each question's intent. It stays
             loaded beside the answering model, or is shared with it when
             both are the same model. Defaults to ``None``, which uses the
-            profile's chat model.
+            project's saved router model or the packaged router default.
 
         Raises
         ------
@@ -917,6 +918,11 @@ class RAGSession:
         self.backend = choose_backend(profile.backend)
         embedding_model = profile.embedding_model(self.backend)
         chat_model = profile.chat_model(self.backend)
+        resolved_router_model = (
+            validate_model_id(router_model)
+            if router_model is not None
+            else read_router_model(self.project.root, self.backend)
+        )
         self.trace.emit(
             "backend.selected",
             component="rag",
@@ -1037,7 +1043,7 @@ class RAGSession:
         self.index_status = status
         self.source_changes = source_changes
         self.turns = turns
-        self.router_model = router_model or profile.chat_model(self.backend)
+        self.router_model = resolved_router_model
         self._router_session: ChatSession | None = None
         self._closed = False
         self.trace.emit(

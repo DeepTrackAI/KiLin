@@ -227,7 +227,16 @@ may require controlled evaluation.
 ## Router and loaded-session reuse
 
 `RAGSession` normally holds an answering chat session, embedding session and
-possibly a separate router session. When `router_model` equals the
+possibly a separate router session. The core loads the selected router ID
+from the project's `[router]` section (separately for MLX and PyTorch).
+When absent, it checks the legacy `effort_levels.json` router choice, then
+uses the packaged `DEFAULT_ROUTER_MODEL_*` for the selected backend. An
+explicit `RAGSession(router_model=...)` overrides that choice for the
+session without changing `profile.ini`. Core callers do not need the GUI
+to read or update router configuration: use
+`kilin.read_router_model()` / `kilin.write_router_model()`.
+
+When `router_model` equals the
 answering model ID, the same model session can be shared; separate IDs can
 increase initial model-loading and memory costs. Router side calls are
 kept distinct from committed chat history. `router_reply()` exposes a

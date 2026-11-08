@@ -115,12 +115,22 @@ const byId = (name) => (fields[name] ??= element());
 const document = {createElement() {return element();}};
 let requiredModels = [];
 let readinessEnvironmentReady = true;
+let installCommand = "";
+let installCommands = {};
 let readinessMissingCount = 0;
 let cachedModels = new Set();
 let kilinReady = true;
+let folderConfirmed = true;
+let termsAccepted = true;
+let termsVersion = "";
+let acceptingTerms = false;
+let pendingTermsVersion = "";
+let acknowledgedTermsVersion = "";
 let confirmedBackendPreference = "mlx";
 const showSetupLock = () => {};
 const refreshModelStatus = () => {};
+const renderTerms = () => {};
+const clearSetupReminder = () => {};
 """ + handler + r"""
 onEvent(JSON.stringify({
   event: "readiness", backend: "mlx", ready: false,
@@ -128,6 +138,7 @@ onEvent(JSON.stringify({
   unavailable_reason: "`mlx` requires a native Apple Silicon Mac.",
   required_models: [], missing_models: [], cached_models: [],
   replacements: {}, can_use_installed: false,
+  folder_confirmed: true, terms_accepted: true,
 }));
 assert.equal(kilinReady, false);
 assert.equal(readinessEnvironmentReady, false);
@@ -141,6 +152,113 @@ console.log("unsupported backend readiness passed");
         result = run_node(script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("unsupported backend readiness passed", result.stdout)
+
+    def test_setup_needs_the_folder_and_terms_after_the_models(
+        self,
+    ) -> None:
+        """Installed models alone do not finish KíLín setup."""
+
+        source = _APP.read_text(encoding="utf-8")
+        handler = extract_function(source, "onEvent")
+        if shutil.which("node") is None:
+            self.assertIn("data.folder_confirmed", handler)
+            self.assertIn("data.terms_accepted", handler)
+            return
+        script = r"""
+const assert = require("node:assert/strict");
+const fields = {};
+function element() {
+  return {
+    textContent: "", open: false, children: [], dataset: {},
+    classList: {add() {}, remove() {}, toggle() {}},
+    replaceChildren() {this.children = [];},
+    append(...nodes) {this.children.push(...nodes);},
+    focus() {},
+  };
+}
+const byId = (name) => (fields[name] ??= element());
+const document = {createElement() {return element();}};
+let requiredModels = [];
+let readinessEnvironmentReady = true;
+let installCommand = "";
+let installCommands = {};
+let readinessMissingCount = 0;
+let cachedModels = new Set();
+let kilinReady = true;
+let folderConfirmed = true;
+let termsAccepted = true;
+let termsVersion = "";
+let acceptingTerms = false;
+let pendingTermsVersion = "";
+let acknowledgedTermsVersion = "";
+let confirmedBackendPreference = "mlx";
+const shownTerms = [];
+const showSetupLock = () => {};
+const refreshModelStatus = () => {};
+const renderTerms = (text) => shownTerms.push(text);
+const clearSetupReminder = () => {};
+let closed = 0;
+const closeModels = () => { closed += 1; };
+let pointed = 0;
+const pointToProjectsFolder = () => { pointed += 1; };
+let welcomes = 0;
+const showWelcome = () => { welcomes += 1; };
+const setWelcomeError = () => {};
+const showSetupConfirmations = () => {};
+""" + handler + r"""
+const readiness = (fields) => onEvent(JSON.stringify({
+  event: "readiness", backend: "mlx", ready: true,
+  environment_ready: true, unavailable_reason: "",
+  required_models: ["m"], missing_models: [], cached_models: ["m"],
+  replacements: {}, can_use_installed: false,
+  projects_folder: "/Projects", terms: "As is.", terms_version: "v1",
+  ...fields,
+}));
+readiness({folder_confirmed: false, terms_accepted: false});
+assert.equal(kilinReady, false);
+assert.equal(termsVersion, "v1");
+// The terms come first, in the welcome dialog.
+assert.equal(welcomes, 1);
+assert.deepEqual(shownTerms, ["As is."]);
+const steps = byId("readiness-steps").children.map((step) => step.textContent);
+assert.deepEqual(steps.slice(2), [
+  "Confirm the projects folder below",
+  "Accept the terms of use",
+]);
+assert.equal(byId("readiness-status").textContent, "2 missing");
+assert.equal(byId("readiness-summary").textContent,
+  "Confirm the projects folder and accept the terms of use to finish setup.");
+// Readiness cannot acknowledge a pending Qt write.
+acceptingTerms = true;
+pendingTermsVersion = "v1";
+readiness({folder_confirmed: false, terms_accepted: true});
+assert.equal(acceptingTerms, true);
+assert.equal(pointed, 0);
+onEvent(JSON.stringify({event: "terms_acceptance_saved", version: "v1"}));
+assert.equal(acceptingTerms, false);
+readiness({folder_confirmed: false, terms_accepted: true});
+assert.equal(pointed, 1);
+readiness({folder_confirmed: true, terms_accepted: false});
+assert.equal(kilinReady, false);
+assert.equal(byId("readiness-summary").textContent,
+  "Accept the terms of use to finish setup.");
+assert.equal(closed, 0);
+readiness({folder_confirmed: true, terms_accepted: true});
+assert.equal(kilinReady, true);
+// The last step finished setup: it collapses and Settings closes, once.
+assert.equal(byId("first-run-setup").open, false);
+assert.equal(closed, 1);
+readiness({folder_confirmed: true, terms_accepted: true});
+assert.equal(closed, 1);
+assert.equal(byId("readiness-steps").children[2].textContent,
+  "Projects folder: /Projects");
+assert.equal(byId("readiness-status").textContent, "Ready");
+assert.equal(byId("readiness-summary").textContent, "KíLín is ready.");
+console.log("setup confirmations passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("setup confirmations passed", result.stdout)
 
     def test_backend_selection_uses_qt_preference_slot(self) -> None:
         """Project backend selection sends no unintended engine command."""

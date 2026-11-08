@@ -15,7 +15,7 @@ rewrite an existing project's configuration.
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
-| Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort/router choices | Persistent, authoritative for the opened project |
+| Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort choices and core-owned router settings | Persistent, authoritative for the opened project |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
 | Runtime state | Backend availability, cached revisions, loaded sessions | Selected implementation state | Resolved at execution, not a package default |
 
@@ -46,12 +46,14 @@ backend and model IDs, then reports project-specific loading failures without
 silently substituting current creation defaults.
 
 `kilin.project.configure_project()` is the core API for validated project
-settings. GUI-specific project settings (effort levels, search-depth steps,
-router model) are saved in additional `profile.ini` sections by
-`kilin.gui.model_settings`. They are not a separate active
-`effort_levels.json` database. The module still supports a controlled
-migration of recognized older files on first use; moving or deleting files
-outside that migration is not authorized.
+profile settings. The router is separately managed by the GUI-independent
+`kilin.model_settings.read_router_model()` and `write_router_model()`
+functions, which use the project's `[router]` section. The GUI maintains
+effort levels and search-depth steps in the same `profile.ini` through
+`kilin.gui.model_settings`; it no longer owns router persistence. These
+settings are not a separate active `effort_levels.json` database. The GUI
+still supports controlled migration of recognized older files on first use;
+moving or deleting files outside that migration is not authorized.
 
 ### Important distinctions
 
@@ -86,10 +88,10 @@ validator does not rewrite or repair the shipped resource.
 
 The sections are `DEFAULT_MODELS`, `REPOSITORY`, `ANSWERING`, `RAG`, `CHAT`,
 `PROJECT_PROFILE`, `CHUNKING`, `PROJECT_TYPES`, and `RETRIEVAL`. The
-`DEFAULT_MODELS` section provides initial MLX/PyTorch chat and embedding
-identifiers. `PROJECT_TYPES` provides bounded fallbacks for fields omitted
-in an intent (for example a default document token budget); it does not
-select which intent should answer an arbitrary question. `CHAT` owns the
+`DEFAULT_MODELS` section provides initial MLX/PyTorch chat, router, and
+embedding identifiers. `PROJECT_TYPES` provides bounded fallbacks for
+fields omitted in an intent (for example a default document token budget);
+it does not select which intent should answer an arbitrary question. `CHAT` owns the
 language/script vocabulary used in positive CJK output requests; a keyword
 mention alone does not grant permission. The per-project `[generation]`
 `block_unrequested_cjk` flag controls whether suppression is enabled, with
@@ -214,11 +216,22 @@ user preferences file (despite its historic name). It does **not** point to
 the immutable shipped defaults during normal use.
 
 A recognized development checkout defaults GUI workspaces to its repository
-`sandbox/`; an installed package uses a user data folder. Explicit
-`KILIN_WORKSPACES_DIR` (absolute or home-expanded) overrides the default,
-and a workspace explicitly chosen in the GUI overrides the suggested
+`sandbox/`; an installed package suggests `KíLín` under the OS Documents
+location (Linux XDG user directories; Windows registered Documents;
+`~/Documents` on macOS or when the location cannot be resolved). The user
+must confirm or browse to a directory. Explicit `KILIN_WORKSPACES_DIR`
+(absolute or home-expanded) takes precedence over the GUI's saved folder;
+a workspace explicitly selected for one project overrides the suggested
 parent. No installed package directory should become the normal writable
-location for conversations, workspaces or preferences. See
+location for conversations, workspaces or preferences. Documents may be
+synchronized by iCloud, OneDrive or another external service; users needing
+strictly local project storage should choose a non-synchronized path.
+
+If the previous installed-app `workspaces/` data directory contains project
+profiles, GUI setup offers to reuse that folder. Choosing it records a
+folder preference without moving or rewriting any project files. Otherwise
+KíLín keeps the proposed Documents folder. An existing confirmed choice or
+environment override is never silently replaced by legacy detection. See
 [GUI architecture](gui_architecture.md) and [GUI README](../kilin/gui/README.md).
 
 ### Saved project settings take precedence

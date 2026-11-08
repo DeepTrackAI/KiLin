@@ -39,6 +39,8 @@ class TestProjectsFolderFrontend(unittest.TestCase):
             'id="browse-workspace"',
             'id="default-workspace"',
             'id="workspace-note"',
+            'id="use-legacy-workspace"',
+            'id="legacy-workspace-note"',
         ):
             self.assertIn(part, project)
         self.assertNotIn("projects-folder", page)
@@ -93,13 +95,17 @@ let savedProjects = [];
 let projectsFolderInfo = null;
 let openProjectPath = "";
 const setBusy = (value) => { busy = value; };
+const showError = (message) => { error.textContent = message; };
 const refreshSavedProject = () => calls.push("refreshSavedProject");
+const showSetupConfirmations = () => {};
 """
         for name in (
             "showProjectsFolder",
             "showProjectSettings",
             "projectName",
             "changeProjectsFolder",
+            "useLegacyProjectsFolder",
+            "finishProjectsFolderSwitch",
             "emptyProjectPath",
             "projectPath",
         ):
@@ -123,6 +129,30 @@ assert.equal(byId("workspace-note").textContent,
   "/Cloud/Projects is not available, so KíLín uses the default folder.");
 assert.ok(shown("workspace-note"));
 
+// The previous project directory is offered but never chosen automatically.
+calls.length = 0;
+showProjectsFolder({
+  folder: "/repo/sandbox", saved: "", missing: false,
+  legacy: "/older/workspaces",
+});
+assert.ok(shown("legacy-workspace-choice"));
+assert.match(byId("legacy-workspace-note").textContent,
+  /No project files will be moved/);
+assert.deepEqual(calls, []);
+useLegacyProjectsFolder();
+assert.deepEqual(calls, ["useLegacyProjectsFolder"]);
+assert.equal(busy, true);
+finishProjectsFolderSwitch("Could not save folder");
+assert.equal(busy, false);
+assert.equal(switchingProjectsFolder, false);
+assert.equal(error.textContent, "Could not save folder");
+calls.length = 0;
+showProjectsFolder({
+  folder: "/older/workspaces", saved: "/older/workspaces",
+  legacy: "/older/workspaces", missing: false,
+});
+assert.ok(!shown("legacy-workspace-choice"));
+showProjectsFolder({ folder: "/repo/sandbox", saved: "", missing: false });
 // Use default on the start screen: Qt saves and restarts the engine.
 changeProjectsFolder(true);
 assert.deepEqual(calls, ["useDefaultProjectsFolder"]);
@@ -147,6 +177,7 @@ ready = true;
 showProjectSettings();
 assert.equal(byId("browse-workspace").disabled, true);
 assert.equal(byId("default-workspace").disabled, true);
+assert.equal(byId("use-legacy-workspace").disabled, true);
 assert.equal(byId("browse-workspace").title,
   "Change it from the start screen.");
 changeProjectsFolder(true);

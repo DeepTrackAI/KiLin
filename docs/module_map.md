@@ -42,11 +42,12 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/gui/app.py`](../kilin/gui/app.py) | Create and run KíLín's Qt desktop application. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/engine.py`](../kilin/gui/engine.py) | Run repository and model operations behind the desktop interface. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/model_catalog.py`](../kilin/gui/model_catalog.py) | Describe the model presets displayed by the desktop interface. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
-| [`kilin/gui/model_settings.py`](../kilin/gui/model_settings.py) | Keep a project's effort levels, search depth, and router in profile.ini. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
+| [`kilin/gui/model_settings.py`](../kilin/gui/model_settings.py) | Keep GUI effort and search settings alongside core router settings. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/preferences.py`](../kilin/gui/preferences.py) | Validate GUI defaults and persist user-owned preference overrides. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/gui/window.py`](../kilin/gui/window.py) | Host KíLín's local web interface in a Qt desktop window. | [GUI architecture](gui_architecture.md) | [GUI tests](../tests/kilin/gui/) |
 | [`kilin/huggingface.py`](../kilin/huggingface.py) | Inspect and reuse Hugging Face's model cache. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/model_defaults.py`](../kilin/model_defaults.py) | Define shared model purposes and default model identifiers. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
+| [`kilin/model_settings.py`](../kilin/model_settings.py) | Resolve and persist auxiliary model settings in the KíLín core. | [Model management](model_management.md) | [Core tests](../tests/kilin/test_model_settings.py) |
 | [`kilin/project.py`](../kilin/project.py) | Create and open project workspaces independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_files.py`](../kilin/project_files.py) | Manage project-owned outputs and templates independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_layout.py`](../kilin/project_layout.py) | Plan and materialize a project's core folders and tool resources. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
@@ -160,7 +161,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Configuration | 3 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
-| Model management | 6 |
+| Model management | 7 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 18 |

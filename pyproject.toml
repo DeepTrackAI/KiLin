@@ -9,7 +9,18 @@ authors = [
 ]
 description = "Local, provider-independent question-answering application"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.12,<3.13"
+keywords = ["question answering", "local LLM", "RAG", "literature", "code"]
+classifiers = [
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Science/Research",
+]
 # Packages required regardless of the selected LLM backend.
 dependencies = [
     "huggingface-hub==1.29.0",
@@ -31,6 +42,16 @@ torch = [
 gui = [
     "PySide6>=6.8,<7",
 ]
+# Everything the desktop app needs on this computer: Qt plus the backend
+# for the platform, MLX on Apple-silicon Macs and PyTorch elsewhere. This
+# is what `pip install "kilin[app]"` and the macOS app install.
+app = [
+    "PySide6>=6.8,<7",
+    "mlx-embeddings==0.0.5; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx-lm==0.31.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "torch==2.14.0; sys_platform != 'darwin' or platform_machine != 'arm64'",
+    "transformers==5.16.1; sys_platform != 'darwin' or platform_machine != 'arm64'",
+]
 # Extra dependencies for the CodeRAG-Bench evaluation notebooks only.
 bench = [
     "datasets==5.0.1",
@@ -38,8 +59,15 @@ bench = [
 ]
 
 
+[project.urls]
+Repository = "https://github.com/giovannivolpe/KiLin"
+
 [project.scripts]
 kilin = "kilin.cli:main"
+
+# Opens the desktop window without a terminal (on Windows, no console).
+[project.gui-scripts]
+kilin-gui = "kilin.gui.app:main"
 
 [build-system]
 requires = ["setuptools==84.0.0"]
@@ -73,6 +101,7 @@ include = ["kilin*"]
 ]
 "kilin.gui" = [
     "defaults.json",
+    "terms.txt",
     "web/*.html",
     "web/*.css",
     "web/*.js",

@@ -1007,6 +1007,78 @@ wheels = [
 ]
 
 [[package]]
+name = "kilin"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "huggingface-hub" },
+    { name = "numpy" },
+    { name = "pdfminer-six" },
+    { name = "pypdf" },
+]
+
+[package.optional-dependencies]
+app = [
+    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "pyside6" },
+    { name = "torch", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+    { name = "transformers", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+]
+bench = [
+    { name = "datasets" },
+    { name = "pytrec-eval" },
+]
+gui = [
+    { name = "pyside6" },
+]
+mlx = [
+    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
+]
+torch = [
+    { name = "torch" },
+    { name = "transformers" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "black" },
+    { name = "ipykernel" },
+    { name = "jupyterlab" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'bench'", specifier = "==5.0.1" },
+    { name = "huggingface-hub", specifier = "==1.29.0" },
+    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'app'", specifier = "==0.0.5" },
+    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.0.5" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'app'", specifier = "==0.31.3" },
+    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.31.3" },
+    { name = "numpy", specifier = "==2.5.2" },
+    { name = "pdfminer-six", specifier = "==20260107" },
+    { name = "pypdf", specifier = "==6.16.2" },
+    { name = "pyside6", marker = "extra == 'app'", specifier = ">=6.8,<7" },
+    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8,<7" },
+    { name = "pytrec-eval", marker = "extra == 'bench'", specifier = "==0.5" },
+    { name = "torch", marker = "(platform_machine != 'arm64' and extra == 'app') or (sys_platform != 'darwin' and extra == 'app')", specifier = "==2.14.0" },
+    { name = "torch", marker = "extra == 'torch'", specifier = "==2.14.0" },
+    { name = "transformers", marker = "(platform_machine != 'arm64' and extra == 'app') or (sys_platform != 'darwin' and extra == 'app')", specifier = "==5.16.1" },
+    { name = "transformers", marker = "extra == 'torch'", specifier = "==5.16.1" },
+]
+provides-extras = ["mlx", "torch", "gui", "app", "bench"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "black", specifier = "==26.5.1" },
+    { name = "ipykernel", specifier = "==7.3.0" },
+    { name = "jupyterlab", specifier = "==4.6.3" },
+    { name = "ruff", specifier = "==0.16.6" },
+]
+
+[[package]]
 name = "lark"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1950,66 +2022,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/30/97/1f5530ff4fc271b4597048371d5af972c2baab51be132ba15874e0327a6a/pyzmq-27.2.0-cp312-abi3-win32.whl", hash = "sha256:fdaaa4ea3242f6ad298eb5177eb042aea5c73c30e76d20caee7b15af20d24ec2", size = 563450, upload-time = "2026-08-20T19:06:52.307Z" },
     { url = "https://files.pythonhosted.org/packages/02/8b/b83f7780dad22e0878e4c7bd9158ebd24ed12bc3d5e3a471cd0576f77ded/pyzmq-27.2.0-cp312-abi3-win_amd64.whl", hash = "sha256:2c218c6ab8bc447ba62054b581fd30209689d199c6ecb253f79615ca74a38e12", size = 628633, upload-time = "2026-08-20T19:06:53.809Z" },
     { url = "https://files.pythonhosted.org/packages/52/aa/3918b5ac7f9987bd9c421b065074fd7409ded88f856f2c704a24341877ec/pyzmq-27.2.0-cp312-abi3-win_arm64.whl", hash = "sha256:348d6fd3e4b81ae4580622ea8c2ea60224e84b2ac1b3be4482e6edc7de06e7a3", size = 556006, upload-time = "2026-08-20T19:06:55.242Z" },
-]
-
-[[package]]
-name = "kilin"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "huggingface-hub" },
-    { name = "numpy" },
-    { name = "pdfminer-six" },
-    { name = "pypdf" },
-]
-
-[package.optional-dependencies]
-bench = [
-    { name = "datasets" },
-    { name = "pytrec-eval" },
-]
-gui = [
-    { name = "pyside6" },
-]
-mlx = [
-    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'" },
-]
-torch = [
-    { name = "torch" },
-    { name = "transformers" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "black" },
-    { name = "ipykernel" },
-    { name = "jupyterlab" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "datasets", marker = "extra == 'bench'", specifier = "==5.0.1" },
-    { name = "huggingface-hub", specifier = "==1.29.0" },
-    { name = "mlx-embeddings", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.0.5" },
-    { name = "mlx-lm", marker = "platform_machine == 'arm64' and sys_platform == 'darwin' and extra == 'mlx'", specifier = "==0.31.3" },
-    { name = "numpy", specifier = "==2.5.2" },
-    { name = "pdfminer-six", specifier = "==20260107" },
-    { name = "pypdf", specifier = "==6.16.2" },
-    { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.8,<7" },
-    { name = "pytrec-eval", marker = "extra == 'bench'", specifier = "==0.5" },
-    { name = "torch", marker = "extra == 'torch'", specifier = "==2.14.0" },
-    { name = "transformers", marker = "extra == 'torch'", specifier = "==5.16.1" },
-]
-provides-extras = ["mlx", "torch", "gui", "bench"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "black", specifier = "==26.5.1" },
-    { name = "ipykernel", specifier = "==7.3.0" },
-    { name = "jupyterlab", specifier = "==4.6.3" },
-    { name = "ruff", specifier = "==0.16.6" },
 ]
 
 [[package]]

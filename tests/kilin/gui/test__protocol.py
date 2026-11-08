@@ -727,9 +727,11 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "model_download_progress", "model_download_started",
             "model_downloaded", "models_applied", "opened", "preview",
             "progress", "projects", "projects_folder", "readiness",
+            "projects_folder_cancelled", "projects_folder_failed",
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
             "sources_checked", "status", "stopped", "tool_settings",
+            "terms_acceptance_failed", "terms_acceptance_saved",
             "trace_ready",
             "usage_progress",
         })
@@ -989,7 +991,7 @@ class TestGUIProtocolBridge(unittest.TestCase):
 
 
     def test_projects_folder_is_reported_and_chosen(self) -> None:
-        """Report the folder in use; Use default asks Qt to save ""."""
+        """Report the folder in use; Use default saves the standard path."""
 
         chosen: list[str] = []
         self.bridge.projectsFolderChosen.connect(chosen.append)
@@ -1002,16 +1004,138 @@ class TestGUIProtocolBridge(unittest.TestCase):
             return_value=Path("/sandbox"),
         ), patch.object(
             window, "saved_workspace_folder", return_value="/Gone/Projects",
+        ), patch.object(
+            window, "available_legacy_workspace_directory", return_value=None,
         ):
             self.bridge.requestProjectsFolder()
         self.assertEqual(json.loads(self.events[-1]), {
             "event": "projects_folder", "folder": "/sandbox",
             "standard": "/sandbox", "saved": "/Gone/Projects",
-            "missing": True,
+            "legacy": "", "missing": True,
         })
-        self.bridge.useDefaultProjectsFolder()
-        self.assertEqual(chosen, [""])
+        with patch.object(
+            window, "standard_workspace_directory",
+            return_value=Path("/sandbox"),
+        ):
+            self.bridge.useDefaultProjectsFolder()
+        self.assertEqual(chosen, [str(Path("/sandbox"))])
         self.assertEqual(self.commands, [])
+
+    def test_previous_projects_choice_is_explicit_and_revalidated(
+        self,
+    ) -> None:
+        """Only a real legacy candidate can be passed to folder selection."""
+
+        window = importlib.import_module("kilin.gui.window")
+        old = Path("/previous/kilin/workspaces")
+        chosen: list[str] = []
+        self.bridge.projectsFolderChosen.connect(chosen.append)
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=old,
+        ):
+            self.bridge.requestProjectsFolder()
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1])["legacy"], str(old)
+        )
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(self.commands, [])
+        with patch.object(
+            window, "available_legacy_workspace_directory",
+            return_value=None,
+        ):
+            self.bridge.useLegacyProjectsFolder()
+        self.assertEqual(chosen, [str(old)])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"],
+            "projects_folder_failed",
+        )
+
+    def test_cancelled_projects_folder_dialog_emits_its_own_event(
+        self,
+    ) -> None:
+        """Cancelling Browse unblocks setup without changing any folder."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "QFileDialog") as picker:
+            picker.getExistingDirectory.return_value = ""
+            self.bridge.chooseProjectsFolder()
+        self.assertEqual(
+            json.loads(self.events[-1]),
+            {"event": "projects_folder_cancelled"},
+        )
+        self.assertEqual(self.commands, [])
+
+    def test_failed_projects_folder_save_reports_recoverable_event(
+        self,
+    ) -> None:
+        """A preference failure must not kill the running GUI engine."""
+
+        window = importlib.import_module("kilin.gui.window")
+        fake = MagicMock()
+        with patch.object(
+            window, "write_defaults", side_effect=OSError("read-only")
+        ):
+            window.ChatWindow._set_projects_folder(fake, "")
+        fake.process.kill.assert_not_called()
+        fake._process_finished.assert_not_called()
+        emitted = json.loads(fake.bridge.event.emit.call_args.args[0])
+        self.assertEqual(emitted["event"], "projects_folder_failed")
+        self.assertIn("read-only", emitted["message"])
+
+    def test_accepting_the_terms_saves_the_current_version(self) -> None:
+        """Confirm only a persisted current-version agreement."""
+
+        window = importlib.import_module("kilin.gui.window")
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms("an outdated version")
+            write.assert_not_called()
+            self.assertEqual(self.commands, [])
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once_with(
+            {"terms_accepted": window.TERMS_VERSION}
+        )
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual([
+            json.loads(message) for message in self.events
+        ], [{
+            "event": "terms_acceptance_failed",
+            "version": "an outdated version",
+            "reason": "outdated_version",
+            "current_version": window.TERMS_VERSION,
+            "message": (
+                "The terms of use have changed. Review the current "
+                "version and accept it again."
+            ),
+        }, {
+            "event": "terms_acceptance_saved",
+            "version": window.TERMS_VERSION,
+        }])
+
+    def test_terms_write_failures_allow_retry(self) -> None:
+        """Do not send readiness for unwritten acceptance."""
+
+        window = importlib.import_module("kilin.gui.window")
+        for problem in (OSError("read-only"), ValueError("invalid file")):
+            with self.subTest(problem=problem):
+                with patch.object(
+                    window, "write_defaults", side_effect=problem,
+                ):
+                    self.bridge.acceptTerms(window.TERMS_VERSION)
+                self.assertEqual(self.commands, [])
+                event = json.loads(self.events[-1])
+                self.assertEqual(event["event"], "terms_acceptance_failed")
+                self.assertEqual(event["reason"], "save_failed")
+                self.assertEqual(event["version"], window.TERMS_VERSION)
+                self.assertIn(str(problem), event["message"])
+        with patch.object(window, "write_defaults") as write:
+            self.bridge.acceptTerms(window.TERMS_VERSION)
+        write.assert_called_once()
+        self.assertEqual(self.commands, [{"action": "readiness"}])
+        self.assertEqual(
+            json.loads(self.events[-1])["event"], "terms_acceptance_saved"
+        )
 
     def test_answer_settings_command_payload(self) -> None:
         """The bridge sends the settings as a command of their own."""

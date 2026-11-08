@@ -258,13 +258,14 @@ serialization policy.
 
 KíLín currently supports **Python 3.12** as declared in `pyproject.toml`.
 The `uv.lock` file is scoped to the same interpreter range. CI is divided
-into three independent workflows under `.github/workflows/`:
+into four independent workflows under `.github/workflows/`:
 
 | Workflow | Validation | Required checks |
 | --- | --- | --- |
 | `tests.yml` | Core tests, newer Python probes, isolated Qt/PDF tests | Python 3.12 on Ubuntu and macOS; Qt/PDF on the same systems (Windows runs but does not block yet) |
 | `package.yml` | Wheel and source distribution, isolated wheel installation | Ubuntu / Python 3.12 |
 | `docs.yml` | Local links/anchors, SVG metadata, source-backed inventories and examples | Ubuntu / Python 3.12 |
+| `macos_app.yml` | Real Apple Silicon .app/.dmg build, signature, mounted-image inspection and installer regression tests | macOS / Python 3.12, ad-hoc signing |
 
 Windows is a target platform, but support is not fully verified yet.
 Its Python 3.12 and Qt/PDF jobs run on every change and report their
@@ -312,7 +313,9 @@ checkout. This checks the installed import path, console entry point and
 packaged resources. The documentation job runs
 `tests.setup.test__documentation_assets`, which is also discovered by the
 two standard test runners. The package workflow uploads build artifacts
-for review but never publishes them to a package index.
+for review but never publishes them to a package index. The macOS
+application workflow can upload a development DMG on manual dispatch; it
+never uses Apple Developer credentials or publishes a public release.
 
 On a developer machine with Python 3.12 and the locked core dependencies,
 use these equivalent commands:
@@ -347,13 +350,124 @@ defaults/templates. A new packaged data file must be added to the package
 data configuration and verified in a **built and installed wheel**, not only
 with a local checkout import. Optional native dependencies are split into
 `mlx`, `torch`, `gui` and `bench` extras; avoid adding GUI requirements to
-the core dependencies merely to make a test run.
+the core dependencies merely to make a test run. The `app` extra is what
+users install: Qt plus the platform's backend, chosen by environment
+markers. `kilin-gui` is a GUI script, so Windows opens it without a
+console.
+
+### Releasing
+
+1. Raise `version` in `pyproject.toml` (and `CITATION.cff`).
+2. Build and check the package: `uv build`, then install the wheel into a
+   fresh environment with `uv pip install "dist/kilin-<version>-py3-none-any.whl[app]"`
+   and open `kilin-gui`.
+3. Publish it to PyPI. PyPI has no upload page; `uv publish` sends the
+   named files and nothing else:
+
+   ```sh
+   uv publish dist/kilin-<version>-py3-none-any.whl dist/kilin-<version>.tar.gz
+   ```
+
+   It asks for an API token (or reads `UV_PUBLISH_TOKEN`). Create one on
+   pypi.org under Account settings → API tokens, scoped to the `kilin`
+   project, with an account that maintains the project. A version can be
+   uploaded only once, even after it is deleted, so a fix needs a new
+   version. To rehearse, upload to TestPyPI first with
+   `--publish-url https://test.pypi.org/legacy/` and a token from
+   test.pypi.org, a separate site and account.
+4. Build a development macOS app using the version from PyPI:
+   `bash setup/macos/build_app.sh`. It writes `dist/KíLín.app` and
+   `dist/KíLín.dmg`. `--wheel` embeds a checkout wheel. Both builds
+   are signed ad hoc only and are **not notarized**. See the
+   [macOS build guide](release.md) for native and manual validation.
+
+The builder resolves `uv` symlinks (including Homebrew's), checks that
+its target is an Apple-silicon executable, and bundles the resolved binary.
+`UV_BINARY` may specify an executable path instead of searching `PATH`.
+It builds in a private temporary directory under `dist/`. The builder
+leaves existing `dist/kilin-*.whl` files untouched and no longer deletes
+the checkout's `build/` directory; the packaging backend may still use
+`build/` for its own intermediate files. With `--wheel`, the temporary
+wheel is embedded in the app rather than written to public `dist/`.
+The existing named app
+and DMG outputs are retained until the replacement build is complete.
+Ordinary publication errors restore the previous pair of outputs. Build
+interruption during the final two renames is not a power-loss-atomic
+transaction; retain separately archived release artifacts as needed.
+Temporary staging directories are removed after successful builds and
+handled failures. The macOS Finder layout operation may still request
+permission; denying it leaves a DMG with the default layout. Set
+`KILIN_SKIP_FINDER_LAYOUT=1` for noninteractive CI and test builds.
+
+The app holds only a launcher, the icon and `uv`. First launch installs
+Python 3.12 and `kilin[app]` under
+`~/Library/Application Support/kilin/runtime/` (with `install.log`; the
+application-owned download cache is removed after activation). Models
+are downloaded later by the desktop setup flow. Removing `runtime/`
+removes application environments, not projects or preferences beside it.
+
+The macOS launcher uses stable, **version-specific virtual environments**
+at `runtime/releases/<release-id>/`. The identifier is the SHA-256 digest
+of the expanded installation requirement plus the bundled wheel checksum,
+when provided. A rebuilt wheel with the same version but different bytes
+therefore receives a distinct destination. Python virtual environments are
+never renamed after installation: console scripts may contain absolute
+interpreter paths that would break after relocation.
+
+The small `runtime/active` file selects the current environment as
+`releases/<release-id>`. The launcher validates the `kilin-gui` and Python
+entry points and installed distribution metadata, records a complete
+`.installed` marker, and **atomically replaces** the active pointer only
+after installation succeeds. A crash before activation leaves the previous
+pointer intact; a crash afterwards selects the completed new release. On
+retry, an incomplete *inactive* directory for the requested release is
+rebuilt, while a completed but not yet active release can be reused.
+
+Older versions used `runtime/app` without an active pointer. Such a
+complete installation remains usable when its requirement matches the
+running application; installing a different version preserves the legacy
+environment and activates the versioned release only after validation.
+Failed updates preserve the previous working installation and selection,
+but **do not silently launch the previous version** from a newer app. The
+launcher reports the failure for correction and retry. Previous releases
+are **not** automatically removed: another desktop process may
+still be using one, and model/backend environments can consume significant
+disk space. Keep this in mind when upgrading or rebuilding wheels.
+
+The installer serializes runtime changes using the system `lockf` utility
+and a persistent `runtime/.install.lock` file. The kernel releases the
+lock when an installer exits, including after a crash; **do not delete
+the lock file** to clear a stale install. A concurrent launch waits up to
+five minutes by default and reports an error instead of waiting forever.
+For diagnostics, `KILIN_INSTALL_LOCK_TIMEOUT` sets a wait of 0-600 seconds.
+If the runtime directory or lock file cannot be created, installation
+stops with an error without invoking `uv`. An older app may have left a
+`runtime/.installing` directory: the launcher does not remove it because
+an old installer might still be running. Quit older instances, verify
+that no installation is in progress, and only then manually remove that
+legacy directory before retrying. The file lock and legacy directory are
+distinct.
+
+The launcher continues to show native macOS alerts and notifications for
+real installations. Unit tests use temporary copies with `osascript`
+redirected to an isolated test executable; negative-path tests must not
+open modal dialogs, require approval, or depend on a desktop session. The
+mocked locking/installation suite does not replace a native Apple Silicon
+acceptance test of the actual application and the system `lockf` utility.
 
 For reproducible PR review, compare against the **actual** last approved
 archive/commit, not an earlier working directory. Provide a Git patch and a
 ZIP of only changed/new files in repository-relative paths, with explicit
 deletions when needed. A separate full source export is useful when requested
 for release or transfer; it is not needed to apply a focused revision.
+
+The root `LICENSE` holds the Apache License 2.0 text declared by
+`pyproject.toml`. It must be committed to Git and present in source ZIPs,
+source distributions, and installed wheels. The source-export notebook
+requires `"LICENSE": True` and refuses missing or untracked licence files.
+The isolated wheel check verifies the actual installed licence text; the
+release test verifies the checkout file. Check the generated source
+archive and source distribution as part of release verification.
 
 A source export is not a user-data backup. It should exclude `.DS_Store`,
 `__MACOSX`, AppleDouble files, caches, model weights, `sandbox/` contents,
