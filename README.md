@@ -112,7 +112,7 @@ recovery, and GUI metadata updates, see
 
 ## Tutorials
 
-KíLín includes 16 notebooks introducing the framework, from local models
+KíLín includes 17 notebooks introducing the framework, from local models
 and source processing to retrieval, project chat, diagnostic traces, project
 types, and custom tools.
 
