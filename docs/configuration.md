@@ -99,7 +99,7 @@ do not bypass the kind's deterministic and model-assisted eligibility
 checks. Cards are reconciled on project opening and source refresh.
 Missing/outdated cards are generated automatically only when policy permits;
 valid cached cards are reused, and other retrieval channels work without
-cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-indexing-and-paper-retrieval-pr7).
+cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-indexing).
 
 ### Important distinctions
 

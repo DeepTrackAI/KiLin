@@ -51,6 +51,7 @@ resuming a project preserves its existing setting.
 - [140 · Execution traces](./140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
 - [150 · Project types](./150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
 - [160 · Custom tools](./160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [170 · Source cards](./170_source_cards.ipynb): Inspect scientific-paper cards, provenance, independent persistence, and four-channel source-first retrieval without loading a model.
 
 ## Choose a learning path
 
@@ -63,6 +64,7 @@ resuming a project preserves its existing setting.
 | Combine evidence and examine retrieval guarantees | [110](./110_hybrid_ranking.ipynb), [120](./120_context_expansion.ipynb) | Embedding |
 | Use the complete project-question-answering workflow | [130](./130_project_chat.ipynb), [140](./140_logging_trace.ipynb) | Chat and embedding |
 | Design project-specific behavior and tools | [150](./150_project_types.ipynb), [160](./160_create_custom_tool.ipynb) | No for the main examples; real-model sections are optional |
+| Inspect source-card indexing and source-first retrieval | [170](./170_source_cards.ipynb) | No |
 
 If you only want an introduction to KíLín as an end user, start with 10,
 20, and 130. The intermediate notebooks are explanations of the internals,

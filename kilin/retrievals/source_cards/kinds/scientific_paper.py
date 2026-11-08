@@ -540,7 +540,7 @@ def generate_card(
     -----
     Generation failures do not silently fall back to the answering model.
     The model is never asked a second time to verify eligibility, content,
-    or citations. PR7 will schedule and persist these outcomes.
+    or citations. The indexing coordinator persists these outcomes.
 
     """
 

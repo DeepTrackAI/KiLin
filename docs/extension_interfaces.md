@@ -31,14 +31,14 @@ loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
 `capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
-`paper_index` (`true` or `false`, default `false`). With `paper_index`,
+`document_headers` (`true` or `false`, default `false`). With `document_headers`,
 document passages are indexed with title, author, section and page
 headers, and intents may use the existing `papers` retrieval strategy with
 `max_papers` (1-50, default 3) and `passages_per_paper` (0-10, default 0).
 The separate `capabilities.source_cards` policy controls whether eligible
 scientific papers receive card summaries and stored vectors; it is not
-implied by `paper_index`. See [Retrieval pipeline](retrieval_pipeline.md).
-A `papers` intent in a type without `paper_index` is rejected.
+implied by `document_headers`. See [Retrieval pipeline](retrieval_pipeline.md).
+A `papers` intent in a type without `document_headers` is rejected.
 
 The registry requires at least one valid definition, not either standard
 type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
@@ -67,8 +67,8 @@ retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
 retrieval strategies are `hybrid`, `papers` and `source_first`. The generic
 `source_first` strategy uses the optional source-card vector index plus
 semantic, lexical and applicable graph source rankings. It can be selected
-in custom project-type JSON without enabling `paper_index`; current
-packaged literature intents remain on `papers` until PR9. A missing tool
+in custom project-type JSON without enabling `document_headers`; the
+packaged literature answering intents already use `source_first`. A missing tool
 name or an unregistered name fails validation rather than importing a
 module by string.
 
@@ -111,7 +111,7 @@ Code relationship extractors for Python and MATLAB live under
 execution or complete semantic analysis. Adding another language may also
 require source-unit conventions, graph entity typing and retrieval tests.
 
-## Source-card kind contract (PR3)
+## Source-card kind contract
 
 `retrievals/source_cards/` defines the active, optional whole-source
 card contract. A `SourceDescriptor` carries the file's
@@ -130,12 +130,12 @@ versions, verifies generic provenance, then delegates to the kind's own
 schema checks. Kind registration must be explicit in source code; project
 JSON must not contain executable import paths.
 
-PR3 established the kind and provenance contracts. PR4 added an
-independent card/vector index, PR5 the dedicated generation adapter and PR6
-the `scientific_paper` kind. PR7 activates automatic indexing and makes the
-existing `papers` retrieval path consume source-card vectors without
-changing its ranking algorithm. A future project type can select registered
-kinds without loading arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts-pr3).
+The kind registry, provenance records, card/vector index, generation
+adapter and automatic indexing coordinator are operational. The packaged
+literature intents use `source_first`; the optional `papers` strategy
+continues to use the source-card vectors when explicitly selected. A new
+project type can select trusted registered card kinds without loading
+arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts).
 
 The `scientific_paper` kind keeps a consistent research-oriented schema,
 including bibliographic metadata and cited aims, methods, data, findings,
@@ -150,7 +150,7 @@ policy decisions, rationale and scope. These are **extension possibilities**,
 not implemented kinds or implicit eligibility rules. Each future kind owns
 its own validation, fields and instructions while reusing the same generic
 card representation, indexing and persistence. See
-[Scientific-paper cards](retrieval_pipeline.md#scientific-paper-cards-pr6).
+[Scientific-paper cards](retrieval_pipeline.md#scientific-paper-cards).
 
 ## Implementing a built-in tool
 

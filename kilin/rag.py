@@ -245,7 +245,7 @@ from kilin.retrievals.source_cards import (
 )
 from kilin.retrievals.source_cards.indexing import reconcile_source_cards
 from kilin.source_card_policy import read_source_card_policy
-from kilin.retrievals.papers import (
+from kilin.retrievals.document_headers import (
     DOCUMENT_HEADER_FORMAT,
     DOCUMENT_KINDS,
     DocumentInfo,
@@ -3500,7 +3500,7 @@ class RAGSession:
 
         source_limits: EvidenceLimits | None, optional
             Source-first hard evidence limits. None preserves the original
-            PR8 source-first behavior for direct callers.
+            source-first behavior for direct callers without evidence limits.
         source_report: dict[str, object] | None, optional
             Optional mutable output for selected and available source paths
             and evidence-budget diagnostics. Defaults to ``None``.
@@ -3901,7 +3901,7 @@ class RAGSession:
         # A paper named in the question is searched (above), not added in
         # full: a whole paper is tens of thousands of tokens of evidence.
         expansion_plan = plan
-        if self._indexes_papers() and plan.paths:
+        if self._uses_document_headers() and plan.paths:
             documents = {
                 chunk.path for chunk in self.chunks
                 if chunk.kind in DOCUMENT_KINDS
@@ -3926,7 +3926,7 @@ class RAGSession:
                 chunk for chunk in expanded if chunk.path in allowed
             ]
         elif source_first is not None and len(named) > 1:
-            # Preserve legacy PR8 behavior for direct strategy callers.
+            # Retain explicit scopes for direct calls without evidence limits.
             allowed = set(named)
             expanded = [
                 chunk for chunk in expanded if chunk.path in allowed
@@ -5233,17 +5233,17 @@ class RAGSession:
         if ".pdf" in profile.extensions:
             metadata["pdf_text_extractor"] = PDF_TEXT_EXTRACTOR
         # Recorded only for paper projects, so other indexes stay valid.
-        if self._indexes_papers():
+        if self._uses_document_headers():
             metadata["document_headers"] = DOCUMENT_HEADER_FORMAT
         return metadata
 
-    def _indexes_papers(self: RAGSession) -> bool:
+    def _uses_document_headers(self: RAGSession) -> bool:
         """Return whether the project type indexes documents as papers.
 
         Returns
         -------
         bool
-            The project type's ``paper_index`` capability; false when the
+            The project type's ``document_headers`` capability; false when the
             profile names no type or an unregistered one.
 
         """
@@ -5257,7 +5257,7 @@ class RAGSession:
         except ValueError:
             # An unregistered type has no paper index.
             return False
-        return bool(getattr(definition, "paper_index", False))
+        return bool(getattr(definition, "document_headers", False))
 
     def _document_infos(
         self: RAGSession, chunks: Sequence[Chunk]
@@ -5273,11 +5273,11 @@ class RAGSession:
         -------
         dict[pathlib.Path, DocumentInfo]
             One entry per file with document passages; empty unless the
-            project type indexes papers (``paper_index``).
+            project type indexes papers (``document_headers``).
 
         """
 
-        if not self._indexes_papers():
+        if not self._uses_document_headers():
             return {}
         by_path: dict[Path, list[Chunk]] = {}
         for chunk in chunks:

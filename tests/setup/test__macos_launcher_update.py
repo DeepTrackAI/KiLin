@@ -267,7 +267,7 @@ class TestMacOSLauncherUpdate(unittest.TestCase):
         )
 
     def test_legacy_runtime_remains_usable_during_transition(self) -> None:
-        """An older PR4 installation is preserved on a failed upgrade.
+        """An existing runtime installation survives a failed upgrade.
 
         """
 

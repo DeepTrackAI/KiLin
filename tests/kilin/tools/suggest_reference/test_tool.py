@@ -89,7 +89,9 @@ class TestStatement(unittest.TestCase):
     def test_quoted_or_after_a_colon(self) -> None:
         router = Mock()
         self.assertEqual(
-            tool.statement_of(f"which paper supports “{STATEMENT}”?", router),
+            tool.statement_of(
+                f"which paper supports “{STATEMENT}”?", router
+            ),
             STATEMENT,
         )
         self.assertEqual(

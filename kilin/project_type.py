@@ -242,10 +242,9 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
         "1000 and 200000."
     )
 
-# Search pipeline used by RETRIEVAL_MODE_SEARCH: the hybrid pipeline
-# (semantic, lexical, code graph, fused), or the same pipeline choosing
-# papers first (``retrieval_papers.py``), for types that index papers.
-# Source-first retrieval is available explicitly; packaged defaults stay as-is.
+# Search pipelines for RETRIEVAL_MODE_SEARCH. ``hybrid`` combines passage
+# channels; ``papers`` is the legacy selectable paper-first strategy; and
+# ``source_first`` fuses four source rankings. Literature uses source_first.
 RetrievalStrategy: TypeAlias = Literal[
     "hybrid", "papers", "source_first"
 ]
@@ -295,7 +294,7 @@ class Intent:
     retrieval_strategy: "hybrid" | "papers" | "source_first"
         Search pipeline used when searching: ``hybrid``, or ``papers``,
         which ranks papers first and fills the evidence from the best ones
-        (only for project types with ``paper_index``).
+        (only for project types with ``document_headers``).
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
@@ -436,10 +435,10 @@ class ProjectType:
         Preferred card kind, or None for no default.
     source_cards_automatic: bool
         Generate missing cards during indexing.
-    paper_index: bool
-        Index documents as papers: search headers with each document's
-        title, author, section and page, and paper cards that summarize
-        each document. Defaults to ``False``.
+    document_headers: bool
+        Prefix searchable passages with document metadata, such as title,
+        author, section, and page. Independent from source-card generation.
+        Defaults to ``False``.
 
     """
 
@@ -457,7 +456,7 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
-    paper_index: bool = False
+    document_headers: bool = False
     source_cards_enabled: bool = False
     source_card_kind: str | None = None
     source_cards_automatic: bool = False
@@ -924,7 +923,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
     capabilities = _object(type_id, data, "capabilities")
     reject_unknown(
         f"{type_id}.capabilities", capabilities,
-        ("code_graph", "paper_index", "source_cards"),
+        ("code_graph", "document_headers", "source_cards"),
     )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
@@ -936,10 +935,11 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             'false, or "auto".'
         )
 
-    paper_index = capabilities.get("paper_index", False)
-    if type(paper_index) is not bool:
+    document_headers = capabilities.get("document_headers", False)
+    if type(document_headers) is not bool:
         raise ValueError(
-            f"Project type {type_id!r} capabilities.paper_index must be true "
+            f"Project type {type_id!r}: capabilities.document_headers "
+            "must be true "
             "or false."
         )
 
@@ -986,12 +986,12 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
     for intent in intents.values():
         if (
             intent.retrieval_strategy == RETRIEVAL_STRATEGY_PAPERS
-            and not paper_index
+            and not document_headers
         ):
             raise ValueError(
                 f"Intent {type_id}.intents.{intent.intent_id} uses the "
                 '"papers" retrieval strategy, which needs '
-                "capabilities.paper_index."
+                "capabilities.document_headers."
             )
     default_intent = data.get("default_intent", next(iter(intents)))
     if default_intent not in intents:
@@ -1018,7 +1018,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
         suggestions=_texts(type_id, data, "suggestions"),
-        paper_index=paper_index,
+        document_headers=document_headers,
         source_cards_enabled=source_cards_enabled,
         source_card_kind=source_card_kind,
         source_cards_automatic=source_cards_automatic,

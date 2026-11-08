@@ -289,7 +289,7 @@ class SourceCardGenerationSettings:
         Finite, nonnegative sampling temperature; zero is greedy.
     max_input_tokens: int
         Maximum estimated card-generation input budget. Passage selection
-        will enforce this value when card kinds are implemented in PR6.
+        is enforced by the registered kind when composing its full prompt.
     max_new_tokens: int
         Strict positive limit on generated tokens for each card.
 

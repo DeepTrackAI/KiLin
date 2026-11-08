@@ -665,32 +665,34 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "code_graph"):
                     self._load(f"graphbad{index}", data)
 
-    def test_paper_index_accepts_booleans_only(self) -> None:
+    def test_document_headers_accepts_booleans_only(self) -> None:
         """Default to no paper index and reject non-boolean settings."""
 
-        self.assertFalse(self._load("paperdefault", _type_data()).paper_index)
+        self.assertFalse(
+            self._load("paperdefault", _type_data()).document_headers
+        )
         for index, value in enumerate((True, False)):
             data = _type_data()
-            data["capabilities"] = {"paper_index": value}
+            data["capabilities"] = {"document_headers": value}
             self.assertIs(
-                self._load(f"paperok{index}", data).paper_index, value
+                self._load(f"paperok{index}", data).document_headers, value
             )
         for index, value in enumerate((1, 0, None, "true", [])):
             with self.subTest(value=value):
                 data = _type_data()
-                data["capabilities"] = {"paper_index": value}
-                with self.assertRaisesRegex(ValueError, "paper_index"):
+                data["capabilities"] = {"document_headers": value}
+                with self.assertRaisesRegex(ValueError, "document_headers"):
                     self._load(f"paperbad{index}", data)
 
-    def test_papers_strategy_needs_paper_index_and_valid_limits(self) -> None:
+    def test_papers_strategy_requires_document_headers(self) -> None:
         """Validate the papers strategy and its paper and passage limits."""
 
         data = _type_data()
         intent = next(iter(data["intents"].values()))
         intent["retrieval"] = {"mode": "search", "strategy": "papers"}
-        with self.assertRaisesRegex(ValueError, "paper_index"):
+        with self.assertRaisesRegex(ValueError, "document_headers"):
             self._load("papersneedindex", data)
-        data["capabilities"] = {"paper_index": True}
+        data["capabilities"] = {"document_headers": True}
         loaded = next(iter(self._load("papersok", data).intents.values()))
         self.assertEqual(
             (loaded.retrieval_strategy, loaded.max_papers,
@@ -718,7 +720,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
             "max_papers": 4, "passages_per_paper": 1,
         }
         config = self._load("sourcefirst", data)
-        self.assertFalse(config.paper_index)
+        self.assertFalse(config.document_headers)
         self.assertFalse(config.source_cards_enabled)
         selected = next(iter(config.intents.values()))
         self.assertEqual(selected.retrieval_strategy, "source_first")
@@ -735,8 +737,8 @@ class TestProjectTypeFields(ProjectTypeFixture):
         """Index papers for literature projects but not for code projects."""
 
         literature = project_type("literature")
-        self.assertTrue(literature.paper_index)
-        self.assertFalse(project_type("code").paper_index)
+        self.assertTrue(literature.document_headers)
+        self.assertFalse(project_type("code").document_headers)
         for intent_id in ("question_answering", "compare_sources",
                           "report_generation"):
             with self.subTest(intent=intent_id):

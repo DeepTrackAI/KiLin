@@ -37,7 +37,7 @@ _si_article_/          # Paper work, benchmarks and source corpora
 sandbox/               # Local development workspaces; export empty
 ```
 
-The repository includes 16 numbered tutorial notebooks. They introduce
+The repository includes 17 numbered tutorial notebooks. They introduce
 installation, model cache, generation, repository scanning, extraction,
 embeddings, semantic/lexical/code retrieval, indexes, routing, RAG sessions,
 trace logging, project types and custom tools. Notebook examples are not a

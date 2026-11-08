@@ -8,8 +8,8 @@ session for subsequent cards, and releases it at the end of the batch.
 
 This module does not choose source kinds, compose scientific-paper prompts,
 or determine which cards need rebuilding. The registered scientific-paper
-kind supplies its own prompts in PR6; the indexing coordinator will call
-this adapter for pending sources in PR7. Index search loads no model.
+registered card kind supplies its prompts. The indexing coordinator calls
+this adapter only for pending sources; index search loads no model.
 
 Key Features
 ------------
@@ -205,7 +205,7 @@ class SourceCardGenerator:
         -----
         Each model call has its own temporary system/user messages.
         Original source data must be treated as untrusted prompt content by
-        the card-kind prompt builder in PR6.
+        the registered card-kind prompt builder.
 
         """
 

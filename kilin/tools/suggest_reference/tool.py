@@ -158,7 +158,9 @@ _ORDER: Final[dict[str, int]] = {
     ))
 }
 # Text in quotation marks: the statement, when the user quotes it.
-_QUOTED: Final[re.Pattern[str]] = re.compile(r"[\"“«]([^\"”»]+)[\"”»]")
+_QUOTED: Final[re.Pattern[str]] = re.compile(
+    r"[\"“«]([^\"”»]+)[\"”»]"
+)
 # A word, for comparing the statement with texts.
 _WORD: Final[re.Pattern[str]] = re.compile(r"[^\W_]+")
 # A bracketed number, which the chat would read as a link to evidence.

@@ -258,7 +258,8 @@ def run(
         path = turn.paths[number - 1]
         line = turn.lines[number - 1] if turn.lines else 0
         lines.append(
-            f"{citation}. {path.name}, line {line}: “{items[number - 1][1]}” "
+            f"{citation}. {path.name}, line {line}: "
+            f"“{items[number - 1][1]}” "
             f"[{citation}]"
         )
         evidence.append(

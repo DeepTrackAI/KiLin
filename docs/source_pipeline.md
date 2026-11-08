@@ -90,7 +90,7 @@ that a valid source manifest proves a completed retrieval rebuild.
 The optional source-card channel runs *after* ordinary chunk, semantic,
 lexical and graph indexing. It selects eligible documents, reuses cached
 cards and embeds missing summaries without replacing original passage
-evidence. See [Automatic source-card indexing](retrieval_pipeline.md#automatic-source-card-indexing-and-paper-retrieval-pr7).
+evidence. See [Automatic source-card indexing](retrieval_pipeline.md#automatic-source-card-indexing).
 
 ## 3. Reading files and retaining source coordinates
 

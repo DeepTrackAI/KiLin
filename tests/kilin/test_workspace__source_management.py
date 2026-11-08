@@ -101,7 +101,7 @@ class TestWorkspaceSourceManagement(unittest.TestCase):
         self.assertEqual(project.profile.type_id, "code")
 
     def test_remove_direct_file_updates_manifest_not_original(self) -> None:
-        """Removing a source copy does not delete its source outside KíLín."""
+        """Removing a source copy does not delete its external original."""
 
         original = self._file("note.md")
         project = prepare_sources_workspace(

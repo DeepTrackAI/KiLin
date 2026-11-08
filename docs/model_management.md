@@ -252,7 +252,7 @@ fallback, terminates the process and loses those live sessions. See the
 [GUI Stop contract](gui_protocol.md#errors-stop-and-restart) for the grace
 period, terminal events and restart behavior.
 
-## Dedicated source-card generation model (PR5)
+## Dedicated source-card generation model
 
 The core owns the independent `[source_card_generation]` settings in each
 project's `profile.ini`, with backend-specific `mlx`/`torch` identifiers.
@@ -273,10 +273,11 @@ message handling, without changing conversational state.
 The project-wide `allow_download` setting is passed to this generator;
 source-card settings do not grant permission to download additional models.
 The scientific-paper kind uses the configured input-token budget for
-the whole prompt, while the adapter enforces the output cap. The PR7
-indexer generates missing cards on project opening or source refresh and
-closes the generator before the answering model loads. Retrieval still
-uses the original paper-ranking algorithm and original chunks as evidence.
+the whole prompt, while the adapter enforces the output cap. The
+indexing coordinator generates missing cards on project opening or source
+refresh and releases the card model before the answering model is loaded
+or restored. Default literature retrieval uses `source_first` and cites
+original source chunks, never generated card text.
 
 ## Failure and cleanup
 

@@ -46,7 +46,7 @@ The associated source-card model identifiers are defined in `DEFAULT_MODELS`.
 | --- | ---: | --- |
 | `THINKING` | `false` | Disable thinking by default while generating card content. Exact boolean. |
 | `TEMPERATURE` | `0.0` | Finite, nonnegative generation temperature; zero requests greedy decoding. |
-| `MAX_INPUT_TOKENS` | `5000` | Estimated budget for a card-kind prompt and selected passages; enforced by the future PR6 prompt builder, not the PR5 model adapter. |
+| `MAX_INPUT_TOKENS` | `5000` | Estimated budget for the full scientific-paper prompt and selected passages; the card kind enforces it during prompt construction. |
 | `MAX_NEW_TOKENS` | `1200` | Strict positive output-token cap applied to each generation. |
 
 The token budgets must be positive integers no greater than 200,000.
@@ -60,8 +60,8 @@ there is no source-card-specific download override.
 Reading settings never loads a model or modifies a project. Saving them
 uses the core atomic profile writer. The configured model is loaded only
 for a requested card-generation batch, and valid existing cards are not
-regenerated just because the model changes. This module does not activate
-source-card indexing until PR7.
+regenerated just because the model changes. Indexing policy and automatic generation are controlled separately by
+project-type defaults, saved project settings, and source overrides.
 
 ## `REPOSITORY` — source-file selection
 

@@ -1,7 +1,7 @@
-"""Verify paper cards: reading, checking, saving, and reuse at indexing.
+"""Verify RAG integration with the active source-card pipeline.
 
-The answering and embedding models are deterministic substitutes; card
-files are written to temporary folders.
+Synthetic document passages and a fake generation session exercise card
+reuse, invalidation and error recovery without loading a real model.
 
 """
 
@@ -21,8 +21,7 @@ from unittest.mock import MagicMock, Mock, patch
 from kilin import rag
 from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
-from kilin.retrievals import paper_cards as pc
-from kilin.retrievals.papers import DocumentInfo
+from kilin.retrievals.document_headers import DocumentInfo
 from tests.kilin import _rag_support as fixtures
 
 REPLY = json.dumps({
@@ -52,194 +51,6 @@ def _paper(path: str = "a.pdf") -> list[Chunk]:
         _page(f"{path}-1", "Title and abstract.", 1, path),
         _page(f"{path}-2", "Methods: we used actigraphy.", 2, path),
     ]
-
-
-class TestCardPassages(unittest.TestCase):
-
-    def test_reading_order_and_opening_passages(self):
-        passages = pc.card_passages(_paper())
-        self.assertEqual([chunk.identifier for chunk in passages],
-                         ["a.pdf-1", "a.pdf-2", "a.pdf-3"])
-
-    def test_budget_keeps_the_first_passage(self):
-        long = [_page("p1", "word " * 400, 1), _page("p2", "word " * 400, 2)]
-        passages = pc.card_passages(long, budget=10)
-        self.assertEqual([chunk.identifier for chunk in passages], ["p1"])
-        self.assertEqual(pc.card_passages([]), [])
-
-    def test_field_passages_are_found_beyond_the_opening(self):
-        chunks = [_page(f"p{n}", f"Introduction text {n}.", n)
-                  for n in range(1, 8)]
-        chunks.append(_page("lim", "Limitations: future work remains.", 9))
-        identifiers = [c.identifier for c in pc.card_passages(chunks)]
-        self.assertIn("lim", identifiers)
-        self.assertEqual(identifiers[:3], ["p1", "p2", "p3"])
-
-    def test_prompt_numbers_passages_with_pages(self):
-        system, prompt = pc.card_prompt("a.pdf", pc.card_passages(_paper()))
-        self.assertIn("JSON", system)
-        self.assertIn("[2] (page 2) Methods: we used actigraphy.", prompt)
-        for field in pc.CARD_FIELDS:
-            self.assertIn(f'"{field}"', prompt)
-
-
-class TestParseCard(unittest.TestCase):
-
-    def setUp(self):
-        self.passages = pc.card_passages(_paper())
-
-    def _parse(self, reply, title=None):
-        return pc.parse_card(reply, self.passages, path=Path("a.pdf"),
-                             sha256="h", title=title, model="m")
-
-    def test_fields_pages_and_citation_checks(self):
-        card = self._parse("Here it is:\n```json\n" + REPLY + "\n```")
-        self.assertTrue(card.complete)
-        self.assertEqual(card.title, "Model title")
-        self.assertEqual(card.year, "2020")
-        self.assertEqual(card.field("methods"), "Actigraphy in a cohort.")
-        # [9] was not shown to the model, so only page 2 is recorded.
-        self.assertEqual(card.field_pages("methods"), (2,))
-        self.assertEqual(card.field_pages("abstract"), (1,))
-        self.assertEqual(card.field("data"), "")
-        self.assertEqual(card.field("limitations"), "")
-        self.assertEqual(card.field_pages("data"), ())
-
-    def test_known_title_takes_precedence(self):
-        self.assertEqual(self._parse(REPLY, "PDF title").title, "PDF title")
-
-    def test_unusable_replies_give_a_title_card(self):
-        for reply in (
-            "", "no json here", "[1, 2]", "{broken", "{}",
-            '{"title": "A study", "authors": "A. Smith"}',
-            '{"methods": "Unsupported claim [99]."}',
-            '{"methods": "Uncited claim."}',
-        ):
-            with self.subTest(reply=reply):
-                card = self._parse(reply, None)
-                self.assertFalse(card.complete)
-                self.assertEqual(card.title, "a")
-                self.assertEqual(card.fields, ())
-
-    def test_uncited_fields_are_not_used_for_card_search(self):
-        reply = json.dumps({
-            "abstract": "Supported abstract [1].",
-            "methods": "Unsupported method.",
-            "findings": "Invalid passage [8].",
-        })
-        card = self._parse(reply)
-        self.assertTrue(card.complete)
-        self.assertEqual(card.abstract, "Supported abstract.")
-        self.assertEqual(card.field("methods"), "")
-        self.assertEqual(card.field("findings"), "")
-
-    def test_enormous_card_citations_are_ignored_safely(self):
-        reply = json.dumps({
-            "methods": "Unsupported [" + "9" * 12000 + "].",
-        })
-        self.assertFalse(self._parse(reply).complete)
-
-    def test_non_pdf_sources_can_have_cited_content(self):
-        passage = Chunk(
-            "md", Path("notes.md"), "Relevant description.",
-            1, 2, "markdown_section", None, "Introduction"
-        )
-        card = pc.parse_card(
-            '{"aim": "Description [1]."}', [passage],
-            path=Path("notes.md"), sha256="h", title=None, model="m",
-        )
-        self.assertTrue(card.complete)
-        self.assertEqual(card.field("aim"), "Description.")
-        self.assertEqual(card.field_pages("aim"), ())
-
-    def test_card_texts_group_fields(self):
-        card = self._parse(REPLY)
-        texts = pc.card_texts(card)
-        self.assertEqual(len(texts), 3)
-        self.assertTrue(all(text.startswith("Model title") for text in texts))
-        self.assertIn("Why sleep declines.", texts[0])
-        self.assertIn("Actigraphy", texts[1])
-        self.assertEqual(pc.card_texts(self._parse("")), ("a",))
-
-
-class TestSavedCards(unittest.TestCase):
-
-    def test_round_trip_and_format_check(self):
-        card = pc.parse_card(REPLY, pc.card_passages(_paper()),
-                             path=Path("d/a.pdf"), sha256="h", title=None,
-                             model="m")
-        with TemporaryDirectory() as folder:
-            file = Path(folder) / "indexes" / "paper_cards.json"
-            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
-            pc.save_cards(file, {card.path: card},
-                          {card.path: embeddings}, "embed:1")
-            cards, vectors, identity = pc.load_cards(file)
-            self.assertEqual(cards, {card.path: card})
-            self.assertEqual(vectors, {card.path: embeddings})
-            self.assertEqual(identity, "embed:1")
-            data = json.loads(file.read_text(encoding="utf-8"))
-            data["format"] = "old"
-            file.write_text(json.dumps(data), encoding="utf-8")
-            self.assertEqual(pc.load_cards(file), ({}, {}, None))
-            self.assertEqual(pc.load_cards(Path(folder) / "none"),
-                             ({}, {}, None))
-
-    def test_reject_corrupt_vectors_on_write(self):
-        card = pc.parse_card(
-            REPLY, pc.card_passages(_paper()),
-            path=Path("a.pdf"), sha256="h", title=None, model="m",
-        )
-        with TemporaryDirectory() as folder:
-            path = Path(folder) / "cards.json"
-            for invalid in (
-                ((float("nan"), 0.0),) * 3,
-                ((0.0, 0.0),) * 3,
-                ((1.0, 0.0),),
-                ((1.0, 0.0), (1.0,), (1.0, 0.0)),
-            ):
-                with self.subTest(invalid=invalid):
-                    with self.assertRaises(ValueError):
-                        pc.save_cards(
-                            path, {card.path: card},
-                            {card.path: invalid}, "embed:1",
-                        )
-
-    def test_corrupt_complete_cards_are_regenerated(self):
-        card = pc.parse_card(
-            REPLY, pc.card_passages(_paper()),
-            path=Path("a.pdf"), sha256="h", title=None, model="m",
-        )
-        with TemporaryDirectory() as folder:
-            file = Path(folder) / "cards.json"
-            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
-            pc.save_cards(
-                file, {card.path: card}, {card.path: embeddings},
-                "embed:1",
-            )
-            data = json.loads(file.read_text(encoding="utf-8"))
-            data["cards"]["a.pdf"]["abstract"] = ""
-            data["cards"]["a.pdf"]["fields"] = {}
-            file.write_text(json.dumps(data), encoding="utf-8")
-            self.assertEqual(pc.load_cards(file)[0], {})
-
-    def test_invalid_loaded_vectors_keep_valid_card_text(self):
-        card = pc.parse_card(
-            REPLY, pc.card_passages(_paper()),
-            path=Path("a.pdf"), sha256="h", title=None, model="m",
-        )
-        with TemporaryDirectory() as folder:
-            path = Path(folder) / "cards.json"
-            embeddings = ((1.0, 0.0),) * len(pc.card_texts(card))
-            pc.save_cards(
-                path, {card.path: card}, {card.path: embeddings},
-                "embed:1",
-            )
-            data = json.loads(path.read_text(encoding="utf-8"))
-            data["cards"]["a.pdf"]["vectors"][1][0] = "NaN"
-            path.write_text(json.dumps(data), encoding="utf-8")
-            cards, vectors, _ = pc.load_cards(path)
-            self.assertEqual(cards[card.path], card)
-            self.assertEqual(vectors[card.path], ())
 
 
 class TestSessionCards(unittest.TestCase):

@@ -46,7 +46,7 @@ class TestTutorials(unittest.TestCase):
         items = notebooks()
         self.assertEqual(
             [int(item.name.split("_", 1)[0]) for item in items],
-            list(range(10, 161, 10)),
+            list(range(10, 171, 10)),
         )
         self.assertTrue((TUTORIALS / "README.md").is_file())
         for file in items:
@@ -86,6 +86,27 @@ class TestTutorials(unittest.TestCase):
                     continue
                 with self.subTest(file=file.name, link=link):
                     self.assertTrue((file.parent / target).exists())
+
+    def test_source_card_tutorial_is_offline_and_provenance_based(
+        self,
+    ) -> None:
+        """Keep card examples independent of downloaded inference models."""
+
+        path = TUTORIALS / "170_source_cards.ipynb"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        code = "\n".join(
+            "".join(cell["source"])
+            for cell in document["cells"]
+            if cell["cell_type"] == "code"
+        )
+        for name in (
+            "SourceDescriptor", "parse_card", "save_source_cards",
+            "source_first_search", "chunk_ids",
+        ):
+            with self.subTest(name=name):
+                self.assertIn(name, code)
+        self.assertNotIn("SourceCardGenerator(", code)
+        self.assertNotIn("download_model(", code)
 
     def test_optional_article_corpus_paths(self) -> None:
         for number in (140, 160):

@@ -5,9 +5,9 @@ The registry validates the common card structure and its exact chunk-level
 provenance before delegating to the kind. It does not generate cards or
 construct retrieval indexes. The initial built-in kind is scientific_paper.
 
-Project types will select registered identifiers. They must not load arbitrary
-Python objects from configuration strings. The scientific-paper kind is
-registered explicitly; it is not yet used by automatic indexing.
+Project types select registered identifiers rather than arbitrary Python
+import paths. The scientific-paper kind is registered explicitly and used by
+the indexing coordinator when project policy permits.
 
 Key Features
 ------------

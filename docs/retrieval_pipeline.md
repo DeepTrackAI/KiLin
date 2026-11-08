@@ -10,11 +10,11 @@ live under `kilin/retrievals/`.
 
 ![Semantic, lexical and code-aware channels rank aligned chunks before reciprocal-rank fusion and evidence selection.](figures/retrieval-indexes.svg)
 
-*Figure: The three channels preserve different ranking signals; reciprocal-rank fusion combines their ranks, and persisted indexes must pass integrity and model-identity validation.*
+*Figure: The three passage-ranking channels of `hybrid` preserve different signals; reciprocal-rank fusion combines their ranks, and persisted indexes must pass integrity and model-identity validation.*
 
 `kilin.retrievals.__init__` exposes the supported records and functions;
 private helpers and individual extension internals should not be treated as
-stable public interfaces. The three ranking channels can operate over the
+stable public interfaces. The three hybrid-ranking channels can operate over the
 **same ordered chunks** but employ different scores and heuristics.
 
 ## Semantic channel
@@ -42,11 +42,12 @@ its own name and code use other words. Evidence, citations and the answering
 model keep the passage text itself. The format is recorded in the index
 settings (`retrieval_text`); changing it rebuilds saved indexes.
 
-In project types with the `paper_index` capability (the packaged
+In project types with the `document_headers` capability (the packaged
 `literature` type), each document passage is indexed after a short header:
 the document's title, its first author and file name, and the section
-heading and page it comes from (`retrievals/papers.py`). Titles and first
-authors come from the PDF metadata when plausible, from the first `#`
+heading and page it comes from
+(`retrievals/document_headers.py`). Titles and first authors come from
+PDF metadata when plausible, from the first `#`
 heading of a Markdown file, or else from the file name; section headings
 are recognized by name ("Methods", "Data availability") or numbering
 ("3.1. Software architecture"). A methods paragraph is then found for a
@@ -144,7 +145,7 @@ scales does not directly influence fusion, but changing **order** does;
 (2) an optimization must preserve the content and ordering of evidence,
 not just the number of embeddings or the final answer string.
 
-## Generic source-card contracts (PR3)
+## Generic source-card contracts
 
 The `retrievals/source_cards/` package defines reusable **source-card
 records** used by the active source-card index. A
@@ -171,14 +172,13 @@ A kind's deterministic `precheck` may rule out clearly ineligible sources;
 positive results are only candidates, with full eligibility deferred to the
 kind's generation/verification logic. Project JSON never imports kind code.
 
-The generic contracts were introduced in PR3. PR4 added the independent
-source-card index, PR5 the dedicated generation adapter, PR6 the
-`scientific_paper` kind, and PR7 connected these to project indexing.
-The `papers` retrieval strategy retains its original ranking and evidence
-selection while reading similarities from the new card-vector index.
-No migration layer for old paper-card files is provided.
+The generic contracts, independent index, dedicated generation adapter,
+scientific-paper kind and indexing coordinator are implemented. The
+packaged literature intents now use four-channel `source_first` retrieval;
+the optional `papers` strategy remains selectable for custom project types.
+No migration layer for the removed paper-card cache is provided.
 
-### Independent source-card index (PR4)
+### Independent source-card index
 
 `retrievals/source_cards/index.py` stores `IndexedSourceCard` outcomes by
 `(source_path, card_kind)` and prepared `SourceCardVector` groups in separate
@@ -211,13 +211,12 @@ transaction; concurrent writers still need higher-level coordination.
 `search_source_cards()` performs standalone cosine search over already
 prepared vectors. A caller supplies a query embedding; it does not construct
 one, start a model, or add card text to the evidence presented to an answer.
-The existing `papers` strategy consumes these vector groups through
-`card_similarities()` and its original paper-ranking algorithm. PR8 will
-separately consider the four-channel source-first retrieval design.
-The new persistence format has no migration or compatibility reader for
-the former `paper_cards.json` file.
+The default `source_first` strategy incorporates the card-vector search
+as a fourth source-ranking channel. The optional `papers` strategy also
+consumes these vectors. The persistence format does not read the older
+`paper_cards.json` file.
 
-### Dedicated generation adapter (PR5)
+### Dedicated generation adapter
 
 `source_cards/generation.py` provides `SourceCardGenerator`, an optional
 model-inference adapter independent of the active RAG answering and routing
@@ -226,15 +225,15 @@ sessions. The model and inference parameters come from core-owned
 model is loaded only on the first requested card and is released at the
 end of the generation batch. It uses the established validated completion
 contract; prompt selection and scientific content rules belong to the
-`scientific_paper` kind added in PR6. The adapter validates the configured
+registered `scientific_paper` kind. The adapter validates the configured
 input budget; the kind enforces it when composing prompts.
 
-In a literature project, PR7 invokes generation on opening or refreshing
-a project only for missing or stale selected cards. No generation model is
+Literature projects generate missing or stale selected cards on opening
+or refreshing, when the saved indexing policy permits. No generation model is
 loaded when the current cards are reusable, and retrieval itself never
 runs card generation.
 
-### Scientific-paper cards (PR6)
+### Scientific-paper cards
 
 `source_cards/kinds/scientific_paper.py` implements the first trusted kind,
 `scientific_paper` (schema version 1, validation version 1). It retains the
@@ -254,9 +253,8 @@ truncated or unsupported responses yield `failed`, not a speculative card.
 No separate eligibility or provenance model call is made. Non-paper sources
 remain available through ordinary retrieval.
 
-Following `paper_cards.py`, passage selection takes the first three chunks
-in reading order and up to two lexical matches per methods/data/findings/
-limitations query. The entire system and user prompt, including labels,
+Passage selection takes the first three chunks in reading order and up to
+two lexical matches per methods/data/findings/limitations query. The entire system and user prompt, including labels,
 source metadata and excerpt text, is bounded by the configured estimated
 input-token limit. The first excerpt can be clipped while retaining its
 chunk identifier. Passages are encoded as quoted untrusted data; instructions
@@ -266,14 +264,15 @@ cause their field to be omitted; at least one supported substantive field
 is required. Presence of a chunk reference does **not** prove that the
 statement is semantically entailed by that chunk.
 
-PR7 invokes this generator when missing scientific-paper cards need to
-be built; it does not alter the existing passage-based evidence rules.
+The indexing coordinator invokes this generator when scientific-paper
+cards need to be built; generated text never replaces source passages as
+answer evidence.
 The registry and generic persistence also allow future, independently
 validated kinds for grant proposals, patents, CVs, slide decks, technical
 manuals, policy documents, and other sources when needed. These kinds
 are **not** implemented or inferred from file extensions.
 
-## Automatic source-card indexing and paper retrieval (PR7)
+## Automatic source-card indexing
 
 Literature projects enable the `scientific_paper` card kind by default.
 After normal extraction, chunking and semantic/lexical/graph indexing,
@@ -296,10 +295,9 @@ generation model, while vector groups are rebuilt if the embedding model
 or search-text projection changes. A failed generation attempt can be
 retried on a source, schema, model or generation-settings change;
 a cached `not_applicable` result is reused until its source or kind
-validation changes. The prerelease implementation does not migrate
-`paper_cards.json`; the old file is never used by active indexing. The
-older `paper_cards.py` module remains available for its standalone tests,
-but `RAGSession` no longer imports or executes it.
+validation changes. The prerelease implementation does not migrate or read
+`paper_cards.json`; the inactive standalone implementation has been
+removed and its relevant tests cover the new source-card pipeline.
 
 Project-type `capabilities.source_cards` defines default `enabled`, `kind`
 and `automatic` values. Project-level overrides are saved in
@@ -313,14 +311,16 @@ cards can be searched, but missing and outdated cards are not generated.
 See [Configuration](configuration.md#source-card-indexing-policy).
 
 For each valid `scientific_paper` card, the kind projects three search
-texts (abstract/aim, methods/data, findings/limitations), retaining the
-original patch's grouped representation. The existing `papers` strategy
-uses these vectors for card similarities. Card text is never answer
-evidence: answers continue citing original source chunks.
+texts (abstract/aim, methods/data, findings/limitations), retaining
+the three-group representation used by document retrieval. The default
+`source_first` strategy uses these vectors as one source-ranking channel.
+The optional `papers` strategy can also consume them. Card text is never
+answer evidence: answers cite original source chunks.
 
-Intents whose retrieval strategy is `papers` (in `literature`:
-`question_answering`, `compare_sources` and `report_generation`) choose
-papers before passages (`strategies/retrieval_papers.py`). Papers are
+An explicitly configured `papers` strategy chooses papers before
+passages (`strategies/retrieval_papers.py`); the packaged literature
+`question_answering`, `compare_sources` and `report_generation` intents
+instead use `source_first` with hard evidence budgets. Papers are
 ranked by reciprocal-rank fusion of two lists: the similarity of the
 question to each card's vectors, and the rank of each paper's best passage
 in the full hybrid ranking. The query is embedded once for both. Unless
@@ -347,7 +347,7 @@ document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
 
-## Four-channel source-first retrieval and evidence budgets (PR8–PR9)
+## Four-channel source-first retrieval and evidence budgets
 
 `retrievals/strategies/retrieval_sources.py` ranks sources independently
 from complete semantic, lexical, applicable code-graph and source-card
@@ -446,11 +446,12 @@ limits, configured in that tool's `defaults.json`, the project-type
 intent's `tool` object, or saved `[tool.<name>]` overrides (where exposed).
 The reusable `EvidenceLimits`/`allocate_evidence` helper permits future
 tools to adopt equivalent evidence budgeting, but existing tools do not
-silently inherit these new source-first values. PR10 will expose shared
-retrieval to tools without changing `ToolContext.rank`.
+silently inherit these new source-first values. Registered tools can
+use `ToolContext.retrieve()` without changing `ToolContext.rank()`.
 
-The legacy `hybrid` and `papers` algorithms remain available; cleanup of
-the old paper-named modules remains a separate focused maintenance PR.
+The `hybrid` and optional `papers` strategies remain available. New
+literature project defaults select `source_first`; the retained `papers`
+implementation is not part of normal literature answering.
 
 ## Named-document retrieval and full-document reading
 
@@ -569,7 +570,7 @@ labels, old-cache rejection and explicit failure cases. A deterministic
 unit substitute validates structure, not live embedding quality; evaluate
 ranking quality separately before claiming a retrieval improvement.
 
-## Tool-owned bounded retrieval (PR10)
+## Tool-owned bounded retrieval
 
 The core `RetrievalRequest` and `RetrievalResult` records in
 `retrievals/requests.py` provide an explicit, model-free retrieval boundary
