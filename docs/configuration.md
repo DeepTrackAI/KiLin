@@ -166,6 +166,29 @@ combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
 
+### Source-first evidence limits per intent
+
+Ordinary model-answering intents with `retrieval.strategy` set to
+`"source_first"` may declare `max_sources`, `passages_per_source`,
+`max_passages`, `evidence_tokens`, and `coverage` in their `retrieval`
+object. The first two govern source quotas; the latter two are hard
+passage and *estimated evidence-token* bounds after context expansion
+and related-turn evidence. `coverage` accepts `bounded` (default) or
+`exhaustive`; explicit requests about all sources demand exhaustive
+source coverage regardless of that default. Omitted sources cause a
+saved coverage record and, in exhaustive mode, a deterministic notice.
+
+These settings are owned by the **selected project-type intent**, not the
+answering model's context-token setting, the GUI, or a tool's internal
+batch parameters. Missing values have validated core defaults; packaged
+literature intent values are documented in
+[Retrieval pipeline](retrieval_pipeline.md#per-intent-source-first-configuration).
+Changing the project type changes future retrieval; a saved project does
+not acquire a separate per-project override for these per-intent limits.
+A tool-backed intent instead uses its tool's validated settings and does
+not automatically execute source-first retrieval. See the tool precedence
+section below.
+
 ### Per-intent thinking policy
 
 An intent may set `thinking` to `true`, `false`, or `null`. Omitting the

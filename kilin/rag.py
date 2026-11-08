@@ -25,10 +25,11 @@ rebuild indexes, generate missing source cards with a separate model, and
 download missing model files according to the profile. ``trace=None``
 enables full tracing here, unlike the low-level chat and embedding classes.
 
-History and expanded evidence have no automatic summarization or shared
-prompt-token budget. A retrieval count limits the initial fused ranking, not
-necessarily the final expanded evidence set. Explicit cleanup releases owned
-models and trace resources.
+History and expanded evidence are not summarized automatically. Source-first
+intents enforce hard passage and estimated evidence-token budgets after
+expansion and related-turn additions; other strategies keep their existing
+behavior. The budgets do not cover chat history or guarantee exact model
+context-token accounting. Explicit cleanup releases model and trace resources.
 
 Key Features
 ------------
@@ -206,6 +207,13 @@ from kilin.repository import (
     build_repository_manifest,
     compare_repository_manifests,
     scan_repository,
+)
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_EXHAUSTIVE,
+    EvidenceLimits,
+    allocate_evidence,
+    coverage_report,
+    evidence_block,
 )
 from kilin.retrievals.model_identity import embedding_model_identity
 from kilin.retrievals.strategies.retrieval_semantic import (
@@ -403,6 +411,27 @@ _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
 )
 # The separator between numbers inside one citation group.
 _CITATION_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
+
+
+def _asks_for_exhaustive_sources(question: str) -> bool:
+    """Recognize explicit complete source coverage, not a source count.
+
+    Parameters
+    ----------
+    question: str
+        Original user wording to classify deterministically.
+
+    Returns
+    -------
+    bool
+        Whether the user asks for all/every/each sources or across a
+        source collection, rather than merely mentioning two papers.
+
+    """
+
+    return asks_for_all_papers(question) and bool(re.search(
+        r"\b(?:all|each|every|across)\b", question, re.IGNORECASE
+    ))
 
 
 def _incomplete_answer(error: IncompleteModelResponse) -> str:
@@ -1609,6 +1638,7 @@ class RAGSession:
             )
 
             retrieval_started = perf_counter()
+            coverage_notice = ""
             if mode == RETRIEVAL_MODE_REUSE:
                 evidence = _merge_evidence(
                     [
@@ -1643,6 +1673,26 @@ class RAGSession:
                     self._ask_router,
                     list(dict.fromkeys(chunk.path for chunk in self.chunks)),
                 )
+                source_limits = None
+                source_report: dict[str, object] = {}
+                if (
+                    intent.retrieval_strategy
+                    == RETRIEVAL_STRATEGY_SOURCE_FIRST
+                ):
+                    source_limits = intent.source_limits()
+                    if _asks_for_exhaustive_sources(question):
+                        source_limits = replace(
+                            source_limits, coverage=COVERAGE_EXHAUSTIVE
+                        )
+                if (
+                    source_limits is not None
+                    and source_limits.coverage == COVERAGE_EXHAUSTIVE
+                    and _asks_for_exhaustive_sources(question)
+                    and len(scope) == 1
+                ):
+                    # A single inferred focus must not silently narrow an
+                    # explicit request about every source in the project.
+                    scope = ()
                 evidence = self._retrieve(
                     search_text,
                     retrieval_count,
@@ -1660,12 +1710,20 @@ class RAGSession:
                     ),
                     **(
                         {"source_first": (
-                            intent.max_papers,
-                            intent.passages_per_paper > 0,
+                            source_limits.max_sources,
+                            source_limits.passages_per_source > 1
+                            or intent.passages_per_paper > 0,
                         )}
                         if getattr(intent, "retrieval_strategy", None)
                         == RETRIEVAL_STRATEGY_SOURCE_FIRST
                         else {}
+                    ),
+                    **(
+                        {
+                            "source_limits": source_limits,
+                            "source_report": source_report,
+                        }
+                        if source_limits is not None else {}
                     ),
                 )
                 found = len(evidence)
@@ -1683,6 +1741,82 @@ class RAGSession:
                     )
                     effective["related_evidence_count"] = len(evidence) - found
                     effective["evidence_from_turns"] = related_turns
+                if source_limits is not None:
+                    # This *final* limit includes context expansion and
+                    # related turns; neither can bypass the hard budget.
+                    chosen_sources = tuple(
+                        source_report.get("selected_sources", ())
+                    )
+                    limited = allocate_evidence(
+                        evidence, source_limits,
+                        priority_sources=chosen_sources,
+                    )
+                    evidence = tuple(
+                        replace(item, citation=index)
+                        for index, item in enumerate(limited.items, 1)
+                    )
+                    indexed = tuple(dict.fromkeys(
+                        item.path for item in self.chunks
+                    ))
+                    # Exhaustive mode means *all requested sources*, not
+                    # merely those retained by the source-count cap.
+                    if source_limits.coverage == COVERAGE_EXHAUSTIVE:
+                        if len(scope) > 1:
+                            requested = tuple(dict.fromkeys(scope))
+                        elif len(scope) == 1 and not (
+                            source_limits.passages_per_source > 1
+                        ):
+                            requested = tuple(scope)
+                        else:
+                            requested = tuple(dict.fromkeys((
+                                *indexed, *self._source_files()
+                            )))
+                    else:
+                        requested = chosen_sources or tuple(scope)
+                    unreadable = tuple(
+                        path for path in requested
+                        if path not in set(indexed)
+                    )
+                    raw_hits = source_report.get("budget_limits_hit", ())
+                    # A source omitted before passage selection must still
+                    # be attributed to the limit that excluded it.
+                    candidates = source_report.get("candidate_sources", ())
+                    source_hits: list[str] = []
+                    if len(candidates) > len(chosen_sources):
+                        if len(chosen_sources) >= source_limits.max_sources:
+                            source_hits.append("sources")
+                        if len(chosen_sources) >= source_limits.max_passages:
+                            source_hits.append("passages")
+                    hits = tuple(dict.fromkeys((
+                        *raw_hits, *source_hits, *limited.limits_hit
+                    )))
+                    coverage = coverage_report(
+                        requested, evidence,
+                        mode=source_limits.coverage,
+                        unavailable=unreadable,
+                        limits_hit=hits,
+                    )
+                    effective["coverage"] = coverage
+                    effective["evidence_limits"] = asdict(source_limits)
+                    trace.emit(
+                        "retrieval.coverage", component="retrieval",
+                        data=coverage, turn_id=turn_id,
+                    )
+                    if (
+                        source_limits.coverage == COVERAGE_EXHAUSTIVE
+                        and not coverage["complete"]
+                    ):
+                        coverage_notice = (
+                            "Coverage incomplete: evidence was included "
+                            f"from {coverage['represented_sources']} of "
+                            f"{coverage['requested_sources']} requested "
+                            "sources. The remaining sources were not "
+                            "represented in this answer."
+                        )
+                        if coverage["unindexed_sources"]:
+                            coverage_notice += (
+                                " Some sources had no searchable text."
+                            )
                 report_phase(
                     ANSWER_PHASE_EVIDENCE_READY,
                     message=f"{found} references found",
@@ -1858,6 +1992,13 @@ class RAGSession:
                 )
                 if finish_reason in ("length", "stop"):
                     effective["finish_reason"] = finish_reason
+
+            # The coverage notice is deterministic, not an assertion made
+            # by the model. Stream it after the model's answer when needed.
+            if coverage_notice:
+                answer += "\n\n" + coverage_notice
+                if token_callback is not None:
+                    token_callback("\n\n" + coverage_notice)
 
             # One fast, deterministic check; do not modify or retry the
             # answer even when the model cites unavailable evidence.
@@ -3157,6 +3298,8 @@ class RAGSession:
         prefer_source_code: bool = False,
         papers: tuple[int, int] | None = None,
         source_first: tuple[int, bool] | None = None,
+        source_limits: EvidenceLimits | None = None,
+        source_report: dict[str, object] | None = None,
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3198,6 +3341,13 @@ class RAGSession:
             can be compared with others. ``None`` preserves the existing
             retrieval strategies. Defaults to ``None``.
 
+        source_limits: EvidenceLimits | None, optional
+            Source-first hard evidence limits. None preserves the original
+            PR8 source-first behavior for direct callers.
+        source_report: dict[str, object] | None, optional
+            Optional mutable output for selected and available source paths
+            and evidence-budget diagnostics. Defaults to ``None``.
+
         Returns
         -------
         tuple[Evidence, ...]
@@ -3206,10 +3356,10 @@ class RAGSession:
 
         Notes
         -----
-        Semantic search receives the configured query format, while lexical and
-        code searches use the raw question. Explicit context expansion is not
-        capped by retrieval_count. Trace details use previews; the evidence
-        records keep full chunk text.
+        Semantic search receives the configured query format, while lexical
+        and code searches use the raw question. Source-first evidence limits
+        apply after expansion; other strategies keep their prior expansion
+        behavior. Trace details use previews and evidence keeps full text.
 
         The semantic loop already scores every chunk. Retain that complete
         ranking for related-passage scoring and for ``_rank_everything``
@@ -3244,10 +3394,14 @@ class RAGSession:
             or type(source_first[1]) is not bool
         ):
             raise ValueError("Invalid source_first retrieval settings.")
+        if source_limits is not None and source_first is None:
+            raise ValueError("Source limits require source_first retrieval.")
         if not self.chunks:
             report("No indexed source passages; skipping retrieval")
             return ()
         count = retrieval_count or self.project.profile.retrieval_count
+        if source_limits is not None:
+            count = source_limits.max_passages
         report("Formatting the search query")
         query_text = self._format_query(question)
         trace = getattr(self, "trace", NullTraceLogger())
@@ -3446,6 +3600,8 @@ class RAGSession:
         # passages, except in a comparison, which needs other papers too.
         named = list(scope)
         sources_chosen = False
+        chosen_source_paths: tuple[Path, ...] = ()
+        source_metadata: dict[str, object] = {}
         if source_first is not None:
             card_matches = (
                 search_source_cards(
@@ -3462,11 +3618,24 @@ class RAGSession:
                 code_results,
                 card_matches,
                 count=count,
-                max_sources=source_first[0],
+                max_sources=(
+                    source_limits.max_sources
+                    if source_limits is not None else source_first[0]
+                ),
                 compare=source_first[1],
                 scope=named,
                 trace_turn_id=trace_turn_id,
+                per_source=(
+                    source_limits.passages_per_source
+                    if source_limits is not None else 1
+                ),
+                metadata=source_metadata,
             )
+            chosen_source_paths = tuple(
+                source_metadata.get("selected_sources", ())
+            )
+            if source_report is not None:
+                source_report.update(source_metadata)
             if chosen:
                 combined = chosen
                 sources_chosen = True
@@ -3580,8 +3749,14 @@ class RAGSession:
             expansion_plan,
             relevance,
         )
-        if source_first is not None and len(named) > 1:
-            # Explicit multi-document scopes are strict for this strategy.
+        if source_first is not None and source_limits is not None:
+            # Expansion must not bypass the selected source set.
+            allowed = set(chosen_source_paths)
+            expanded = [
+                chunk for chunk in expanded if chunk.path in allowed
+            ]
+        elif source_first is not None and len(named) > 1:
+            # Preserve legacy PR8 behavior for direct strategy callers.
             allowed = set(named)
             expanded = [
                 chunk for chunk in expanded if chunk.path in allowed
@@ -3661,6 +3836,21 @@ class RAGSession:
             )
             for index, chunk in enumerate(expanded, start=1)
         )
+        if source_limits is not None:
+            selected = allocate_evidence(
+                evidence, source_limits,
+                priority_sources=chosen_source_paths,
+            )
+            evidence = tuple(
+                replace(item, citation=index)
+                for index, item in enumerate(selected.items, start=1)
+            )
+            if source_report is not None:
+                source_report.update({
+                    "budget_omitted": selected.omitted,
+                    "budget_limits_hit": selected.limits_hit,
+                    "budget_estimated_tokens": selected.estimated_tokens,
+                })
         trace.emit(
             "evidence.finalized",
             component="retrieval",
@@ -4098,6 +4288,8 @@ class RAGSession:
         compare: bool,
         scope: Sequence[Path],
         trace_turn_id: str | None,
+        per_source: int = 1,
+        metadata: dict[str, object] | None = None,
     ) -> list[HybridResult]:
         """Select sources by four-channel RRF, then original passages.
 
@@ -4121,6 +4313,10 @@ class RAGSession:
             Explicit source selections; several form a strict restriction.
         trace_turn_id: str | None
             Trace identifier for this retrieval turn.
+        per_source: int, optional
+            Target passages per source after the first. Defaults to ``1``.
+        metadata: dict[str, object] | None, optional
+            Mutable diagnostics with selected source paths. Defaults to None.
 
         Returns
         -------
@@ -4129,8 +4325,8 @@ class RAGSession:
 
         Notes
         -----
-        This initial selection is bounded by passage count. Explicit
-        exhaustive-coverage and token budgets are deferred to PR9.
+        Source-first callers can set per-source passage targets and hard
+        evidence limits independently of the ordinary retrieval count.
 
         """
 
@@ -4169,8 +4365,17 @@ class RAGSession:
             count=len(self.chunks),
         )
         passages = select_source_passages(
-            full_passages, chosen, count=count
+            full_passages, chosen, count=count,
+            per_source=per_source,
         )
+        if metadata is not None:
+            metadata.update({
+                "selected_sources": tuple(chosen),
+                "candidate_sources": tuple(
+                    item.path for item in available
+                ),
+                "ranked_source_count": len(available),
+            })
         trace = getattr(self, "trace", NullTraceLogger())
         trace.emit(
             "retrieval.sources.ranked",
@@ -5578,18 +5783,7 @@ def _answer_prompt(
         return question
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
-        # Render evidence from either host with POSIX separators.
-        location = (
-            f"{PureWindowsPath(str(item.path)).as_posix()}:"
-            f"{item.start_line}-{item.end_line}"
-        )
-        symbol = f" ({item.symbol})" if item.symbol else ""
-        role = (
-            f" [context: {item.context_role}]" if item.context_role else ""
-        )
-        sections.append(
-            f"[{item.citation}] {location}{symbol}{role}\n{item.text}"
-        )
+        sections.append(evidence_block(item, item.citation))
     sections.append(
         "Prioritize direct evidence about the requested target. "
         "Related evidence can explain dependencies or alternatives. "

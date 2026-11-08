@@ -201,6 +201,7 @@ def select_source_passages(
     sources: Sequence[Path],
     *,
     count: int = 5,
+    per_source: int = 1,
 ) -> list[HybridResult]:
     """Choose original evidence from selected sources within a hard count.
 
@@ -212,6 +213,9 @@ def select_source_passages(
         Chosen sources in source-relevance order.
     count: int, optional
         Maximum number of original chunks returned. Defaults to ``5``.
+    per_source: int, optional
+        Desired original passages per selected source, after each source
+        receives one. A target subject to ``count``. Defaults to ``1``.
 
     Returns
     -------
@@ -234,6 +238,8 @@ def select_source_passages(
 
     if type(count) is not int or count < 1:
         raise ValueError("count must be a positive whole number.")
+    if type(per_source) is not int or per_source < 1:
+        raise ValueError("per_source must be a positive whole number.")
 
     chosen = tuple(dict.fromkeys(sources))[:count]
     allowed = set(chosen)
@@ -249,6 +255,20 @@ def select_source_passages(
         if result is not None and result.chunk.identifier not in seen:
             selected.append(result)
             seen.add(result.chunk.identifier)
+    # Fill additional per-source targets without taking the first passage
+    # away from another selected source.
+    for path in chosen:
+        present = sum(result.chunk.path == path for result in selected)
+        for result in ranked:
+            if len(selected) >= count or present >= per_source:
+                break
+            if (
+                result.chunk.path == path
+                and result.chunk.identifier not in seen
+            ):
+                selected.append(result)
+                seen.add(result.chunk.identifier)
+                present += 1
     for result in ranked:
         if len(selected) >= count:
             break

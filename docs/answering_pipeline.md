@@ -88,6 +88,17 @@ and possibly a registered tool.
 history. Always inspect the validated `Intent` record rather than relying
 on optional fields being present verbatim in a JSON file.
 
+For source-first ordinary answers, the selected intent also owns
+source/passage quotas, hard estimated evidence-token limits and a bounded
+versus exhaustive source-coverage policy. Context expansion and related
+turns compete for the same final evidence budget. An explicit request for
+all sources triggers exhaustive source-coverage reporting; when a source
+cannot be represented, a deterministic notice is appended **after** the
+model reply. This reports source representation, not full-document review.
+Details and example per-intent JSON are in
+[Retrieval pipeline](retrieval_pipeline.md#per-intent-source-first-configuration).
+Tool-backed intents keep their separately validated tool settings.
+
 `use_router=False` bypasses classification and uses the project's default
 intent. A GUI effort selection or router-model choice is not itself an
 intent. Router calls have their own token limits and can increase answer

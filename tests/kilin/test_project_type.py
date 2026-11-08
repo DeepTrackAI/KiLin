@@ -728,7 +728,7 @@ class TestProjectTypeFields(ProjectTypeFixture):
             project_type("literature").intents[
                 "question_answering"
             ].retrieval_strategy,
-            "papers",
+            "source_first",
         )
 
     def test_packaged_literature_type_indexes_papers(self) -> None:
@@ -742,11 +742,64 @@ class TestProjectTypeFields(ProjectTypeFixture):
             with self.subTest(intent=intent_id):
                 self.assertEqual(
                     literature.intents[intent_id].retrieval_strategy,
-                    "papers",
+                    "source_first",
                 )
+        limits = literature.intents["compare_sources"].source_limits()
         self.assertEqual(
-            literature.intents["compare_sources"].passages_per_paper, 2
+            (limits.max_sources, limits.passages_per_source,
+             limits.max_passages, limits.max_tokens),
+            (8, 2, 16, 9000),
         )
+
+    def test_source_first_limits_are_per_intent_and_validated(self):
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        intent["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+            "max_sources": 7, "passages_per_source": 3,
+            "max_passages": 12, "evidence_tokens": 7500,
+            "coverage": "exhaustive",
+        }
+        loaded = next(iter(self._load(
+            "sourcebudgetok", data
+        ).intents.values()))
+        self.assertEqual(
+            loaded.source_limits().max_sources, 7
+        )
+        self.assertEqual(loaded.source_limits().max_passages, 12)
+        self.assertEqual(loaded.source_limits().max_tokens, 7500)
+        self.assertEqual(loaded.source_limits().coverage, "exhaustive")
+        invalid = (
+            ("max_sources", True),
+            ("passages_per_source", 0),
+            ("max_passages", 201),
+            ("evidence_tokens", 999),
+            ("coverage", "all"),
+        )
+        for count, (key, value) in enumerate(invalid):
+            with self.subTest(key=key, value=value):
+                original = intent["retrieval"][key]
+                intent["retrieval"][key] = value
+                try:
+                    with self.assertRaisesRegex(ValueError, key):
+                        self._load(f"sourcebudgetbad{count}", data)
+                finally:
+                    intent["retrieval"][key] = original
+
+    def test_source_first_limits_cannot_be_ignored_by_other_modes(self):
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        for count, (mode, strategy) in enumerate((
+            ("search", "hybrid"), ("document", "source_first"),
+            ("none", "source_first"),
+        )):
+            with self.subTest(mode=mode, strategy=strategy):
+                intent["retrieval"] = {
+                    "mode": mode, "strategy": strategy,
+                    "max_passages": 8,
+                }
+                with self.assertRaisesRegex(ValueError, "source-first"):
+                    self._load(f"budgetmode{count}", data)
 
     def test_history_recent_turns_range(self) -> None:
         """Accept zero through one hundred turns, rejecting invalid values."""

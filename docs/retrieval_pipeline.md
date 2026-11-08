@@ -347,46 +347,110 @@ document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
 
-## Four-channel source-first retrieval (PR8, opt-in)
+## Four-channel source-first retrieval and evidence budgets (PR8–PR9)
 
-The `source_first` retrieval strategy is implemented in
-`retrievals/strategies/retrieval_sources.py`. Unlike the existing `papers`
-strategy, it **does not gate sources by the global top-passage ranking**.
-It independently converts the complete semantic, lexical and applicable
-code-graph rankings to one ranked position per source, then combines those
-three source lists with the optional source-card vector ranking. Each
-available channel contributes the same Reciprocal Rank Fusion weight;
-repeated chunks or card kinds do not give a source extra credit. Equal
-source scores are ordered by source-relative path. The graph channel is
-omitted when the query names no applicable code entity.
+`retrievals/strategies/retrieval_sources.py` ranks sources independently
+from complete semantic, lexical, applicable code-graph and source-card
+rankings. Each available channel contributes one reciprocal-rank score per
+source; repeated chunks or card kinds do not inflate a source's rank.
+Unlike the legacy `papers` strategy, a card-ranked source need not have
+any globally top-ranked passage to be selected. All answer evidence still
+comes from the original chunks, not from generated card statements.
 
-After ranking sources, the strategy ranks **original chunks** using the
-existing full passage fusion, selects the first passage of each selected
-source, and fills remaining places from the highest-ranked chunks of those
-sources. A card can discover a document whose passages were globally low,
-but generated card text never becomes answer evidence. Source cards are
-optional: without them, source-first ranking uses semantic, lexical and
-available graph signals. The semantic query and cards share one query
-embedding; neither card generation nor a second embedding call is added.
+`retrievals/evidence_budget.py` adds validated per-intent **hard evidence
+limits** for source-first retrieval. Each selected source receives one
+original passage where it fits. The strategy then approaches the optional
+per-source target and fills remaining capacity from relevant original
+passages. A configured source quota is a target, not permission to exceed
+any hard passage or estimated-token limit. The budgeter preserves entire
+chunks and their line ranges; it skips oversized chunks rather than
+silently shortening evidence. Each token estimate includes the actual
+citation header, source-relative path and provenance label, and follows
+`document_reading.estimate_tokens` (one token per four characters, rounded
+up). This **is not** exact tokenizer or total conversation accounting.
 
-`source_first` can be selected explicitly in an intent's
-`retrieval.strategy` field. It is not yet a packaged intent default:
-`hybrid` and `papers` retain their existing algorithms and results. In PR8,
-existing `max_papers` limits the preliminary number of source candidates,
-subject to the initial retrieval passage count. A positive
-`passages_per_paper` signals that a single named document may be compared
-with others; it does not yet impose a source quota. These existing setting
-names are a transitional reuse until PR9 specifies dedicated source
-budgets. Multiple explicitly named documents strictly restrict initial
-source candidates and source-first evidence. A single named document
-remains primary in the initial selection unless comparison is requested.
+### Per-intent source-first configuration
 
-The initial selection respects `retrieval_count`, but the shared explicit
-context-expansion stage may append additional original chunks, as in other
-strategies. PR9 will add hard passage/token budgets, bounded versus
-exhaustive coverage, and activate source-first defaults only after their
-coverage checks. PR8 intentionally retains the old `papers` strategy and
-`paper_cards.py`; obsolete-code removal is a separate cleanup.
+Add these fields to an ordinary model-answering intent's `retrieval` object
+in `kilin/project_types/<type>.json`. Each field is validated during
+project-type loading. The intent is selected by routing, or by the default
+intent when routing is disabled. Configured budgets are not overridden by
+the project's ordinary `retrieval_count` (which remains relevant to other
+strategies).
+
+| Setting | Allowed values | Behavior |
+| --- | --- | --- |
+| `strategy` | `"source_first"` | Source-level four-channel RRF followed by original evidence. |
+| `max_sources` | Integer 1–50 | Upper bound on represented sources; missing falls back to `max_papers` (default 3). |
+| `passages_per_source` | Integer 1–10 | Target per selected source; missing inherits positive `passages_per_paper`, otherwise 1. |
+| `max_passages` | Integer 1–200 | Final hard number of original evidence passages; default 8. |
+| `evidence_tokens` | Integer 1000–200000 | Final hard estimate of evidence tokens, including source headers; default 5000. |
+| `coverage` | `"bounded"` or `"exhaustive"` | Coverage policy; default `"bounded"`. |
+| `include_related_evidence` | Boolean | Earlier cited passages compete for the **same** limits. |
+
+For example, literature comparisons have the following settings:
+
+```json
+{
+  "mode": "search",
+  "strategy": "source_first",
+  "max_sources": 8,
+  "passages_per_source": 2,
+  "max_passages": 16,
+  "evidence_tokens": 9000,
+  "coverage": "bounded",
+  "include_related_evidence": true
+}
+```
+
+The three built-in literature model-answering intents use:
+
+| Intent | Sources | Target per source | Hard passages | Evidence tokens |
+| --- | ---: | ---: | ---: | ---: |
+| `question_answering` | 3 | 1 | 8 | 5000 |
+| `compare_sources` | 8 | 2 | 16 | 9000 |
+| `report_generation` | 8 | 1 | 12 | 8000 |
+
+These are **packaged project-type defaults**, not universal limits on
+project size, the number of indexed sources, or standalone tools.
+
+### Coverage meaning and failure behavior
+
+`bounded` selects the most relevant source set within configured limits.
+It **does not** claim every source was checked. `exhaustive` attempts to
+represent every requested source with at least one original passage.
+Questions explicitly asking about *all*, *each*, or *every* source request
+exhaustive mode for that turn, regardless of the configured bounded default.
+When a request names several documents, the explicit scope is strict.
+
+If not every requested source can be represented, KíLín appends a
+deterministic **Coverage incomplete** notice to the answer, without another
+model call. It identifies how many requested sources had at least one
+passage and notes unindexed sources separately. The saved turn parameters
+contain a `coverage` record (requested/represented counts, missing paths,
+limit reasons, estimated evidence tokens and `complete`), and the trace
+receives `retrieval.coverage`. This report expresses **source representation
+in the supplied context, not an exhaustive reading of each document**.
+No additional model calls or background batches are started.
+
+The final limiter runs after context expansion **and** related-turn evidence
+have been considered. Expansion and follow-ups cannot bypass the passage,
+source or estimated evidence-token caps. Citation numbers are rebuilt from
+the retained passages. Large contexts can still exceed the full model's
+available context because chat history, system instructions and the question
+are outside these *evidence* limits.
+
+Tools selected by `tool` replace this ordinary retrieval path. A tool
+continues to own its own validated `part_tokens`, batch and model-call
+limits, configured in that tool's `defaults.json`, the project-type
+intent's `tool` object, or saved `[tool.<name>]` overrides (where exposed).
+The reusable `EvidenceLimits`/`allocate_evidence` helper permits future
+tools to adopt equivalent evidence budgeting, but existing tools do not
+silently inherit these new source-first values. PR10 will expose shared
+retrieval to tools without changing `ToolContext.rank`.
+
+The legacy `hybrid` and `papers` algorithms remain available; cleanup of
+the old paper-named modules remains a separate focused maintenance PR.
 
 ## Named-document retrieval and full-document reading
 

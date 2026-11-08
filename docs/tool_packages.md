@@ -86,6 +86,26 @@ exact values and constraints belong in the tool's README and
 `_configuration.py`. Invalid JSON or missing, unknown, mistyped or
 out-of-range values must fail validation rather than change policy silently.
 
+## Retrieval evidence budgets and tool-owned limits
+
+Source-first retrieval budgets (`max_sources`, `passages_per_source`,
+`max_passages`, `evidence_tokens`, `coverage`) belong to an ordinary
+model-answering intent's `retrieval` object in its project-type JSON.
+They are not generic tool inference limits. An intent with a `tool`
+executes the registered tool in place of the ordinary answer pipeline;
+its own validated `part_tokens`, batch sizes, number of model calls,
+confirmation policy and other exposed settings apply instead.
+
+Tools can reuse the pure `kilin.retrievals.evidence_budget.EvidenceLimits`
+and `allocate_evidence` functions for **their own** source/passage limits,
+but must explicitly expose, validate and document any such settings in
+their own tool package. Existing tools do not silently inherit source-first
+budgets. PR10 will provide an optional shared retrieval interface while
+retaining the full-ranking `ToolContext.rank` API.
+
+See [Source-first configuration and coverage](retrieval_pipeline.md#per-intent-source-first-configuration)
+for exact accepted values, limits, estimate semantics, and coverage notices.
+
 ## Creating a tool
 
 Follow the [registration and extension checklist](extension_interfaces.md#implementing-a-built-in-tool)

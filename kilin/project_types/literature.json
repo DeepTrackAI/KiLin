@@ -32,8 +32,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 3,
+        "strategy": "source_first",
+        "max_sources": 3,
+        "passages_per_source": 1,
+        "max_passages": 8,
+        "evidence_tokens": 5000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -69,9 +73,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 8,
-        "passages_per_paper": 2,
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -290,9 +297,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 8,
-        "passages_per_paper": 1,
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 1,
+        "max_passages": 12,
+        "evidence_tokens": 8000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },

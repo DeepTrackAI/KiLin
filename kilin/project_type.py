@@ -149,6 +149,9 @@ from kilin.defaults import (
     require_default_int,
     require_default_nonnegative_int,
 )
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_MODES, EvidenceLimits,
+)
 from kilin.repository import normalize_extensions
 from kilin.tools._contract import reject_unknown
 from kilin.tools._registry import ToolUse, parse_tool
@@ -326,10 +329,19 @@ class Intent:
         Sources the ``papers`` or ``source_first`` strategy initially
         considers. Defaults to ``3``.
     passages_per_paper: int
-        Passages the ``papers`` strategy guarantees to each chosen paper;
-        zero guarantees one to the best paper only. For ``source_first``,
-        a positive value enables comparisons around one named source.
-        Explicit quotas remain a PR9 concern. Defaults to ``0``.
+        Legacy ``papers`` strategy's per-paper target. Defaults to ``0``.
+    max_sources: int | None
+        Source-first source limit; None inherits ``max_papers``.
+    passages_per_source: int | None
+        Source-first per-source target; None uses at least one passage and
+        inherits a positive ``passages_per_paper`` for programmatic intents.
+    max_passages: int
+        Hard number of source-first evidence passages.
+    evidence_tokens: int
+        Hard estimated source-first evidence-token budget including headers.
+    coverage: "bounded" | "exhaustive"
+        Whether ordinary questions require all indexed sources. Explicit
+        questions asking about all sources always request exhaustive mode.
 
     """
 
@@ -350,6 +362,36 @@ class Intent:
     thinking: bool | None = None
     max_papers: int = _DEFAULT_MAX_PAPERS
     passages_per_paper: int = 0
+    max_sources: int | None = None
+    passages_per_source: int | None = None
+    max_passages: int = 8
+    evidence_tokens: int = 5_000
+    coverage: str = "bounded"
+
+    def source_limits(self) -> EvidenceLimits:
+        """Resolve the validated source-first limits for this intent.
+
+        Returns
+        -------
+        EvidenceLimits
+            Per-intent limits independent of the project retrieval count.
+
+        """
+
+        return EvidenceLimits(
+            max_sources=(
+                self.max_sources if self.max_sources is not None
+                else self.max_papers
+            ),
+            passages_per_source=(
+                self.passages_per_source
+                if self.passages_per_source is not None
+                else max(1, self.passages_per_paper)
+            ),
+            max_passages=self.max_passages,
+            max_tokens=self.evidence_tokens,
+            coverage=self.coverage,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -644,6 +686,11 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "max_tokens",
             "max_papers",
             "passages_per_paper",
+            "max_sources",
+            "passages_per_source",
+            "max_passages",
+            "evidence_tokens",
+            "coverage",
         ),
     )
 
@@ -707,6 +754,41 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             f"number from 0 to {_PASSAGES_PER_PAPER_LIMIT}."
         )
 
+    numeric_limits = (
+        ("max_sources", 1, _MAX_PAPERS_LIMIT),
+        ("passages_per_source", 1, _PASSAGES_PER_PAPER_LIMIT),
+        ("max_passages", 1, 200),
+        ("evidence_tokens", 1000, _MAX_DOCUMENT_TOKENS),
+    )
+    for key, minimum, maximum in numeric_limits:
+        if key not in retrieval:
+            continue
+        value = retrieval[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Intent {where!r} retrieval.{key} must be a whole "
+                f"number from {minimum} to {maximum}."
+            )
+    source_only = (
+        "max_sources", "passages_per_source", "max_passages",
+        "evidence_tokens", "coverage",
+    )
+    if any(key in retrieval for key in source_only) and (
+        strategy != RETRIEVAL_STRATEGY_SOURCE_FIRST
+        or mode != RETRIEVAL_MODE_SEARCH
+        or tool is not None
+    ):
+        raise ValueError(
+            f"Intent {where!r} source-first evidence limits require "
+            'retrieval.mode="search" and strategy="source_first".'
+        )
+    coverage = retrieval.get("coverage", "bounded")
+    if coverage not in COVERAGE_MODES:
+        raise ValueError(
+            f"Intent {where!r} retrieval.coverage must be bounded "
+            "or exhaustive."
+        )
+
     related = retrieval.get("include_related_evidence", False)
     if type(related) is not bool:
         raise ValueError(
@@ -758,6 +840,11 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         thinking=thinking,
         max_papers=max_papers,
         passages_per_paper=per_paper,
+        max_sources=retrieval.get("max_sources"),
+        passages_per_source=retrieval.get("passages_per_source"),
+        max_passages=retrieval.get("max_passages", 8),
+        evidence_tokens=retrieval.get("evidence_tokens", 5000),
+        coverage=coverage,
     )
 
 
