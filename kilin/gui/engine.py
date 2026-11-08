@@ -1948,9 +1948,7 @@ class ChatEngine:
             conversation
         )
         session = RAGSession(project.root, **options)
-        session.use_router_model(
-            read_router_model(project.root, session.backend)
-        )
+        # RAGSession resolves the same saved router setting in the core.
         self.session = session
         self._use_project_answer_settings()
         self._announce_project(project, conversation)

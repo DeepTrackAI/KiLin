@@ -63,9 +63,8 @@ from pathlib import Path
 import tomllib
 from typing import Final
 
-from huggingface_hub.utils import validate_repo_id
-
 from kilin.atomic_writes import atomic_write_text
+from kilin.model_settings import validate_model_id
 from kilin.gui._paths import (
     PREFERENCES_ENVIRONMENT,
     preferences_path,
@@ -126,34 +125,6 @@ TERMS_VERSION: Final[str] = "2026-11-05.2"
 # Year of first publication, which a copyright notice states; the names
 # come from the package authors (``pyproject.toml``).
 COPYRIGHT_YEAR: Final[int] = 2026
-
-
-def validate_model_id(value: str) -> str:
-    """Check a Hugging Face model ID or an existing local model folder.
-
-    Parameters
-    ----------
-    value: str
-        Model ID such as ``Qwen/Qwen3-8B-MLX-4bit`` or a local path.
-
-    Returns
-    -------
-    str
-        The value without surrounding space.
-
-    Raises
-    ------
-    ValueError
-        If the value is empty or not a valid repository ID.
-
-    """
-
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError("Enter a Hugging Face model ID.")
-    value = value.strip()
-    if not Path(value).expanduser().is_dir():
-        validate_repo_id(value)
-    return value
 
 
 def validate_effort_levels(value: object) -> list[dict[str, object]]:

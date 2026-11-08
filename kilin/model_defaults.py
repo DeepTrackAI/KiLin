@@ -20,7 +20,7 @@ Key Features
 
 - **Shared default models**
 
-    Define the four model IDs used by new project profiles and GUI presets.
+    Define default chat, router, and embedding models for both backends.
 
 Module Structure
 ----------------
@@ -36,6 +36,10 @@ Module Structure
 - ``DEFAULT_CHAT_MODEL_MLX`` and ``DEFAULT_CHAT_MODEL_TORCH``
 
     Default chat-model IDs for the two calculation backends.
+
+- ``DEFAULT_ROUTER_MODEL_MLX`` and ``DEFAULT_ROUTER_MODEL_TORCH``
+
+    Default independent router-model IDs for the two backends.
 
 - ``DEFAULT_EMBEDDING_MODEL_MLX`` and ``DEFAULT_EMBEDDING_MODEL_TORCH``
 
@@ -72,6 +76,8 @@ __all__ = [
     "DEFAULT_CHAT_MODEL_TORCH",
     "DEFAULT_EMBEDDING_MODEL_MLX",
     "DEFAULT_EMBEDDING_MODEL_TORCH",
+    "DEFAULT_ROUTER_MODEL_MLX",
+    "DEFAULT_ROUTER_MODEL_TORCH",
 ]
 
 ModelRole: TypeAlias = Literal["chat", "embedding"]
@@ -91,6 +97,12 @@ DEFAULT_CHAT_MODEL_MLX: Final[str] = require_default_string(
 )
 DEFAULT_CHAT_MODEL_TORCH: Final[str] = require_default_string(
     _MODEL_DEFAULTS, "DEFAULT_CHAT_MODEL_TORCH", "DEFAULT_MODELS"
+)
+DEFAULT_ROUTER_MODEL_MLX: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_ROUTER_MODEL_MLX", "DEFAULT_MODELS"
+)
+DEFAULT_ROUTER_MODEL_TORCH: Final[str] = require_default_string(
+    _MODEL_DEFAULTS, "DEFAULT_ROUTER_MODEL_TORCH", "DEFAULT_MODELS"
 )
 DEFAULT_EMBEDDING_MODEL_MLX: Final[str] = require_default_string(
     _MODEL_DEFAULTS, "DEFAULT_EMBEDDING_MODEL_MLX", "DEFAULT_MODELS"

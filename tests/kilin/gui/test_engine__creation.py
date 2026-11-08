@@ -8,6 +8,7 @@ These tests use real workspace/conversation files and mocked model loading.
 # pylint: disable=C0116:missing-function-docstring
 # pylint: disable=C0103:invalid-name
 
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -105,6 +106,28 @@ class TestEngineCreation(unittest.TestCase):
         profile = (target / "profile.ini").read_text(encoding="utf-8")
         self.assertIn("depth = 3, 4, 5, 6, 7", profile)
         self.assertIn("mlx = Qwen/Qwen3-1.7B-MLX-4bit", profile)
+
+    def test_gui_router_preference_is_saved_for_new_projects(self):
+        """Seed the project from user preferences, not the core fallback."""
+
+        from kilin.gui.preferences import write_defaults
+
+        settings = self.root / "preferences.json"
+        target = self.root / "custom-router"
+        with patch.dict(
+            os.environ, {"KILIN_DEFAULTS_FILE": str(settings)}
+        ):
+            write_defaults({
+                "router_models": {"mlx": "example/preferred-router"},
+            })
+            self.engine.open_project(
+                [str(self.source)], "literature", str(target)
+            )
+        self.assertEqual(self.events[-1]["event"], "opened")
+        self.assertEqual(
+            kilin.read_router_model(target, "mlx"),
+            "example/preferred-router",
+        )
 
     def test_partial_destination_is_not_resumed_or_modified(self):
         """Unrelated contents do not become an existing-project candidate."""
