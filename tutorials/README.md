@@ -52,6 +52,7 @@ resuming a project preserves its existing setting.
 - [150 · Execution traces](./150_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
 - [160 · Project types](./160_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
 - [170 · Custom tools](./170_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [180 · Research-assistant capstone](./180_end_to_end_research_assistant.ipynb): Create a literature project from bundled example notes, evaluate offline retrieval and citations, and optionally run a complete RAG session.
 
 ## Choose a learning path
 
@@ -65,15 +66,18 @@ resuming a project preserves its existing setting.
 | Inspect source-card indexing and source-first retrieval | [130](./130_source_cards.ipynb) | No |
 | Use the complete project-question-answering workflow | [140](./140_project_chat.ipynb), [150](./150_logging_trace.ipynb) | Chat and embedding |
 | Design project-specific behavior and tools | [160](./160_project_types.ipynb), [170](./170_create_custom_tool.ipynb) | No for the main examples; real-model sections are optional |
+| Apply and verify the complete research workflow | [180](./180_end_to_end_research_assistant.ipynb) | No for the core checks; chat and embedding models optional |
 
 If you only want an introduction to KíLín as an end user, start with 10,
-20, and 140. The intermediate notebooks are explanations of the internals,
-not prerequisites for using the GUI or project chat.
+20, and 140, then try the integrated example in 180. The intermediate
+notebooks explain the internals; they are not prerequisites for the GUI
+or project chat.
 
 ## Where the examples get their data
 
 Most tutorials work with the included `kilin/` Python package. The source
-code is itself a realistic, reproducible example repository. Tutorials 150 and 170 use literature PDFs:
+code is itself a realistic, reproducible example repository.
+Tutorials 150 and 170 use literature PDFs:
 
 - The complete supplementary article corpus, if available, lives under
   `_si_article_/literature_repo/`, with PDF files under `papers/`.
@@ -85,6 +89,11 @@ code is itself a realistic, reproducible example repository. Tutorials 150 and 1
   small PDFs provided in `tests/fixtures/`. They tell you which file was
   selected. If neither location exists, the notebook raises an informative
   `FileNotFoundError` instead of silently choosing unrelated documents.
+
+Tutorial 180 instead uses four small, fictional Markdown research notes
+from `tutorials/data/180_research_pilot/`. Its deterministic steps work
+without a language model; the full RAG run is explicitly opt-in. The
+fictional measurements must not be cited as research findings.
 
 For a real project, replace the example source directory with your own
 existing code or literature folder. The original source files are input;
@@ -99,10 +108,9 @@ after checking the smaller examples. Some notebooks use embedding batches
 to avoid processing the entire corpus in one model call.
 
 Example workspaces and indexes are created below `sandbox/`, not in the
-original source directory. Tutorials 150 and 170 automatically choose a
-new numbered workspace if an earlier run exists; they do not recursively
-delete an earlier one. The other tutorials may write to documented paths
-below `sandbox/`; inspect these paths before changing them. Do not add
+original source directory. Tutorials 150, 170, and 180 automatically
+choose a new numbered workspace if an earlier run exists; they do not
+recursively delete an earlier one. The other tutorials may write to documented paths below `sandbox/`; inspect these paths before changing them. Do not add
 `sandbox/`, Hugging Face model caches, or source PDFs to version control.
 
 Traces may contain prompts, retrieved passages, model output, paths, and

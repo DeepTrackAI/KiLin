@@ -37,10 +37,11 @@ _si_article_/          # Paper work, benchmarks and source corpora
 sandbox/               # Local development workspaces; export empty
 ```
 
-The repository includes 17 numbered tutorial notebooks. They introduce
+The repository includes 18 numbered tutorial notebooks. They introduce
 installation, model cache, generation, repository scanning, extraction,
 embeddings, semantic/lexical/code retrieval, indexes, routing, RAG sessions,
-trace logging, project types and custom tools. Notebook examples are not a
+trace logging, project types, custom tools, and an end-to-end research
+assistant capstone. Notebook examples are not a
 substitute for production API tests and must not rely on changes to hidden
 per-user files. `assets/clean_repository.ipynb` supports a controlled clean
 source export. Within `_si_article_/`, benchmark sources are included but

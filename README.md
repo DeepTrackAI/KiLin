@@ -112,9 +112,9 @@ recovery, and GUI metadata updates, see
 
 ## Tutorials
 
-KíLín includes 17 notebooks introducing the framework, from local models
+KíLín includes 18 notebooks introducing the framework, from local models
 and source processing to retrieval, project chat, diagnostic traces, project
-types, and custom tools.
+types, custom tools, and a final end-to-end research-assistant exercise.
 
 Start with the [tutorial guide](tutorials/README.md) for prerequisites,
 recommended learning paths, model requirements, example datasets, and safe
@@ -135,4 +135,7 @@ not prerequisites for using the graphical interface. Most examples use
 source files distributed with KíLín. Tutorials involving literature can
 optionally use the supplementary article corpus in
 `_si_article_/literature_repo/` and provide bundled PDF fallbacks when
-that corpus is unavailable.
+that corpus is unavailable. The final
+[end-to-end tutorial](tutorials/180_end_to_end_research_assistant.ipynb)
+uses a bundled fictional corpus for offline retrieval checks and an
+optional model-based RAG run.

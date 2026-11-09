@@ -197,7 +197,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/gui/web/`](../kilin/gui/web/) | HTML layout, styling and JavaScript state/events | [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/gui/icons/`](../kilin/gui/icons/) | Packaged native GUI icon assets | [GUI architecture](gui_architecture.md) |
 | [`kilin/tools/`](../kilin/tools/) | Registered tools' READMEs, `defaults.json` files and summary templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
-| [`tutorials/`](../tutorials/) | Seventeen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
+| [`tutorials/`](../tutorials/) | Eighteen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
 | [`assets/`](../assets/) | Maintenance, benchmark and notebook-validation assets | [Development](development.md), [Performance](performance.md) |
 | [`pyproject.toml`](../pyproject.toml) | Python requirements, dependency extras, package data, tooling | [Development](development.md) |
 | [`tests/`](../tests/) | Unit/integration suites and independent runner | [Development](development.md) |
