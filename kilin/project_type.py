@@ -74,11 +74,11 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID``, ``RETRIEVAL_STRATEGY_PAPERS``,
-  and ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
+- ``RETRIEVAL_STRATEGY_HYBRID`` and
+  ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
 
-    Canonical string values for hybrid, legacy paper-first, and generic
-    four-channel source-first retrieval.
+    Canonical string values for hybrid and four-channel source-first
+    retrieval.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -111,7 +111,7 @@ Module Structure
 
 - ``RetrievalStrategy``
 
-    Type alias for ``"hybrid"``, ``"papers"``, or ``"source_first"``.
+    Type alias for ``"hybrid"`` or ``"source_first"``.
 
 - ``load_project_types``
 
@@ -172,7 +172,6 @@ __all__ = [
     "RETRIEVAL_MODE_SEARCH",
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
-    "RETRIEVAL_STRATEGY_PAPERS",
     "RETRIEVAL_STRATEGY_SOURCE_FIRST",
     "CodeGraphSetting",
     "HistoryPolicy",
@@ -243,24 +242,18 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
     )
 
 # Search pipelines for RETRIEVAL_MODE_SEARCH. ``hybrid`` combines passage
-# channels; ``papers`` is the legacy selectable paper-first strategy; and
-# ``source_first`` fuses four source rankings. Literature uses source_first.
-RetrievalStrategy: TypeAlias = Literal[
-    "hybrid", "papers", "source_first"
-]
+# channels; ``source_first`` fuses four source rankings.
+RetrievalStrategy: TypeAlias = Literal["hybrid", "source_first"]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
-RETRIEVAL_STRATEGY_PAPERS: Final[RetrievalStrategy] = "papers"
 RETRIEVAL_STRATEGY_SOURCE_FIRST: Final[RetrievalStrategy] = "source_first"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
-    RETRIEVAL_STRATEGY_PAPERS,
     RETRIEVAL_STRATEGY_SOURCE_FIRST,
 )
-# Papers the ``papers`` strategy chooses by default, and the accepted range.
-_DEFAULT_MAX_PAPERS: Final[int] = 3
-_MAX_PAPERS_LIMIT: Final[int] = 50
-# Most passages guaranteed to each chosen paper.
-_PASSAGES_PER_PAPER_LIMIT: Final[int] = 10
+# Source-first defaults and validation bounds for selected sources.
+_DEFAULT_MAX_SOURCES: Final[int] = 3
+_MAX_SOURCES_LIMIT: Final[int] = 50
+_PASSAGES_PER_SOURCE_LIMIT: Final[int] = 10
 
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
@@ -291,10 +284,9 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid" | "papers" | "source_first"
-        Search pipeline used when searching: ``hybrid``, or ``papers``,
-        which ranks papers first and fills the evidence from the best ones
-        (only for project types with ``document_headers``).
+    retrieval_strategy: "hybrid" | "source_first"
+        Search pipeline used when searching: ``hybrid`` fuses passage
+        ranks and ``source_first`` fuses independent source ranks.
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
@@ -324,16 +316,10 @@ class Intent:
         ``None`` inherits the session setting; ``True`` or ``False``
         overrides it without changing the session. Defaults to ``None``.
         Tool-backed intents must leave this unset or null.
-    max_papers: int
-        Sources the ``papers`` or ``source_first`` strategy initially
-        considers. Defaults to ``3``.
-    passages_per_paper: int
-        Legacy ``papers`` strategy's per-paper target. Defaults to ``0``.
     max_sources: int | None
-        Source-first source limit; None inherits ``max_papers``.
+        Source-first limit on represented sources; None defaults to 3.
     passages_per_source: int | None
-        Source-first per-source target; None uses at least one passage and
-        inherits a positive ``passages_per_paper`` for programmatic intents.
+        Source-first per-source target; None defaults to one passage.
     max_passages: int
         Hard number of source-first evidence passages.
     evidence_tokens: int
@@ -359,8 +345,6 @@ class Intent:
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
     thinking: bool | None = None
-    max_papers: int = _DEFAULT_MAX_PAPERS
-    passages_per_paper: int = 0
     max_sources: int | None = None
     passages_per_source: int | None = None
     max_passages: int = 8
@@ -380,12 +364,11 @@ class Intent:
         return EvidenceLimits(
             max_sources=(
                 self.max_sources if self.max_sources is not None
-                else self.max_papers
+                else _DEFAULT_MAX_SOURCES
             ),
             passages_per_source=(
                 self.passages_per_source
-                if self.passages_per_source is not None
-                else max(1, self.passages_per_paper)
+                if self.passages_per_source is not None else 1
             ),
             max_passages=self.max_passages,
             max_tokens=self.evidence_tokens,
@@ -683,8 +666,6 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "include_related_evidence",
             "prefer_source_code",
             "max_tokens",
-            "max_papers",
-            "passages_per_paper",
             "max_sources",
             "passages_per_source",
             "max_passages",
@@ -734,28 +715,9 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             f"{', '.join(RETRIEVAL_STRATEGY_CHOICES)}."
         )
 
-    max_papers = retrieval.get("max_papers", _DEFAULT_MAX_PAPERS)
-    if (
-        type(max_papers) is not int
-        or not 1 <= max_papers <= _MAX_PAPERS_LIMIT
-    ):
-        raise ValueError(
-            f"Intent {where!r} retrieval.max_papers must be a whole number "
-            f"from 1 to {_MAX_PAPERS_LIMIT}."
-        )
-    per_paper = retrieval.get("passages_per_paper", 0)
-    if (
-        type(per_paper) is not int
-        or not 0 <= per_paper <= _PASSAGES_PER_PAPER_LIMIT
-    ):
-        raise ValueError(
-            f"Intent {where!r} retrieval.passages_per_paper must be a whole "
-            f"number from 0 to {_PASSAGES_PER_PAPER_LIMIT}."
-        )
-
     numeric_limits = (
-        ("max_sources", 1, _MAX_PAPERS_LIMIT),
-        ("passages_per_source", 1, _PASSAGES_PER_PAPER_LIMIT),
+        ("max_sources", 1, _MAX_SOURCES_LIMIT),
+        ("passages_per_source", 1, _PASSAGES_PER_SOURCE_LIMIT),
         ("max_passages", 1, 200),
         ("evidence_tokens", 1000, _MAX_DOCUMENT_TOKENS),
     )
@@ -837,8 +799,6 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         max_tokens=max_tokens,
         tool=tool,
         thinking=thinking,
-        max_papers=max_papers,
-        passages_per_paper=per_paper,
         max_sources=retrieval.get("max_sources"),
         passages_per_source=retrieval.get("passages_per_source"),
         max_passages=retrieval.get("max_passages", 8),
@@ -983,16 +943,6 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         intent_id: _parse_intent(type_id, intent_id, value)
         for intent_id, value in raw_intents.items()
     }
-    for intent in intents.values():
-        if (
-            intent.retrieval_strategy == RETRIEVAL_STRATEGY_PAPERS
-            and not document_headers
-        ):
-            raise ValueError(
-                f"Intent {type_id}.intents.{intent.intent_id} uses the "
-                '"papers" retrieval strategy, which needs '
-                "capabilities.document_headers."
-            )
     default_intent = data.get("default_intent", next(iter(intents)))
     if default_intent not in intents:
         raise ValueError(

@@ -1,7 +1,7 @@
 """Exercise source-first retrieval in RAG without loading real models.
 
 Deterministic search fixtures verify the fourth ranking channel, scoping,
-and original passage evidence while keeping legacy strategies independent.
+and original passage evidence while keeping hybrid retrieval independent.
 
 """
 
@@ -167,26 +167,27 @@ class TestSourceFirstRAG(unittest.TestCase):
         )
         self.assertEqual(len(evidence), 1)
 
-    def test_hybrid_and_papers_are_still_separate(self):
+    def test_hybrid_retrieval_is_independent_of_source_first(self):
         session = _session()
         hybrid = session._retrieve("memory", 2)
-        papers = session._retrieve("memory", 2, papers=(2, 0))
         self.assertEqual([item.path for item in hybrid], [Path("a.pdf")] * 2)
-        self.assertTrue(papers)
-        self.assertNotEqual(hybrid[0].path, Path("c.pdf"))
+        selected = session._retrieve(
+            "memory", 2, source_first=(2, False)
+        )
+        self.assertIn(Path("c.pdf"), [item.path for item in selected])
 
     def test_routing_dispatches_explicit_source_first_only(self):
         session = fixtures._session()
         intent = replace(
             _intent(), retrieval_strategy="source_first",
-            max_papers=4, passages_per_paper=1,
+            max_sources=4, passages_per_source=2,
         )
         with _answer_patches(session, intent) as mocks:
             session.ask("What differs?", use_router=False)
         self.assertEqual(
             mocks.retrieve.call_args.kwargs["source_first"], (4, True)
         )
-        self.assertIsNone(mocks.retrieve.call_args.kwargs["papers"])
+        self.assertNotIn("papers", mocks.retrieve.call_args.kwargs)
         session = fixtures._session()
         with _answer_patches(session, _intent()) as mocks:
             session.ask("What differs?", use_router=False)
@@ -211,12 +212,8 @@ class TestSourceFirstRAG(unittest.TestCase):
         self.assertIn(("cards", 1), discovered["channel_ranks"])
         self.assertTrue(discovered["chosen"])
 
-    def test_reject_conflicting_or_invalid_strategy_requests(self):
+    def test_reject_invalid_source_first_requests(self):
         session = _session()
-        with self.assertRaises(ValueError):
-            session._retrieve(
-                "memory", papers=(2, 0), source_first=(2, False)
-            )
         for argument in ((0, False), (2, "no"), (True, False)):
             with self.subTest(argument=argument):
                 with self.assertRaises(ValueError):

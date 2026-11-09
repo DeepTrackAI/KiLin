@@ -196,7 +196,6 @@ from kilin.project_type import (
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
-    RETRIEVAL_STRATEGY_PAPERS,
     RETRIEVAL_STRATEGY_SOURCE_FIRST,
     project_type,
 )
@@ -221,13 +220,7 @@ from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
 from kilin.retrievals.strategies.retrieval_semantic import (
     _validate_semantic_embeddings,
 )
-from kilin.retrievals.strategies.retrieval_papers import (
-    asks_for_all_papers,
-    card_similarities,
-    rank_papers,
-    relevant_papers,
-    select_paper_passages,
-)
+from kilin.retrievals.source_coverage import asks_for_all_sources
 from kilin.retrievals.strategies.retrieval_code import CodeResult
 from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
 from kilin.retrievals.strategies.retrieval_sources import (
@@ -415,27 +408,6 @@ _CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
 )
 # The separator between numbers inside one citation group.
 _CITATION_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s*,\s*")
-
-
-def _asks_for_exhaustive_sources(question: str) -> bool:
-    """Recognize explicit complete source coverage, not a source count.
-
-    Parameters
-    ----------
-    question: str
-        Original user wording to classify deterministically.
-
-    Returns
-    -------
-    bool
-        Whether the user asks for all/every/each sources or across a
-        source collection, rather than merely mentioning two papers.
-
-    """
-
-    return asks_for_all_papers(question) and bool(re.search(
-        r"\b(?:all|each|every|across)\b", question, re.IGNORECASE
-    ))
 
 
 def _incomplete_answer(error: IncompleteModelResponse) -> str:
@@ -1684,14 +1656,14 @@ class RAGSession:
                     == RETRIEVAL_STRATEGY_SOURCE_FIRST
                 ):
                     source_limits = intent.source_limits()
-                    if _asks_for_exhaustive_sources(question):
+                    if asks_for_all_sources(question):
                         source_limits = replace(
                             source_limits, coverage=COVERAGE_EXHAUSTIVE
                         )
                 if (
                     source_limits is not None
                     and source_limits.coverage == COVERAGE_EXHAUSTIVE
-                    and _asks_for_exhaustive_sources(question)
+                    and asks_for_all_sources(question)
                     and len(scope) == 1
                 ):
                     # A single inferred focus must not silently narrow an
@@ -1706,17 +1678,10 @@ class RAGSession:
                     ),
                     scope=scope,
                     prefer_source_code=intent.prefer_source_code,
-                    papers=(
-                        (intent.max_papers, intent.passages_per_paper)
-                        if getattr(intent, "retrieval_strategy", None)
-                        == RETRIEVAL_STRATEGY_PAPERS
-                        else None
-                    ),
                     **(
                         {"source_first": (
                             source_limits.max_sources,
-                            source_limits.passages_per_source > 1
-                            or intent.passages_per_paper > 0,
+                            source_limits.passages_per_source > 1,
                         )}
                         if getattr(intent, "retrieval_strategy", None)
                         == RETRIEVAL_STRATEGY_SOURCE_FIRST
@@ -3452,7 +3417,6 @@ class RAGSession:
         status_callback: Callable[[str], None] | None = None,
         scope: Sequence[Path] = (),
         prefer_source_code: bool = False,
-        papers: tuple[int, int] | None = None,
         source_first: tuple[int, bool] | None = None,
         source_limits: EvidenceLimits | None = None,
         source_report: dict[str, object] | None = None,
@@ -3487,16 +3451,11 @@ class RAGSession:
             ``demote_documentation``) and keep ``SOURCE_SEARCH_RESULTS``
             fused results (at least the retrieval count). Defaults to
             ``False``.
-        papers: tuple[int, int] | None, optional
-            For the ``papers`` strategy, the most papers to choose and the
-            passages guaranteed to each (``_paper_passages``); ignored when
-            one document is named. ``None`` keeps hybrid retrieval.
-            Defaults to ``None``.
         source_first: tuple[int, bool] | None, optional
             Activate the independent four-channel source ranking. The tuple
             supplies the maximum selected sources and whether a named source
             can be compared with others. ``None`` preserves the existing
-            retrieval strategies. Defaults to ``None``.
+            hybrid retrieval. Defaults to ``None``.
 
         source_limits: EvidenceLimits | None, optional
             Source-first hard evidence limits. None preserves the original
@@ -3544,8 +3503,6 @@ class RAGSession:
             if status_callback is not None:
                 status_callback(message)
 
-        if papers is not None and source_first is not None:
-            raise ValueError("Choose either papers or source_first retrieval.")
         if source_first is not None and (
             type(source_first) is not tuple
             or len(source_first) != 2
@@ -3612,18 +3569,8 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
-            # Paper search compares the same query vector with the papers'
-            # cards, so the query is embedded here, once.
+            # Source-card ranking reuses the semantic query embedding.
             vector_index = getattr(self, "source_card_vectors", None)
-            card_vectors = {
-                entry.path: entry.embeddings
-                for entry in (
-                    vector_index.records
-                    if isinstance(vector_index, SourceCardVectorIndex)
-                    else ()
-                )
-                if entry.kind == "scientific_paper"
-            }
             query_vector = None
             has_source_cards = (
                 isinstance(vector_index, SourceCardVectorIndex)
@@ -3632,10 +3579,7 @@ class RAGSession:
                     for entry in vector_index.records
                 )
             )
-            if (
-                (papers is not None and card_vectors)
-                or (source_first is not None and has_source_cards)
-            ):
+            if source_first is not None and has_source_cards:
                 query_vector = (
                     self.embedding_session.embed_query(query_text)
                     if trace_turn_id is None
@@ -3761,8 +3705,7 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
-        # Paper search chooses papers first. One named paper keeps its own
-        # passages, except in a comparison, which needs other papers too.
+        # Source-first ranking can prioritize one or several named files.
         named = list(scope)
         sources_chosen = False
         chosen_source_paths: tuple[Path, ...] = ()
@@ -3813,30 +3756,9 @@ class RAGSession:
                     f"Selected {len(combined)} original passages from "
                     f"{len({r.chunk.path for r in combined})} sources"
                 )
-        papers_chosen = False
-        if papers is not None and (len(named) != 1 or papers[1] > 0):
-            chosen = self._paper_passages(
-                question,
-                semantic_results,
-                query_vector,
-                card_vectors,
-                count=count,
-                max_papers=papers[0],
-                per_paper=papers[1],
-                scope=named,
-                trace_turn_id=trace_turn_id,
-            )
-            if chosen:
-                combined = chosen
-                papers_chosen = True
-                report(
-                    f"Kept {len(combined)} passages from "
-                    f"{len({r.chunk.path for r in combined})} papers"
-                )
-
         # A named document supplies the primary passages; expansion may
         # still add useful context from elsewhere in the repository.
-        if len(named) == 1 and not papers_chosen and not sources_chosen:
+        if len(named) == 1 and not sources_chosen:
             focused = [
                 result
                 for result in self._rank_everything(
@@ -4691,110 +4613,6 @@ class RAGSession:
                 "selected_count": len(chosen),
                 "passage_count": len(passages),
                 "scope": named,
-            },
-            turn_id=trace_turn_id,
-        )
-        return passages
-
-    def _paper_passages(
-        self: RAGSession,
-        question: str,
-        semantic_results: Sequence[SemanticResult],
-        query_vector: Sequence[float] | None,
-        card_vectors: Mapping[Path, Sequence[Sequence[float]]],
-        *,
-        count: int,
-        max_papers: int,
-        per_paper: int,
-        scope: Sequence[Path],
-        trace_turn_id: str | None,
-    ) -> list[HybridResult]:
-        """Choose papers for a question, then passages inside them.
-
-        Parameters
-        ----------
-        question: str
-            Search text.
-        semantic_results: Sequence[SemanticResult]
-            Complete semantic ranking for this question.
-        query_vector: Sequence[float] | None
-            Embedded question, or ``None`` when no card has vectors.
-        card_vectors: Mapping[pathlib.Path, Sequence[Sequence[float]]]
-            Search vectors of the papers' cards.
-        count: int
-            Passages to keep at least.
-        max_papers: int
-            Most papers to choose.
-        per_paper: int
-            Passages guaranteed to each chosen paper; zero guarantees one
-            to the best paper only.
-        scope: Sequence[pathlib.Path]
-            Documents the question means. Several limit the papers to
-            them; a single one (in a comparison) is always chosen first,
-            with other relevant papers.
-        trace_turn_id: str | None
-            Turn identifier for trace events.
-
-        Returns
-        -------
-        list[HybridResult]
-            Passages of the chosen papers (``select_paper_passages``), best
-            first; empty when no paper was ranked.
-
-        Notes
-        -----
-        Papers are ranked by fusing the similarity of the question to their
-        cards with the rank of their best passage (``rank_papers``); papers
-        without a card are ranked by their passages only. Unless the
-        question asks about all papers (``asks_for_all_papers``), only
-        papers with a passage among the ``count`` best passages of the
-        collection are chosen (``relevant_papers``), at least two when
-        each paper gets passages (a comparison).
-
-        """
-
-        everything = self._rank_everything(
-            question, trace_turn_id, semantic_results=semantic_results
-        )
-        scores = (
-            card_similarities(query_vector, card_vectors)
-            if query_vector is not None
-            else {}
-        )
-        ranked = rank_papers(everything, scores)
-        required = list(scope) if len(scope) == 1 else []
-        if len(scope) > 1:
-            ranked = [paper for paper in ranked if paper.path in set(scope)]
-        elif not asks_for_all_papers(question):
-            ranked = relevant_papers(
-                ranked,
-                everything,
-                depth=count,
-                minimum=2 if per_paper > 0 else 1,
-                required=required,
-            )
-        chosen = [paper.path for paper in ranked[:max_papers]]
-        passages = select_paper_passages(
-            everything, chosen, count=count, per_paper=per_paper
-        )
-        trace = getattr(self, "trace", NullTraceLogger())
-        trace.emit(
-            "retrieval.papers.ranked",
-            component="retrieval",
-            data={
-                "papers": [
-                    {
-                        "path": paper.path,
-                        "score": paper.score,
-                        "card_rank": paper.card_rank,
-                        "passage_rank": paper.passage_rank,
-                        "chosen": paper.path in chosen,
-                    }
-                    for paper in ranked
-                ],
-                "max_papers": max_papers,
-                "passages_per_paper": per_paper,
-                "kept_count": len(passages),
             },
             turn_id=trace_turn_id,
         )

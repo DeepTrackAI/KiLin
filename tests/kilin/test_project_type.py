@@ -684,31 +684,36 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "document_headers"):
                     self._load(f"paperbad{index}", data)
 
-    def test_papers_strategy_requires_document_headers(self) -> None:
-        """Validate the papers strategy and its paper and passage limits."""
+    def test_retired_papers_strategy_and_settings_are_rejected(self):
+        """Reject obsolete configuration with and without headers."""
 
-        data = _type_data()
-        intent = next(iter(data["intents"].values()))
-        intent["retrieval"] = {"mode": "search", "strategy": "papers"}
-        with self.assertRaisesRegex(ValueError, "document_headers"):
-            self._load("papersneedindex", data)
-        data["capabilities"] = {"document_headers": True}
-        loaded = next(iter(self._load("papersok", data).intents.values()))
-        self.assertEqual(
-            (loaded.retrieval_strategy, loaded.max_papers,
-             loaded.passages_per_paper),
-            ("papers", 3, 0),
-        )
-        for index, (key, value) in enumerate((
-            ("max_papers", 0), ("max_papers", 51), ("max_papers", True),
-            ("passages_per_paper", -1), ("passages_per_paper", 11),
-            ("passages_per_paper", 1.5),
+        for enabled in (False, True):
+            with self.subTest(document_headers=enabled):
+                data = _type_data()
+                data["capabilities"] = {
+                    "document_headers": enabled,
+                }
+                intent = next(iter(data["intents"].values()))
+                intent["retrieval"] = {
+                    "mode": "search", "strategy": "papers",
+                }
+                with self.assertRaisesRegex(
+                    ValueError, "retrieval strategy"
+                ):
+                    self._load(f"retiredpapers{enabled}", data)
+
+        for index, key in enumerate((
+            "max_papers", "passages_per_paper",
         )):
-            with self.subTest(key=key, value=value):
-                bad = deepcopy(data)
-                next(iter(bad["intents"].values()))["retrieval"][key] = value
+            with self.subTest(key=key):
+                data = _type_data()
+                intent = next(iter(data["intents"].values()))
+                intent["retrieval"] = {
+                    "mode": "search", "strategy": "source_first",
+                    key: 2,
+                }
                 with self.assertRaisesRegex(ValueError, key):
-                    self._load(f"paperslimit{index}", bad)
+                    self._load(f"retiredsetting{index}", data)
 
     def test_source_first_strategy_is_generic_and_opt_in(self) -> None:
         """Allow source-first without paper indexing or stored card kinds."""
@@ -717,15 +722,30 @@ class TestProjectTypeFields(ProjectTypeFixture):
         intent = next(iter(data["intents"].values()))
         intent["retrieval"] = {
             "mode": "search", "strategy": "source_first",
-            "max_papers": 4, "passages_per_paper": 1,
+            "max_sources": 4, "passages_per_source": 1,
         }
         config = self._load("sourcefirst", data)
         self.assertFalse(config.document_headers)
         self.assertFalse(config.source_cards_enabled)
         selected = next(iter(config.intents.values()))
         self.assertEqual(selected.retrieval_strategy, "source_first")
-        self.assertEqual(selected.max_papers, 4)
-        self.assertEqual(selected.passages_per_paper, 1)
+        self.assertEqual(selected.max_sources, 4)
+        self.assertEqual(selected.passages_per_source, 1)
+        self.assertEqual(
+            selected.source_limits().max_sources, 4
+        )
+        self.assertEqual(
+            selected.source_limits().passages_per_source, 1
+        )
+        default_data = _type_data()
+        next(iter(default_data["intents"].values()))["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+        }
+        default = next(iter(self._load(
+            "sourcefirstdefaults", default_data
+        ).intents.values()))
+        self.assertEqual(default.source_limits().max_sources, 3)
+        self.assertEqual(default.source_limits().passages_per_source, 1)
         self.assertEqual(
             project_type("literature").intents[
                 "question_answering"

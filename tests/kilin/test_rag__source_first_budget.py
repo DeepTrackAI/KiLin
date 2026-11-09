@@ -191,7 +191,6 @@ class TestSourceFirstBudget(unittest.TestCase):
         intent = replace(
             _intent(), retrieval_strategy="source_first",
             max_sources=8, passages_per_source=2,
-            passages_per_paper=0,
         )
         with _answer_patches(session, intent) as mocks:
             session.ask("Compare this paper", use_router=False)

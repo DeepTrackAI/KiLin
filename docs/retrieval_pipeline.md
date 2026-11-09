@@ -174,8 +174,7 @@ kind's generation/verification logic. Project JSON never imports kind code.
 
 The generic contracts, independent index, dedicated generation adapter,
 scientific-paper kind and indexing coordinator are implemented. The
-packaged literature intents now use four-channel `source_first` retrieval;
-the optional `papers` strategy remains selectable for custom project types.
+packaged literature intents use four-channel `source_first` retrieval.
 No migration layer for the removed paper-card cache is provided.
 
 ### Independent source-card index
@@ -212,9 +211,8 @@ transaction; concurrent writers still need higher-level coordination.
 prepared vectors. A caller supplies a query embedding; it does not construct
 one, start a model, or add card text to the evidence presented to an answer.
 The default `source_first` strategy incorporates the card-vector search
-as a fourth source-ranking channel. The optional `papers` strategy also
-consumes these vectors. The persistence format does not read the older
-`paper_cards.json` file.
+as a fourth source-ranking channel. The persistence format does not
+read the older `paper_cards.json` file.
 
 ### Dedicated generation adapter
 
@@ -314,31 +312,15 @@ For each valid `scientific_paper` card, the kind projects three search
 texts (abstract/aim, methods/data, findings/limitations), retaining
 the three-group representation used by document retrieval. The default
 `source_first` strategy uses these vectors as one source-ranking channel.
-The optional `papers` strategy can also consume them. Card text is never
-answer evidence: answers cite original source chunks.
+Card text is never answer evidence: answers cite original source chunks.
 
-An explicitly configured `papers` strategy chooses papers before
-passages (`strategies/retrieval_papers.py`); the packaged literature
-`question_answering`, `compare_sources` and `report_generation` intents
-instead use `source_first` with hard evidence budgets. Papers are
-ranked by reciprocal-rank fusion of two lists: the similarity of the
-question to each card's vectors, and the rank of each paper's best passage
-in the full hybrid ranking. The query is embedded once for both. Unless
-the question asks about every paper ("all five papers", "each study",
-"across the articles"), only papers with a passage among the best `retrieval_count`
-passages of the collection are kept, at least two in a comparison, so that
-comparing two papers does not take in every paper of the collection. The
-best `max_papers` of them are chosen; with `passages_per_paper` zero, the
-evidence is the best passages of those papers with the best paper always
-represented, and otherwise each chosen paper receives that many passages
-before the best remaining ones fill the evidence. A question that means
-one document keeps the named-document behavior below, except in a
-comparison, where that paper is chosen first together with the other
-relevant papers; several named documents limit the papers that can be
-chosen. Without cards, papers are ranked by their passages only. In these
-projects a paper named in the question is searched, never added in full:
-the code-oriented expansion that appends every passage of a named file
-applies to code files only.
+Explicit requests for all sources ("all five papers", "each study",
+"across the articles") are recognized independently of source ranking
+by `retrievals/source_coverage.py`. Such requests activate exhaustive
+coverage for source-first answers; simply mentioning "two papers" does
+not request the entire collection. A paper named in a question is
+searched, not appended in full: code-oriented full-file expansion
+applies only to code files.
 
 Which document a follow-up means (`document_scope` in
 `tools/_shared/choose_document.py`) is decided by its wording when that is
@@ -353,9 +335,9 @@ model judges only the remaining requests.
 from complete semantic, lexical, applicable code-graph and source-card
 rankings. Each available channel contributes one reciprocal-rank score per
 source; repeated chunks or card kinds do not inflate a source's rank.
-Unlike the legacy `papers` strategy, a card-ranked source need not have
-any globally top-ranked passage to be selected. All answer evidence still
-comes from the original chunks, not from generated card statements.
+A card-ranked source need not have any globally top-ranked passage to
+be selected. All answer evidence still comes from the original chunks,
+not from generated card statements.
 
 `retrievals/evidence_budget.py` adds validated per-intent **hard evidence
 limits** for source-first retrieval. Each selected source receives one
@@ -381,8 +363,8 @@ strategies).
 | Setting | Allowed values | Behavior |
 | --- | --- | --- |
 | `strategy` | `"source_first"` | Source-level four-channel RRF followed by original evidence. |
-| `max_sources` | Integer 1–50 | Upper bound on represented sources; missing falls back to `max_papers` (default 3). |
-| `passages_per_source` | Integer 1–10 | Target per selected source; missing inherits positive `passages_per_paper`, otherwise 1. |
+| `max_sources` | Integer 1–50 | Upper bound on represented sources; default 3. |
+| `passages_per_source` | Integer 1–10 | Target per selected source; default 1. |
 | `max_passages` | Integer 1–200 | Final hard number of original evidence passages; default 8. |
 | `evidence_tokens` | Integer 1000–200000 | Final hard estimate of evidence tokens, including source headers; default 5000. |
 | `coverage` | `"bounded"` or `"exhaustive"` | Coverage policy; default `"bounded"`. |
@@ -449,9 +431,8 @@ tools to adopt equivalent evidence budgeting, but existing tools do not
 silently inherit these new source-first values. Registered tools can
 use `ToolContext.retrieve()` without changing `ToolContext.rank()`.
 
-The `hybrid` and optional `papers` strategies remain available. New
-literature project defaults select `source_first`; the retained `papers`
-implementation is not part of normal literature answering.
+The supported answering retrieval strategies are `hybrid` and
+`source_first`. Literature project defaults use `source_first`.
 
 ## Named-document retrieval and full-document reading
 

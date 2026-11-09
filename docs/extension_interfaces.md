@@ -31,14 +31,12 @@ loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
 `capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
-`document_headers` (`true` or `false`, default `false`). With `document_headers`,
-document passages are indexed with title, author, section and page
-headers, and intents may use the existing `papers` retrieval strategy with
-`max_papers` (1-50, default 3) and `passages_per_paper` (0-10, default 0).
-The separate `capabilities.source_cards` policy controls whether eligible
-scientific papers receive card summaries and stored vectors; it is not
-implied by `document_headers`. See [Retrieval pipeline](retrieval_pipeline.md).
-A `papers` intent in a type without `document_headers` is rejected.
+`document_headers` (`true` or `false`, default `false`). With
+`document_headers`, document passages are indexed with title, author,
+section and page headers. The separate `capabilities.source_cards`
+policy controls whether eligible scientific papers receive card
+summaries and stored vectors; it is not implied by `document_headers`.
+See [Retrieval pipeline](retrieval_pipeline.md).
 
 The registry requires at least one valid definition, not either standard
 type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
@@ -64,7 +62,7 @@ mode/strategy, instruction, and a tool reference. `Intent` is the validated in-m
 always a literal one-to-one copy of keys in JSON because the loader applies
 defaults. Supported history modes are `none`, `recent`, `relevant`; supported
 retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
-retrieval strategies are `hybrid`, `papers` and `source_first`. The generic
+retrieval strategies are `hybrid` and `source_first`. The generic
 `source_first` strategy uses the optional source-card vector index plus
 semantic, lexical and applicable graph source rankings. It can be selected
 in custom project-type JSON without enabling `document_headers`; the
@@ -132,10 +130,9 @@ JSON must not contain executable import paths.
 
 The kind registry, provenance records, card/vector index, generation
 adapter and automatic indexing coordinator are operational. The packaged
-literature intents use `source_first`; the optional `papers` strategy
-continues to use the source-card vectors when explicitly selected. A new
-project type can select trusted registered card kinds without loading
-arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts).
+literature intents use `source_first`, which searches source-card
+vectors as one of its four ranking channels. A new project type can
+select trusted registered card kinds without loading arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts).
 
 The `scientific_paper` kind keeps a consistent research-oriented schema,
 including bibliographic metadata and cited aims, methods, data, findings,
