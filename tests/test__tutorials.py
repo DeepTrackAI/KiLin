@@ -55,6 +55,32 @@ class TestTutorials(unittest.TestCase):
                 introduction = "".join(document["cells"][0]["source"])
                 self.assertIn("[tutorial guide](./README.md)", introduction)
 
+    def test_guide_and_notebook_navigation_match_series(self) -> None:
+        """Keep tutorial titles, index links, and navigation synchronized."""
+
+        items = notebooks()
+        guide = (TUTORIALS / "README.md").read_text(
+            encoding="utf-8"
+        )
+        for index, path in enumerate(items):
+            with self.subTest(file=path.name):
+                number = int(path.name.split("_", 1)[0])
+                notebook = json.loads(path.read_text(encoding="utf-8"))
+                first = "".join(notebook["cells"][0]["source"])
+                last = "".join(notebook["cells"][-1]["source"])
+                self.assertTrue(first.startswith(f"# Tutorial {number} "))
+                self.assertIn(f"./{path.name}", guide)
+                if index:
+                    self.assertIn(f"./{items[index - 1].name}", last)
+                    self.assertIn("**Previous:**", last)
+                else:
+                    self.assertNotIn("**Previous:**", last)
+                if index < len(items) - 1:
+                    self.assertIn(f"./{items[index + 1].name}", last)
+                    self.assertIn("**Next:**", last)
+                else:
+                    self.assertNotIn("**Next:**", last)
+
     def test_code_cells_compile_and_outputs_are_empty(self) -> None:
         for file in notebooks():
             document = json.loads(file.read_text(encoding="utf-8"))
@@ -92,7 +118,7 @@ class TestTutorials(unittest.TestCase):
     ) -> None:
         """Keep card examples independent of downloaded inference models."""
 
-        path = TUTORIALS / "170_source_cards.ipynb"
+        path = TUTORIALS / "130_source_cards.ipynb"
         document = json.loads(path.read_text(encoding="utf-8"))
         code = "\n".join(
             "".join(cell["source"])
@@ -109,7 +135,7 @@ class TestTutorials(unittest.TestCase):
         self.assertNotIn("download_model(", code)
 
     def test_optional_article_corpus_paths(self) -> None:
-        for number in (140, 160):
+        for number in (150, 170):
             file = next(TUTORIALS.glob(f"{number}_*.ipynb"))
             document = json.loads(file.read_text(encoding="utf-8"))
             code = "\n".join(

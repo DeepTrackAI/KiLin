@@ -126,7 +126,7 @@ For a first introduction, we recommend:
    computational backend without loading a model.
 2. [20 · Hugging Face models](tutorials/20_huggingface_models.ipynb): Inspect
    locally cached models and download models explicitly when needed.
-3. [130 · Project chat](tutorials/130_project_chat.ipynb): Create a project
+3. [140 · Project chat](tutorials/140_project_chat.ipynb): Create a project
    and ask questions about its files with citations and saved history.
    This example requires local chat and embedding models.
 
