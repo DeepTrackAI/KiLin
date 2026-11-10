@@ -266,8 +266,6 @@ class ChatBridge(QObject):
         Open a saved conversation without reloading project resources.
     renameConversation(conversation_id, name)
         Rename a saved conversation in the project catalog.
-    saveAnswerTimeline(timestamp, timeline_json)
-        Keep how long an answer took, so a resumed chat shows it again.
     deleteConversation(conversation_id)
         Archive a conversation and remove it from the visible catalog.
     cancelAnswer()
@@ -925,28 +923,6 @@ class ChatBridge(QObject):
             }
         )
 
-    @Slot(str, str)
-    def saveAnswerTimeline(self, timestamp: str, timeline_json: str) -> None:
-        """Keep how long an answer took, so a resumed chat shows it again.
-
-        Parameters
-        ----------
-        timestamp: str
-            The answered turn's timestamp, which identifies it.
-        timeline_json: str
-            JSON object with ``elapsed_ms`` and ``steps`` (each a ``label``
-            and ``ms``), as the page displayed them.
-
-        """
-
-        self.commandRequested.emit(
-            {
-                "action": "save_answer_timeline",
-                "timestamp": timestamp,
-                "timeline": json.loads(timeline_json),
-            }
-        )
-
     @Slot(str)
     def deleteConversation(self, conversation_id: str) -> None:
         """Archive a conversation and remove it from the visible catalog.
@@ -1414,7 +1390,7 @@ class ChatBridge(QObject):
 def saved_conversation_turns(
     root: Path, conversation_id: str
 ) -> list[dict[str, object]] | None:
-    """Read one saved conversation's turns, as the page shows them.
+    """Read saved turns, including core timelines, without the engine.
 
     Parameters
     ----------
@@ -1426,8 +1402,8 @@ def saved_conversation_turns(
     Returns
     -------
     list[dict[str, object]] | None
-        Its saved turns, each with its saved timing under ``timeline`` when
-        there is one, or None when no readable conversation has that ID.
+        Its saved turns, including any persisted ``timeline`` fields,
+        or None when no readable conversation has that ID.
 
     Notes
     -----
@@ -1436,16 +1412,6 @@ def saved_conversation_turns(
 
     """
 
-    try:
-        timelines = json.loads(
-            (root / "logs" / "answer_timelines.json").read_text(
-                encoding="utf-8"
-            )
-        )
-    except (OSError, ValueError):
-        timelines = {}
-    if not isinstance(timelines, dict):
-        timelines = {}
     for path in sorted((root / "logs" / "traces").glob("conversation_*.json")):
         if path.is_symlink() or not path.is_file():
             continue
@@ -1460,16 +1426,9 @@ def saved_conversation_turns(
             continue
         if not isinstance(turns, list):
             return None
-        shown = []
-        for turn in turns:
-            if not isinstance(turn, dict):
-                return None
-            timeline = timelines.get(turn.get("timestamp"))
-            shown.append(
-                {**turn, "timeline": timeline}
-                if isinstance(timeline, dict) else turn
-            )
-        return shown
+        if not all(isinstance(turn, dict) for turn in turns):
+            return None
+        return turns
     return None
 
 

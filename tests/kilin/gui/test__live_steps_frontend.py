@@ -1,9 +1,8 @@
 """Exercise the step list shown while an answer is being made.
 
-Run the production ``timelineSteps`` function in Node and check that the
-pending answer lists its steps live with the same row renderer as the saved
-"Took …" list. Rendering is covered only by the Qt/WebEngine smoke test and
-manual checks.
+Run the production ``timelineSteps`` function in Node to verify the
+live, display-only activity list. Completed turns must render the core's
+persisted timing record rather than saving another browser-side timeline.
 
 """
 
@@ -57,11 +56,47 @@ class TestLiveStepsFrontend(unittest.TestCase):
             "appendTimelineRows(list, record?.steps || []);",
             _function(source, "renderTimeline"),
         )
+        complete = _function(source, "completePendingTurn")
         self.assertIn(
-            "timelineSteps(current.timeline || [], current.started + "
-            "totalMs)",
-            _function(source, "timelineRecord"),
+            "renderTimeline(turn.timeline || null, turn);", complete,
         )
+        self.assertNotIn("timelineRecord", source)
+        self.assertNotIn("saveAnswerTimeline", source)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_completed_rows_show_core_measured_durations(self):
+        """Show persisted labels and durations, not browser estimates."""
+        source = _APP.read_text(encoding="utf-8")
+        script = r"""
+const assert = require("node:assert/strict");
+const document = { createElement: type => ({
+  type, children: [], textContent: "", className: "",
+  append(...nodes) { this.children.push(...nodes); },
+}) };
+const usageSum = () => 0;
+const formatDuration = ms => `${Math.round(ms / 1000)}s`;
+const formatTokens = n => String(n);
+"""
+        script += _function(source, "appendTimelineRows")
+        script += _function(source, "renderTimeline")
+        script += r"""
+const record = {elapsed_ms: 4200, steps: [
+  {phase: 'routing', label: 'Identifying intent', ms: 1200},
+  {phase: 'generating', label: 'Generating answer', ms: 3000},
+]};
+const line = renderTimeline(record, {parameters: {}});
+assert.equal(line.children[0].textContent, 'Took 4s');
+assert.deepEqual(line.children[1].children.map(row => [
+  row.children[0].textContent, row.children[1].textContent,
+]), [
+  ['Identifying intent', '1.2s'],
+  ['Generating answer', '3.0s'],
+]);
+console.log('completed core timing passed');
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("completed core timing passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_step_durations(self):

@@ -589,8 +589,10 @@ never earlier evidence) and retrieval mode (search, reuse earlier
 references, or none). A shimmering line under the pending answer shows
 the phases that apply: intent identification, included conversation
 history, retrieval, and reading references before generation. A finished
-answer shows "Took Ns"; expanding it lists the actual steps and measured
-durations. The selected router model also writes chat titles without
+answer shows "Took Ns"; expanding it lists the core-recorded activities
+and their durations. The GUI only estimates timing for running or stopped
+answers; completed timings are stored with each turn, including answers
+created directly from notebooks. The selected router model also writes chat titles without
 switching the answering model.
 
 Stop terminates the engine and starts a fresh backend process. Loaded models

@@ -83,8 +83,8 @@ Core answer timelines are included directly in each serialized
 `ConversationTurn` before the checkpoint commit. They therefore share the
 conversation's existing atomic write and ownership lease rather than
 creating another timing file or introducing a post-commit update. The
-separate GUI timing file remains a presentation mechanism until the GUI
-integration PR; it is not required for notebook/API timeline persistence.
+GUI consumes the saved turn directly; it does not maintain a separate
+presentation timing file for notebook, API, or GUI answers.
 
 ## Switching, resetting, and archiving
 
@@ -126,7 +126,8 @@ uniquely named temporary file in the destination directory and atomically
 replaces the destination after completing the write. A pre-existing `.tmp`
 symlink cannot redirect the write; an unsuccessful write or replacement
 removes the temporary file and preserves the prior destination. The same
-helper is used for cached source text and GUI answer timelines. File-format
+helper is used for cached source text. Answer timelines are included in
+conversation checkpoints, not written separately. File-format
 choices (such as indentation and sorting) remain with the callers.
 
 This atomicity concerns **one file at a time**. It does not synchronize

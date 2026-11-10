@@ -4866,7 +4866,7 @@ function queueAnswerStage(key, detail) {
 }
 
 /**
- * Record the moment a step started, for the expandable timeline.
+ * Note the start of a live, display-only activity step.
  *
  * @param label Step description, as shown in the shimmering line.
  */
@@ -4877,31 +4877,7 @@ function markTimelineStep(label) {
 }
 
 /**
- * Record how long a completed answer took and how long each step took.
- *
- * The record is saved with the project, so a resumed conversation shows the
- * same "Took Ns" line and step list as when the answer arrived.
- *
- * @param current The pending turn being completed.
- * @param turn Saved turn with its routing parameters.
- * @param totalMs Time from Ask to the complete answer.
- * @returns The total time and each step's label and duration.
- */
-function timelineRecord(current, turn, totalMs) {
-  const query = turn.parameters?.retrieval_query;
-  return {
-    elapsed_ms: Math.round(totalMs),
-    steps: timelineSteps(current.timeline || [], current.started + totalMs).map((step) => ({
-      label: query && /semantic search/i.test(step.label)
-        ? `${step.label} for “${query}”`
-        : step.label,
-      ms: step.ms,
-    })),
-  };
-}
-
-/**
- * Turn the recorded step start times into labels and durations.
+ * Estimate in-flight step durations for the live activity display.
  *
  * @param timeline Steps with ``label`` and start time ``at``, in order.
  * @param end Time the last step ended, or now for a step still running.
@@ -4944,8 +4920,8 @@ function appendTimelineRows(list, steps, running = false) {
  * Build the collapsed "Took Ns · Xk tokens" line; expanding it lists each
  * step and how long it took.
  *
- * @param record Saved timing from timelineRecord, or null for an answer
- *   saved before timings were kept (then only its tokens are shown).
+ * @param record Core-owned answer timeline stored with the turn, or null
+ *   for an older answer without timing data.
  * @param turn Saved turn with its token usage.
  * @returns The line, or null when there is neither a timing nor tokens.
  */
@@ -4985,7 +4961,7 @@ function renderTimeline(record, turn) {
  */
 function completeAfterAnswerStages(turn) {
   unansweredQuestion = "";
-  // Freeze the timer when the answer arrives, not after the stage animation.
+  // Freeze the display timer; final timing comes from the saved turn.
   if (pendingTurn && pendingTurn.elapsedMs === null) {
     pendingTurn.elapsedMs = performance.now() - pendingTurn.started;
   }
@@ -5087,7 +5063,7 @@ function paintPendingTurn() {
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  // The steps so far, with the running one's time still counting.
+  // Live estimates only; the completed turn supplies core timings.
   const list = pendingTurn.steps;
   if (list && pendingTurn.durationLine.open) {
     list.replaceChildren();
@@ -5324,15 +5300,16 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
-  // "Took Ns" only; expanding it shows the routing steps and their times.
-  const record = timelineRecord(
-    current, turn, current.elapsedMs ?? performance.now() - current.started);
-  const timeline = renderTimeline(record, turn);
-  if (current.durationLine) current.durationLine.replaceWith(timeline);
-  else current.item.insertBefore(timeline, current.answer);
+  // A completed answer uses only the timeline committed by the core.
+  // Local phase timings remain a visual estimate for a running/stopped turn.
+  const timeline = renderTimeline(turn.timeline || null, turn);
+  if (current.durationLine) {
+    if (timeline) current.durationLine.replaceWith(timeline);
+    else current.durationLine.remove();
+  } else if (timeline) {
+    current.item.insertBefore(timeline, current.answer);
+  }
   current.durationLine = timeline;
-  // Keep the timing with the project so a resumed chat shows it too.
-  if (bridge && turn.timestamp) bridge.saveAnswerTimeline(turn.timestamp, JSON.stringify(record));
   // The text was shown live as it was generated; now add citation links.
   current.answer.classList.remove("answer-phase", "streaming");
   current.answer.replaceChildren();

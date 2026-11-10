@@ -113,8 +113,8 @@ request to answer:
 3. Calls `RAGSession.ask()` with phase/token/progress callbacks and optional
    callbacks for tool plans, document choices and PDF output.
 4. Sends `answer_phase`, progress, usage and answer-text events to the page.
-5. Relays the committed turn and evidence in `answered`, so the page can
-   render citations and saved timeline information.
+5. Relays the committed turn, evidence, and core-owned timeline in
+   `answered`; the page only renders these and the live progress display.
 
 For a large tool plan, the backend can request a user choice **while the
 answer is running**. The engine's `read_command` uses the same stdin iterator

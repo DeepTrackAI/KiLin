@@ -593,22 +593,33 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.assertLess(names.index("answer_delta"), names.index("answered"))
 
     def test_every_answer_refreshes_the_workspace_tree(self):
-        """Send the current project files with each answer, tool or not."""
+        """Forward core timings and project files with each answer."""
+        from kilin.answer_timeline import (
+            AnswerTimeline, AnswerTimelineStep,
+        )
         from kilin.rag import ConversationTurn
 
         session = self.engine.session
         session.turns = []
+        timeline = AnswerTimeline(1200, (
+            AnswerTimelineStep("generating", "Generating answer", 1200),
+        ))
 
         def answer(question, **options):
-            """Save a plain answer that used no tool."""
-            session.turns.append(
-                ConversationTurn("now", question, "Plain answer.", (), {})
-            )
+            """Save a plain answer with a core-owned execution timeline."""
+            session.turns.append(ConversationTurn(
+                "now", question, "Plain answer.", (), {}, timeline,
+            ))
 
         with patch.object(session, "ask", side_effect=answer):
             self.engine.ask("question")
         answered = [e for e in self.events if e["event"] == "answered"]
         self.assertEqual(len(answered), 1)
+        self.assertEqual(answered[0]["turn"]["timeline"], {
+            "elapsed_ms": 1200,
+            "steps": ({"phase": "generating", "label": "Generating answer",
+                       "ms": 1200},),
+        })
         self.assertEqual(
             answered[0]["workspace_files"],
             list_project_files(session.project),

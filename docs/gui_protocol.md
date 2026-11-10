@@ -55,6 +55,15 @@ For orientation, a command and an event look like:
 {"event": "answer_delta", "text": "The file defines..."}
 ```
 
+Core-owned answer timelines are stored in each completed conversation
+turn under `timeline` (`elapsed_ms`, `steps` containing `phase`, `label`,
+and `ms`). The `answered`, `opened`, and `conversation_opened` events
+include that field as part of their turn objects. Qt's read-only
+`conversation_viewed` path returns the same saved turn fields. The page
+maintains only display estimates while an answer is in flight; the
+completed summary and activity durations come exclusively from the core.
+There is no `save_answer_timeline` command or companion timing file.
+
 ## Project-type identifiers
 
 Project selection uses `type_id` in `startup`, `projects`, `saved_project`,
@@ -115,7 +124,6 @@ paths and source paths remain subject to downstream core validation.
 | `save_source_cards` | `settings` | Save project-wide source-card policy and both backend generation models, then reconcile derived cards only; send `source_cards_applied` with resolved settings and outcome counts |
 | `regenerate_source_cards` | None | Confirmed user action regenerating derived cards without rescanning chunks or rebuilding ordinary retrieval indexes; send `source_cards_regenerated` with counts |
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
-| `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `tool_settings` | None | List the open project's tools and their settings |
 | `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
