@@ -3874,6 +3874,9 @@ function renderMarkdown(host, text, linkCitation = null) {
       while (index < lines.length && !MARKDOWN_FENCE.test(lines[index])) code.push(lines[index++]);
       index += 1;
       const pre = document.createElement("pre");
+      if (/^\s*```[ \t]*latex[ \t]*$/i.test(line)) {
+        pre.className = "answer-latex-source";
+      }
       const element = document.createElement("code");
       element.textContent = code.join("\n");
       pre.append(element);

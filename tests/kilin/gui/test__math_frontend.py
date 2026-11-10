@@ -13,6 +13,7 @@ manual checks.
 # pylint: disable=C0103:invalid-name
 
 from pathlib import Path
+import re
 import shutil
 import unittest
 
@@ -34,6 +35,20 @@ def _constant(source: str, name: str) -> str:
 
 class TestMathFrontend(unittest.TestCase):
     """Show LaTeX maths in answers as maths."""
+
+    def test_latex_source_has_wrapping_style(self):
+        """Long LaTeX source wraps without changing other code blocks."""
+
+        css = (_WEB / "styles.css").read_text(encoding="utf-8")
+        self.assertRegex(
+            css,
+            re.compile(
+                r"\.answer-body pre\.answer-latex-source\s*\{"
+                r"[^}]*white-space:\s*pre-wrap;"
+                r"[^}]*overflow-wrap:\s*anywhere;[^}]*\}",
+                re.S,
+            ),
+        )
 
     def test_katex_ships_with_the_gui(self):
         """Bundled, loaded before app.js, licensed, and packaged."""
@@ -165,6 +180,19 @@ assert.deepEqual(host.children.map((child) => child.textContent),
 [math] = inline("Link $\\href{javascript:alert(1)}{x}$.");
 assert.match(math.html, /<math/);
 assert.doesNotMatch(math.html, /href=/);
+// Only LaTeX source fences gain wrapping; their text stays literal.
+const texSource = "  \\begin{align}\n"
+  + "\\longcommand{very_long_unbroken_formula}";
+host = render("```latex\n" + texSource + "\n```\nAfter.");
+assert.deepEqual(host.children.map((child) => child.tag), ["pre", "p"]);
+assert.equal(host.children[0].className, "answer-latex-source");
+assert.equal(host.children[0].children[0].textContent, texSource);
+host = render("```LaTeX  \n\\alpha\n```");
+assert.equal(host.children[0].className, "answer-latex-source");
+host = render("```python\nlong_line_without_spaces\n```");
+assert.equal(host.children[0].className, "");
+host = render("```\nlong_line_without_spaces\n```");
+assert.equal(host.children[0].className, "");
 console.log("maths passed");
 """
         result = run_node(script)
