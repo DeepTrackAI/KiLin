@@ -130,7 +130,7 @@ remain sensitive and must be handled according to
 [`trace_recording.md`](trace_recording.md).
 
 If `EXPORT_CSV = True`, timing-only summaries are stored under
-`sandbox/performance_pr4/`, which is ignored by Git and omitted from the
+`sandbox/performance_benchmark/`, which is ignored by Git and omitted from the
 source ZIP. A live run writes new conversations and traces only into the
 explicitly selected dedicated benchmark workspace. The default read-only
 notebook run creates no files. Review run labels before sharing even the

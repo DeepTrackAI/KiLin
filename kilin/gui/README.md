@@ -453,9 +453,8 @@ silently reset. Updates use atomic replacement, and no package files are
 modified. When working from a source checkout, edits made directly to the
 shipped `defaults.json` remain readable as checkout defaults but are not
 copied into the user-preferences file. Before reinstalling an earlier KíLín
-version with edited installed defaults, manually preserve those edits:
-automatic migration from previously mutable package resources is not part
-of this PR.
+version with edited installed defaults, manually preserve those edits.
+KíLín does not automatically migrate edits to installed package resources.
 
 **Generation defaults** for new projects remain core-owned in
 `kilin/kilin_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,

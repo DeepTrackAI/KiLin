@@ -24,8 +24,9 @@ profile before opening and ensure models are cached.
 `RAGSession` owns the authoritative `ConversationTurn` list, selected
 conversation path and project/index state. `ChatSession` separately owns the
 loaded answering model and in-memory formatted messages; the router may
-share that session or be a separate loaded chat model. The optional GUI adapts callbacks and displays core-owned timelines
-without maintaining a separate record. A `ToolContext`
+share that session or be a separate loaded chat model. The optional GUI
+adapts callbacks and displays core-owned timelines without maintaining a
+separate record. A `ToolContext`
 provides scoped operations for registered built-in tools, not arbitrary
 filesystem or Python execution.
 
@@ -96,10 +97,10 @@ if timeline is not None:
 
 The timeline is part of the turn in the authoritative checkpoint and follows
 that turn when a conversation is branched. An interrupted or uncommitted
-answer has no saved timeline. Earlier turns without a timeline remain
-readable, but no history migration or reconstruction is performed in this
-prerelease refactor. The GUI reads timelines directly from saved turns;
-it does not maintain a separate timeline file or reconstruction mechanism.
+answer has no saved timeline. Turns without a timeline remain readable,
+but have no recorded activity breakdown. The GUI reads timelines directly
+from saved turns and does not maintain a separate timing file or attempt
+to reconstruct missing activity data.
 
 ## Intent routing and fallback
 

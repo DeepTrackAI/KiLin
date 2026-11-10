@@ -74,8 +74,8 @@ target_runtime="$runtime_root/$target_name"
 
 # An active pointer contains either a relative release name or the legacy
 # 'app' directory. Never use an unvalidated value as a filesystem path.
-# Without a pointer, an existing PR4 installation remains active until a
-# complete replacement has been committed.
+# Without a pointer, the existing legacy installation remains active
+# until a complete replacement has been committed.
 read_active() {
     runtime=""
     if [ -L "$active_file" ]; then
