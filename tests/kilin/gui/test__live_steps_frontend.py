@@ -98,6 +98,63 @@ console.log('completed core timing passed');
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("completed core timing passed", result.stdout)
 
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_token_row_shows_saved_model_settings(self):
+        """Use the completed turn settings, not current GUI selections."""
+        source = _APP.read_text(encoding="utf-8")
+        script = r"""
+const assert = require("node:assert/strict");
+const document = { createElement: type => ({
+  type, children: [], textContent: "", className: "", title: "",
+  append(...nodes) { this.children.push(...nodes); },
+}) };
+const usageSum = usage => (usage?.input_tokens || 0)
+  + (usage?.output_tokens || 0);
+const formatDuration = ms => `${Math.round(ms / 1000)}s`;
+const formatTokens = n => String(n);
+"""
+        script += _function(source, "appendTimelineRows")
+        script += _function(source, "renderTimeline")
+        script += r"""
+const usage = { input_tokens: 5127, output_tokens: 545 };
+const record = { elapsed_ms: 36000, steps: [] };
+const savedTurn = { parameters: {
+  usage, chat_model: "Qwen/Qwen3-8B-MLX-4bit",
+  thinking: true, max_new_tokens: 8192,
+} };
+const labels = turn => renderTimeline(record, turn)
+  .children[1].children.map(row => row.children[0].textContent);
+assert.deepEqual(labels(savedTurn), [
+  "Tokens: 5,127 read, 545 written",
+  "Model: Qwen/Qwen3-8B-MLX-4bit (thinking on, 8,192 max tokens)",
+]);
+const line = renderTimeline(record, savedTurn);
+assert.equal(line.children[0].textContent, "Took 36s · 5672 tokens");
+assert.equal(line.children[1].children.length, 2);
+assert.deepEqual(labels({ parameters: {
+  usage, chat_model: "other-model", thinking: false,
+  max_new_tokens: 1024,
+} }), [
+  "Tokens: 5,127 read, 545 written",
+  "Model: other-model (thinking off, 1,024 max tokens)",
+]);
+assert.deepEqual(labels({ parameters: { usage } }),
+  ["Tokens: 5,127 read, 545 written"]);
+assert.deepEqual(labels({ parameters: {
+  usage, chat_model: "old-model",
+} }), [
+  "Tokens: 5,127 read, 545 written",
+  "Model: old-model",
+]);
+assert.equal(renderTimeline(null, { parameters: {
+  chat_model: "old-model", thinking: true,
+} }), null);
+console.log("saved model settings passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("saved model settings passed", result.stdout)
+
     def test_no_frontend_activity_inference(self) -> None:
         """Only core activity messages may append to the live timeline."""
         source = _APP.read_text(encoding="utf-8")

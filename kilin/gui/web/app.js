@@ -4948,9 +4948,32 @@ function renderTimeline(record, turn) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
     const label = document.createElement("span");
-    label.textContent = `Tokens: ${usage.input_tokens.toLocaleString()} read, ${usage.output_tokens.toLocaleString()} written`;
+    const parameters = turn.parameters || {};
+    const model = typeof parameters.chat_model === "string"
+      ? parameters.chat_model : "";
+    const settings = [];
+    if (typeof parameters.thinking === "boolean") {
+      settings.push(parameters.thinking ? "thinking on" : "thinking off");
+    }
+    if (Number.isInteger(parameters.max_new_tokens)
+        && parameters.max_new_tokens > 0) {
+      settings.push(`${parameters.max_new_tokens.toLocaleString()} max tokens`);
+    }
+    label.textContent = [
+      `Tokens: ${usage.input_tokens.toLocaleString()} read`,
+      `${usage.output_tokens.toLocaleString()} written`,
+    ].join(", ");
     row.append(label);
     list.append(row);
+    if (model) {
+      const modelRow = document.createElement("li");
+      modelRow.className = "timeline-model";
+      const modelLabel = document.createElement("span");
+      modelLabel.textContent = `Model: ${model}${settings.length
+        ? ` (${settings.join(", ")})` : ""}`;
+      modelRow.append(modelLabel);
+      list.append(modelRow);
+    }
   }
   details.append(summary, list);
   return details;
