@@ -16,8 +16,9 @@ the retrieval mode (search, one document, reused evidence, or none), and
 optionally a tool that writes the answer itself. An unusable router reply
 falls back to the project type's default intent.
 
-Conversation turns retain questions, answers, evidence, and effective turn
-parameters. One authoritative conversation JSON path stores resumable state.
+Conversation turns retain questions, answers, evidence, effective turn
+parameters, and a core-recorded activity timeline. One authoritative
+conversation JSON path stores resumable state.
 When tracing is enabled for a RAG session, its trace output is required to use
 that same path; tracing therefore cannot silently redirect conversation
 persistence. The session has side effects: initialization may create files,
@@ -63,6 +64,11 @@ Key Features
 
     Expose canonical phase identifiers for interfaces observing answer
     retrieval, evidence preparation, generation, saving, and completion.
+
+- **Answer timelines**
+
+    Record core phase durations independently of the GUI or diagnostic
+    tracing and save them with the completed conversation turn.
 
 - **Progress and tracing**
 
@@ -157,6 +163,12 @@ from kilin._model_completion import (
     thinking_is_open,
 )
 from kilin.atomic_writes import atomic_write_text
+from kilin.answer_timeline import (
+    AnswerTimeline,
+    _AnswerTimelineRecorder,
+    _timeline_from_data,
+    _timeline_to_data,
+)
 from kilin.defaults import (
     load_defaults_section,
     require_default_int,
@@ -643,6 +655,9 @@ class ConversationTurn:
         Source chunks supplied for this answer.
     parameters: dict[str, object]
         Exact project and model settings used for this turn.
+    timeline: AnswerTimeline | None, optional
+        Core-measured activities and elapsed time before the checkpoint.
+        None for a turn without a recorded timeline. Defaults to ``None``.
 
     Attributes
     ----------
@@ -656,6 +671,8 @@ class ConversationTurn:
         Source chunks supplied for this answer.
     parameters: dict[str, object]
         Exact project and model settings used for this turn.
+    timeline: AnswerTimeline | None
+        Persisted execution timeline when available.
 
     Notes
     -----
@@ -670,6 +687,7 @@ class ConversationTurn:
     answer: str
     evidence: tuple[Evidence, ...]
     parameters: dict[str, object]
+    timeline: AnswerTimeline | None = None
 
 
 class RAGSession:
@@ -1341,12 +1359,13 @@ class RAGSession:
 
         Notes
         -----
-        A generated turn is committed to memory only after its resumable
-        checkpoint has been written. If persistence fails, the previous
-        chat-model history is restored. The final completed-phase callback
-        runs after the turn span closes; its failure is traced separately and
-        does not invalidate the answer. Other callback errors and explicit
-        strict diagnostic-write failures can still propagate after commit.
+        A generated turn and its core-measured timeline are committed only
+        after their shared resumable checkpoint has been written. If
+        persistence fails, the previous chat-model history is restored.
+        The final completed-phase callback runs after the turn span closes;
+        its failure is traced separately and does not invalidate the answer.
+        Other callback errors and explicit strict diagnostic-write failures
+        can still propagate after commit.
         Citation identifiers are checked once after generation against
         this turn's evidence. Invalid identifiers are recorded without
         changing the answer or retrying generation. The content of claims
@@ -1381,8 +1400,10 @@ class RAGSession:
         if reuse_evidence and not self.turns:
             raise ValueError("There is no previous answer to reuse.")
 
+        timeline_recorder = _AnswerTimelineRecorder()
+
         def report_phase(phase: AnswerPhase, **details: object) -> None:
-            """Notify an interface without coupling retrieval to GUI code.
+            """Record a core phase and optionally notify an observer.
 
             Parameters
             ----------
@@ -1393,11 +1414,12 @@ class RAGSession:
 
             Notes
             -----
-            The nested helper calls the closed-over callback only when
-            supplied. It does not catch callback exceptions.
+            Timing is always recorded, including without an observer or
+            diagnostic trace. Callback exceptions still propagate unchanged.
 
             """
 
+            timeline_recorder.record(phase, details)
             if phase_callback is not None:
                 phase_callback(phase, details)
 
@@ -1979,12 +2001,16 @@ class RAGSession:
 
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
+            # Freeze before the atomic checkpoint: saving itself is not
+            # timed, so no post-commit write is needed for the timeline.
+            timeline = timeline_recorder.finish()
             turn = ConversationTurn(
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 question=question,
                 answer=answer,
                 evidence=evidence,
                 parameters=effective,
+                timeline=timeline,
             )
             # A compact summary lets the router find this turn later.
             representation = turn_representation(turn, len(self.turns) + 1)
@@ -5958,6 +5984,7 @@ def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
             for item in turn.evidence
         ],
         "parameters": turn.parameters,
+        "timeline": _timeline_to_data(turn.timeline),
     }
 
 
@@ -5972,14 +5999,14 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
     Returns
     -------
     ConversationTurn
-        Reconstructed ConversationTurn with evidence records and copied
-        parameters.
+        Reconstructed ConversationTurn with evidence, copied parameters,
+        and the validated optional execution timeline.
 
     Raises
     ------
     ValueError
-        If evidence is not a list, parameters is not a dictionary, or numeric
-        conversion fails.
+        If evidence, parameters, or timeline data has an invalid structure,
+        or numeric conversion fails.
     KeyError
         If required turn/evidence fields are absent.
     TypeError
@@ -6019,6 +6046,7 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
         answer=str(data["answer"]),
         evidence=evidence,
         parameters=parameters,
+        timeline=_timeline_from_data(data.get("timeline")),
     )
 
 

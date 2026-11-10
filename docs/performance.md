@@ -62,6 +62,7 @@ loading KíLín; other third-party backends may not honor them. The actual
 |---|---|---|
 | `startup_ms` | External `perf_counter()` | Creating `RAGSession`, including project, index, and model preparation |
 | `wall_ms` | External `perf_counter()` | Full `RAGSession.ask()` call, regardless of diagnostic tracing |
+| `timeline.elapsed_ms` | `ConversationTurn.timeline` | Core answering up to the checkpoint, regardless of diagnostic tracing |
 | `turn_ms` | `turn` span | Inclusive traced turn; includes nested work and persistence |
 | `routing_ms` | `intent.classification` span | Router classification when enabled; absent when bypassed |
 | `semantic_ms` | `retrieval.semantic` span | Semantic search operation |
@@ -74,6 +75,15 @@ loading KíLín; other third-party backends may not honor them. The actual
 The notebook also produces an operation-level listing for initialization and
 other recorded spans, including `session.ready` and model-load spans. This
 allows inspection of startup components without introducing new counters.
+
+A saved `ConversationTurn.timeline` also contains ordered, non-overlapping
+phase-based activities, independently of tracing. This is an end-user
+execution summary rather than the diagnostic trace's operation hierarchy.
+Its duration excludes checkpoint persistence and the final completion event,
+so it need not equal the externally measured `wall_ms` or inclusive `turn_ms`.
+Pre-answer model loading is excluded; tool and confirmation waiting within
+`ask()` is included. Activity boundaries are phase notifications, not exact
+onset/offset timestamps of every nested retrieval operation.
 
 The `turn_ms` measurement is **inclusive**: never add routing, retrieval or
 generation durations to it. Similarly, individual retrieval operations can

@@ -79,6 +79,13 @@ A tracing-disabled RAG session *still saves checkpoints* and retains
 exclusive ownership. This is important because disabling diagnostic tracing
 must not disable persistence protection.
 
+Core answer timelines are included directly in each serialized
+`ConversationTurn` before the checkpoint commit. They therefore share the
+conversation's existing atomic write and ownership lease rather than
+creating another timing file or introducing a post-commit update. The
+separate GUI timing file remains a presentation mechanism until the GUI
+integration PR; it is not required for notebook/API timeline persistence.
+
 ## Switching, resetting, and archiving
 
 When switching conversations, RAG acquires (or validates) the target lock

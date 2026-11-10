@@ -25,7 +25,9 @@ profile before opening and ensure models are cached.
 conversation path and project/index state. `ChatSession` separately owns the
 loaded answering model and in-memory formatted messages; the router may
 share that session or be a separate loaded chat model. The optional GUI
-adapts callbacks and persists presentation-only metadata. A `ToolContext`
+adapts callbacks and currently retains an independent presentation-timing
+writer until the GUI integration PR. The core now persists answer timelines
+with turns. A `ToolContext`
 provides scoped operations for registered built-in tools, not arbitrary
 filesystem or Python execution.
 
@@ -51,7 +53,7 @@ ask(question, options)
    |     `-- ChatSession.reply() with history + evidence prompt
    +-- validate completion or retain an explicitly incomplete result
    +-- deterministic citation-ID check; collect token usage
-   +-- form ConversationTurn + compact representation
+   +-- freeze core activity timeline; form ConversationTurn + representation
    +-- persist checkpoint; append committed turn
    `-- notify completed phase (observer)
 ```
@@ -64,6 +66,43 @@ for event wire fields and the distinction between backend and frontend
 operation states. A callback's failure **before** commitment can abort the
 turn; a failure in the final completed notification is traced but should not
 recast a successfully committed answer as a failed generation.
+
+### Core answer timelines
+
+`RAGSession.ask()` records the existing answer phase transitions internally,
+even when `phase_callback` is omitted and `TraceConfig(enabled=False)` is
+used. Each committed `ConversationTurn.timeline` is an `AnswerTimeline` with
+`elapsed_ms` and ordered `AnswerTimelineStep` records (`phase`, `label`,
+`ms`). The recorded steps have non-overlapping durations summing to the
+recorded total. Labels come from core phase messages or a canonical fallback;
+only these labels and durations are stored, not the full event payloads.
+
+The clock is monotonic and measures wall time from the start of processing to
+just before the answer's atomic conversation checkpoint. It includes waiting
+for tools or user confirmation while `ask()` is active, but excludes model
+loading performed before `ask()`, the checkpoint disk write, the final
+completion notification, and GUI rendering. No extra model calls, trace
+writes, or conversation writes are required. The existing `saving` and
+`completed` callbacks still fire, but are not persisted as measurable steps.
+
+For example, notebook code can inspect the committed timeline directly:
+
+```python
+answer = session.ask("How is the lexical index built?")
+timeline = session.turns[-1].timeline
+if timeline is not None:
+    print(f"Answer processing: {timeline.elapsed_ms} ms")
+    for step in timeline.steps:
+        print(step.phase, step.label, step.ms)
+```
+
+The timeline is part of the turn in the authoritative checkpoint and follows
+that turn when a conversation is branched. An interrupted or uncommitted
+answer has no saved timeline. Earlier turns without a timeline remain
+readable, but no history migration or reconstruction is performed in this
+prerelease refactor. The GUI's separate `answer_timelines.json` writer remains
+in place until the subsequent GUI integration PR; it is not the source of
+core timeline data.
 
 ## Intent routing and fallback
 

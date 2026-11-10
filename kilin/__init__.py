@@ -54,6 +54,7 @@ except _PackageNotFoundError:
         __version__ = _tomllib.load(_stream)["project"]["version"]
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
+from .answer_timeline import AnswerTimeline, AnswerTimelineStep
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .model_defaults import (
@@ -274,6 +275,8 @@ __all__ = [
     "ANSWER_PHASE_SAVING",
     "ASSISTANT_ROLE",
     "AnswerPhase",
+    "AnswerTimeline",
+    "AnswerTimelineStep",
     "BACKEND_AUTO",
     "BACKEND_CHOICES",
     "BACKEND_MLX",
