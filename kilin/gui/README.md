@@ -552,8 +552,8 @@ The interface displays backend phases as they happen: loading a model,
 identifying intent, retrieving or reusing references, and reading the
 references before the first word streams. Reading time grows with the
 references and the selected history; earlier turns enter as question and
-answer text only. Each label
-stays at least 0.6 seconds and a newer phase replaces queued ones, so the
+answer text only. Each queued label
+is displayed briefly (currently 450 ms), and later stages follow it, so the
 display is at most one short step behind. A timer runs from Ask.
 
 Answers stream as they are generated: the engine forwards text a few times
@@ -585,14 +585,16 @@ questions rather than model-written text.
 
 The selected intent determines the history (question and answer text only,
 never earlier evidence) and retrieval mode (search, reuse earlier
-references, or none). A shimmering line under the pending answer shows
-the phases that apply: intent identification, included conversation
-history, retrieval, and reading references before generation. A finished
-answer shows "Took Ns"; expanding it lists the core-recorded activities
-and their durations. The GUI only estimates timing for running or stopped
-answers; completed timings are stored with each turn, including answers
-created directly from notebooks. The selected router model also writes chat titles without
-switching the answering model.
+references, or none). The core reports an ordered activity stream with
+intent identification, history decisions, retrieval (including skipped
+work), tool progress, and generation. The pending answer shows these same
+labels in an expandable live list, including events that describe skipped
+operations; the GUI does not filter them. A finished answer shows "Took Ns";
+expanding it lists the identical core-recorded activities with measured
+durations. The GUI estimates the times of in-flight activities; completed
+timings are stored with each turn and appear for notebook-generated answers
+as well. Enabled traces also record each activity start. The selected
+router model writes chat titles without switching the answering model.
 
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen

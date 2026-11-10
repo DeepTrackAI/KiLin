@@ -1,9 +1,11 @@
 """Record lightweight, persistent timing for an answered conversation turn.
 
-Answer timelines measure stages already reported by the RAG coordinator.
-They are ordinary conversation data, independent of optional diagnostic
-tracing and of the GUI. Recording uses a monotonic clock; only durations and
-human-readable stage labels are persisted, not clock values or trace content.
+Answer timelines own the activity stream for the RAG coordinator. Each
+activity is reported to observers, included in optional diagnostic traces,
+and stored with the committed conversation turn. No GUI-specific activity
+inference is needed. Recording uses a monotonic clock, independent of trace
+availability. Only activity identifiers, descriptions, and durations are
+persisted with the conversation.
 
 The saved duration ends before the atomic conversation checkpoint. Measuring
 that write would require a second checkpoint, so the write and the final
@@ -33,7 +35,8 @@ Module Structure
 
 - ``_AnswerTimelineRecorder``
 
-    A per-answer monotonic recorder consuming existing phase notifications.
+    A per-answer monotonic recorder translating phase notifications to one
+    ordered stream of user-visible activities.
 
 - ``_timeline_to_data`` and ``_timeline_from_data``
 
@@ -67,7 +70,7 @@ class AnswerTimelineStep:
     ----------
     phase: str
         Stable identifier of the originating core phase, or ``preparing``
-        for work before the first notification.
+        if no phases were reported at all.
     label: str
         Human-readable activity description from the core.
     ms: int
@@ -118,12 +121,78 @@ class AnswerTimeline:
 
 _PHASE_LABELS = {
     "routing": "Identifying intent",
-    "routed": "Selecting context",
     "retrieving": "Retrieving evidence",
     "evidence_ready": "Preparing answer",
     "generating": "Generating answer",
     "processing": "Processing request",
+    "saving": "Saving conversation",
 }
+
+
+def _history_activity(details: Mapping[str, object]) -> str:
+    """Describe the selected history using the core's routing decision.
+
+    Parameters
+    ----------
+    details: Mapping[str, object]
+        Metadata accompanying the routed phase.
+
+    Returns
+    -------
+    str
+        Description of the earlier turns supplied to the model.
+
+    """
+
+    chosen = details.get("history_turn_ids")
+    related = details.get("related_turn_ids")
+    ids = chosen if isinstance(chosen, (tuple, list)) else ()
+    related_ids = related if isinstance(related, (tuple, list)) else ()
+    if not ids:
+        return "No earlier conversation needed"
+    recent = [number for number in ids if number not in related_ids]
+    parts = []
+    if recent:
+        name = "turn" if len(recent) == 1 else "turns"
+        parts.append(f"the last {len(recent)} {name}")
+    if related_ids:
+        name = "turn" if len(related_ids) == 1 else "turns"
+        numbers = ", ".join(str(number) for number in related_ids)
+        parts.append(f"{name} {numbers}")
+    return f"Including {' and '.join(parts)} from the conversation"
+
+
+def _activity_labels(
+    phase: str,
+    details: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Resolve canonical activity labels for one core phase notification.
+
+    Parameters
+    ----------
+    phase: str
+        Core answer phase.
+    details: Mapping[str, object]
+        Phase-specific details already known to the RAG coordinator.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Every new user-facing activity represented by this notification.
+        Completion is a post-checkpoint state, not an execution activity.
+
+    """
+
+    if phase == "completed":
+        return ()
+    if phase == "routed":
+        intent = str(details.get("intent", "")).replace("_", " ")
+        name = intent.capitalize() if intent else "Intent"
+        return (f"{name} identified", _history_activity(details))
+    message = details.get("message")
+    if isinstance(message, str) and message.strip():
+        return (message.strip(),)
+    return (_PHASE_LABELS.get(phase, "Processing answer"),)
 
 
 class _AnswerTimelineRecorder:
@@ -139,10 +208,11 @@ class _AnswerTimelineRecorder:
     -----
     Phase notifications describe transitions, not completed spans. The
     recorder measures each span until the following distinct notification.
-    Saving and completion notifications are excluded because they occur at
-    or after the conversation checkpoint boundary. Repeated notifications
-    with the same phase and label do not create duplicate steps. Worker
-    callbacks are serialized to keep observed phase boundaries ordered.
+    The saving notification starts immediately before the checkpoint, but
+    its disk write is not timed. Post-commit completion is not an activity.
+    Repeated notifications describing the same ongoing activity update that
+    activity rather than creating misleading duplicate starts. The recorder
+    returns exactly the new starts that form the saved activity list.
 
     """
 
@@ -162,37 +232,52 @@ class _AnswerTimelineRecorder:
         self._clock = clock
         self._lock = Lock()
         self._started_at = clock()
-        self._activities: list[tuple[str, str, float]] = [
-            ("preparing", "Preparing answer", self._started_at)
-        ]
+        self._activities: list[tuple[str, str, float]] = []
         self._finished: AnswerTimeline | None = None
 
-    def record(self, phase: str, details: Mapping[str, object]) -> None:
-        """Observe a core phase without altering the caller's notification.
+    def record(
+        self, phase: str, details: Mapping[str, object],
+    ) -> tuple[dict[str, object], ...]:
+        """Start activities for one phase and return their exact identities.
 
         Parameters
         ----------
         phase: str
             Machine-readable answer phase.
         details: Mapping[str, object]
-            Existing event metadata; the ``message`` may supply the label.
+            Existing event metadata needed for the canonical descriptions.
+
+        Returns
+        -------
+        tuple[dict[str, object], ...]
+            New activity events in order, each with its position, phase,
+            description, and monotonic start offset. A repeated update of
+            the current activity emits no duplicate start event.
 
         """
 
-        if phase in ("saving", "completed"):
-            return
-        message = details.get("message")
-        label = (
-            message.strip()
-            if isinstance(message, str) and message.strip()
-            else _PHASE_LABELS.get(phase, "Processing answer")
-        )
+        labels = _activity_labels(phase, details)
         with self._lock:
             if self._finished is not None:
-                return
-            previous_phase, previous_label, _ = self._activities[-1]
-            if (phase, label) != (previous_phase, previous_label):
-                self._activities.append((phase, label, self._clock()))
+                return ()
+            events: list[dict[str, object]] = []
+            for label in labels:
+                if self._activities and (
+                    self._activities[-1][:2] == (phase, label)
+                ):
+                    continue
+                now = self._clock()
+                started = now if self._activities else self._started_at
+                self._activities.append((phase, label, started))
+                events.append({
+                    "index": len(self._activities) - 1,
+                    "phase": phase,
+                    "label": label,
+                    "started_ms": max(
+                        0, round((started - self._started_at) * 1000)
+                    ),
+                })
+            return tuple(events)
 
     def finish(self) -> AnswerTimeline:
         """Freeze durations just before the conversation checkpoint.
@@ -212,6 +297,10 @@ class _AnswerTimelineRecorder:
             elapsed_ms = max(
                 0, round((self._clock() - self._started_at) * 1000)
             )
+            if not self._activities:
+                self._activities.append((
+                    "preparing", "Preparing answer", self._started_at
+                ))
             boundaries = []
             for _, _, started_at in self._activities:
                 offset = round((started_at - self._started_at) * 1000)

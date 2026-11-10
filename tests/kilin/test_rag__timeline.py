@@ -72,7 +72,7 @@ class TestRAGAnswerTimeline(unittest.TestCase):
         self.assertNotIn("completed", [
             step.phase for step in timeline.steps
         ])
-        self.assertNotIn("saving", [step.phase for step in timeline.steps])
+        self.assertEqual(timeline.steps[-1].phase, "saving")
         self.assertEqual(self._stored_turn()["timeline"]["elapsed_ms"],
                          timeline.elapsed_ms)
         _, restored, _ = self.session._load_conversation()
@@ -92,10 +92,130 @@ class TestRAGAnswerTimeline(unittest.TestCase):
         self.assertIsNotNone(self.session.turns[0].timeline)
         self.assertEqual(
             self._stored_turn()["timeline"]["steps"][0]["phase"],
-            "preparing",
+            "routed",
         )
         _, restored, _ = self.session._load_conversation()
         self.assertEqual(restored, self.session.turns)
+
+    def test_live_activities_match_turn_and_diagnostic_trace(self) -> None:
+        """Emit, trace, and save exactly the same ordered activity list."""
+        from kilin.trace_logging import TRACE_EVENT_ANSWER_ACTIVITY
+
+        logger = TraceLogger(
+            TraceConfig(enabled=True,
+                        output_path=self.session.conversation_path),
+            default_directory=self.root,
+        )
+        self.addCleanup(logger.close)
+        self.session.trace = logger
+        events: list[dict[str, object]] = []
+        with _answer_patches(
+            self.session, _intent(RETRIEVAL_MODE_NONE)
+        ) as mocks:
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            self.session.ask(
+                "Check the references", use_router=False,
+                activity_callback=events.append,
+            )
+        steps = self.session.turns[-1].timeline.steps
+        self.assertEqual(
+            [(item["phase"], item["label"]) for item in events],
+            [(step.phase, step.label) for step in steps],
+        )
+        self.assertEqual(
+            [item["index"] for item in events], list(range(len(steps)))
+        )
+        self.assertIn("No earlier conversation needed", [
+            step.label for step in steps
+        ])
+        self.assertIn("No retrieval needed", [
+            step.label for step in steps
+        ])
+        traced = [event["data"] for event in logger._events
+                  if event["event_type"] == TRACE_EVENT_ANSWER_ACTIVITY]
+        self.assertEqual(traced, events)
+        # Assert the events are present on disk, not only in memory.
+        payload = json.loads(
+            self.session.conversation_path.read_text(encoding="utf-8")
+        )
+        stages = (payload["sessions"]["05_conversations"]
+                  ["turns"]["turn_0001"]["stages"])
+        operations = (
+            value for stage in stages.values()
+            for value in stage["operations"].values()
+        )
+        disk_events = sorted((
+            item["details"] for item in operations
+            if "index" in item.get("details", {})
+            and "started_ms" in item["details"]
+        ), key=lambda item: item["index"])
+        self.assertEqual(disk_events, events)
+        self.assertEqual(
+            [(item["phase"], item["label"]) for item in traced],
+            [(step.phase, step.label) for step in steps],
+        )
+        self.assertEqual(
+            self._stored_turn()["timeline"]["steps"],
+            [{"phase": item.phase, "label": item.label, "ms": item.ms}
+             for item in steps],
+        )
+
+    def test_activities_are_reported_with_diagnostics_disabled(self) -> None:
+        """Core event delivery must not depend on optional trace writes."""
+        observed: list[dict[str, object]] = []
+        with _answer_patches(
+            self.session, _intent(RETRIEVAL_MODE_NONE)
+        ) as mocks:
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            self.session.ask(
+                "Check references", use_router=False,
+                activity_callback=observed.append,
+            )
+        self.assertFalse(self.session.trace.enabled)
+        self.assertEqual(
+            [event["label"] for event in observed],
+            [step.label for step in self.session.turns[-1].timeline.steps],
+        )
+
+    def test_first_stream_piece_has_a_core_recorded_boundary(self) -> None:
+        """Keep prompt reading and first output in the same activity stream."""
+        observed: list[dict[str, object]] = []
+        chunks: list[str] = []
+        with _answer_patches(
+            self.session, _intent(RETRIEVAL_MODE_NONE)
+        ) as mocks:
+            def reply(*args, **kwargs):
+                """Simulate an already requested streaming backend."""
+                callback = kwargs["token_callback"]
+                callback("Part one")
+                callback("Part two")
+                return "Part onePart two"
+
+            self.session.chat_session.reply.side_effect = reply
+            mocks.save.side_effect = lambda **options: (
+                rag.RAGSession._save_conversation(self.session, **options)
+            )
+            self.session.ask(
+                "Explain", use_router=False,
+                token_callback=chunks.append,
+                activity_callback=observed.append,
+            )
+        self.assertEqual(chunks, ["Part one", "Part two"])
+        labels = [event["label"] for event in observed]
+        self.assertIn("Reading the conversation", labels)
+        self.assertIn("Generating the answer", labels)
+        self.assertLess(
+            labels.index("Reading the conversation"),
+            labels.index("Generating the answer"),
+        )
+        self.assertEqual(
+            labels,
+            [step.label for step in self.session.turns[0].timeline.steps],
+        )
 
     def test_each_answer_keeps_its_own_timeline(self) -> None:
         """Keep separate timelines when answering multiple questions."""
@@ -106,9 +226,9 @@ class TestRAGAnswerTimeline(unittest.TestCase):
         ))["turns"]
         self.assertEqual(len(saved), 2)
         self.assertEqual(saved[0]["timeline"]["steps"][0]["phase"],
-                         "preparing")
+                         "routed")
         self.assertEqual(saved[1]["timeline"]["steps"][0]["phase"],
-                         "preparing")
+                         "routed")
         self.assertEqual(
             [turn.timeline for turn in self.session.turns],
             [turn.timeline for turn in self.session._load_conversation()[1]],

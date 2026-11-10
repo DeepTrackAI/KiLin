@@ -27,7 +27,7 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
     """Verify stable transitions and non-overlapping monotonic durations."""
 
     def test_phase_durations_are_measured_once_and_add_up(self) -> None:
-        """Ignore duplicate notifications and checkpoint-only phases."""
+        """Merge repeated updates while retaining the saving event."""
         now = [10.0]
         recorder = _AnswerTimelineRecorder(clock=lambda: now[0])
         now[0] = 10.125
@@ -47,15 +47,90 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
             [(step.phase, step.label, step.ms)
              for step in timeline.steps],
             [
-                ("preparing", "Preparing answer", 125),
-                ("routing", "Identifying intent", 875),
+                ("routing", "Identifying intent", 1000),
                 ("retrieving", "Semantic search", 250),
-                ("retrieving", "Lexical search", 750),
+                ("retrieving", "Lexical search", 450),
+                ("saving", "Saving conversation", 300),
             ],
         )
         now[0] = 100.0
         recorder.record("completed", {"message": "Answer ready"})
         self.assertIs(recorder.finish(), timeline)
+
+    def test_routed_phase_emits_intent_and_history_activities(self) -> None:
+        """Use the same detailed semantics shown in the original live GUI."""
+        now = [10.0]
+        recorder = _AnswerTimelineRecorder(clock=lambda: now[0])
+        routed = recorder.record("routed", {
+            "intent": "reference_check",
+            "history_turn_ids": [],
+            "related_turn_ids": [],
+        })
+        self.assertEqual([item["label"] for item in routed], [
+            "Reference check identified",
+            "No earlier conversation needed",
+        ])
+        self.assertEqual([item["index"] for item in routed], [0, 1])
+        self.assertEqual([item["started_ms"] for item in routed], [0, 0])
+        now[0] += 1.0
+        skipped = recorder.record("evidence_ready", {
+            "message": "No retrieval needed", "skipped": True,
+        })
+        self.assertEqual(skipped[0]["label"], "No retrieval needed")
+        now[0] += 0.5
+        steps = recorder.finish().steps
+        self.assertEqual([item.label for item in steps], [
+            *(event["label"] for event in routed),
+            skipped[0]["label"],
+        ])
+
+    def test_reference_check_reports_every_activity_in_order(self) -> None:
+        """Keep the detailed tool progression with no GUI skip policy."""
+        now = [1.0]
+        recorder = _AnswerTimelineRecorder(clock=lambda: now[0])
+        emitted: list[dict[str, object]] = []
+        sequence = (
+            ("routing", {"message": "Identifying intent"}),
+            ("routed", {"intent": "reference_check",
+                        "history_turn_ids": [], "related_turn_ids": []}),
+            ("evidence_ready", {"message": "No retrieval needed",
+                                "skipped": True}),
+            ("processing", {"message": "Finding the paper"}),
+            ("processing", {"message":
+                            "Identifying the project's files"}),
+            ("processing", {"message": "Reading references and citations"}),
+        )
+        for phase, details in sequence:
+            emitted.extend(recorder.record(phase, details))
+            now[0] += 0.25
+        saved = recorder.finish()
+        self.assertEqual([event["label"] for event in emitted], [
+            "Identifying intent", "Reference check identified",
+            "No earlier conversation needed", "No retrieval needed",
+            "Finding the paper", "Identifying the project's files",
+            "Reading references and citations",
+        ])
+        self.assertEqual(
+            [(event["phase"], event["label"]) for event in emitted],
+            [(step.phase, step.label) for step in saved.steps],
+        )
+        self.assertEqual(
+            [event["index"] for event in emitted],
+            list(range(len(saved.steps))),
+        )
+
+    def test_history_selection_has_one_core_description(self) -> None:
+        """Describe recent and related turns without browser inference."""
+        recorder = _AnswerTimelineRecorder(clock=lambda: 1.0)
+        records = recorder.record("routed", {
+            "intent": "question_answering",
+            "history_turn_ids": [2, 3, 5],
+            "related_turn_ids": [2, 5],
+        })
+        self.assertEqual(records[1]["label"], (
+            "Including the last 1 turn and turns 2, 5 "
+            "from the conversation"
+        ))
 
     def test_no_phase_notifications_still_produces_timing(self) -> None:
         """Measure work when routing and retrieval produce no callbacks."""

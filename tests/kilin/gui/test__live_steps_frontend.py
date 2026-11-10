@@ -98,6 +98,21 @@ console.log('completed core timing passed');
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("completed core timing passed", result.stdout)
 
+    def test_no_frontend_activity_inference(self) -> None:
+        """Only core activity messages may append to the live timeline."""
+        source = _APP.read_text(encoding="utf-8")
+        self.assertIn(
+            'data.event === "answer_activity"', source,
+        )
+        handler = _function(source, "markTimelineStep")
+        self.assertIn("activity.index", handler)
+        self.assertIn("label: activity.label", handler)
+        self.assertNotIn("intentName", source)
+        self.assertNotIn("describeHistory", source)
+        self.assertNotIn("markTimelineStep(detail)", source)
+        self.assertNotIn('markTimelineStep("Waiting', source)
+        self.assertNotIn('markTimelineStep("Generating', source)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_step_durations(self):
         """Each step lasts until the next; the last until the end."""
@@ -109,7 +124,6 @@ const assert = require("node:assert/strict");
         script += _function(source, "timelineSteps")
         script += r"""
 const timeline = [
-  { label: "Starting", at: 0 },
   { label: "Identifying intent", at: 100 },
   { label: "Reading the whole paper (part 1 of 4)", at: 3700 },
 ];

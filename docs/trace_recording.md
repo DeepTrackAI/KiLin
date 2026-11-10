@@ -134,10 +134,19 @@ A Stop is easy to find in the trace file. Under
 timed when the answer ended. Any other failure has a different
 `error_type`.
 
+When enabled, tracing records each core-owned answer activity as an
+`answer.activity` event with `index`, `phase`, `label`, and
+`started_ms`. These are the same starts the GUI receives in real time and
+that the completed `ConversationTurn.timeline` retains with durations.
+The activity list remains saved with the turn when optional tracing is off.
+Activity event writes are throttled like progress updates; normal checkpoint
+writes flush all pending events.
+
 If the window must terminate the engine, the trace retains events already
 written before termination. A mid-turn exit can leave an operation without
 a completion/failure event; reopening numbers later turns above it. Events
-other than throttled progress updates rewrite the file as they are emitted,
+other than throttled progress and answer-activity updates rewrite the file
+as they are emitted,
 but unwritten events cannot be recovered. Do not infer a successful answer
 from the mere presence of a traced turn operation.
 

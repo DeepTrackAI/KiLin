@@ -729,7 +729,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
         ).read_text(encoding="utf-8")
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
-            "answer_cancelled", "answer_delta", "answer_phase",
+            "answer_activity", "answer_cancelled", "answer_delta",
+            "answer_phase",
             "answer_settings_failed", "answer_settings_saved",
             "answered",
             "backend_failed", "backend_preference_failed",

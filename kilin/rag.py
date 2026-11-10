@@ -153,6 +153,7 @@ from pathlib import Path, PureWindowsPath
 import platform
 import re
 import sys
+from threading import RLock
 from time import perf_counter
 from typing import Final, Literal, TypeAlias
 
@@ -314,6 +315,7 @@ from kilin.trace_logging import (
     TraceConfig,
     TraceLogger,
     TraceSink,
+    TRACE_EVENT_ANSWER_ACTIVITY,
     create_trace_logger,
     trace_text_preview,
 )
@@ -1253,6 +1255,7 @@ class RAGSession:
         retrieval_count: int | None = None,
         generation_settings: dict[str, object] | None = None,
         phase_callback: AnswerPhaseCallback | None = None,
+        activity_callback: Callable[[dict[str, object]], None] | None = None,
         answer_guidance: str | None = None,
         token_callback: Callable[[str], None] | None = None,
         retrieval_query: str | None = None,
@@ -1298,6 +1301,11 @@ class RAGSession:
             the final completed-phase notification is recorded in the trace
             without invalidating a committed answer, unless strict trace
             logging itself fails. Defaults to ``None``.
+        activity_callback: Callable[[dict[str, object]], None] | None, optional
+            Receives each newly recorded activity with its ordered index,
+            phase, label, and monotonic start offset. The same entries are
+            persisted with the committed turn and in enabled traces.
+            Defaults to ``None``.
         answer_guidance: str | None, optional
             Answer instruction for this question. Intent guidance takes
             precedence, followed by explicit caller guidance and the project
@@ -1391,6 +1399,8 @@ class RAGSession:
             raise ValueError("confirm_callback must be callable or None.")
         if phase_callback is not None and not callable(phase_callback):
             raise ValueError("phase_callback must be callable or None.")
+        if activity_callback is not None and not callable(activity_callback):
+            raise ValueError("activity_callback must be callable or None.")
         if retrieval_query is not None and (
             not isinstance(retrieval_query, str) or not retrieval_query.strip()
         ):
@@ -1401,6 +1411,9 @@ class RAGSession:
             raise ValueError("There is no previous answer to reuse.")
 
         timeline_recorder = _AnswerTimelineRecorder()
+        # Worker progress callbacks can arrive concurrently. Keep the
+        # reported, traced, and stored activity order identical.
+        activity_lock = RLock()
 
         def report_phase(phase: AnswerPhase, **details: object) -> None:
             """Record a core phase and optionally notify an observer.
@@ -1414,14 +1427,48 @@ class RAGSession:
 
             Notes
             -----
-            Timing is always recorded, including without an observer or
-            diagnostic trace. Callback exceptions still propagate unchanged.
+            Activities are derived only here and sent unchanged to both
+            observers and enabled diagnostic traces. A completed turn saves
+            the same ordered list even if diagnostics are disabled.
+            Callback exceptions still propagate unchanged.
 
             """
 
-            timeline_recorder.record(phase, details)
-            if phase_callback is not None:
-                phase_callback(phase, details)
+            with activity_lock:
+                activities = timeline_recorder.record(phase, details)
+                for activity in activities:
+                    trace.emit(
+                        TRACE_EVENT_ANSWER_ACTIVITY,
+                        component="rag",
+                        data=activity,
+                        turn_id=turn_id,
+                    )
+                    if activity_callback is not None:
+                        activity_callback(activity)
+                if phase_callback is not None:
+                    phase_callback(phase, details)
+
+        first_stream_piece = False
+
+        def stream_token(text: str) -> None:
+            """Report the first output boundary before forwarding a token.
+
+            Parameters
+            ----------
+            text: str
+                Model or tool output being sent to the caller.
+
+            """
+
+            nonlocal first_stream_piece
+            if text and not first_stream_piece:
+                first_stream_piece = True
+                report_phase(
+                    ANSWER_PHASE_GENERATING,
+                    message="Generating the answer",
+                )
+            if token_callback is not None:
+                token_callback(text)
 
         question = question.strip()
         # Every model this answer may call checks the same Stop request.
@@ -1874,7 +1921,9 @@ class RAGSession:
                     confirm_callback=confirm_callback,
                     pdf_writer=pdf_writer,
                     choice_callback=choice_callback,
-                    token_callback=token_callback,
+                    token_callback=(
+                        stream_token if token_callback is not None else None
+                    ),
                     answer_guidance=resolved_guidance,
                 )
                 answer = result.answer
@@ -1890,7 +1939,7 @@ class RAGSession:
                         if key in result.summary
                     }
                 if token_callback is not None and not result.streamed:
-                    token_callback(answer)
+                    stream_token(answer)
             else:
                 system_prompt = (
                     f"{config.system_prompt}\n\n{intent.system_prompt}"
@@ -1923,9 +1972,15 @@ class RAGSession:
                     },
                     turn_id=turn_id,
                 )
+                initial_generation = "Generating the answer"
+                if token_callback is not None:
+                    initial_generation = (
+                        f"Reading {len(evidence)} references"
+                        if evidence else "Reading the conversation"
+                    )
                 report_phase(
                     ANSWER_PHASE_GENERATING,
-                    message="Generating answer",
+                    message=initial_generation,
                     evidence_count=len(evidence),
                 )
                 reply_options: dict[str, object] = {
@@ -1950,7 +2005,7 @@ class RAGSession:
                 if intent.thinking is not None:
                     reply_options["thinking"] = intent.thinking
                 if token_callback is not None:
-                    reply_options["token_callback"] = token_callback
+                    reply_options["token_callback"] = stream_token
                 try:
                     answer = self.chat_session.reply(prompt, **reply_options)
                     require_complete_reply(
@@ -1973,8 +2028,8 @@ class RAGSession:
                     self.chat_session.restore_history(committed_messages)
                     if token_callback is not None:
                         if thinking_is_open(error.raw_text):
-                            token_callback("</think>\n\n")
-                        token_callback("\n\n" + answer)
+                            stream_token("</think>\n\n")
+                        stream_token("\n\n" + answer)
 
                 # "length" marks an answer cut off by the token limit. Other
                 # values, or a session without the attribute, record nothing.
@@ -1989,7 +2044,7 @@ class RAGSession:
             if coverage_notice:
                 answer += "\n\n" + coverage_notice
                 if token_callback is not None:
-                    token_callback("\n\n" + coverage_notice)
+                    stream_token("\n\n" + coverage_notice)
 
             # One fast, deterministic check; do not modify or retry the
             # answer even when the model cites unavailable evidence.
@@ -2001,8 +2056,12 @@ class RAGSession:
 
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
-            # Freeze before the atomic checkpoint: saving itself is not
-            # timed, so no post-commit write is needed for the timeline.
+            # The last recorded activity is the checkpoint boundary. Its
+            # measured duration is zero because the write is excluded.
+            report_phase(
+                ANSWER_PHASE_SAVING,
+                message="Saving conversation",
+            )
             timeline = timeline_recorder.finish()
             turn = ConversationTurn(
                 timestamp=datetime.now(timezone.utc).isoformat(),
@@ -2020,10 +2079,6 @@ class RAGSession:
                 component="rag",
                 data=representation,
                 turn_id=turn_id,
-            )
-            report_phase(
-                ANSWER_PHASE_SAVING,
-                message="Saving conversation",
             )
             try:
                 self._save_conversation(

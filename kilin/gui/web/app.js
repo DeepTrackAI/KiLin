@@ -4857,7 +4857,6 @@ function advanceAnswerStage() {
  */
 function queueAnswerStage(key, detail) {
   if (!pendingTurn) return;
-  markTimelineStep(detail);
   if (answerStageKey === key) return;
   if (answerStageQueue.some((stage) => stage.key === key)) return;
   answerStageQueue.push({ key, detail });
@@ -4866,14 +4865,18 @@ function queueAnswerStage(key, detail) {
 }
 
 /**
- * Note the start of a live, display-only activity step.
+ * Display an activity start emitted by the core timeline recorder.
  *
- * @param label Step description, as shown in the shimmering line.
+ * @param activity Indexed activity with the core's phase and description.
  */
-function markTimelineStep(label) {
+function markTimelineStep(activity) {
   const timeline = pendingTurn?.timeline;
-  if (!timeline || timeline.at(-1)?.label === label) return;
-  timeline.push({ label, at: performance.now() });
+  if (!timeline || activity.index !== timeline.length) return;
+  timeline.push({
+    phase: activity.phase,
+    label: activity.label,
+    at: performance.now(),
+  });
 }
 
 /**
@@ -4881,14 +4884,13 @@ function markTimelineStep(label) {
  *
  * @param timeline Steps with ``label`` and start time ``at``, in order.
  * @param end Time the last step ended, or now for a step still running.
- * @returns Each step's label and duration in milliseconds, without the
- *   initial "Starting" step.
+ * @returns Each reported activity's label and estimated duration in
+ *   milliseconds. No core activity is filtered by the GUI.
  */
 function timelineSteps(timeline, end) {
-  const steps = timeline.filter((step) => step.label !== "Starting");
-  return steps.map((step, index) => ({
+  return timeline.map((step, index) => ({
     label: step.label,
-    ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+    ms: Math.round(Math.max(0, (timeline[index + 1]?.at ?? end) - step.at)),
   }));
 }
 
@@ -5130,7 +5132,6 @@ function showToolPrompt(card) {
   pendingTurn.prompt = card;
   pendingTurn.answer.append(card);
   resetAnswerStages();
-  markTimelineStep("Waiting for your choice");
   showTurnPhase("Waiting", "Waiting for your choice");
   byId("activity-text").textContent = "Waiting for your choice";
   byId("activity-detail").textContent = "";
@@ -5390,30 +5391,6 @@ function thoughtsBlock(text, label, open = false) {
 }
 
 /**
- * Name an intent for display, using the project type's list.
- * @param intentId Configured project-type intent ID.
- */
-function intentName(intentId) {
-  const names = projectTypes[activeProjectTypeId]?.intents || {};
-  return names[intentId] || String(intentId || "").replaceAll("_", " ");
-}
-
-/**
- * Describe which earlier turns the answer sees, such as "Recent 2 + turn 3".
- * @param data Turn parameters containing history metadata.
- */
-function describeHistory(data) {
-  const ids = data.history_turn_ids || [];
-  if (!ids.length) return "No earlier conversation needed";
-  const related = data.related_turn_ids || [];
-  const recent = ids.filter((id) => !related.includes(id));
-  const parts = [];
-  if (recent.length) parts.push(`the last ${recent.length === 1 ? "turn" : `${recent.length} turns`}`);
-  if (related.length) parts.push(`turn${related.length === 1 ? "" : "s"} ${related.join(", ")}`);
-  return `Including ${parts.join(" and ")} from the conversation`;
-}
-
-/**
  * Show generated text live in the pending answer.
  *
  * @param text Newly generated text.
@@ -5428,7 +5405,6 @@ function appendAnswerText(text) {
   if (!current.streaming) {
     current.streaming = true;
     resetAnswerStages();
-    markTimelineStep("Generating the answer");
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
@@ -5718,87 +5694,45 @@ function onEvent(raw) {
     setBusy(true, data.message);
   } else if (data.event === "answer_delta") {
     appendAnswerText(data.text || "");
+  } else if (data.event === "answer_activity") {
+    // The core emits exactly the activities persisted with the turn.
+    // Phase messages update status, but must not invent timeline rows.
+    markTimelineStep(data);
+    queueAnswerStage(`activity:${data.index}`, data.label);
   } else if (data.event === "answer_phase") {
     activity.classList.add("answer-progress");
     if (data.phase === ANSWER_PHASE_ROUTING) {
-      queueAnswerStage("intent", "Identifying intent");
       byId("activity-text").textContent = "Identifying what the question asks for";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_ROUTED) {
-      queueAnswerStage("intent-done", `${intentName(data.intent)} identified`);
-      queueAnswerStage("history", describeHistory(data));
-      // Retrieval steps follow from their own phases; "none" shows none.
+      byId("activity-text").textContent = "Selecting conversation context";
+      byId("activity-detail").textContent = "";
     } else if (data.phase === ENGINE_PHASE_LOADING_MODEL) {
       const name = String(data.model_id || "the model").split("/").pop();
-      queueAnswerStage("loading", `Loading ${name}`);
       byId("activity-text").textContent = `Loading ${name}`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_RETRIEVING) {
-      // Show what retrieval is doing (semantic search, lexical search, …);
-      // generic and result-count messages are skipped.
-      const message = data.message || "Searching project evidence";
-      if (/^(Embedding|Running|Searching|Checking|Combining|Expanding|Finding|Scanning)\b/.test(message)) {
-        queueAnswerStage(`retrieval:${message}`, message.replace(/^Embedding the query and running /, "Running "));
-      }
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
-      // A tool asks which option the user means, such as which paper.
       showToolChoice(data.choice);
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
-      // An expensive tool run waits for Continue, Quick, or Cancel.
       showToolPlan(data.plan);
     } else if (data.phase === ANSWER_PHASE_PROCESSING) {
-      queueAnswerStage(`processing:${data.current ?? ""}`, data.message || "Working");
       byId("activity-text").textContent = data.message || "Working";
       byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.skipped) {
-      // No retrieval needed: no step to show.
-    } else if (
-      data.phase === ANSWER_PHASE_EVIDENCE_READY &&
-      (data.document !== undefined || data.tool !== undefined)
-    ) {
-      // Document reading or a tool describes its own result.
-      queueAnswerStage("preparing", data.message || "Reading the document");
-      byId("activity-text").textContent = data.message || "Reading the document";
-      byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.reused) {
-      queueAnswerStage("preparing", `Reusing ${data.evidence_count} references from earlier turns`);
-      byId("activity-text").textContent = "Follow-up: reusing the previous references";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY) {
-      queueAnswerStage(
-        "preparing",
-        data.evidence_count == null
-          ? "Preparing retrieved evidence"
-          : data.related_count
-            ? `Found ${data.evidence_count - data.related_count} references + ${data.related_count} from earlier turns`
-            : `Found ${data.evidence_count} references`,
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "Preparing retrieved evidence for the model"
-        : `Preparing ${data.evidence_count} retrieved references for the model`;
+      byId("activity-text").textContent = data.message || "Preparing answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_GENERATING) {
-      // The model reads its whole prompt before the first word appears;
-      // streamed text replaces this label.
-      queueAnswerStage(
-        "reading",
-        data.evidence_count
-          ? `Reading ${data.evidence_count} references`
-          : "Reading the conversation",
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "The model is reading the prompt"
-        : `The model is reading ${data.evidence_count} references before writing`;
+      byId("activity-text").textContent = data.message || "Generating answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_SAVING) {
-      queueAnswerStage("saving", data.message || "Saving the answer");
-      byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
+      byId("activity-text").textContent = data.message || "Saving conversation";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_COMPLETED) {
       stopPhaseAnimation();
-      byId("activity-text").textContent = data.message || "Displaying the completed response";
+      byId("activity-text").textContent = data.message || "Answer ready";
       byId("activity-detail").textContent = "";
     }
   } else if (data.event === "model_download_started") {

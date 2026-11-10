@@ -68,21 +68,34 @@ recast a successfully committed answer as a failed generation.
 
 ### Core answer timelines
 
-`RAGSession.ask()` records the existing answer phase transitions internally,
-even when `phase_callback` is omitted and `TraceConfig(enabled=False)` is
-used. Each committed `ConversationTurn.timeline` is an `AnswerTimeline` with
-`elapsed_ms` and ordered `AnswerTimelineStep` records (`phase`, `label`,
-`ms`). The recorded steps have non-overlapping durations summing to the
-recorded total. Labels come from core phase messages or a canonical fallback;
-only these labels and durations are stored, not the full event payloads.
+`RAGSession.ask()` is the single owner of answer activities. It converts
+existing phase notifications into an ordered stream of activity starts,
+including intent and conversation-history decisions, retrieval results,
+skipped retrieval, detailed tool messages, and generation transitions. It
+reports each start through the optional `activity_callback` with an index,
+phase, label, and monotonic start offset (`started_ms`). The GUI uses these
+labels unchanged; it never derives, suppresses, or renames timeline entries.
+Repeated notifications for an activity already in progress update that
+activity rather than creating artificial duplicate starts.
 
-The clock is monotonic and measures wall time from the start of processing to
-just before the answer's atomic conversation checkpoint. It includes waiting
-for tools or user confirmation while `ask()` is active, but excludes model
-loading performed before `ask()`, the checkpoint disk write, the final
-completion notification, and GUI rendering. No extra model calls, trace
-writes, or conversation writes are required. The existing `saving` and
-`completed` callbacks still fire, but are not persisted as measurable steps.
+When diagnostic tracing is enabled, those same activity starts appear as
+`answer.activity` events, with the identical fields and order.
+Tracing is optional: each committed `ConversationTurn.timeline` still stores
+an `AnswerTimeline` with `elapsed_ms` and ordered `AnswerTimelineStep`
+records (`phase`, `label`, `ms`). The record contains the same activities
+reported live and traced, with each span measured by the core monotonic
+clock. Durations are non-overlapping and add to the recorded total. This
+recording requires neither GUI callbacks nor diagnostic tracing.
+
+The duration measures `ask()` up to the conversation checkpoint. It includes
+routing, history selection, retrieval, model or tool execution, and time
+waiting for tool confirmation. The `saving` activity begins before the
+checkpoint and is retained, but the disk write is excluded from timing.
+The post-commit `completed` phase is a status notification, not an activity
+in the already-committed turn. Model loading before `ask()` and GUI rendering
+are outside the core timeline. No extra model inference or conversation
+checkpoint writes are introduced; optional traces receive additional
+activity events, with bounded refresh frequency.
 
 For example, notebook code can inspect the committed timeline directly:
 

@@ -55,6 +55,13 @@ For orientation, a command and an event look like:
 {"event": "answer_delta", "text": "The file defines..."}
 ```
 
+The core emits `answer_activity` for each new user-facing activity, with
+`index` (zero-based order), `phase`, `label`, and `started_ms` (monotonic
+milliseconds relative to the answer's start). These are the exact activity
+identifiers and labels stored with completed answers; the browser does not
+infer or filter timeline entries from `answer_phase`. The latter describes
+control and status changes, including tool confirmation and completion.
+
 Core-owned answer timelines are stored in each completed conversation
 turn under `timeline` (`elapsed_ms`, `steps` containing `phase`, `label`,
 and `ms`). The `answered`, `opened`, and `conversation_opened` events
@@ -320,7 +327,7 @@ can accompany an event.
 | Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
-| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
+| Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |
 | Evidence | `reference_preview` (`turn_index`, `citation`, `path`, contextual excerpt details); `reference_error` (`turn_index`, `citation`, `message`) |
 | Creation conflict | `workspace_conflict` (`workspace`, `existing_project`, `message`); current session remains active and destination is unchanged |
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
@@ -423,8 +430,9 @@ The phase strings used by the web page are the values of
 switching the MLX chat model. The strings are duplicated as JavaScript
 constants and are covered by the Qt-free protocol tests.
 
-A common successful answer can send `status`, several `answer_phase` and
-`progress` events, zero or more `answer_delta` and `usage_progress` events,
+A common successful answer can send `status`, several `answer_phase`,
+`answer_activity`, and `progress` events, zero or more `answer_delta` and
+`usage_progress` events,
 and a final `answered` event with the saved turn. The exact number of phase
 updates and intermediate order **depend on intent, tools, model switches,
 and retrieval paths**. `answer_delta` reports batched model text; the

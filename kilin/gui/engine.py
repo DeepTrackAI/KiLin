@@ -2940,6 +2940,9 @@ class ChatEngine:
                 phase=phase,
                 **details,
             )
+            options["activity_callback"] = lambda event: self._send(
+                "answer_activity", **event
+            )
             if self.read_command is not None:
                 options["confirm_callback"] = self._confirm_plan
                 options["choice_callback"] = self._choose_option
