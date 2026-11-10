@@ -546,10 +546,13 @@ the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
 
-Select an answer to inspect its evidence. A citation requests a preview of
-that evidence's source location through the bridge. Reference responses are
-matched to the currently selected turn and citation before being displayed,
-so a late response does not overwrite a newer selection.
+Clicking an answer selects its evidence when the side panels are visible;
+selecting text does not change the current reference. Ordinary answer clicks
+do not open hidden panels. Clicking a citation opens the panels and requests
+a preview of the cited source through the bridge. Pressing Enter or Space on
+a focused answer also explicitly opens its references. Reference responses
+are matched to the currently selected turn and citation before being
+displayed, so a late response does not overwrite a newer selection.
 
 The interface displays backend phases as they happen: loading a model,
 identifying intent, retrieving or reusing references, and reading the

@@ -4321,8 +4321,7 @@ function revealWorkspacePath(path) {
 }
 
 /**
- * Append a completed turn, enable answer selection, and show its
- * references.
+ * Append a completed turn and enable its answer/reference interactions.
  *
  * @param turn Saved question, answer, and evidence data.
  */
@@ -4335,19 +4334,7 @@ function addTurn(turn) {
   fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
-  answer.tabIndex = 0;
-  answer.setAttribute("aria-label", "Select this answer to view its references");
-  answer.addEventListener("click", () => {
-    chooseSidePanels(true);
-    selectTurn(item, turn);
-  });
-  answer.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      chooseSidePanels(true);
-      selectTurn(item, turn);
-    }
-  });
+  bindAnswerSelection(answer, item, turn);
   renderAnswer(answer, turn, item);
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
@@ -5281,7 +5268,10 @@ function showToolChoice(choice) {
 }
 
 /**
- * Enable pointer and keyboard selection of a completed answer.
+ * Select an answer without disrupting text selection or panel visibility.
+ *
+ * Ordinary clicks select an answer only when the panels are already open.
+ * A deliberate keyboard activation can still open them for accessibility.
  *
  * @param answer Focusable answer element.
  * @param item Parent conversation article.
@@ -5290,15 +5280,18 @@ function showToolChoice(choice) {
 function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
-  const choose = () => {
-    chooseSidePanels(true);
+  answer.addEventListener("click", (event) => {
+    if (!shell.classList.contains("sidebar-open")
+        || window.getSelection()?.isCollapsed === false
+        || event.target?.closest("button, a, summary")) return;
     selectTurn(item, turn);
-  };
-  answer.addEventListener("click", choose);
+  });
   answer.addEventListener("keydown", (event) => {
+    if (event.target !== answer) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      choose();
+      chooseSidePanels(true);
+      selectTurn(item, turn);
     }
   });
 }
