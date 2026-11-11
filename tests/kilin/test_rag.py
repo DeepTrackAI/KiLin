@@ -613,6 +613,61 @@ class TestRAGSessionConstruction(unittest.TestCase):
         self.assertEqual(mocks.prepared.call_count, 1)
         self.assertTrue(session._owns_trace)
 
+    def test_constructor_uses_saved_router_without_gui(self) -> None:
+        """Choose the saved project router without an explicit model ID."""
+
+        from kilin.model_settings import write_router_model
+
+        write_router_model(self.root, BACKEND_MLX, "example/saved-router")
+        with self._construction_patches():
+            session = rag.RAGSession(self.root)
+        self.addCleanup(session.close)
+        self.assertEqual(session.router_model, "example/saved-router")
+        self.assertNotEqual(
+            session.router_model,
+            self.project.profile.chat_model(BACKEND_MLX),
+        )
+
+    def test_explicit_router_overrides_saved_project_model(self) -> None:
+        """Keep an explicit session choice without editing the profile."""
+
+        from kilin.model_settings import (
+            read_router_model, write_router_model,
+        )
+
+        write_router_model(self.root, BACKEND_MLX, "example/saved-router")
+        with self._construction_patches():
+            session = rag.RAGSession(
+                self.root, router_model="example/override-router"
+            )
+        self.addCleanup(session.close)
+        self.assertEqual(session.router_model, "example/override-router")
+        self.assertEqual(
+            read_router_model(self.root, BACKEND_MLX),
+            "example/saved-router",
+        )
+
+    def test_explicit_empty_router_is_rejected(self) -> None:
+        """Do not silently substitute defaults for an invalid override."""
+
+        with self._construction_patches():
+            with self.assertRaises(ValueError):
+                rag.RAGSession(self.root, router_model="")
+
+    def test_constructor_without_router_setting_uses_core_default(
+        self,
+    ) -> None:
+        """Core-only projects share the published router default."""
+
+        from kilin.model_settings import default_router_model
+
+        with self._construction_patches():
+            session = rag.RAGSession(self.root)
+        self.addCleanup(session.close)
+        self.assertEqual(
+            session.router_model, default_router_model(BACKEND_MLX)
+        )
+
     def test_constructor_restores_history_and_generation_settings(
         self,
     ) -> None:

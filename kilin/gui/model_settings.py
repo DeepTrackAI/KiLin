@@ -1,10 +1,11 @@
-"""Keep a project's effort levels, search depth, and router in profile.ini.
+"""Keep GUI effort and search settings alongside core router settings.
 
 Each backend has five effort levels; a level has a display name and the
 chat model it answers with. Search depth is a separate vector of five
 steps, each the number of passages retrieved for an answer. The composer
-picks an effort level and a search-depth step independently. The intent
-router model is chosen per backend.
+picks an effort level and a search-depth step independently. The router
+model is selected by the core ``kilin.model_settings`` module; this module
+re-exports its project-level read/write functions.
 
 Every project keeps all its settings, changed or not, in its own
 ``profile.ini``, next to the core settings, so it resumes exactly as it was
@@ -21,23 +22,25 @@ set up even when ``kilin/gui/defaults.json`` changes later:
     depth = 5, 5, 10, 10, 15
 
     [router]
-    mlx = Qwen/Qwen3-8B-MLX-4bit
-    torch = Qwen/Qwen3-8B
+    mlx = Qwen/Qwen3-4B-MLX-4bit
+    torch = Qwen/Qwen3-4B
 
 ``save_project_settings`` writes them when a project is created or first
 opened, from the defaults, or from the ``effort_levels.json`` and
 ``model_choices.json`` files earlier versions kept, which it then removes.
 
-The defaults and the shared validation live in
-``kilin.gui.preferences``.
+GUI effort and search defaults live in ``kilin.gui.preferences``. Router
+model validation, persistence, and packaged defaults live in KíLín core.
+The GUI supplies its application preference only when a project has no
+saved or legacy router choice.
 
 Key Features
 ------------
 
 - **Project-local settings**
 
-    Read and update effort levels, search-depth steps, and router models in
-    the project's ``profile.ini``.
+    Read and update effort levels and search-depth steps in the project's
+    ``profile.ini``. Router read/write functions are imported from core.
 
 - **Legacy migration**
 
@@ -56,7 +59,7 @@ Module Structure
 
 - ``read_router_model``, ``write_router_model``
 
-    Read and write the project router model.
+    Re-export the core project-router configuration operations.
 
 - ``save_project_settings``
 
@@ -87,6 +90,7 @@ from kilin.gui.preferences import (
     validate_model_id,
     validate_search_depth,
 )
+from kilin.model_settings import read_router_model, write_router_model
 from kilin.runtime import BACKEND_MLX, BACKEND_TORCH
 
 __all__ = [
@@ -269,57 +273,6 @@ def write_search_depth(root: Path, steps: list[int]) -> None:
     _write(root, profile)
 
 
-def read_router_model(root: Path | None, backend: str) -> str:
-    """Return a project's intent router model for one backend.
-
-    Parameters
-    ----------
-    root: pathlib.Path | None
-        Project workspace, or None for a project not created yet.
-    backend: str
-        Computation backend whose router model is wanted.
-
-    Returns
-    -------
-    str
-        The saved model ID; for a project that has not saved one yet, an
-        earlier version's choice, otherwise the default.
-
-    """
-
-    if root is None:
-        return default_router_model(backend)
-    profile = _read(root)
-    if profile.has_option(_ROUTER_SECTION, backend):
-        return validate_model_id(profile.get(_ROUTER_SECTION, backend))
-    routers = _legacy(root).get("router")
-    if isinstance(routers, dict) and isinstance(routers.get(backend), str):
-        return validate_model_id(routers[backend])
-    return default_router_model(backend)
-
-
-def write_router_model(root: Path, backend: str, model_id: str) -> None:
-    """Save a project's intent router model for one backend.
-
-    Parameters
-    ----------
-    root: pathlib.Path
-        Project workspace.
-    backend: str
-        Computation backend the router model belongs to.
-    model_id: str
-        Model ID to validate and save.
-
-    """
-
-    model_id = validate_model_id(model_id)
-    profile = _read(root)
-    if not profile.has_section(_ROUTER_SECTION):
-        profile.add_section(_ROUTER_SECTION)
-    profile.set(_ROUTER_SECTION, backend, model_id)
-    _write(root, profile)
-
-
 def save_project_settings(root: Path) -> bool:
     """Write every setting a project's ``profile.ini`` does not keep yet.
 
@@ -346,7 +299,11 @@ def save_project_settings(root: Path) -> bool:
             write_effort_levels(root, backend, levels)
             changed = True
         if not profile.has_option(_ROUTER_SECTION, backend):
-            write_router_model(root, backend, read_router_model(root, backend))
+            initial_router = read_router_model(
+                root, backend,
+                default_model=default_router_model(backend),
+            )
+            write_router_model(root, backend, initial_router)
             changed = True
     if not profile.has_option(_SEARCH_SECTION, "depth"):
         write_search_depth(root, read_search_depth(root))
