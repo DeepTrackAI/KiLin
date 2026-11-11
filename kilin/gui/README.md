@@ -86,6 +86,9 @@ records supplied with that answer.
 LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
 KaTeX (`web/katex/`, MIT) as MathML, without fonts or network access;
 LaTeX it cannot read stays as text.
+Fenced `latex` blocks display source text with long lines wrapped, while
+preserving explicit line breaks and indentation. Other code blocks retain
+their horizontal scrolling behavior.
 Files attached to a message are first added to the project's sources and
 indexed, without the add dialog; the question then lists their `sources/`
 paths. The question shows them as chips that open the workspace tree there.
@@ -198,9 +201,10 @@ use link, under a copyright line built from the package authors.
 The initial setup blocks project interaction until terms acceptance and
 projects-folder confirmation succeed. After that, saved projects can be
 resumed without downloading new models; creating and answering in new
-projects still requires the configured models. Repeated creation from the
-same sources allocates
-independent numbered folders. An explicitly selected occupied destination is
+projects still requires the configured models. Changing the type selected
+for a new project does not filter or hide existing resumable projects.
+Repeated creation from the same sources allocates independent numbered
+folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
@@ -516,9 +520,12 @@ See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking
 ## Conversations, references, and progress
 
 New chat creates a separate conversation record while retaining earlier
-conversations in the picker. It does not archive and delete the previous GUI
-conversation. Branch copies resumable parent state and records parent and
-checkpoint identifiers; it does not copy the entire parent event history.
+conversations in the picker; it does not archive or delete the previous GUI
+conversation. The chat producing an answer is italicized with a spinner in
+the left panel, even while another chat is being read. The indicator clears
+on completion, cancellation, or failure and is not saved. Branch copies
+resumable parent state and records parent and checkpoint identifiers; it
+does not copy the entire parent event history.
 Renaming a conversation updates display metadata. The chat heading and the
 floating top bar show only the open chat's name and turn count. The left
 panel lists projects; right-click the open project to rename it, and its
@@ -543,10 +550,13 @@ the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
 
-Select an answer to inspect its evidence. A citation requests a preview of
-that evidence's source location through the bridge. Reference responses are
-matched to the currently selected turn and citation before being displayed,
-so a late response does not overwrite a newer selection.
+Clicking an answer selects its evidence when the side panels are visible;
+selecting text does not change the current reference. Ordinary answer clicks
+do not open hidden panels. Clicking a citation opens the panels and requests
+a preview of the cited source through the bridge. Pressing Enter or Space on
+a focused answer also explicitly opens its references. Reference responses
+are matched to the currently selected turn and citation before being
+displayed, so a late response does not overwrite a newer selection.
 
 The interface displays backend phases as they happen: loading a model,
 identifying intent, retrieving or reusing references, and reading the

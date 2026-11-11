@@ -452,7 +452,7 @@ button:disabled { opacity: .62; cursor: default; }
 .prompt-suggestions button { min-height: 34px; border: 1px solid var(--line); color: var(--muted); background: var(--surface-soft); font-size: 12px; font-weight: 500; }
 .turn { margin: 0 0 32px; }
 .user-message { width: fit-content; max-width: 78%; margin-left: auto; padding: 12px 16px; border-radius: 15px; color: var(--user-bubble-text); background: var(--user-bubble); white-space: pre-wrap; }
-.answer-message { margin: 20px 0 12px; line-height: 1.65; white-space: pre-wrap; cursor: pointer; }
+.answer-message { margin: 20px 0 12px; line-height: 1.65; white-space: pre-wrap; cursor: text; }
 .answer-phase { color: var(--control); cursor: default; }
 .answer-phase-label { color: var(--control); }
 .answer-phase-header { display: flex; align-items: baseline; gap: 10px; }
@@ -490,7 +490,7 @@ button:disabled { opacity: .62; cursor: default; }
 .answer-math.display { overflow-x: auto; margin: 12px 0; padding: 2px 0; text-align: center; }
 .answer-math.display math { display: block math; }
 .answer-citation { margin-left: 1px; vertical-align: super; font-size: .75em; line-height: 0; }
-.answer-citation button { min-height: 0; padding: 0 1px; border: 0; border-radius: 0; color: var(--citation); background: none; font: inherit; font-weight: 650; text-decoration: underline; }
+.answer-citation button { min-height: 0; padding: 0 1px; border: 0; border-radius: 0; color: var(--citation); background: none; font: inherit; line-height: normal; font-weight: 650; text-decoration: underline; }
 .answer-citation button:hover, .answer-citation button:focus-visible { color: var(--citation-hover); }
 /* Small and grey, like a footnote: always visible, never in the way. */
 .ai-disclaimer { flex: none; margin: 0 0 6px; color: var(--muted); font-size: 11px; line-height: 1.4; text-align: center; }
@@ -701,6 +701,10 @@ button.question-attachment:hover, button.question-attachment:focus-visible { bor
 .conversation-item.provisional { color: var(--muted); font-style: italic; }
 .conversation-item.unread { font-weight: 600; }
 .conversation-item.unread::before { display: inline-block; width: 7px; height: 7px; margin: 0 7px 1px 0; border-radius: 50%; background: var(--accent); content: ""; }
+/* An answer in progress stays identifiable when another chat is viewed. */
+.conversation-item.generating { font-style: italic; }
+.conversation-item.generating::before { content: ""; display: inline-block; box-sizing: border-box; width: 12px; height: 12px; margin-right: 7px; border: 2px solid var(--control); border-right-color: transparent; border-radius: 50%; vertical-align: -2px; animation: send-waiting .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .conversation-item.generating::before { animation: none; } }
 /* Drag handles on the panel borders; positioned by JavaScript. */
 .panel-resizer { position: fixed; top: 0; z-index: 30; width: 7px; height: 100vh; cursor: col-resize; touch-action: none; }
 .panel-resizer::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent; transition: background 0.15s; }
@@ -752,6 +756,8 @@ details.answer-duration summary { width: fit-content; cursor: pointer; }
 .answer-body li { margin: 0.2em 0; white-space: pre-wrap; }
 .answer-body code { padding: 0.1em 0.3em; border-radius: 4px; background: var(--surface-soft); font-size: 0.92em; }
 .answer-body pre { margin: 0 0 0.75em; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: var(--surface-soft); white-space: pre; }
+/* Preserve LaTeX source formatting while wrapping long formula lines. */
+.answer-body pre.answer-latex-source { white-space: pre-wrap; overflow-wrap: anywhere; }
 .answer-body pre code { padding: 0; background: transparent; }
 .answer-body blockquote { margin: 0 0 0.75em; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); }
 .answer-body hr { margin: 1em 0; border: 0; border-top: 1px solid var(--line); }

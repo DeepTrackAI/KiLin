@@ -247,11 +247,6 @@ function updateFloatingHeader() {
 }
 
 /**
- * Hide and clear the previously offered saved-project shortcut.
- */
-function hideResume() { byId("saved-projects").classList.add("hidden"); }
-
-/**
  * Ask the engine for a saved project only on an idle setup screen.
  */
 function refreshSavedProject() {
@@ -327,7 +322,10 @@ function renderSavedProjects(projects) {
   const shown = JSON.stringify(projects.map((project) => [
     project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
   ]));
-  if (host.dataset.shown === shown) return;
+  if (host.dataset.shown === shown) {
+    host.classList.toggle("hidden", !host.children.length);
+    return;
+  }
   host.dataset.shown = shown;
   const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
@@ -3378,6 +3376,7 @@ function setBusy(value, message = "") {
   byId("new-chat").disabled = value || !ready;
   // While an answer runs, other chats can still be read, not changed.
   document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
+  syncGeneratingConversations();
   document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
@@ -3874,6 +3873,9 @@ function renderMarkdown(host, text, linkCitation = null) {
       while (index < lines.length && !MARKDOWN_FENCE.test(lines[index])) code.push(lines[index++]);
       index += 1;
       const pre = document.createElement("pre");
+      if (/^\s*```[ \t]*latex[ \t]*$/i.test(line)) {
+        pre.className = "answer-latex-source";
+      }
       const element = document.createElement("code");
       element.textContent = code.join("\n");
       pre.append(element);
@@ -4318,8 +4320,7 @@ function revealWorkspacePath(path) {
 }
 
 /**
- * Append a completed turn, enable answer selection, and show its
- * references.
+ * Append a completed turn and enable its answer/reference interactions.
  *
  * @param turn Saved question, answer, and evidence data.
  */
@@ -4332,19 +4333,7 @@ function addTurn(turn) {
   fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
-  answer.tabIndex = 0;
-  answer.setAttribute("aria-label", "Select this answer to view its references");
-  answer.addEventListener("click", () => {
-    chooseSidePanels(true);
-    selectTurn(item, turn);
-  });
-  answer.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      chooseSidePanels(true);
-      selectTurn(item, turn);
-    }
-  });
+  bindAnswerSelection(answer, item, turn);
   renderAnswer(answer, turn, item);
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
@@ -4353,6 +4342,24 @@ function addTurn(turn) {
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
+}
+
+/**
+ * Mark only the chat currently producing an answer in the sidebar.
+ *
+ * The answering chat stays marked while another conversation is read.
+ * The marker is presentation state and never enters saved conversation data.
+ */
+function syncGeneratingConversations() {
+  const generating = busy && activity.classList.contains("answer-progress")
+    ? answeringConversationId : "";
+  document.querySelectorAll(".conversation-item").forEach((item) => {
+    const active = Boolean(generating)
+      && item.dataset.conversationId === generating;
+    item.classList.toggle("generating", active);
+    item.setAttribute("aria-label", active
+      ? `${item.textContent} (generating answer)` : item.textContent);
+  });
 }
 
 /**
@@ -4442,6 +4449,7 @@ function renderConversations(data) {
       });
     }
   }
+  syncGeneratingConversations();
   const heading = reading ? reading.name : activeEmpty ? "" : activeName;
   byId("conversation-name").textContent = heading;
   byId("conversation-name").classList.toggle("hidden", !heading);
@@ -5278,7 +5286,10 @@ function showToolChoice(choice) {
 }
 
 /**
- * Enable pointer and keyboard selection of a completed answer.
+ * Select an answer without disrupting text selection or panel visibility.
+ *
+ * Ordinary clicks select an answer only when the panels are already open.
+ * A deliberate keyboard activation can still open them for accessibility.
  *
  * @param answer Focusable answer element.
  * @param item Parent conversation article.
@@ -5287,15 +5298,18 @@ function showToolChoice(choice) {
 function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
-  const choose = () => {
-    chooseSidePanels(true);
+  answer.addEventListener("click", (event) => {
+    if (!shell.classList.contains("sidebar-open")
+        || window.getSelection()?.isCollapsed === false
+        || event.target?.closest("button, a, summary")) return;
     selectTurn(item, turn);
-  };
-  answer.addEventListener("click", choose);
+  });
   answer.addEventListener("keydown", (event) => {
+    if (event.target !== answer) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      choose();
+      chooseSidePanels(true);
+      selectTurn(item, turn);
     }
   });
 }
@@ -6782,7 +6796,6 @@ for (const id of ["temperature", "max-new-tokens"]) {
   byId(id).addEventListener("change", saveAnswerNumbers);
 }
 byId("type-id").addEventListener("change", () => {
-  hideResume();
   bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
