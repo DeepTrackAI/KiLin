@@ -6036,8 +6036,10 @@ def _answer_prompt(
 
     Notes
     -----
-    A question about several documents ("the five articles", "all the
-    papers") also asks for each source of the evidence in turn
+    The prompt names the valid evidence numbers, because a passage's own
+    reference markers ("... memory capacity [23]") were copied as
+    citations. A question about several documents ("the five articles",
+    "all the papers") also asks for each source of the evidence in turn
     (``_per_source_instruction``). Evidence text is inserted without
     semantic validation. The current label
     includes path, line range, optional symbol and context role, but not
@@ -6056,6 +6058,11 @@ def _answer_prompt(
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
         sections.append(evidence_block(item, item.citation))
+    numbers = sorted({item.citation for item in evidence})
+    cited = (
+        f"[{numbers[0]}]" if len(numbers) == 1
+        else f"[{numbers[0]}] to [{numbers[-1]}]"
+    )
     sections.append(
         "Prioritize direct evidence about the requested target. "
         "Related evidence can explain dependencies or alternatives. "
@@ -6063,8 +6070,10 @@ def _answer_prompt(
         "its actual source and do not equate differently qualified symbols "
         "without supporting evidence. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
-        "after the claims they support. Do not repeat the source text or "
-        "write a bibliography."
+        "after the claims they support. Cite only the evidence numbers "
+        f"{cited}: numbers in brackets inside the evidence text are the "
+        "documents' own references, not evidence. Do not repeat the source "
+        "text or write a bibliography."
     )
     if isinstance(guidance, str) and guidance.strip():
         sections[-1] += " " + guidance.strip()

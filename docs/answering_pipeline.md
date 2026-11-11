@@ -339,6 +339,12 @@ scientific claims, and it does not trigger a second generation attempt or
 auto-correction of the text. An answer may contain unsupported or mistaken
 claims even if all citation indices resolve.
 
+To prevent the most common invalid citation, the evidence prompt names the
+valid evidence numbers and says that bracketed numbers inside the evidence
+text are the documents' own references: passages of scientific papers
+carry their reference markers ("... memory capacity [23]"), which the
+model otherwise copies as citations.
+
 The GUI's citation previews are derived from saved exact evidence and source
 coordinates. They must not silently substitute a different file or invent
 supporting text if the source has changed since indexing.

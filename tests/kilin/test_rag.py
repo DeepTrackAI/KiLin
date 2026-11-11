@@ -132,6 +132,15 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertIn("[1] src/a.py:1-3 (func)\nFirst excerpt", prompt)
         self.assertIn("[2] src/a.py:1-3\nsource text", prompt)
         self.assertIn("bibliography. Short.", prompt)
+        self.assertIn(
+            "Cite only the evidence numbers [1] to [2]: numbers in brackets "
+            "inside the evidence text are the documents' own references",
+            prompt,
+        )
+        self.assertIn(
+            "evidence numbers [1]:",
+            rag._answer_prompt("Q", evidence[:1]),
+        )
         self.assertTrue(prompt.endswith("requests:\nExplain this"))
         self.assertNotIn("(None)", prompt)
         self.assertNotIn("cell=3", prompt)
