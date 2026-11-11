@@ -358,7 +358,9 @@ nothing about how relevant a source is. Before sources are chosen,
 source the question names, a source with a passage among the first
 *count* passages of the fused passage ranking (*count* is the intent's
 evidence count), and the source whose card ranks first. A comparison
-keeps at least two sources (the next ranked ones when fewer qualify).
+keeps at least two sources, and a question naming a number of sources
+("review the five articles", `requested_source_count`) at least that many
+(the next ranked ones when fewer qualify).
 Exhaustive questions ("all five papers") and several named sources skip
 this cut. The trace event `retrieval.sources.ranked` lists the sources
 left out as `unrelated`.

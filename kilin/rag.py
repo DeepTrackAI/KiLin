@@ -233,7 +233,10 @@ from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
 from kilin.retrievals.strategies.retrieval_semantic import (
     _validate_semantic_embeddings,
 )
-from kilin.retrievals.source_coverage import asks_for_all_sources
+from kilin.retrievals.source_coverage import (
+    asks_for_all_sources,
+    requested_source_count,
+)
 from kilin.retrievals.strategies.retrieval_code import CodeResult
 from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
 from kilin.retrievals.strategies.retrieval_sources import (
@@ -3830,6 +3833,7 @@ class RAGSession:
                     source_limits is not None
                     and source_limits.coverage == COVERAGE_EXHAUSTIVE
                 ),
+                requested=requested_source_count(question),
             )
             chosen_source_paths = tuple(
                 source_metadata.get("selected_sources", ())
@@ -4624,6 +4628,7 @@ class RAGSession:
         per_source: int = 1,
         metadata: dict[str, object] | None = None,
         exhaustive: bool = False,
+        requested: int = 0,
     ) -> list[HybridResult]:
         """Select sources by four-channel RRF, then original passages.
 
@@ -4655,6 +4660,9 @@ class RAGSession:
             Whether the question asks about every source ("all the
             papers"), so no source is left out as unrelated. Defaults to
             ``False``.
+        requested: int, optional
+            How many sources the question asks about ("the five
+            articles"); at least that many are kept. Defaults to ``0``.
 
         Returns
         -------
@@ -4663,7 +4671,8 @@ class RAGSession:
             Unless ``exhaustive`` or several sources are named, only
             sources the question is about are used (``relevant_sources``:
             a passage among the first ``count``, a named source, or the
-            best card match), at least two for a comparison.
+            best card match), at least two for a comparison and at least
+            ``requested``.
 
         Notes
         -----
@@ -4708,7 +4717,7 @@ class RAGSession:
         if not exhaustive and len(named) < 2:
             relevant = relevant_sources(
                 available, full_passages, depth=count, keep=named,
-                minimum=2 if compare else 1,
+                minimum=max(2 if compare else 1, requested),
             )
             unrelated = [
                 item.path for item in available if item not in relevant

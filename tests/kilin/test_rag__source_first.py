@@ -248,6 +248,12 @@ class TestSourceFirstRAG(unittest.TestCase):
         self.assertEqual(
             set(details["unrelated_sources"]), {Path("c.pdf"), Path("d.pdf")}
         )
+        # A count of papers keeps at least that many.
+        evidence = session._retrieve(
+            "Review the four articles on memory capacity", 4,
+            source_first=(8, True),
+        )
+        self.assertEqual(len({item.path for item in evidence}), 4)
         # Asking about every source keeps them all.
         budget = EvidenceLimits(8, 1, 8, 5000, coverage=COVERAGE_EXHAUSTIVE)
         evidence = session._retrieve(
