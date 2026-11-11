@@ -339,6 +339,18 @@ A card-ranked source need not have any globally top-ranked passage to
 be selected. All answer evidence still comes from the original chunks,
 not from generated card statements.
 
+Fusion gives every source a position in every channel, so in a small
+project every source is ranked, however unrelated, and a position says
+nothing about how relevant a source is. Before sources are chosen,
+`relevant_sources` therefore keeps only those the question is about: a
+source the question names, a source with a passage among the first
+*count* passages of the fused passage ranking (*count* is the intent's
+evidence count), and the source whose card ranks first. A comparison
+keeps at least two sources (the next ranked ones when fewer qualify).
+Exhaustive questions ("all five papers") and several named sources skip
+this cut. The trace event `retrieval.sources.ranked` lists the sources
+left out as `unrelated`.
+
 `retrievals/evidence_budget.py` adds validated per-intent **hard evidence
 limits** for source-first retrieval. Each selected source receives one
 original passage where it fits. The strategy then approaches the optional

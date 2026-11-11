@@ -237,6 +237,7 @@ from kilin.retrievals.source_coverage import asks_for_all_sources
 from kilin.retrievals.strategies.retrieval_code import CodeResult
 from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
 from kilin.retrievals.strategies.retrieval_sources import (
+    relevant_sources,
     select_source_passages,
     source_first_search,
 )
@@ -3824,6 +3825,10 @@ class RAGSession:
                     if source_limits is not None else 1
                 ),
                 metadata=source_metadata,
+                exhaustive=(
+                    source_limits is not None
+                    and source_limits.coverage == COVERAGE_EXHAUSTIVE
+                ),
             )
             chosen_source_paths = tuple(
                 source_metadata.get("selected_sources", ())
@@ -4592,6 +4597,7 @@ class RAGSession:
         trace_turn_id: str | None,
         per_source: int = 1,
         metadata: dict[str, object] | None = None,
+        exhaustive: bool = False,
     ) -> list[HybridResult]:
         """Select sources by four-channel RRF, then original passages.
 
@@ -4619,11 +4625,19 @@ class RAGSession:
             Target passages per source after the first. Defaults to ``1``.
         metadata: dict[str, object] | None, optional
             Mutable diagnostics with selected source paths. Defaults to None.
+        exhaustive: bool, optional
+            Whether the question asks about every source ("all the
+            papers"), so no source is left out as unrelated. Defaults to
+            ``False``.
 
         Returns
         -------
         list[HybridResult]
             Original chunks selected from independently ranked sources.
+            Unless ``exhaustive`` or several sources are named, only
+            sources the question is about are used (``relevant_sources``:
+            a passage among the first ``count``, a named source, or the
+            best card match), at least two for a comparison.
 
         Notes
         -----
@@ -4658,14 +4672,24 @@ class RAGSession:
             ]
             available = [*target, *others] if compare else target
 
-        limit = min(max_sources, count)
-        chosen = [item.path for item in available[:limit]]
         full_passages = hybrid_search(
             semantic=semantic,
             lexical=lexical,
             code=code,
             count=len(self.chunks),
         )
+        unrelated: list[Path] = []
+        if not exhaustive and len(named) < 2:
+            relevant = relevant_sources(
+                available, full_passages, depth=count, keep=named,
+                minimum=2 if compare else 1,
+            )
+            unrelated = [
+                item.path for item in available if item not in relevant
+            ]
+            available = relevant
+        limit = min(max_sources, count)
+        chosen = [item.path for item in available[:limit]]
         passages = select_source_passages(
             full_passages, chosen, count=count,
             per_source=per_source,
@@ -4677,6 +4701,7 @@ class RAGSession:
                     item.path for item in available
                 ),
                 "ranked_source_count": len(available),
+                "unrelated_sources": tuple(unrelated),
             })
         trace = getattr(self, "trace", NullTraceLogger())
         trace.emit(
@@ -4696,6 +4721,7 @@ class RAGSession:
                 "selected_count": len(chosen),
                 "passage_count": len(passages),
                 "scope": named,
+                "unrelated": unrelated,
             },
             turn_id=trace_turn_id,
         )
