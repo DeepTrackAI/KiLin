@@ -520,9 +520,12 @@ See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking
 ## Conversations, references, and progress
 
 New chat creates a separate conversation record while retaining earlier
-conversations in the picker. It does not archive and delete the previous GUI
-conversation. Branch copies resumable parent state and records parent and
-checkpoint identifiers; it does not copy the entire parent event history.
+conversations in the picker; it does not archive or delete the previous GUI
+conversation. The chat producing an answer is italicized with a spinner in
+the left panel, even while another chat is being read. The indicator clears
+on completion, cancellation, or failure and is not saved. Branch copies
+resumable parent state and records parent and checkpoint identifiers; it
+does not copy the entire parent event history.
 Renaming a conversation updates display metadata. The chat heading and the
 floating top bar show only the open chat's name and turn count. The left
 panel lists projects; right-click the open project to rename it, and its

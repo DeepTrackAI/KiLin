@@ -3376,6 +3376,7 @@ function setBusy(value, message = "") {
   byId("new-chat").disabled = value || !ready;
   // While an answer runs, other chats can still be read, not changed.
   document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
+  syncGeneratingConversations();
   document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
@@ -4344,6 +4345,24 @@ function addTurn(turn) {
 }
 
 /**
+ * Mark only the chat currently producing an answer in the sidebar.
+ *
+ * The answering chat stays marked while another conversation is read.
+ * The marker is presentation state and never enters saved conversation data.
+ */
+function syncGeneratingConversations() {
+  const generating = busy && activity.classList.contains("answer-progress")
+    ? answeringConversationId : "";
+  document.querySelectorAll(".conversation-item").forEach((item) => {
+    const active = Boolean(generating)
+      && item.dataset.conversationId === generating;
+    item.classList.toggle("generating", active);
+    item.setAttribute("aria-label", active
+      ? `${item.textContent} (generating answer)` : item.textContent);
+  });
+}
+
+/**
  * Replace the conversation picker using the backend registry.
  *
  * @param data Event containing conversation records and the active
@@ -4430,6 +4449,7 @@ function renderConversations(data) {
       });
     }
   }
+  syncGeneratingConversations();
   const heading = reading ? reading.name : activeEmpty ? "" : activeName;
   byId("conversation-name").textContent = heading;
   byId("conversation-name").classList.toggle("hidden", !heading);
