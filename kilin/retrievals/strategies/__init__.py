@@ -3,6 +3,7 @@
 Lexical retrieval uses TF-IDF weights, semantic retrieval uses embedding
 cosine similarity, code retrieval follows recognized entity relationships,
 and hybrid retrieval combines existing rankings through reciprocal ranks.
+Source-first retrieval fuses source positions before selecting evidence.
 Each strategy has its own score semantics. This initializer only re-exports
 the listed implementations; it does not build indexes or perform searches.
 
@@ -45,6 +46,10 @@ Module Structure
 
     One chunk returned by semantic ranking.
 
+- ``SourceResult``
+
+    One source ranked across independent retrieval channels.
+
 - ``build_lexical_index``
 
     Calculate TF-IDF vectors for repository chunks.
@@ -77,6 +82,14 @@ Module Structure
 
     Rank indexed chunks by cosine similarity to one query.
 
+- ``source_first_search``
+
+    Fuse semantic, lexical, graph, and card rankings by source.
+
+- ``select_source_passages``
+
+    Select original passages from the source-ranked candidates.
+
 Examples
 --------
 >>> import kilin
@@ -97,6 +110,11 @@ from .retrieval_lexical import (
     lexical_search,
     lexical_terms,
 )
+from .retrieval_sources import (
+    SourceResult,
+    select_source_passages,
+    source_first_search,
+)
 from .retrieval_semantic import (
     SemanticIndex,
     SemanticResult,
@@ -112,6 +130,7 @@ __all__ = [
     "LexicalResult",
     "SemanticIndex",
     "SemanticResult",
+    "SourceResult",
     "build_lexical_index",
     "build_semantic_index",
     "code_search",
@@ -120,4 +139,6 @@ __all__ = [
     "lexical_terms",
     "resolve_code_entities",
     "semantic_search",
+    "select_source_passages",
+    "source_first_search",
 ]

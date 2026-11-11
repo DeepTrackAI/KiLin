@@ -54,6 +54,7 @@ except _PackageNotFoundError:
         __version__ = _tomllib.load(_stream)["project"]["version"]
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
+from .answer_timeline import AnswerTimeline, AnswerTimelineStep
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .model_defaults import (
@@ -63,12 +64,21 @@ from .model_defaults import (
     DEFAULT_EMBEDDING_MODEL_TORCH,
     DEFAULT_ROUTER_MODEL_MLX,
     DEFAULT_ROUTER_MODEL_TORCH,
+    DEFAULT_SOURCE_CARD_MODEL_MLX,
+    DEFAULT_SOURCE_CARD_MODEL_TORCH,
     MODEL_ROLE_CHAT,
     MODEL_ROLE_CHOICES,
     MODEL_ROLE_EMBEDDING,
     ModelRole,
 )
-from .model_settings import read_router_model, write_router_model
+from .model_settings import (
+    SourceCardGenerationSettings,
+    default_source_card_generation_settings,
+    read_router_model,
+    read_source_card_generation_settings,
+    write_router_model,
+    write_source_card_generation_settings,
+)
 from .huggingface import (
     available_models,
     cached_model_snapshot,
@@ -223,6 +233,7 @@ from .trace_logging import (
     FAILURE_POLICY_CHOICES,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
+    TRACE_EVENT_ANSWER_ACTIVITY,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
@@ -265,6 +276,8 @@ __all__ = [
     "ANSWER_PHASE_SAVING",
     "ASSISTANT_ROLE",
     "AnswerPhase",
+    "AnswerTimeline",
+    "AnswerTimelineStep",
     "BACKEND_AUTO",
     "BACKEND_CHOICES",
     "BACKEND_MLX",
@@ -283,6 +296,8 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL_TORCH",
     "DEFAULT_ROUTER_MODEL_MLX",
     "DEFAULT_ROUTER_MODEL_TORCH",
+    "DEFAULT_SOURCE_CARD_MODEL_MLX",
+    "DEFAULT_SOURCE_CARD_MODEL_TORCH",
     "EmbeddingSession",
     "Evidence",
     "FAILURE_POLICY_CHOICES",
@@ -317,6 +332,7 @@ __all__ = [
     "SemanticResult",
     "SourceFile",
     "SourceUnit",
+    "TRACE_EVENT_ANSWER_ACTIVITY",
     "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
     "TRACE_EVENT_LLM_CALL_INPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT",
@@ -359,7 +375,10 @@ __all__ = [
     "open_project",
     "plan_context_expansion",
     "read_document",
+    "SourceCardGenerationSettings",
+    "default_source_card_generation_settings",
     "read_router_model",
+    "read_source_card_generation_settings",
     "DocumentSelection",
     "DocumentReason",
     "DOCUMENT_REASON_CHOICES",
@@ -373,6 +392,7 @@ __all__ = [
     "remove_workspace_sources",
     "sync_project_sources",
     "write_router_model",
+    "write_source_card_generation_settings",
     "SourceAction",
     "SourceChanges",
     "SourceVersion",

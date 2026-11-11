@@ -415,7 +415,7 @@ def _directory_digest(
     Notes
     -----
     Files are read in bounded blocks. The tree digest combines JSON-encoded
-    relative names and individual content hashes, preserving the prior PR 4
+    relative names and individual content hashes, preserving the earlier
     model identity regardless of cache hits, misses, or cache location.
 
     """

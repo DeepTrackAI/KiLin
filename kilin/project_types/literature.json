@@ -11,7 +11,13 @@
   "system_prompt": "Answer only from the supplied project evidence. Put source numbers such as [1] and [2] directly after supported claims. Do not write a separate reference list or copy bibliographic text. Say when evidence is insufficient.",
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
-    "code_graph": "auto"
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": true,
+      "kind": "scientific_paper",
+      "automatic": true
+    }
   },
   "history": {
     "recent_turns": 2
@@ -19,19 +25,24 @@
   "default_intent": "question_answering",
   "intents": {
     "question_answering": {
-      "description": "Answer a question about the documents' content, methods, or findings, or what the papers say about a topic ('how does the method work?', 'summarize what the papers say about sleep quality', 'why did the authors choose this design?'). Not for a specific number, setting, or name, or a complete list of the things a paper includes (fact_finding), not for a summary of one particular paper (paper_overview), and not when the user asks to read through a whole document (document_reading).",
+      "description": "Answer a question about the documents' content, methods, or findings, or what the papers say about a topic ('how does the method work?', 'summarize what the papers say about sleep quality', 'why did the authors choose this design?', 'what kind of data does that study analyze?', 'does the paper's software support plug-ins?', 'what does the value in Figure 2 represent?'). Not for a specific number, setting, or name, or a complete list of the things a paper includes (fact_finding), not for a summary of one particular paper (paper_overview), and not when the user asks to read through a whole document (document_reading).",
       "system_prompt": "Answer the question directly and support each claim with the evidence.",
       "history": {
         "policy": "relevant"
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 3,
+        "passages_per_source": 1,
+        "max_passages": 8,
+        "evidence_tokens": 5000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
     "fact_finding": {
-      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations or what the papers say about a topic (question_answering), and not for listing sentences, passages, or files.",
+      "description": "A specific fact, or a complete list of specific things, stated in one paper or across every paper in the project: a number, a setting, or the names of the models, datasets, methods, tools, species, materials, or samples involved ('what sample size does that paper use?', 'which model does each paper use?', 'give a full list of the species studied in that paper', 'list all the datasets used across the papers', 'how many participants are in the Smith study?', 'which tools does Table 2 of that paper list?'). Reads every passage for a thorough answer, and offers a quick answer instead. Not for explanations, what the papers say about a topic, what kind of data or measurements a study analyzes in general, or whether a paper supports a feature (question_answering), and not for listing sentences, passages, or files.",
       "history": {
         "policy": "relevant"
       },
@@ -48,13 +59,26 @@
     },
     "compare_sources": {
       "description": "Compare papers, methods, findings, or claims across sources.",
+      "cues": [
+        "^(?!.*\\breport\\b).*\\bdiffer(?:s|ent)?\\s+from\\b",
+        "^(?!.*\\breport\\b).*\\bthe\\s+same\\s+[\\w-]+(?:\\s+[\\w-]+)?\\s+as\\b",
+        "^(?!.*\\breport\\b).*\\b(?:all|both)\\s+(?:the\\s+)?(?:\\w+\\s+)?(?:papers|articles|studies)\\s+use\\s+the\\s+same\\b",
+        "^\\s*(?:now\\s+)?compare\\b",
+        "\\bcompare\\s+(?:it|them|this|that)\\s+(?:with|to)\\b",
+        "\\bhow\\s+does\\s+(?:it|this|that)\\s+compare\\b"
+      ],
       "system_prompt": "Compare the sources point by point, and say where they agree and where they differ.",
       "history": {
         "policy": "relevant"
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -76,6 +100,11 @@
     },
     "paper_overview": {
       "description": "A short summary or overview of one paper, in the chat ('give me a short summary of the Smith paper', 'what is the Lee paper about?', 'summarize another paper', 'a quick summary of one of the papers'). Asks which paper when none is named. Not for a named report format (research_briefing, popular_science_summary, technical_summary, or experimental_protocol), whether or not the user asks to save a file, and not for what several papers say about a topic (question_answering).",
+      "cues": [
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b).*\\b(?:an?\\s+)?(?:short\\s+|brief\\s+|quick\\s+)?overview\\s+of\\b",
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)(?!.*\\b(?:its|their|main|contributions|limitations|results|methods|findings)\\b)\\s*(?:now\\s+)?summari[sz]e\\s+(?:the|this|that|[\\w-]+\\.pdf)\\b",
+        "^(?!.*\\b(?:briefing|report|popular|technical|protocol|papers|articles|studies|documents|project|collection)\\b)\\s*(?:now\\s+)?tell\\s+me\\s+about\\s+(?:the|this|that)\\s+[\\w\\s-]+?\\s(?:paper|article|study)[.?!]?\\s*$"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -88,7 +117,10 @@
       }
     },
     "reference_check": {
-      "description": "Check one paper's references against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Provides offline search links for missing references, and optionally resolves them online with explicit user approval ('find web links for missing references in that paper'). Link-only requests do not recheck scientific claims. Asks which paper when none is named. Not for what a paper says about a topic (question_answering) or a summary of one paper (paper_overview).",
+      "description": "Only about one paper's references and citations. Check them against the project's files: which cited papers are in the project and which are missing, where each reference is cited in the paper's text, and whether the cited papers support the sentences citing them ('check the references of the Smith paper', 'which papers cited by patil25 are missing from the project?', 'does the Lee paper cite its sources correctly?', 'are the claims in that paper supported by the papers it cites?'). Provides offline search links for missing references, and optionally resolves them online with explicit user approval ('find web links for missing references in that paper'). Link-only requests do not recheck scientific claims. Asks which paper when none is named. Not for what a paper says about a topic, or whether a paper supports, offers, or includes a feature or capability ('did that paper already support plug-ins?' is question_answering), and not for a summary of one paper (paper_overview).",
+      "requires": [
+        "\\b(?:referenc\\w*|citation\\w*|cit(?:e|es|ed|ing)|bibliograph\\w*)\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -199,7 +231,7 @@
       }
     },
     "mention_listing": {
-      "description": "The sentences or files that mention or contain an exact word, name, or phrase, or whether, where, or how often it appears, in one paper or across the papers, including spelling variants such as 'COVID19' and 'COVID-19' ('give me a list of sentences in that paper mentioning MRI', 'how many sentences in that paper mention MRI?', 'does that paper mention MRI?', 'how many papers mention transfer learning?', 'check whether all the papers contain the phrase \"random forest\"', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the sentences must match a meaning rather than a word (topic_listing), and not for sorting mentions into categories.",
+      "description": "The sentences or files that mention or contain an exact word, name, or phrase, or whether, where, or how often it appears, in one paper or across the papers, including spelling variants such as 'COVID19' and 'COVID-19' ('give me a list of sentences in that paper mentioning MRI', 'how many sentences in that paper mention MRI?', 'does that paper mention MRI?', 'how many papers mention transfer learning?', 'check whether all the papers contain the phrase \"random forest\"', 'how many times does the Smith paper say MRI?'). Exhaustive and exact. Not when the sentences must match a meaning rather than a word (topic_listing), not for what a table, figure, or section of a paper lists (fact_finding), and not for sorting mentions into categories.",
       "history": {
         "policy": "none"
       },
@@ -216,6 +248,9 @@
     },
     "topic_listing": {
       "description": "Only when the user asks for the sentences, passages, or files that match a description judged by meaning, not by an exact word: 'list the sentences that discuss the study's limitations', 'which files use method X to study Y?', 'how many of the files are related to X?', 'list the papers that apply X to Y'. Reads every passage. Not for whether or where a word, name, or phrase appears, or the sentences that contain or mention it ('does it mention X?', 'how many papers mention X?', 'list the sentences that mention X' are mention_listing), and not for summarizing what the papers say.",
+      "cues": [
+        "^\\s*(?:now\\s+)?(?:find|show|list)\\s+(?:me\\s+)?(?:new\\s+|more\\s+|other\\s+|the\\s+)?passages?\\b"
+      ],
       "history": {
         "policy": "none"
       },
@@ -262,12 +297,20 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "hybrid",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 1,
+        "max_passages": 12,
+        "evidence_tokens": 8000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
     "refine_results": {
       "description": "Narrow down or judge the items an earlier answer listed (mentions, sentences, files, or passages) by a criterion, without searching again ('among those 7, how many are about XYZ 2?', 'of these sentences, which discuss limitations?', 'which of them are in the methods section?'). Judges each listed item.",
+      "cues": [
+        "^(?!.*\\b(?:find|search)\\b).*\\b(?:you\\s+(?:just\\s+)?listed|previously\\s+listed|listed\\s+(?:earlier|before|above))\\b"
+      ],
       "history": {
         "policy": "relevant"
       },
@@ -281,7 +324,7 @@
       }
     },
     "source_context": {
-      "description": "Show the exact source text behind an earlier answer: the sentence or passage it cited, word for word, with the sentences around it, and what it is talking about ('show me that sentence', 'where exactly does it say that?', 'what is that passage about?', 'show me the context of that quote'). Reads only the cited passages and their neighbours; no new search.",
+      "description": "Show the exact source text behind an earlier answer: the sentence or passage it cited, word for word, with the sentences around it, and what it is talking about ('show me that sentence', 'where exactly does it say that?', 'what is that passage about?', 'show me the context of that quote'). Reads only the cited passages and their neighbours; no new search. Only about the sources of an earlier answer: not for a question about a paper's figure, table, or value (question_answering), and not for finding new passages (topic_listing).",
       "history": {
         "policy": "relevant"
       },

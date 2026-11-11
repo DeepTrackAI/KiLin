@@ -48,12 +48,58 @@ silently substituting current creation defaults.
 `kilin.project.configure_project()` is the core API for validated project
 profile settings. The router is separately managed by the GUI-independent
 `kilin.model_settings.read_router_model()` and `write_router_model()`
-functions, which use the project's `[router]` section. The GUI maintains
+functions, which use the project's `[router]` section. Independently,
+`kilin.model_settings.read_source_card_generation_settings()` and
+`write_source_card_generation_settings()` own the dedicated card-generation
+model and parameters in `[source_card_generation]`. These are core settings,
+not a way to change active answering or routing sessions. The GUI maintains
 effort levels and search-depth steps in the same `profile.ini` through
 `kilin.gui.model_settings`; it no longer owns router persistence. These
 settings are not a separate active `effort_levels.json` database. The GUI
 still supports controlled migration of recognized older files on first use;
 moving or deleting files outside that migration is not authorized.
+
+### Source-card indexing policy
+
+Project-type JSON can declare `capabilities.source_cards` with `enabled`,
+`kind`, and `automatic` defaults. The literature type enables automatic
+`scientific_paper` cards; other packaged types leave cards disabled. These
+indexing choices are independent of `[source_card_generation]`, which
+configures the dedicated generation model rather than selecting sources.
+
+Project-local `profile.ini` can override the type defaults:
+
+```ini
+[source_cards]
+enabled = true
+kind = scientific_paper
+automatic = true
+```
+
+`kilin.source_card_policy.read_source_card_policy()` and
+`write_source_card_policy()` validate these values and retain unrelated
+profile sections. The project-level enabled switch is authoritative.
+
+Individual source-relative paths can override the default or opt out in
+`source_card_sources.json` at the project root:
+
+```json
+{
+  "format": "source-card-source-settings-v1",
+  "sources": {
+    "certificates/certificate.pdf": {"enabled": false},
+    "papers/study.pdf": {"kind": "scientific_paper"}
+  }
+}
+```
+
+Keys are case-sensitive source-relative paths; absolute or traversing
+paths, unknown card kinds, and malformed settings are rejected. Overrides
+do not bypass the kind's deterministic and model-assisted eligibility
+checks. Cards are reconciled on project opening and source refresh.
+Missing/outdated cards are generated automatically only when policy permits;
+valid cached cards are reused, and other retrieval channels work without
+cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-indexing).
 
 ### Important distinctions
 
@@ -119,6 +165,29 @@ fields documented defaults (including `search` for ordinary intents and
 combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
+
+### Source-first evidence limits per intent
+
+Ordinary model-answering intents with `retrieval.strategy` set to
+`"source_first"` may declare `max_sources`, `passages_per_source`,
+`max_passages`, `evidence_tokens`, and `coverage` in their `retrieval`
+object. The first two govern source quotas; the latter two are hard
+passage and *estimated evidence-token* bounds after context expansion
+and related-turn evidence. `coverage` accepts `bounded` (default) or
+`exhaustive`; explicit requests about all sources demand exhaustive
+source coverage regardless of that default. Omitted sources cause a
+saved coverage record and, in exhaustive mode, a deterministic notice.
+
+These settings are owned by the **selected project-type intent**, not the
+answering model's context-token setting, the GUI, or a tool's internal
+batch parameters. Missing values have validated core defaults; packaged
+literature intent values are documented in
+[Retrieval pipeline](retrieval_pipeline.md#per-intent-source-first-configuration).
+Changing the project type changes future retrieval; a saved project does
+not acquire a separate per-project override for these per-intent limits.
+A tool-backed intent instead uses its tool's validated settings and does
+not automatically execute source-first retrieval. See the tool precedence
+section below.
 
 ### Per-intent thinking policy
 
@@ -316,9 +385,9 @@ JSON is not proof that a particular model revision ran.
 
 Source selection changes can invalidate manifests; chunk/tokenizer/query
 format or embedding-model changes can invalidate retrieval caches; route
-shortcuts and intent instructions can change answers without reindexing.
-Unit tests should validate each ownership/precedence boundary and refusal
-of malformed configuration. Include an installed-wheel test when adding a
+shortcuts, cues, required words and intent instructions can change answers
+without reindexing. Unit tests should validate each ownership/precedence
+boundary and refusal of malformed configuration. Include an installed-wheel test when adding a
 new packaged JSON resource.
 
 ### Change impact and verification

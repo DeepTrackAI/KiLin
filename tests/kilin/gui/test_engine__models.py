@@ -130,6 +130,95 @@ class TestEngineModelTransitions(unittest.TestCase):
             encoding="utf-8"
         )
 
+    def test_source_card_settings_save_without_rebuilding_indexes(self):
+        """Persist card settings without changing chunk or answer models."""
+        from kilin.model_settings import (
+            read_source_card_generation_settings,
+        )
+        from kilin.source_card_policy import read_source_card_policy
+        from kilin.project_type import project_type
+
+        session = self.engine.session
+        indexes = session.indexes
+        chat = session.chat_session
+        settings = self.engine._source_card_settings(
+            self.project.root, "literature"
+        )
+        settings["policy"]["automatic"] = False
+        settings["models"]["mlx"]["model_id"] = "example/card-mlx"
+        settings["models"]["torch"]["model_id"] = "example/card-torch"
+        with patch.object(session, "refresh_source_cards") as refresh:
+            self.engine.save_source_card_settings(settings)
+        refresh.assert_called_once()
+        self.assertEqual(self.events[-1]["event"], "source_cards_applied")
+        self.assertIs(session.indexes, indexes)
+        self.assertIs(session.chat_session, chat)
+        self.assertEqual(
+            read_source_card_generation_settings(
+                self.project.root, "mlx"
+            ).model_id, "example/card-mlx",
+        )
+        self.assertEqual(
+            read_source_card_generation_settings(
+                self.project.root, "torch"
+            ).model_id, "example/card-torch",
+        )
+        self.assertFalse(read_source_card_policy(
+            self.project.root, project_type("literature")
+        ).automatic)
+        self.assertEqual(
+            self.events[-1]["source_card_summary"]["total"],
+            len(session.source_cards.records),
+        )
+
+    def test_invalid_card_settings_do_not_modify_profile(self):
+        """Reject an inconsistent request without writing settings."""
+        path = self.project.root / "profile.ini"
+        original = path.read_bytes()
+        settings = self.engine._source_card_settings(
+            self.project.root, "literature"
+        )
+        settings["models"]["mlx"]["max_input_tokens"] = -5
+        with patch.object(self.engine.session,
+                          "refresh_source_cards") as refresh:
+            self.engine.save_source_card_settings(settings)
+        refresh.assert_not_called()
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_failed_card_refresh_rolls_back_project_configuration(self):
+        """Restore original core settings after a refresh failure."""
+        path = self.project.root / "profile.ini"
+        original = path.read_bytes()
+        settings = self.engine._source_card_settings(
+            self.project.root, "literature"
+        )
+        settings["policy"]["automatic"] = False
+        with patch.object(
+            self.engine.session, "refresh_source_cards",
+            side_effect=[OSError("card refresh failed"), None],
+        ) as refresh:
+            self.engine.save_source_card_settings(settings)
+        self.assertEqual(refresh.call_count, 2)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(self.events[-1]["event"], "error")
+
+    def test_card_regeneration_uses_existing_session(self):
+        """Regenerate cards without rebuilding other index channels."""
+        session = self.engine.session
+        index = session.indexes
+        with (
+            patch.object(session, "regenerate_source_cards") as regenerate,
+            patch.object(session, "refresh_sources") as full_refresh,
+        ):
+            self.engine.regenerate_source_cards()
+        regenerate.assert_called_once()
+        full_refresh.assert_not_called()
+        self.assertIs(session.indexes, index)
+        self.assertEqual(
+            self.events[-1]["event"], "source_cards_regenerated"
+        )
+
     def test_chat_change_does_not_reindex_and_is_traced(self):
         """Switch the chat model without recalculating embeddings."""
         self.request["chat_model"] = "example/new-chat"
@@ -211,7 +300,12 @@ class TestEngineModelTransitions(unittest.TestCase):
         )
         self.engine.add_project_sources([str(new_file)])
         self.assertEqual(self.events[-1]["event"], "opened")
-        self.assertEqual(self.embedded, [new_file.read_text(encoding="utf-8")])
+        # Paper passages are embedded after their search header: the title
+        # (here the file name) and the file name.
+        self.assertEqual(
+            self.embedded,
+            ["new\nnew.txt\n\n" + new_file.read_text(encoding="utf-8")],
+        )
         self.assertNotIn("Original document about memory.", self.counted)
         original_vector = dict(
             zip(
@@ -499,22 +593,33 @@ class TestEngineModelTransitions(unittest.TestCase):
         self.assertLess(names.index("answer_delta"), names.index("answered"))
 
     def test_every_answer_refreshes_the_workspace_tree(self):
-        """Send the current project files with each answer, tool or not."""
+        """Forward core timings and project files with each answer."""
+        from kilin.answer_timeline import (
+            AnswerTimeline, AnswerTimelineStep,
+        )
         from kilin.rag import ConversationTurn
 
         session = self.engine.session
         session.turns = []
+        timeline = AnswerTimeline(1200, (
+            AnswerTimelineStep("generating", "Generating answer", 1200),
+        ))
 
         def answer(question, **options):
-            """Save a plain answer that used no tool."""
-            session.turns.append(
-                ConversationTurn("now", question, "Plain answer.", (), {})
-            )
+            """Save a plain answer with a core-owned execution timeline."""
+            session.turns.append(ConversationTurn(
+                "now", question, "Plain answer.", (), {}, timeline,
+            ))
 
         with patch.object(session, "ask", side_effect=answer):
             self.engine.ask("question")
         answered = [e for e in self.events if e["event"] == "answered"]
         self.assertEqual(len(answered), 1)
+        self.assertEqual(answered[0]["turn"]["timeline"], {
+            "elapsed_ms": 1200,
+            "steps": ({"phase": "generating", "label": "Generating answer",
+                       "ms": 1200},),
+        })
         self.assertEqual(
             answered[0]["workspace_files"],
             list_project_files(session.project),

@@ -75,13 +75,111 @@ class TestRAGLifecycle(unittest.TestCase):
         new_project = SimpleNamespace(root=Path("/new"))
         values = ([chunk("new")], sentinel.indexes, "reused", {"a": 1})
         session._prepare_retrieval = Mock(return_value=values)
+        session._prepare_source_cards = Mock(
+            return_value=(sentinel.cards, sentinel.card_vectors)
+        )
         session.refresh_sources(new_project)
+        session._prepare_source_cards.assert_called_once_with(
+            values[0], sentinel.indexes, session.embedding_session,
+        )
+        self.assertIs(session.source_cards, sentinel.cards)
+        self.assertIs(session.source_card_vectors, sentinel.card_vectors)
         self.assertIs(session.project, new_project)
         self.assertEqual(session.chunks, values[0])
         self.assertIs(session.indexes, sentinel.indexes)
         self.assertEqual(session.index_status, "reused")
         self.assertEqual(session.source_changes, {"a": 1})
         self.assertIs(session.chat_session, previous_chat)
+
+    def test_card_refresh_uses_existing_indexes(self) -> None:
+        """Reconcile cards without rescanning or embedding source chunks."""
+        session = _session()
+        session._prepare_retrieval = Mock()
+        session._prepare_source_cards = Mock(return_value=(
+            sentinel.cards, sentinel.vectors,
+        ))
+        session.refresh_source_cards()
+        session._prepare_retrieval.assert_not_called()
+        session._prepare_source_cards.assert_called_once_with(
+            session.chunks, session.indexes, session.embedding_session,
+        )
+        self.assertIs(session.source_cards, sentinel.cards)
+
+    def test_card_generation_guard_preserves_history_and_parameters(
+        self,
+    ) -> None:
+        """Unload both interactive models and restore conversation state."""
+        session = _session()
+        original = session.chat_session
+        original.messages = [
+            {"role": "system", "content": "instructions"},
+            {"role": "user", "content": "previous question"},
+        ]
+        original.thinking = True
+        original.temperature = 0.2
+        original.max_new_tokens = 432
+        original.input_token_total = 123
+        original.output_token_total = 45
+        router = MagicMock()
+        session._router_session = router
+        replacement = MagicMock()
+        session._new_chat_session = Mock(return_value=replacement)
+        with session._card_generation_guard():
+            original.close.assert_called_once()
+            router.close.assert_called_once()
+            self.assertIsNone(session.chat_session)
+            self.assertIsNone(session._router_session)
+        session._new_chat_session.assert_called_once_with(
+            original.model_id, thinking=True, temperature=0.2,
+            max_new_tokens=432,
+        )
+        replacement.restore_history.assert_called_once_with(
+            original.messages
+        )
+        self.assertEqual(replacement.input_token_total, 123)
+        self.assertEqual(replacement.output_token_total, 45)
+        self.assertIs(session.chat_session, replacement)
+        self.assertFalse(session._closed)
+
+    def test_card_generation_restores_chat_when_generation_fails(self):
+        """Return to the interactive model even after inference raises."""
+        session = _session()
+        previous = session.chat_session
+        replacement = MagicMock()
+        session._new_chat_session = Mock(return_value=replacement)
+        with self.assertRaisesRegex(ValueError, "model problem"):
+            with session._card_generation_guard():
+                raise ValueError("model problem")
+        previous.close.assert_called_once()
+        self.assertIs(session.chat_session, replacement)
+        self.assertFalse(session._closed)
+
+    def test_card_release_trace_failure_restores_answering_session(self):
+        """Trace failures must not strand a temporarily unloaded model."""
+        session = _session()
+        previous = session.chat_session
+        session.trace = MagicMock()
+        session.trace.emit.side_effect = [OSError("bad trace"), None]
+        restored = MagicMock()
+        session._new_chat_session = Mock(return_value=restored)
+        with self.assertRaisesRegex(OSError, "bad trace"):
+            with session._card_generation_guard():
+                self.fail("Trace failure must precede model generation")
+        previous.close.assert_called_once()
+        self.assertIs(session.chat_session, restored)
+        self.assertFalse(session._closed)
+
+    def test_failed_card_model_restoration_closes_session(self):
+        """Prevent use of an interactive model that failed to reload."""
+        session = _session()
+        session._new_chat_session = Mock(
+            side_effect=OSError("model unavailable")
+        )
+        with self.assertRaisesRegex(RuntimeError, "Reopen"):
+            with session._card_generation_guard():
+                pass
+        self.assertTrue(session._closed)
+        session.embedding_session.close.assert_called_once()
 
     def test_refresh_failure_keeps_old_index_but_new_project(self) -> None:
         """Preserve the existing index after a failed source refresh."""

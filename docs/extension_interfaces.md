@@ -30,6 +30,14 @@ optional `answer_guidance`, `capabilities`, history settings, a valid
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
+`capabilities` accepts `code_graph` (`true`, `false` or `"auto"`) and
+`document_headers` (`true` or `false`, default `false`). With
+`document_headers`, document passages are indexed with title, author,
+section and page headers. The separate `capabilities.source_cards`
+policy controls whether eligible scientific papers receive card
+summaries and stored vectors; it is not implied by `document_headers`.
+See [Retrieval pipeline](retrieval_pipeline.md).
+
 The registry requires at least one valid definition, not either standard
 type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
 is the filename-derived identifier. The GUI takes its initial selection
@@ -48,13 +56,19 @@ supported for every type. Missing welcome content has generic fallbacks;
 project-type prompts, tools and retrieval policies still control answers.
 
 Each intent key names an operation. Its fields may supply a description,
-shortcuts, history policy, retrieval mode/strategy, instruction, and a tool
-reference. `Intent` is the validated in-memory record; its values are not
+shortcuts, wording `cues` that set the intent, `requires` patterns a
+question must match for the intent, history policy, retrieval
+mode/strategy, instruction, and a tool reference. `Intent` is the validated in-memory record; its values are not
 always a literal one-to-one copy of keys in JSON because the loader applies
 defaults. Supported history modes are `none`, `recent`, `relevant`; supported
 retrieval modes are `none`, `search`, `document`, `reuse`. The implemented
-retrieval strategy is `hybrid`. A missing tool name or an unregistered name
-fails validation rather than importing a module by string.
+retrieval strategies are `hybrid` and `source_first`. The generic
+`source_first` strategy uses the optional source-card vector index plus
+semantic, lexical and applicable graph source rankings. It can be selected
+in custom project-type JSON without enabling `document_headers`; the
+packaged literature answering intents already use `source_first`. A missing tool
+name or an unregistered name fails validation rather than importing a
+module by string.
 
 Ordinary intents can also declare `thinking: true`, `false`, or `null`.
 An omitted or null field inherits the configured chat setting; a boolean
@@ -94,6 +108,46 @@ Code relationship extractors for Python and MATLAB live under
 `retrievals/code_graph/extensions/`; their results are heuristic, not
 execution or complete semantic analysis. Adding another language may also
 require source-unit conventions, graph entity typing and retrieval tests.
+
+## Source-card kind contract
+
+`retrievals/source_cards/` defines the active, optional whole-source
+card contract. A `SourceDescriptor` carries the file's
+identity and existing chunk identifiers, without assigning a content kind
+from a filename suffix. `SourceCard` holds immutable metadata, substantive
+statements with original-chunk provenance, and source/generation/validation
+fingerprints. `SourceCardResult` records `valid`, `not_applicable` or
+`failed` separately from card content.
+
+A trusted Python `SourceCardKind` supplies `identifier`, `schema_version`,
+`validation_version`, `precheck(source)` and `validate(card)`.
+`precheck` must be conservative: `False` means definitely ineligible, while
+`True` does not establish eligibility. It is not a model inference call.
+`SourceCardRegistry` refuses duplicate/unknown names and obsolete card
+versions, verifies generic provenance, then delegates to the kind's own
+schema checks. Kind registration must be explicit in source code; project
+JSON must not contain executable import paths.
+
+The kind registry, provenance records, card/vector index, generation
+adapter and automatic indexing coordinator are operational. The packaged
+literature intents use `source_first`, which searches source-card
+vectors as one of its four ranking channels. A new project type can
+select trusted registered card kinds without loading arbitrary modules. See [Retrieval pipeline](retrieval_pipeline.md#generic-source-card-contracts).
+
+The `scientific_paper` kind keeps a consistent research-oriented schema,
+including bibliographic metadata and cited aims, methods, data, findings,
+and limitations. Its candidate check does not classify a PDF as a paper.
+The generation response confirms or rejects the kind in the same inference
+call that writes the card. Only supplied chunk IDs may support statements.
+
+The design permits other registered kinds as requirements emerge: grant
+proposals could emphasize objectives and work packages; patents, claims and
+applications; technical manuals, procedures; presentations, main topics;
+policy decisions, rationale and scope. These are **extension possibilities**,
+not implemented kinds or implicit eligibility rules. Each future kind owns
+its own validation, fields and instructions while reusing the same generic
+card representation, indexing and persistence. See
+[Scientific-paper cards](retrieval_pipeline.md#scientific-paper-cards).
 
 ## Implementing a built-in tool
 
@@ -196,6 +250,16 @@ path disambiguation, safe output-file access and source statistics. These
 modules are private implementation helpers. Prefer them when semantics match,
 but do not silently move a tool's policy into a shared service unless
 multiple tools really need the same contract.
+
+Document-reading tools validate passage citations through
+`tools/_shared/citations.py`. Valid individual references and bounded
+ranges may contribute evidence; invalid range parts never contribute
+partial evidence. Numeric missing references remain in
+`invalid_citations`, while malformed or invalid ranges appear in
+`invalid_citation_groups` when present. Citation validation checks
+identifiers, not factual support. The maximum expansion of an individual
+citation range is 100 passages.
+
 
 The report-generation package has an additional `_report_template.py` and
 `_report_format.py` to validate Markdown templates and report formatting.

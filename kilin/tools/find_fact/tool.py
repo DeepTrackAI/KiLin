@@ -12,9 +12,10 @@ The scope is the paper the question names or points at ("that paper"),
 otherwise every indexed file. Reading everything takes time, so by default
 the user always chooses first: read everything, a quick answer, or cancel.
 When the question names exact terms, the quick answer takes notes on only
-the passages that mention them; otherwise it answers from the best-ranked
-passages directly. Passages are numbered once across all files, so every
-citation is unambiguous, and citations to passages that do not exist are
+the passages that mention them; otherwise, or when no passage mentions
+them, it answers from the best-ranked passages directly. Passages are
+numbered once across all files, so every citation is unambiguous, and
+citations to passages that do not exist are
 counted in the summary.
 
 Parts beyond ``max_model_calls`` are not read, and the answer says so. A
@@ -37,8 +38,10 @@ Key Features
 
 - **Checked citations**
 
-    One passage numbering across all files; invalid citations are counted,
-    and only cited passages become evidence.
+    One passage numbering across all files (the quick answer from ranked
+    passages numbers them 1, 2, 3...); a quoted phrase cited to the wrong
+    passage is moved to the one that contains it; invalid citations are
+    counted, and only cited passages become evidence.
 
 Module Structure
 ----------------
@@ -82,16 +85,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from time import perf_counter
 from typing import Final
 
 from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import (
-    answer_citations,
     plan_parts,
+    quote_citations,
     take_notes,
 )
 from kilin.tools._shared.choose_document import document_scope
@@ -129,13 +132,6 @@ _REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 _NOTES_PROMPT_TOKENS: Final[int] = _config.NOTES_PROMPT_TOKENS
 _CALL_SECONDS: Final[float] = _config.CALL_SECONDS
 _QUICK_ANSWER_SECONDS: Final[float] = _config.QUICK_ANSWER_SECONDS
-# A citation such as [3], [3, 5], or [3-5] (with a hyphen or an en dash).
-_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
-    r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
-)
-_CITATION_RANGE: Final[re.Pattern[str]] = re.compile(
-    r"(\d+)(?:\s*[–-]\s*(\d+))?"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,7 +324,13 @@ def run(
 
     # Quick: when the question names exact terms, only the passages that
     # mention them (read in parts, per file); otherwise the ranked ones.
+    # Terms that no passage mentions are often the question's own wording
+    # ("metadata table C6", "modular software extension"), not the paper's,
+    # so the quick answer falls back to the ranked passages.
     terms, hits = term_hits(request.question, context, passages)
+    missing: tuple[str, ...] = ()
+    if terms and not hits:
+        missing, terms = terms, ()
     hit_set = set(hits)
     quick_by_file = [
         (
@@ -352,6 +354,8 @@ def run(
             f"{'passage' if len(ranked) == 1 else 'passages'}; may miss a "
             "fact stated elsewhere"
         )
+        if missing:
+            note = f"{term_label(missing, ())[1]}. {note}"
         quick_seconds = (
             _QUICK_ANSWER_SECONDS
             + sum(estimate_tokens(texts[index]) for index in ranked)
@@ -384,24 +388,19 @@ def run(
         plan, settings.confirmation, settings.large_batches, context
     )
     summary.update({"plan": plan.to_dict(), "choice": choice, "asked": asked})
+    if missing:
+        summary["terms_without_hits"] = list(missing)
     if choice == PLAN_CHOICE_CANCEL:
         context.done("Cancelled before reading", evidence_count=0)
         return ToolResult(
             "Cancelled; no model calls were made.", (), summary
         )
 
-    if choice == PLAN_CHOICE_QUICK and terms and not hits:
-        quoted = " or ".join(f"“{term}”" for term in terms)
-        context.done(f"No passage mentions {quoted}", evidence_count=0)
-        return ToolResult(
-            f"No passage mentions {quoted}; all {len(passages)} passages "
-            "in scope were checked for these words. Ask again and choose "
-            "Continue to read everything for related wording.",
-            (),
-            summary,
-        )
-
     failures: list[dict[str, object]] = []
+    # Citation number -> passage index. Notes cite the shared numbering;
+    # ranked passages are numbered 1, 2, 3... in reading order, because
+    # small models confuse gapped numbers such as [1] and [10].
+    numbering = {index + 1: index for index in range(len(passages))}
     if choice == PLAN_CHOICE_QUICK and terms:
         material = _notes(
             request.question,
@@ -413,17 +412,23 @@ def run(
             failures=failures,
         )
         read = len(hits)
+        given = sorted(hits)
     elif choice == PLAN_CHOICE_QUICK:
+        numbering = {
+            number: index
+            for number, index in enumerate(sorted(ranked), start=1)
+        }
         material = []
         for path in files:
             lines = [
-                f"[{index + 1}] {texts[index].strip()}"
-                for index in sorted(ranked)
+                f"[{number}] {texts[index].strip()}"
+                for number, index in numbering.items()
                 if passages[index].path == path
             ]
             if lines:
                 material.append((path.name, lines))
         read = len(ranked)
+        given = sorted(ranked)
     else:
         # Parts beyond the model-call budget are left out.
         allowed = {id(part) for part in budget}
@@ -441,6 +446,7 @@ def run(
             failures=failures,
         )
         read = sum(len(part) for part in budget)
+        given = sorted(index for part in budget for index in part)
     read -= sum(int(item["passages"]) for item in failures)
     if failures and not any(lines for _, lines in material):
         return partial_result(
@@ -466,13 +472,22 @@ def run(
             "notes; do not infer absence from missing notes."
         )
     answer = context.write(system, prompt, None)
-    invalid = answer_citations(answer, len(passages))
+    number_of = {index: number for number, index in numbering.items()}
+    answer, quotes = quote_citations(
+        answer, {number_of[index]: texts[index] for index in given}
+    )
+    citation_report = inspect_citations(answer, len(numbering))
+    invalid = list(citation_report.invalid_numbers)
     if choice == PLAN_CHOICE_QUICK:
         which = (
             "passages that mention " + " or ".join(terms)
             if terms
             else "best-ranked passages"
         )
+        if missing:
+            which += " (no passage mentions " + " or ".join(
+                f"“{term}”" for term in missing
+            ) + ")"
         answer += (
             f"\n\n*Quick answer from the {read} {which}; ask again and "
             "choose Continue to read everything.*"
@@ -488,27 +503,33 @@ def run(
             "passages": len(passages),
             "passages_read": read,
             "invalid_citations": invalid,
+            "quote_citations": quotes,
             "seconds": round(perf_counter() - started, 1),
         }
     )
 
-    # Citations keep their numbers, so evidence ``n`` is passage ``n``.
-    cited = _cited(answer, len(passages)) - {
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
+
+    # Evidence ``n`` is the passage the answer cites as [n].
+    cited = _cited(answer, len(numbering)) - {
         number for failure in failures
         for number in failure["passage_numbers"]
     }
     evidence = tuple(
         {
-            "citation": index + 1,
-            "path": chunk.path,
-            "start_line": chunk.start_line,
-            "end_line": chunk.end_line,
-            "symbol": chunk.symbol,
-            "text": chunk.text,
-            "cell": chunk.cell,
+            "citation": number,
+            "path": passages[index].path,
+            "start_line": passages[index].start_line,
+            "end_line": passages[index].end_line,
+            "symbol": passages[index].symbol,
+            "text": passages[index].text,
+            "cell": passages[index].cell,
         }
-        for index, chunk in enumerate(passages)
-        if index + 1 in cited
+        for number, index in numbering.items()
+        if number in cited
     )
     return partial_result(
         ToolResult(answer, evidence, summary, streamed=True), failures,
@@ -590,22 +611,7 @@ def _cited(answer: str, count: int) -> set[int]:
 
     """
 
-    numbers: set[int] = set()
-    for group in _CITATION_GROUP.findall(answer):
-        for piece in re.split(r"\s*,\s*", group):
-            match = _CITATION_RANGE.fullmatch(piece)
-            if match is None:
-                continue
-
-            first = int(match.group(1))
-            last = int(match.group(2) or first)
-            numbers.update(
-                number
-                for number in range(first, last + 1)
-                if 1 <= number <= count
-            )
-    return numbers
-
+    return set(inspect_citations(answer, count).valid)
 
 def _estimate(
     parts: list[list[int]], texts: list[str]

@@ -215,7 +215,8 @@ class TestSuperscripts(unittest.TestCase):
             chunk(
                 "a",
                 "Values depend on the anomalous exponent α64. The exponent "
-                "relates as H = α/212,67. Together with Ref. 50, these agree. "
+                "relates as H = α/212,67. Together with Ref. 50, "
+                "these agree. "
                 "A grant, Ref. 001-P-00038, paid for it.\n",
             ),
         )
@@ -289,7 +290,8 @@ class TestSuperscripts(unittest.TestCase):
                 "for angles above 13 degrees (refs 19,21). Films transmit 97% "
                 "at a wavelength above 500 nm23. Here we use reservoir "
                 "computing10—a framework that reproduces biological "
-                "networks11–14—to study aging. Areas of 4 cm2 were used.\n",
+                "networks11–14—to study aging. "
+                "Areas of 4 cm2 were used.\n",
             ),
         )
         superscripts = {

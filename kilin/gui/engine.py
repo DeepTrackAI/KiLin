@@ -84,6 +84,17 @@ from time import perf_counter
 from typing import Callable, Final
 
 from kilin._model_completion import GenerationCancelled
+from kilin.model_settings import (
+    SourceCardGenerationSettings,
+    default_source_card_generation_settings,
+    read_source_card_generation_settings,
+    write_source_card_generation_settings,
+)
+from kilin.source_card_policy import (
+    SourceCardPolicy,
+    read_source_card_policy,
+    write_source_card_policy,
+)
 from kilin.atomic_writes import atomic_write_text
 from kilin.gui._paths import (
     default_workspace_directory,
@@ -344,6 +355,10 @@ class ChatEngine:
         Move a closed project into the deleted folder beside it.
     apply_indexing_settings(settings)
         Save the open project's indexing settings and rebuild its index.
+    save_source_card_settings(request)
+        Save the project-owned policy and independent card-model settings.
+    regenerate_source_cards()
+        Regenerate only source cards using the dedicated model.
 
     **Answering and evidence.**
 
@@ -351,7 +366,6 @@ class ChatEngine:
         Emit progress, saved answer, and evidence events.
     cancel_answer()
         Stop the running answer at its next generated token.
-    save_answer_timeline(timestamp, timeline)
         Keep how long an answer took, as the page showed it.
     preview_reference(turn_index, citation)
         Show nearby source lines for one saved answer citation.
@@ -1216,6 +1230,134 @@ class ChatEngine:
         if changes["added"] or changes["changed"] or changes["deleted"]:
             self._send("source_changes", **changes)
 
+    @staticmethod
+    def _source_card_settings(
+        root: Path | None, type_id: str,
+    ) -> dict[str, object]:
+        """Resolve model and policy settings using only core readers.
+
+        Parameters
+        ----------
+        root: pathlib.Path | None
+            Existing project directory, or None for creation defaults.
+        type_id: str
+            Registered type providing source-card indexing defaults.
+
+        Returns
+        -------
+        dict[str, object]
+            Project policy and independent backend model selections.
+
+        """
+
+        item = project_type(type_id)
+        policy = (
+            read_source_card_policy(root, item) if root is not None
+            else SourceCardPolicy(
+                item.source_cards_enabled, item.source_card_kind,
+                item.source_cards_automatic,
+            )
+        )
+        return {
+            "policy": asdict(policy),
+            "models": {
+                backend: asdict(read_source_card_generation_settings(
+                    root, backend
+                ))
+                for backend in (BACKEND_MLX, BACKEND_TORCH)
+            },
+        }
+
+    @staticmethod
+    def _validate_source_card_settings(
+        request: object,
+    ) -> tuple[SourceCardPolicy, dict[str, SourceCardGenerationSettings]]:
+        """Validate an entire GUI card-settings request before writing.
+
+        Parameters
+        ----------
+        request: object
+            Exact policy and two-backend generation settings payload.
+
+        Returns
+        -------
+        tuple[SourceCardPolicy, dict[str, SourceCardGenerationSettings]]
+            Validated policy and generation settings.
+
+        Raises
+        ------
+        ValueError
+            If required fields are missing, extra, or invalid.
+
+        """
+
+        if not isinstance(request, dict) or set(request) != {
+            "policy", "models"
+        }:
+            raise ValueError("Invalid source-card settings request.")
+        options = request["policy"]
+        models = request["models"]
+        if not isinstance(options, dict) or set(options) != {
+            "enabled", "kind", "automatic"
+        }:
+            raise ValueError("Invalid source-card indexing policy.")
+        policy = SourceCardPolicy(**options)
+        if not isinstance(models, dict) or set(models) != {
+            BACKEND_MLX, BACKEND_TORCH
+        }:
+            raise ValueError("Specify both source-card model backends.")
+        keys = {
+            "model_id", "thinking", "temperature",
+            "max_input_tokens", "max_new_tokens",
+        }
+        validated = {}
+        for backend, values in models.items():
+            if not isinstance(values, dict) or set(values) != keys:
+                raise ValueError("Invalid source-card model settings.")
+            validated[backend] = SourceCardGenerationSettings(**values)
+        first = validated[BACKEND_MLX]
+        second = validated[BACKEND_TORCH]
+        if first.fingerprint() != second.fingerprint():
+            raise ValueError(
+                "Source-card inference parameters are shared by backends."
+            )
+        return policy, validated
+
+    @staticmethod
+    def _card_summary(session: RAGSession) -> dict[str, int]:
+        """Count persisted generation outcomes for GUI status displays.
+
+        Parameters
+        ----------
+        session: RAGSession
+            Live project with reconciled source-card outcomes.
+
+        Returns
+        -------
+        dict[str, int]
+            Total, valid, ineligible, failed, and embedded-card counts.
+
+        """
+
+        records = getattr(
+            getattr(session, "source_cards", None), "records", ()
+        )
+        vectors = getattr(session, "source_card_vectors", None)
+        return {
+            "total": len(records),
+            "valid": sum(
+                item.result.status == "valid" for item in records
+            ),
+            "not_applicable": sum(
+                item.result.status == "not_applicable"
+                for item in records
+            ),
+            "failed": sum(
+                item.result.status == "failed" for item in records
+            ),
+            "embedded": len(vectors.records) if vectors else 0,
+        }
+
     def settings(self, type_id: str, workspace: str) -> None:
         """Emit saved or default settings and cached model IDs.
 
@@ -1292,6 +1434,10 @@ class ChatEngine:
                     backend: default_router_model(backend)
                     for backend in (BACKEND_MLX, BACKEND_TORCH)
                 },
+                source_cards=self._source_card_settings(
+                    profile_path.parent if profile_path.is_file() else None,
+                    type_id,
+                ),
                 project_types=[
                     {
                         "type_id": item.id,
@@ -1766,6 +1912,11 @@ class ChatEngine:
             created_levels = settings.pop("_gui_effort_levels", None)
             created_depth = settings.pop("_gui_search_depth", None)
             created_routers = settings.pop("_gui_router_models", None)
+            created_cards = settings.pop("_gui_source_cards", None)
+            if created_cards is not None:
+                card_policy, card_models = (
+                    self._validate_source_card_settings(created_cards)
+                )
             if created_routers is not None:
                 if not isinstance(created_routers, dict) or any(
                     backend not in {BACKEND_MLX, BACKEND_TORCH}
@@ -1831,6 +1982,12 @@ class ChatEngine:
                     write_effort_levels(project.root, backend, levels)
             for backend, model in (created_routers or {}).items():
                 write_router_model(project.root, backend, model)
+            if created_cards is not None:
+                write_source_card_policy(project.root, card_policy)
+                for backend, values in card_models.items():
+                    write_source_card_generation_settings(
+                        project.root, backend, values
+                    )
             self.close()
             switched = True
             conversation = self._open_conversation_store(project)
@@ -1979,10 +2136,14 @@ class ChatEngine:
             ),
             router_models=_router_models_by_backend(project.root),
             search_depth=read_search_depth(project.root),
+            source_cards=self._source_card_settings(
+                project.root, project.profile.type_id
+            ),
+            source_card_summary=self._card_summary(session),
             preferences=_preference_payload(),
             usage=self._usage_totals(),
             index_status=session.index_status,
-            turns=_turn_payloads(session.turns, project.root),
+            turns=_turn_payloads(session.turns),
             workspace_files=list_project_files(project),
             retrieval_count=(
                 session.turns[-1].parameters.get(
@@ -2779,6 +2940,9 @@ class ChatEngine:
                 phase=phase,
                 **details,
             )
+            options["activity_callback"] = lambda event: self._send(
+                "answer_activity", **event
+            )
             if self.read_command is not None:
                 options["confirm_callback"] = self._confirm_plan
                 options["choice_callback"] = self._choose_option
@@ -2893,38 +3057,6 @@ class ChatEngine:
         finally:
             stopped.set()
             ticker.join(timeout=1.0)
-
-    def save_answer_timeline(self, timestamp: str, timeline: object) -> None:
-        """Keep how long an answer took, as the page showed it.
-
-        Parameters
-        ----------
-        timestamp: str
-            The answered turn's timestamp, which identifies it.
-        timeline: object
-            ``elapsed_ms`` and ``steps`` (each a ``label`` and ``ms``) from
-            the page; anything else is ignored.
-
-        Notes
-        -----
-        The timing is presentation only: it is not part of the
-        conversation record, and a missing or unreadable file only means
-        resumed answers show their tokens without the time.
-
-        """
-
-        if self.session is None or not timestamp:
-            return
-
-        if not _valid_timeline(timeline):
-            return
-
-        root = self.session.project.root
-        timelines = _read_answer_timelines(root)
-        timelines[timestamp] = timeline
-        path = root / "logs" / _ANSWER_TIMELINES
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps(timelines))
 
     def _usage_totals(self) -> dict[str, dict[str, int]]:
         """Tokens used by the open chat and by the whole project.
@@ -3468,6 +3600,88 @@ class ChatEngine:
                 f"Could not delete the project: {error}",
             )
 
+    def save_source_card_settings(self, request: object) -> None:
+        """Save independent card settings and reconcile derived indexes.
+
+        Parameters
+        ----------
+        request: object
+            Fully specified and validated indexing and model settings.
+
+        Notes
+        -----
+        Valid cards are not regenerated merely because the model changed.
+        An incomplete write is rolled back using the previous profile text.
+        Ordinary chunk and retrieval indexes are never rebuilt here.
+
+        """
+
+        try:
+            if self.session is None or getattr(self.session, "_closed", False):
+                raise RuntimeError("Open a project before changing cards.")
+            policy, models = self._validate_source_card_settings(request)
+            session = self.session
+            root = session.project.root
+            path = root / PROFILE_FILE
+            original = path.read_text(encoding="utf-8")
+            self._send("status", message="Updating source cards…")
+            try:
+                write_source_card_policy(root, policy)
+                for backend, values in models.items():
+                    write_source_card_generation_settings(
+                        root, backend, values
+                    )
+                session.refresh_source_cards()
+            except Exception as error:
+                atomic_write_text(path, original)
+                # If a failed restoration closed the model session, the
+                # error must remain explicit and the project must reopen.
+                if not getattr(session, "_closed", False):
+                    try:
+                        session.refresh_source_cards()
+                    except Exception as recovery:
+                        error.add_note(
+                            f"Source-card recovery failed: {recovery!r}"
+                        )
+                raise
+            self._send(
+                "source_cards_applied",
+                source_cards=self._source_card_settings(
+                    root, session.project.profile.type_id
+                ),
+                source_card_summary=self._card_summary(session),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.source_cards.settings.failed", error,
+                f"Could not update source cards: {error}",
+            )
+
+    def regenerate_source_cards(self) -> None:
+        """Force regeneration using the saved project model and policy.
+
+        Notes
+        -----
+        Existing source files and normal retrieval indexes are untouched.
+        The model refresh guard restores the answering conversation.
+
+        """
+
+        try:
+            if self.session is None or getattr(self.session, "_closed", False):
+                raise RuntimeError("Open a project before regenerating.")
+            self._send("status", message="Regenerating source cards…")
+            self.session.regenerate_source_cards()
+            self._send(
+                "source_cards_regenerated",
+                source_card_summary=self._card_summary(self.session),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.source_cards.regenerate.failed", error,
+                f"Could not regenerate source cards: {error}",
+            )
+
     def apply_indexing_settings(self, settings: object) -> None:
         """Save the open project's indexing settings and rebuild its index.
 
@@ -3651,7 +3865,7 @@ class ChatEngine:
         )
         self._send_conversations(
             "conversation_opened",
-            turns=_turn_payloads(turns, self.session.project.root),
+            turns=_turn_payloads(turns),
             retrieval_count=(
                 turns[-1].parameters.get(
                     "retrieval_count",
@@ -4055,96 +4269,23 @@ def _preference_payload() -> dict[str, object]:
     }
 
 
-# How long each answer took, as the page showed it, by turn timestamp; kept
-# per project so resumed and branched chats show it again.
-_ANSWER_TIMELINES: Final[str] = "answer_timelines.json"
-
-
-def _read_answer_timelines(root: Path) -> dict[str, dict]:
-    """Return the saved answer timings of a project, by turn timestamp.
-
-    Parameters
-    ----------
-    root: pathlib.Path
-        Project folder.
-
-    Returns
-    -------
-    dict[str, dict]
-        Timings saved by ``ChatEngine.save_answer_timeline``; empty when
-        none are saved or the file cannot be read.
-
-    """
-
-    try:
-        data = json.loads(
-            (root / "logs" / _ANSWER_TIMELINES).read_text(encoding="utf-8")
-        )
-    except (OSError, ValueError):
-        return {}
-
-    return data if isinstance(data, dict) else {}
-
-
-def _turn_payloads(turns: list, root: Path) -> list[dict]:
-    """Return turns for the page, each with its saved timing if any.
+def _turn_payloads(turns: list) -> list[dict]:
+    """Serialize each turn, including its core-owned answer timeline.
 
     Parameters
     ----------
     turns: list[ConversationTurn]
         Turns of the open conversation.
-    root: pathlib.Path
-        Project folder holding the saved timings.
 
     Returns
     -------
     list[dict]
-        The turns as dictionaries; a turn whose timing was saved has it
-        under ``timeline``.
+        Conversation turns for the page. Each includes ``timeline``
+        from its authoritative conversation record, or None when absent.
 
     """
 
-    timelines = _read_answer_timelines(root)
-    payloads = []
-    for turn in turns:
-        payload = asdict(turn)
-        timeline = timelines.get(getattr(turn, "timestamp", ""))
-        if _valid_timeline(timeline):
-            payload["timeline"] = timeline
-        payloads.append(payload)
-
-    return payloads
-
-
-def _valid_timeline(timeline: object) -> bool:
-    """Whether a timeline from the page has the expected shape.
-
-    Parameters
-    ----------
-    timeline: object
-        Timeline data received from the frontend.
-
-    Returns
-    -------
-    bool
-        True if the timeline has the expected structure.
-
-    """
-
-    if not isinstance(timeline, dict):
-        return False
-
-    steps = timeline.get("steps")
-    return (
-        isinstance(timeline.get("elapsed_ms"), int)
-        and isinstance(steps, list)
-        and all(
-            isinstance(step, dict)
-            and isinstance(step.get("label"), str)
-            and isinstance(step.get("ms"), int)
-            for step in steps
-        )
-    )
+    return [asdict(turn) for turn in turns]
 
 
 def _path_list(value: object) -> list[str]:
@@ -4547,6 +4688,12 @@ def main() -> None:
                         engine.delete_project(command["project"])
                     elif action == "apply_indexing":
                         engine.apply_indexing_settings(command["settings"])
+                    elif action == "save_source_cards":
+                        engine.save_source_card_settings(
+                            command.get("settings")
+                        )
+                    elif action == "regenerate_source_cards":
+                        engine.regenerate_source_cards()
                     elif action == "save_answer_settings":
                         engine.save_answer_settings(
                             command.get("settings"),
@@ -4558,11 +4705,6 @@ def main() -> None:
                     elif action == "save_tool_settings":
                         engine.save_tool_settings(
                             command["tool"], command.get("settings")
-                        )
-                    elif action == "save_answer_timeline":
-                        engine.save_answer_timeline(
-                            str(command.get("timestamp", "")),
-                            command.get("timeline"),
                         )
                     elif action == "reset":
                         engine.reset()

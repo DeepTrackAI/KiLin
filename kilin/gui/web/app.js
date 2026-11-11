@@ -105,6 +105,9 @@ let applyingModels = false;
 let closeAfterModelsApply = false;
 // Set while the engine saves indexing settings and rebuilds the index.
 let applyingIndexing = false;
+// Source-card settings are project-owned and independent of answering models.
+let sourceCardSettings = null;
+let applyingSourceCards = false;
 let downloadingModel = null;
 let selectedTurn = null;
 let activeReference = null;
@@ -244,11 +247,6 @@ function updateFloatingHeader() {
 }
 
 /**
- * Hide and clear the previously offered saved-project shortcut.
- */
-function hideResume() { byId("saved-projects").classList.add("hidden"); }
-
-/**
  * Ask the engine for a saved project only on an idle setup screen.
  */
 function refreshSavedProject() {
@@ -324,7 +322,10 @@ function renderSavedProjects(projects) {
   const shown = JSON.stringify(projects.map((project) => [
     project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
   ]));
-  if (host.dataset.shown === shown) return;
+  if (host.dataset.shown === shown) {
+    host.classList.toggle("hidden", !host.children.length);
+    return;
+  }
   host.dataset.shown = shown;
   const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
@@ -2093,6 +2094,7 @@ function showSettings(data) {
   }
   if (!keepAnswers) byId("thinking").checked = profile.thinking;
   showModelFields();
+  if (data.source_cards) showSourceCardSettings(data.source_cards);
   if (data.workspace) {
     byId("workspace-location").textContent = data.workspace;
     renderWorkspace(data.workspace_files);
@@ -2123,6 +2125,7 @@ function collectSettings() {
     _gui_effort_levels: { [activeBackend]: cloneLevels(currentLevels()) },
     _gui_search_depth: [...currentDepth()],
     _gui_router_models: { [activeBackend]: currentRouter() },
+    _gui_source_cards: sourceCardValues(),
     chat_mlx: profile.chat_mlx, chat_torch: profile.chat_torch,
     embedding_mlx: profile.embedding_mlx, embedding_torch: profile.embedding_torch,
     query_format: byId("query-format").value,
@@ -2134,6 +2137,124 @@ function collectSettings() {
     // Models are downloaded from Settings, never silently while preparing.
     allow_download: false,
   };
+}
+
+/**
+ * Display the core-owned card policy and independent backend models.
+ * @param settings Validated settings supplied by the engine.
+ */
+function showSourceCardSettings(settings) {
+  sourceCardSettings = JSON.parse(JSON.stringify(settings));
+  byId("source-card-enabled").checked = settings.policy.enabled;
+  byId("source-card-automatic").checked = settings.policy.automatic;
+  byId("source-card-kind").value = settings.policy.kind || "";
+  byId("source-card-mlx").value = settings.models.mlx.model_id;
+  byId("source-card-torch").value = settings.models.torch.model_id;
+  const model = settings.models[activeBackend] || settings.models.mlx;
+  byId("source-card-thinking").checked = model.thinking;
+  byId("source-card-temperature").value = model.temperature;
+  byId("source-card-input").value = model.max_input_tokens;
+  byId("source-card-output").value = model.max_new_tokens;
+  byId("regenerate-source-cards").disabled = !ready || !settings.policy.enabled;
+}
+
+/**
+ * Read source-card controls, with shared inference parameters per backend.
+ * @returns Complete request for the core-owned settings validator.
+ */
+function sourceCardValues() {
+  const common = {
+    thinking: byId("source-card-thinking").checked,
+    temperature: Number(byId("source-card-temperature").value),
+    max_input_tokens: Number(byId("source-card-input").value),
+    max_new_tokens: Number(byId("source-card-output").value),
+  };
+  return {
+    policy: {
+      enabled: byId("source-card-enabled").checked,
+      kind: byId("source-card-kind").value || null,
+      automatic: byId("source-card-automatic").checked,
+    },
+    models: {
+      mlx: { ...common, model_id: byId("source-card-mlx").value.trim() },
+      torch: { ...common, model_id: byId("source-card-torch").value.trim() },
+    },
+  };
+}
+
+/**
+ * Reject malformed numerical card settings before submitting them to core.
+ * @returns Error message, or an empty string for valid values.
+ */
+function sourceCardProblem() {
+  const config = sourceCardValues();
+  if (!config.models.mlx.model_id || !config.models.torch.model_id) {
+    return "Choose valid MLX and PyTorch source-card model identifiers.";
+  }
+  const value = config.models.mlx;
+  if (!Number.isFinite(value.temperature) || value.temperature < 0
+      || byId("source-card-temperature").value.trim() === "") {
+    return "Source-card temperature must be finite and nonnegative.";
+  }
+  for (const key of ["max_input_tokens", "max_new_tokens"]) {
+    if (!Number.isInteger(value[key]) || value[key] < 1
+        || value[key] > 200000) {
+      return "Source-card token limits must be between 1 and 200,000.";
+    }
+  }
+  if (config.policy.enabled && !config.policy.kind) {
+    return "Choose a registered card kind when cards are enabled.";
+  }
+  return "";
+}
+
+/**
+ * Report valid, excluded, failed and embedded cards from current indexing.
+ * @param summary Core-provided persisted card outcome counts.
+ */
+function showSourceCardSummary(summary) {
+  if (!summary) return;
+  byId("source-card-summary").textContent =
+    `${summary.valid} valid · ${summary.not_applicable} ineligible · `
+    + `${summary.failed} failed · ${summary.embedded} embedded `
+    + `(${summary.total} recorded)`;
+}
+
+/**
+ * Persist card settings independently of normal model and index settings.
+ */
+function saveSourceCardSettings() {
+  if (!bridge || busy) return;
+  const problem = sourceCardProblem();
+  if (problem) {
+    byId("model-download-status").textContent = problem;
+    return;
+  }
+  if (!ready) {
+    sourceCardSettings = sourceCardValues();
+    byId("model-download-status").textContent =
+      "Source-card settings kept for the new project.";
+    return;
+  }
+  applyingSourceCards = true;
+  setBusy(true, "Updating source-card settings…");
+  bridge.saveSourceCardSettings(JSON.stringify(sourceCardValues()));
+}
+
+/**
+ * Request fresh cards only after confirmation; never rebuild chunk indexes.
+ */
+async function regenerateSourceCards() {
+  if (!ready || !bridge || busy) return;
+  if (!await askKilin(
+    "Regenerate source cards?",
+    "This replaces derived card summaries using the saved generation "
+      + "model. Original sources and passage indexes are unchanged.",
+    "Regenerate",
+  )) return;
+  applyingSourceCards = true;
+  setBusy(true, "Regenerating source cards…");
+  bridge.regenerateSourceCards();
 }
 
 /**
@@ -3255,6 +3376,7 @@ function setBusy(value, message = "") {
   byId("new-chat").disabled = value || !ready;
   // While an answer runs, other chats can still be read, not changed.
   document.querySelectorAll(".conversation-item").forEach((item) => { item.disabled = (value && !answering) || !ready; });
+  syncGeneratingConversations();
   document.querySelectorAll(".conversation-delete, .project-item, .project-settings, .message-branch").forEach((item) => { item.disabled = value || !ready; });
   byId("home-logo").disabled = value;
   byId("new-project").disabled = value;
@@ -3368,6 +3490,10 @@ function showProgress(data) {
     details.push(`about ${seconds(data.eta_seconds)} left`);
   }
   byId("activity-detail").textContent = details.join(" · ");
+  if (data.stage === "building_source_cards") {
+    byId("source-card-progress").textContent =
+      `Generating source cards: ${data.current ?? 0} / ${data.total ?? 0}`;
+  }
 }
 
 /**
@@ -3747,6 +3873,9 @@ function renderMarkdown(host, text, linkCitation = null) {
       while (index < lines.length && !MARKDOWN_FENCE.test(lines[index])) code.push(lines[index++]);
       index += 1;
       const pre = document.createElement("pre");
+      if (/^\s*```[ \t]*latex[ \t]*$/i.test(line)) {
+        pre.className = "answer-latex-source";
+      }
       const element = document.createElement("code");
       element.textContent = code.join("\n");
       pre.append(element);
@@ -4191,8 +4320,7 @@ function revealWorkspacePath(path) {
 }
 
 /**
- * Append a completed turn, enable answer selection, and show its
- * references.
+ * Append a completed turn and enable its answer/reference interactions.
  *
  * @param turn Saved question, answer, and evidence data.
  */
@@ -4205,19 +4333,7 @@ function addTurn(turn) {
   fillQuestion(question, turn.question);
   const answer = document.createElement("div");
   answer.className = "answer-message";
-  answer.tabIndex = 0;
-  answer.setAttribute("aria-label", "Select this answer to view its references");
-  answer.addEventListener("click", () => {
-    chooseSidePanels(true);
-    selectTurn(item, turn);
-  });
-  answer.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      chooseSidePanels(true);
-      selectTurn(item, turn);
-    }
-  });
+  bindAnswerSelection(answer, item, turn);
   renderAnswer(answer, turn, item);
   // A saved answer shows the timing and tokens it showed when it arrived.
   const timeline = renderTimeline(turn.timeline || null, turn);
@@ -4226,6 +4342,24 @@ function addTurn(turn) {
   conversation.append(item);
   selectTurn(item, turn);
   conversationScroll.scrollTop = conversationScroll.scrollHeight;
+}
+
+/**
+ * Mark only the chat currently producing an answer in the sidebar.
+ *
+ * The answering chat stays marked while another conversation is read.
+ * The marker is presentation state and never enters saved conversation data.
+ */
+function syncGeneratingConversations() {
+  const generating = busy && activity.classList.contains("answer-progress")
+    ? answeringConversationId : "";
+  document.querySelectorAll(".conversation-item").forEach((item) => {
+    const active = Boolean(generating)
+      && item.dataset.conversationId === generating;
+    item.classList.toggle("generating", active);
+    item.setAttribute("aria-label", active
+      ? `${item.textContent} (generating answer)` : item.textContent);
+  });
 }
 
 /**
@@ -4315,6 +4449,7 @@ function renderConversations(data) {
       });
     }
   }
+  syncGeneratingConversations();
   const heading = reading ? reading.name : activeEmpty ? "" : activeName;
   byId("conversation-name").textContent = heading;
   byId("conversation-name").classList.toggle("hidden", !heading);
@@ -4730,7 +4865,6 @@ function advanceAnswerStage() {
  */
 function queueAnswerStage(key, detail) {
   if (!pendingTurn) return;
-  markTimelineStep(detail);
   if (answerStageKey === key) return;
   if (answerStageQueue.some((stage) => stage.key === key)) return;
   answerStageQueue.push({ key, detail });
@@ -4739,53 +4873,32 @@ function queueAnswerStage(key, detail) {
 }
 
 /**
- * Record the moment a step started, for the expandable timeline.
+ * Display an activity start emitted by the core timeline recorder.
  *
- * @param label Step description, as shown in the shimmering line.
+ * @param activity Indexed activity with the core's phase and description.
  */
-function markTimelineStep(label) {
+function markTimelineStep(activity) {
   const timeline = pendingTurn?.timeline;
-  if (!timeline || timeline.at(-1)?.label === label) return;
-  timeline.push({ label, at: performance.now() });
+  if (!timeline || activity.index !== timeline.length) return;
+  timeline.push({
+    phase: activity.phase,
+    label: activity.label,
+    at: performance.now(),
+  });
 }
 
 /**
- * Record how long a completed answer took and how long each step took.
- *
- * The record is saved with the project, so a resumed conversation shows the
- * same "Took Ns" line and step list as when the answer arrived.
- *
- * @param current The pending turn being completed.
- * @param turn Saved turn with its routing parameters.
- * @param totalMs Time from Ask to the complete answer.
- * @returns The total time and each step's label and duration.
- */
-function timelineRecord(current, turn, totalMs) {
-  const query = turn.parameters?.retrieval_query;
-  return {
-    elapsed_ms: Math.round(totalMs),
-    steps: timelineSteps(current.timeline || [], current.started + totalMs).map((step) => ({
-      label: query && /semantic search/i.test(step.label)
-        ? `${step.label} for “${query}”`
-        : step.label,
-      ms: step.ms,
-    })),
-  };
-}
-
-/**
- * Turn the recorded step start times into labels and durations.
+ * Estimate in-flight step durations for the live activity display.
  *
  * @param timeline Steps with ``label`` and start time ``at``, in order.
  * @param end Time the last step ended, or now for a step still running.
- * @returns Each step's label and duration in milliseconds, without the
- *   initial "Starting" step.
+ * @returns Each reported activity's label and estimated duration in
+ *   milliseconds. No core activity is filtered by the GUI.
  */
 function timelineSteps(timeline, end) {
-  const steps = timeline.filter((step) => step.label !== "Starting");
-  return steps.map((step, index) => ({
+  return timeline.map((step, index) => ({
     label: step.label,
-    ms: Math.round(Math.max(0, (steps[index + 1]?.at ?? end) - step.at)),
+    ms: Math.round(Math.max(0, (timeline[index + 1]?.at ?? end) - step.at)),
   }));
 }
 
@@ -4817,8 +4930,8 @@ function appendTimelineRows(list, steps, running = false) {
  * Build the collapsed "Took Ns · Xk tokens" line; expanding it lists each
  * step and how long it took.
  *
- * @param record Saved timing from timelineRecord, or null for an answer
- *   saved before timings were kept (then only its tokens are shown).
+ * @param record Core-owned answer timeline stored with the turn, or null
+ *   for an older answer without timing data.
  * @param turn Saved turn with its token usage.
  * @returns The line, or null when there is neither a timing nor tokens.
  */
@@ -4843,9 +4956,32 @@ function renderTimeline(record, turn) {
     const row = document.createElement("li");
     row.className = "timeline-usage";
     const label = document.createElement("span");
-    label.textContent = `Tokens: ${usage.input_tokens.toLocaleString()} read, ${usage.output_tokens.toLocaleString()} written`;
+    const parameters = turn.parameters || {};
+    const model = typeof parameters.chat_model === "string"
+      ? parameters.chat_model : "";
+    const settings = [];
+    if (typeof parameters.thinking === "boolean") {
+      settings.push(parameters.thinking ? "thinking on" : "thinking off");
+    }
+    if (Number.isInteger(parameters.max_new_tokens)
+        && parameters.max_new_tokens > 0) {
+      settings.push(`${parameters.max_new_tokens.toLocaleString()} max tokens`);
+    }
+    label.textContent = [
+      `Tokens: ${usage.input_tokens.toLocaleString()} read`,
+      `${usage.output_tokens.toLocaleString()} written`,
+    ].join(", ");
     row.append(label);
     list.append(row);
+    if (model) {
+      const modelRow = document.createElement("li");
+      modelRow.className = "timeline-model";
+      const modelLabel = document.createElement("span");
+      modelLabel.textContent = `Model: ${model}${settings.length
+        ? ` (${settings.join(", ")})` : ""}`;
+      modelRow.append(modelLabel);
+      list.append(modelRow);
+    }
   }
   details.append(summary, list);
   return details;
@@ -4858,7 +4994,7 @@ function renderTimeline(record, turn) {
  */
 function completeAfterAnswerStages(turn) {
   unansweredQuestion = "";
-  // Freeze the timer when the answer arrives, not after the stage animation.
+  // Freeze the display timer; final timing comes from the saved turn.
   if (pendingTurn && pendingTurn.elapsedMs === null) {
     pendingTurn.elapsedMs = performance.now() - pendingTurn.started;
   }
@@ -4960,7 +5096,7 @@ function paintPendingTurn() {
   pendingTurn.timer.textContent = formatDuration(
     pendingTurn.elapsedMs ?? performance.now() - pendingTurn.started)
     + (tokens ? ` · ${formatTokens(tokens)} tokens` : "");
-  // The steps so far, with the running one's time still counting.
+  // Live estimates only; the completed turn supplies core timings.
   const list = pendingTurn.steps;
   if (list && pendingTurn.durationLine.open) {
     list.replaceChildren();
@@ -5027,7 +5163,6 @@ function showToolPrompt(card) {
   pendingTurn.prompt = card;
   pendingTurn.answer.append(card);
   resetAnswerStages();
-  markTimelineStep("Waiting for your choice");
   showTurnPhase("Waiting", "Waiting for your choice");
   byId("activity-text").textContent = "Waiting for your choice";
   byId("activity-detail").textContent = "";
@@ -5151,7 +5286,10 @@ function showToolChoice(choice) {
 }
 
 /**
- * Enable pointer and keyboard selection of a completed answer.
+ * Select an answer without disrupting text selection or panel visibility.
+ *
+ * Ordinary clicks select an answer only when the panels are already open.
+ * A deliberate keyboard activation can still open them for accessibility.
  *
  * @param answer Focusable answer element.
  * @param item Parent conversation article.
@@ -5160,15 +5298,18 @@ function showToolChoice(choice) {
 function bindAnswerSelection(answer, item, turn) {
   answer.tabIndex = 0;
   answer.setAttribute("aria-label", "Select this answer to view its references");
-  const choose = () => {
-    chooseSidePanels(true);
+  answer.addEventListener("click", (event) => {
+    if (!shell.classList.contains("sidebar-open")
+        || window.getSelection()?.isCollapsed === false
+        || event.target?.closest("button, a, summary")) return;
     selectTurn(item, turn);
-  };
-  answer.addEventListener("click", choose);
+  });
   answer.addEventListener("keydown", (event) => {
+    if (event.target !== answer) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      choose();
+      chooseSidePanels(true);
+      selectTurn(item, turn);
     }
   });
 }
@@ -5197,15 +5338,16 @@ function completePendingTurn(turn) {
   }
   pendingTurn = null;
   current.item.classList.remove("pending");
-  // "Took Ns" only; expanding it shows the routing steps and their times.
-  const record = timelineRecord(
-    current, turn, current.elapsedMs ?? performance.now() - current.started);
-  const timeline = renderTimeline(record, turn);
-  if (current.durationLine) current.durationLine.replaceWith(timeline);
-  else current.item.insertBefore(timeline, current.answer);
+  // A completed answer uses only the timeline committed by the core.
+  // Local phase timings remain a visual estimate for a running/stopped turn.
+  const timeline = renderTimeline(turn.timeline || null, turn);
+  if (current.durationLine) {
+    if (timeline) current.durationLine.replaceWith(timeline);
+    else current.durationLine.remove();
+  } else if (timeline) {
+    current.item.insertBefore(timeline, current.answer);
+  }
   current.durationLine = timeline;
-  // Keep the timing with the project so a resumed chat shows it too.
-  if (bridge && turn.timestamp) bridge.saveAnswerTimeline(turn.timestamp, JSON.stringify(record));
   // The text was shown live as it was generated; now add citation links.
   current.answer.classList.remove("answer-phase", "streaming");
   current.answer.replaceChildren();
@@ -5286,30 +5428,6 @@ function thoughtsBlock(text, label, open = false) {
 }
 
 /**
- * Name an intent for display, using the project type's list.
- * @param intentId Configured project-type intent ID.
- */
-function intentName(intentId) {
-  const names = projectTypes[activeProjectTypeId]?.intents || {};
-  return names[intentId] || String(intentId || "").replaceAll("_", " ");
-}
-
-/**
- * Describe which earlier turns the answer sees, such as "Recent 2 + turn 3".
- * @param data Turn parameters containing history metadata.
- */
-function describeHistory(data) {
-  const ids = data.history_turn_ids || [];
-  if (!ids.length) return "No earlier conversation needed";
-  const related = data.related_turn_ids || [];
-  const recent = ids.filter((id) => !related.includes(id));
-  const parts = [];
-  if (recent.length) parts.push(`the last ${recent.length === 1 ? "turn" : `${recent.length} turns`}`);
-  if (related.length) parts.push(`turn${related.length === 1 ? "" : "s"} ${related.join(", ")}`);
-  return `Including ${parts.join(" and ")} from the conversation`;
-}
-
-/**
  * Show generated text live in the pending answer.
  *
  * @param text Newly generated text.
@@ -5324,7 +5442,6 @@ function appendAnswerText(text) {
   if (!current.streaming) {
     current.streaming = true;
     resetAnswerStages();
-    markTimelineStep("Generating the answer");
     current.answer.classList.remove("answer-phase");
     current.answer.classList.add("streaming");
     current.answer.replaceChildren();
@@ -5614,87 +5731,45 @@ function onEvent(raw) {
     setBusy(true, data.message);
   } else if (data.event === "answer_delta") {
     appendAnswerText(data.text || "");
+  } else if (data.event === "answer_activity") {
+    // The core emits exactly the activities persisted with the turn.
+    // Phase messages update status, but must not invent timeline rows.
+    markTimelineStep(data);
+    queueAnswerStage(`activity:${data.index}`, data.label);
   } else if (data.event === "answer_phase") {
     activity.classList.add("answer-progress");
     if (data.phase === ANSWER_PHASE_ROUTING) {
-      queueAnswerStage("intent", "Identifying intent");
       byId("activity-text").textContent = "Identifying what the question asks for";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_ROUTED) {
-      queueAnswerStage("intent-done", `${intentName(data.intent)} identified`);
-      queueAnswerStage("history", describeHistory(data));
-      // Retrieval steps follow from their own phases; "none" shows none.
+      byId("activity-text").textContent = "Selecting conversation context";
+      byId("activity-detail").textContent = "";
     } else if (data.phase === ENGINE_PHASE_LOADING_MODEL) {
       const name = String(data.model_id || "the model").split("/").pop();
-      queueAnswerStage("loading", `Loading ${name}`);
       byId("activity-text").textContent = `Loading ${name}`;
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_RETRIEVING) {
-      // Show what retrieval is doing (semantic search, lexical search, …);
-      // generic and result-count messages are skipped.
-      const message = data.message || "Searching project evidence";
-      if (/^(Embedding|Running|Searching|Checking|Combining|Expanding|Finding|Scanning)\b/.test(message)) {
-        queueAnswerStage(`retrieval:${message}`, message.replace(/^Embedding the query and running /, "Running "));
-      }
       byId("activity-text").textContent = data.message || "Searching project evidence";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.choice) {
-      // A tool asks which option the user means, such as which paper.
       showToolChoice(data.choice);
     } else if (data.phase === ANSWER_PHASE_PROCESSING && data.plan) {
-      // An expensive tool run waits for Continue, Quick, or Cancel.
       showToolPlan(data.plan);
     } else if (data.phase === ANSWER_PHASE_PROCESSING) {
-      queueAnswerStage(`processing:${data.current ?? ""}`, data.message || "Working");
       byId("activity-text").textContent = data.message || "Working";
       byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.skipped) {
-      // No retrieval needed: no step to show.
-    } else if (
-      data.phase === ANSWER_PHASE_EVIDENCE_READY &&
-      (data.document !== undefined || data.tool !== undefined)
-    ) {
-      // Document reading or a tool describes its own result.
-      queueAnswerStage("preparing", data.message || "Reading the document");
-      byId("activity-text").textContent = data.message || "Reading the document";
-      byId("activity-detail").textContent = "";
-    } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY && data.reused) {
-      queueAnswerStage("preparing", `Reusing ${data.evidence_count} references from earlier turns`);
-      byId("activity-text").textContent = "Follow-up: reusing the previous references";
-      byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_EVIDENCE_READY) {
-      queueAnswerStage(
-        "preparing",
-        data.evidence_count == null
-          ? "Preparing retrieved evidence"
-          : data.related_count
-            ? `Found ${data.evidence_count - data.related_count} references + ${data.related_count} from earlier turns`
-            : `Found ${data.evidence_count} references`,
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "Preparing retrieved evidence for the model"
-        : `Preparing ${data.evidence_count} retrieved references for the model`;
+      byId("activity-text").textContent = data.message || "Preparing answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_GENERATING) {
-      // The model reads its whole prompt before the first word appears;
-      // streamed text replaces this label.
-      queueAnswerStage(
-        "reading",
-        data.evidence_count
-          ? `Reading ${data.evidence_count} references`
-          : "Reading the conversation",
-      );
-      byId("activity-text").textContent = data.evidence_count == null
-        ? "The model is reading the prompt"
-        : `The model is reading ${data.evidence_count} references before writing`;
+      byId("activity-text").textContent = data.message || "Generating answer";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_SAVING) {
-      queueAnswerStage("saving", data.message || "Saving the answer");
-      byId("activity-text").textContent = data.message || "Saving this turn to the conversation";
+      byId("activity-text").textContent = data.message || "Saving conversation";
       byId("activity-detail").textContent = "";
     } else if (data.phase === ANSWER_PHASE_COMPLETED) {
       stopPhaseAnimation();
-      byId("activity-text").textContent = data.message || "Displaying the completed response";
+      byId("activity-text").textContent = data.message || "Answer ready";
       byId("activity-detail").textContent = "";
     }
   } else if (data.event === "model_download_started") {
@@ -5732,6 +5807,17 @@ function onEvent(raw) {
     answerSettingsSaved(data);
   } else if (data.event === "answer_settings_failed") {
     answerSettingsFailed(data);
+  } else if (data.event === "source_cards_applied"
+      || data.event === "source_cards_regenerated") {
+    applyingSourceCards = false;
+    if (data.source_cards) showSourceCardSettings(data.source_cards);
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "Card indexing complete.";
+    byId("model-download-status").textContent =
+      data.event === "source_cards_applied"
+        ? "Saved source-card settings in profile.ini."
+        : "Source cards regenerated; other indexes unchanged.";
+    setBusy(false);
   } else if (data.event === "indexing_applied") {
     applyingIndexing = false;
     profile = data.profile;
@@ -5773,7 +5859,10 @@ function onEvent(raw) {
       byId("backend").value = profile.backend;
       showIndexingFields();
       showModelFields();
+      if (data.source_cards) showSourceCardSettings(data.source_cards);
     }
+    showSourceCardSummary(data.source_card_summary);
+    byId("source-card-progress").textContent = "";
     activeProjectTypeId = data.type_id;
     // Reopening the same project need not discard a queued save that has
     // not yet been acknowledged. A different project starts fresh.
@@ -6022,6 +6111,10 @@ function onEvent(raw) {
     // A failed switch may already have released the previous session.
     // Do not show its stale conversation or claim it is still active.
     if (data.resume_released) returnToLaunch();
+    if (typeof applyingSourceCards !== "undefined" && applyingSourceCards) {
+      applyingSourceCards = false;
+      if (sourceCardSettings) showSourceCardSettings(sourceCardSettings);
+    }
     if (applyingIndexing) {
       // Not saved: show the settings still in effect.
       applyingIndexing = false;
@@ -6216,6 +6309,11 @@ byId("project-form").addEventListener("submit", (event) => {
     openModels();
     byId("model-download-status").textContent = "Download the selected models in Settings before preparing the project.";
     return;
+  }
+  const cardProblem = sourceCardProblem();
+  if (cardProblem) {
+    openModels();
+    return showError(cardProblem);
   }
   const selected = Object.fromEntries(
     selectedSources.map((path) => [path, [...(checkedFiles.get(path) || [])]]),
@@ -6698,7 +6796,6 @@ for (const id of ["temperature", "max-new-tokens"]) {
   byId(id).addEventListener("change", saveAnswerNumbers);
 }
 byId("type-id").addEventListener("change", () => {
-  hideResume();
   bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });
@@ -6730,6 +6827,16 @@ document.addEventListener("keydown", (event) => {
   }
 });
 for (const id of ["extensions", "max-file-bytes"]) byId(id).addEventListener("change", previewSources);
+
+byId("save-source-card-models").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("save-source-card-policy").addEventListener(
+  "click", saveSourceCardSettings,
+);
+byId("regenerate-source-cards").addEventListener(
+  "click", regenerateSourceCards,
+);
 
 // Attach the bridge only after Qt exposes the channel; then request state.
 new QWebChannel(qt.webChannelTransport, (channel) => {

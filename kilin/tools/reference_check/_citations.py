@@ -131,7 +131,8 @@ _AFTER: Final[str] = r"[\s.,;:)\]!?—–”’\"']"
 # after punctuation: "polygenic15", "MDD93", "regions)70", "stress.12",
 # "UNet3+86". The PDF's glyph sizes, not this pattern, rule out "COVID19".
 _GLUED: Final[re.Pattern[str]] = re.compile(
-    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
+    r"(?:[^\W\d_]|[)\]+*′″’”%])[.,;:]?"
+    r"(?P<n>\d{1,3}(?:[,–-]\d{1,3})*)"
     rf"(?={_AFTER}|$)"
 )
 # A superscript after a space: "practices 1,8–14.", "petioles 5,14,15 by",
@@ -171,7 +172,9 @@ _NOT_CITED: Final[re.Pattern[str]] = re.compile(
 )
 # Glyphs of equations, including those some PDFs use for "(", ")" and "="
 # (ð, Þ, ¼).
-_MATH_GLYPH: Final[re.Pattern[str]] = re.compile(r"[=¼ðÞ∑∫δΨ|∣±×∝≈<>]")
+_MATH_GLYPH: Final[re.Pattern[str]] = re.compile(
+    r"[=¼ðÞ∑∫δΨ|∣±×∝≈<>]"
+)
 # Share of a sentence's tokens that are single characters or hold an
 # equation glyph above which the "sentence" is an equation ("ðsÞ = 1 2",
 # "j2H2 t2 j2H1"), whose superscripts are exponents. Prose, even with a

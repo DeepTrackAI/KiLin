@@ -747,6 +747,120 @@ class TestRouting(unittest.TestCase):
         self.assertIsNone(mixed.shortcut)
         router.assert_called_once()
 
+    def test_follow_up_tools_need_an_earlier_answer(self) -> None:
+        """Replace an answer-inspecting tool for a new question on a file."""
+
+        literature = project_type("literature")
+        reply = '{"intent": "source_context", "standalone": true}'
+        cases = (
+            ("In Figure 1G of smith20.pdf, what does 79.7 represent?",
+             literature.default_intent),
+            ("Show the sentence you cited from smith20.pdf.",
+             "source_context"),
+            ("Show the context of the first cited passage.",
+             "source_context"),
+        )
+        for question, intent in cases:
+            with self.subTest(question=question):
+                with patch.object(answering, "side_reply",
+                                  return_value=reply):
+                    decision = answering.route_question(
+                        object(), literature, self.turns, question
+                    )
+                self.assertEqual(decision.intent, intent)
+                if intent == literature.default_intent:
+                    self.assertIn("names a file", decision.fallback)
+
+    def test_follow_up_tools_are_rerouted_without_them(self) -> None:
+        """Ask the router again without tools that need an earlier answer."""
+
+        literature = project_type("literature")
+        replies = [
+            '{"intent": "source_context", "standalone": true}',
+            '{"intent": "topic_listing", "standalone": true}',
+        ]
+        question = (
+            "Which passages of smith20.pdf explain how its interface works?"
+        )
+        with patch.object(
+            answering, "side_reply", side_effect=replies
+        ) as reply:
+            decision = answering.route_question(
+                object(), literature, self.turns, question
+            )
+
+        self.assertEqual(decision.intent, "topic_listing")
+        self.assertIn("source_context replaced by topic_listing",
+                      decision.fallback)
+        first, second = (call.args[2] for call in reply.call_args_list)
+        self.assertIn("- source_context:", first)
+        self.assertNotIn("- source_context:", second)
+        self.assertIn("- topic_listing:", second)
+
+    def test_wording_cues_set_the_intent(self) -> None:
+        """Let clear wording overrule the router's intent."""
+
+        literature = project_type("literature")
+        cases = (
+            ("Give me an overview of the BRAPH 2 paper.", "research_briefing",
+             "paper_overview"),
+            ("Prepare a research briefing for smith20.pdf.",
+             "research_briefing", "research_briefing"),
+            ("Summarize its main contributions and limitations.",
+             "question_answering", "question_answering"),
+            ("How does BRAPH 2 differ from the earlier BRAPH framework?",
+             "question_answering", "compare_sources"),
+            ("Write a structured report comparing the methods of a.pdf "
+             "and b.pdf.", "report_generation", "report_generation"),
+            ("Of the BRAPH mentions you listed, which describe software "
+             "features?", "mention_classification", "refine_results"),
+            ("Find new passages discussing interfaces, not just the "
+             "earlier matches.", "refine_results", "topic_listing"),
+        )
+        for question, routed, expected in cases:
+            with self.subTest(question=question):
+                reply = json.dumps({"intent": routed, "standalone": True})
+                with patch.object(answering, "side_reply",
+                                  return_value=reply) as call:
+                    decision = answering.route_question(
+                        object(), literature, self.turns, question
+                    )
+                self.assertEqual(decision.intent, expected)
+                self.assertEqual(call.call_count, 1)
+                if routed != expected:
+                    self.assertIn("set by the question's wording",
+                                  decision.fallback)
+
+    def test_required_words_rule_out_an_intent(self) -> None:
+        """Ask again without an intent whose required words are absent."""
+
+        literature = project_type("literature")
+        replies = [
+            '{"intent": "reference_check", "standalone": true}',
+            '{"intent": "question_answering", "standalone": true}',
+        ]
+        question = "Did the original paper a.pdf support plug-ins?"
+        with patch.object(
+            answering, "side_reply", side_effect=replies
+        ) as reply:
+            decision = answering.route_question(
+                object(), literature, self.turns, question
+            )
+
+        self.assertEqual(decision.intent, "question_answering")
+        self.assertIn("lacks its required words", decision.fallback)
+        self.assertNotIn("- reference_check:",
+                         reply.call_args_list[1].args[2])
+        with patch.object(
+            answering, "side_reply",
+            return_value='{"intent": "reference_check", "standalone": true}',
+        ):
+            kept = answering.route_question(
+                object(), literature, self.turns,
+                "Check the references of a.pdf.",
+            )
+        self.assertEqual(kept.intent, "reference_check")
+
     def test_router_errors_do_not_stop_answers(self) -> None:
         """Use a fallback when generation of the route raises."""
 

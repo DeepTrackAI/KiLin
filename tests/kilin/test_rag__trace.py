@@ -102,7 +102,10 @@ class TestRAGTraceIntegration(unittest.TestCase):
         trace.close()
         self.assertEqual(answer, "model answer")
         payload = self._payload()
-        self.assertEqual(payload["event_count"], 13)
+        timeline = self.session.turns[-1].timeline
+        self.assertEqual(
+            payload["event_count"], 13 + len(timeline.steps)
+        )
         session = self._conversation()
         self.assertEqual(len(session["turns"]), 1)
         turn = session["turns"]["turn_0001"]
@@ -134,10 +137,12 @@ class TestRAGTraceIntegration(unittest.TestCase):
             question_ops["01_turn"]["details"]["question"],
             "Sensitive question",
         )
+        representation = next(
+            value for key, value in question_ops.items()
+            if key.endswith("_conversation_turn_representation")
+        )
         self.assertEqual(
-            question_ops["06_conversation_turn_representation"][
-                "details"
-            ]["question"],
+            representation["details"]["question"],
             "Sensitive question",
         )
         self.assertFalse(trace.output_path.with_suffix(".json.tmp").exists())

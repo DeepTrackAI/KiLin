@@ -62,6 +62,7 @@ loading KíLín; other third-party backends may not honor them. The actual
 |---|---|---|
 | `startup_ms` | External `perf_counter()` | Creating `RAGSession`, including project, index, and model preparation |
 | `wall_ms` | External `perf_counter()` | Full `RAGSession.ask()` call, regardless of diagnostic tracing |
+| `timeline.elapsed_ms` | `ConversationTurn.timeline` | Core answering up to the checkpoint, regardless of diagnostic tracing |
 | `turn_ms` | `turn` span | Inclusive traced turn; includes nested work and persistence |
 | `routing_ms` | `intent.classification` span | Router classification when enabled; absent when bypassed |
 | `semantic_ms` | `retrieval.semantic` span | Semantic search operation |
@@ -74,6 +75,15 @@ loading KíLín; other third-party backends may not honor them. The actual
 The notebook also produces an operation-level listing for initialization and
 other recorded spans, including `session.ready` and model-load spans. This
 allows inspection of startup components without introducing new counters.
+
+A saved `ConversationTurn.timeline` also contains ordered, non-overlapping
+phase-based activities, independently of tracing. This is an end-user
+execution summary rather than the diagnostic trace's operation hierarchy.
+Its duration excludes checkpoint persistence and the final completion event,
+so it need not equal the externally measured `wall_ms` or inclusive `turn_ms`.
+Pre-answer model loading is excluded; tool and confirmation waiting within
+`ask()` is included. Activity boundaries are phase notifications, not exact
+onset/offset timestamps of every nested retrieval operation.
 
 The `turn_ms` measurement is **inclusive**: never add routing, retrieval or
 generation durations to it. Similarly, individual retrieval operations can
@@ -120,7 +130,7 @@ remain sensitive and must be handled according to
 [`trace_recording.md`](trace_recording.md).
 
 If `EXPORT_CSV = True`, timing-only summaries are stored under
-`sandbox/performance_pr4/`, which is ignored by Git and omitted from the
+`sandbox/performance_benchmark/`, which is ignored by Git and omitted from the
 source ZIP. A live run writes new conversations and traces only into the
 explicitly selected dedicated benchmark workspace. The default read-only
 notebook run creates no files. Review run labels before sharing even the

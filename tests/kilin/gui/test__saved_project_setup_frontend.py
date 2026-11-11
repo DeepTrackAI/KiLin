@@ -96,6 +96,107 @@ console.log("saved project resume bypass passed");
             "saved project resume bypass passed", result.stdout
         )
 
+    def test_type_change_preserves_saved_project_list(self) -> None:
+        """Changing creation type must not hide resumable projects."""
+
+        source = _WEB.read_text(encoding="utf-8")
+        home = extract_function(source, "renderSavedProjects")
+        refresh = extract_function(source, "refreshSavedProject")
+        marker = 'byId("type-id").addEventListener("change", () => {'
+        start = source.index(marker)
+        change = source[start:source.index("\n});", start) + 4]
+        if shutil.which("node") is None:
+            self.assertNotIn("hideResume()", change)
+            self.assertIn('host.classList.toggle("hidden"', home)
+            return
+        script = r"""
+const assert = require("node:assert/strict");
+class Element {
+  constructor(tag = "div") {
+    this.tag = tag;
+    this.children = [];
+    this.handlers = {};
+    this.dataset = {};
+    this.value = "";
+    this.className = "";
+    this.scrollTop = 0;
+    const classes = new Set();
+    this.classList = {
+      add: (name) => classes.add(name),
+      contains: (name) => classes.has(name),
+      toggle: (name, force) => {
+        const enabled = force === undefined ? !classes.has(name) : force;
+        if (enabled) classes.add(name);
+        else classes.delete(name);
+      },
+    };
+  }
+  querySelector(selector) {
+    for (const child of this.children) {
+      if (`.${child.className}` === selector) return child;
+      const nested = child.querySelector(selector);
+      if (nested) return nested;
+    }
+    return null;
+  }
+  append(...nodes) { this.children.push(...nodes); }
+  replaceChildren(...nodes) { this.children = nodes; }
+  addEventListener(name, handler) { this.handlers[name] = handler; }
+}
+const fields = {};
+const byId = (id) => (fields[id] ??= new Element());
+const document = {createElement: (tag) => new Element(tag)};
+const requests = [];
+const bridge = {
+  requestSettings(type, path) { requests.push(["settings", type, path]); },
+  listSavedProjects(path) { requests.push(["projects", path]); },
+  resumeProject(path) { requests.push(["resume", path]); },
+};
+const hideResume = () => byId("saved-projects").classList.add("hidden");
+let ready = false;
+let busy = false;
+let savedProjects = [];
+const projectTypes = {
+  literature: {label: "Literature"}, code: {label: "Code"},
+};
+""" + home + refresh + change + r"""
+const projects = [
+  {name: "Papers", type_id: "literature", project: "/projects/papers"},
+  {name: "Scripts", type_id: "code", project: "/projects/scripts"},
+];
+const host = byId("saved-projects");
+host.classList.add("hidden");
+renderSavedProjects(projects);
+assert.equal(host.classList.contains("hidden"), false);
+const list = host.querySelector(".saved-project-list");
+assert.equal(list.children.length, 2);
+byId("type-id").value = "code";
+byId("type-id").handlers.change();
+assert.equal(host.classList.contains("hidden"), false);
+assert.deepEqual(requests, [
+  ["settings", "code", ""], ["projects", ""],
+]);
+renderSavedProjects(projects.map((project) => ({...project})));
+assert.equal(host.classList.contains("hidden"), false);
+assert.equal(host.querySelector(".saved-project-list"), list);
+// An unchanged refresh must also restore a previously hidden list.
+host.classList.add("hidden");
+renderSavedProjects(projects);
+assert.equal(host.classList.contains("hidden"), false);
+assert.equal(host.querySelector(".saved-project-list"), list);
+// An empty list is correctly hidden, including on an unchanged refresh.
+renderSavedProjects([]);
+assert.equal(host.classList.contains("hidden"), true);
+renderSavedProjects([]);
+assert.equal(host.classList.contains("hidden"), true);
+console.log("project type preserves saved project list");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "project type preserves saved project list", result.stdout
+        )
+
     def test_refreshing_the_same_projects_keeps_the_list_scroll(
         self,
     ) -> None:

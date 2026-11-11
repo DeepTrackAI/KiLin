@@ -192,7 +192,8 @@ class TestReferenceCheckRun(unittest.TestCase):
             "`braph.md` (found: first page and first author)", section
         )
         self.assertIn(
-            "Software such as BRAPH implements these measures **⁽²,³⁾**.",
+            "Software such as BRAPH implements these "
+            "measures **⁽²,³⁾**.",
             section,
         )
         self.assertIn("We followed the protocol of **⁽²⁾**.", section)
@@ -210,7 +211,8 @@ class TestReferenceCheckRun(unittest.TestCase):
         )
         # The unconfirmed contradiction is listed first, weakened.
         self.assertIn(
-            "**1. Not supported** · reference 3 → `braph2.md`", result.answer
+            "**1. Not supported** · reference 3 → "
+            "`braph2.md`", result.answer
         )
         self.assertIn("2 partly supported · 1 not supported", result.answer)
         self.assertIn("Judged contradicted", result.answer)

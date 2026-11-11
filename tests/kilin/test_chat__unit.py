@@ -1440,7 +1440,10 @@ class TestUnpromptedScriptBlocking(unittest.TestCase):
     def _tokenizer() -> Mock:
         """Create a tokenizer whose vocabulary mixes scripts."""
 
-        pieces = {0: "The", 1: " first", 2: "优先", 3: "、", 4: "é", 5: "の"}
+        pieces = {
+            0: "The", 1: " first", 2: "优先",
+            3: "、", 4: "é", 5: "の",
+        }
         tokenizer = Mock()
         tokenizer.get_vocab.return_value = {
             text: token for token, text in pieces.items()

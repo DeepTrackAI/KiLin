@@ -92,6 +92,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+import re
 from typing import Final
 
 from kilin.retrievals.document_reading import dominant_path, named_paths
@@ -120,6 +121,21 @@ _REPLY_SAME: Final[str] = "SAME"
 _REPLY_DIFFERENT: Final[str] = "DIFFERENT"
 # Longest router reply; one word is expected.
 _ROUTER_REPLY_TOKENS: Final[int] = 8
+# Wording that clearly means one document ("its limitations", "that
+# study") or several ("these articles", "the other papers"). Clear wording
+# decides without the router model, which tends to answer ALL.
+_ONE_DOCUMENT: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:it|its|itself)\b"
+    r"|\b(?:this|that|the same|the) (?:paper|study|article|work|document"
+    r"|pdf|manuscript|preprint|publication)\b",
+    re.IGNORECASE,
+)
+_SEVERAL_DOCUMENTS: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:all|each|every|both|these|those|other|others|another"
+    r"|different|papers|articles|studies|documents|sources|pdfs"
+    r"|collection|project)\b",
+    re.IGNORECASE,
+)
 
 
 def choose_document(
@@ -350,9 +366,17 @@ def document_scope(
     -------
     tuple[list[pathlib.Path], str | None]
         The files the question names; otherwise the file the earlier turns
-        were about, when the router model judges that the request means it
-        ("go through that paper", "in this paper", "does it say MRI?");
-        otherwise no files (the whole project). The second value says why.
+        were about, when the request means it ("go through that paper",
+        "in this paper", "does it say MRI?"); otherwise no files (the whole
+        project). The second value says why.
+
+    Notes
+    -----
+    Clear wording decides without the router model: words for several
+    documents ("these articles", "the other papers", "all") mean the whole
+    project, and words for one document ("its limitations", "that study")
+    mean the earlier file. The router model judges only the remaining
+    requests.
 
     """
 
@@ -365,6 +389,10 @@ def document_scope(
         return [], None
 
     path, why = earlier
+    if _SEVERAL_DOCUMENTS.search(request.question):
+        return [], None
+    if _ONE_DOCUMENT.search(request.question):
+        return [path], why
     system = (
         "You decide which documents a request is about. You reply with "
         "ALL, SAME, or DIFFERENT only."

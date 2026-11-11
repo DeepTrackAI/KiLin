@@ -35,6 +35,10 @@ Module Structure
 
     Find invalid passage citations in a generated answer.
 
+- ``quote_citations``
+
+    Move the citation of a quoted phrase to the passage that contains it.
+
 - ``take_notes``
 
     Read each part using the caller's model and tracing callbacks.
@@ -49,7 +53,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import re
 from time import perf_counter
 from typing import Final
@@ -58,6 +62,7 @@ from kilin._model_completion import IncompleteModelResponse
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._contract import ToolContext
+from kilin.tools._shared.citations import inspect_citations
 
 __all__ = [
     "NOTHING",
@@ -65,11 +70,21 @@ __all__ = [
     "clean_notes",
     "notes_prompt",
     "plan_parts",
+    "quote_citations",
     "take_notes",
 ]
 
 NOTHING: Final[str] = "NOTHING"
-_CITATION = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+# A citation group such as [3], [3, 5], or [3-5].
+_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
+    r"\[\s*(\d[^\[\]\r\n]*)\]"
+)
+# A phrase in straight or curly double quotes.
+_QUOTE: Final[re.Pattern[str]] = re.compile(r'["“]([^"“”]+)["”]')
+# A sentence ends at ., !, or ? followed by space, or at a line break.
+_SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+|\n+")
+# Fewer words than this are too common to place a quote ("BRAPH").
+_QUOTE_MIN_WORDS: Final[int] = 3
 
 
 def plan_parts(chunks: Sequence[Chunk], part_tokens: int) -> list[list[int]]:
@@ -175,12 +190,11 @@ def clean_notes(reply: str, numbers: Sequence[int]) -> list[str]:
     kept: list[str] = []
     for line in reply.splitlines():
         line = line.strip().lstrip("-*• ").strip()
-        cited = {
-            int(number)
-            for group in _CITATION.findall(line)
-            for number in re.split(r"\s*,\s*", group)
-        }
-        if line and cited and cited <= allowed:
+        cited = inspect_citations(line, max(allowed, default=0))
+        if (
+            line and cited.valid and cited.valid <= allowed
+            and not cited.invalid_numbers and not cited.invalid_groups
+        ):
             kept.append(f"- {line}")
     return kept
 
@@ -203,13 +217,110 @@ def answer_citations(answer: str, passages: int) -> list[int]:
 
     """
 
-    cited = {
-        int(number)
-        for group in _CITATION.findall(answer)
-        for number in re.split(r"\s*,\s*", group)
-    }
-    return sorted(number for number in cited if not 1 <= number <= passages)
+    return list(inspect_citations(answer, passages).invalid_numbers)
 
+
+
+def quote_citations(
+    answer: str, passages: Mapping[int, str]
+) -> tuple[str, dict[str, int]]:
+    """Move the citation of a quoted phrase to the passage that contains it.
+
+    Small models cite a neighbouring number ([1] for [10]). A sentence that
+    quotes a phrase of at least three words, and has one citation group,
+    is checked: when no cited passage contains the phrase, and exactly one
+    other passage the model was given does, the group cites that passage
+    instead. Text is compared ignoring case, spacing, and line-end
+    hyphenation.
+
+    Parameters
+    ----------
+    answer: str
+        The generated answer.
+    passages: Mapping[int, str]
+        The citation numbers the model was given, with their passage text.
+
+    Returns
+    -------
+    tuple[str, dict[str, int]]
+        The answer with moved citations, and counts: ``moved`` citation
+        groups, and ``unplaced`` quotes that no given passage contains.
+
+    """
+
+    texts = {number: _plain(text) for number, text in passages.items()}
+    counts = {"moved": 0, "unplaced": 0}
+    pieces: list[str] = []
+    position = 0
+    for end in [*_SENTENCE_END.finditer(answer), None]:
+        stop = end.start() if end is not None else len(answer)
+        sentence = answer[position:stop]
+        groups = list(_CITATION_GROUP.finditer(sentence))
+        quotes = [
+            _plain(quote)
+            for quote in _QUOTE.findall(sentence)
+            if len(quote.split()) >= _QUOTE_MIN_WORDS
+        ]
+        if quotes and len(groups) == 1:
+            citation = inspect_citations(
+                groups[0].group(0), max(passages, default=0)
+            )
+            if (
+                not citation.valid or citation.invalid_numbers
+                or citation.invalid_groups
+            ):
+                pieces.append(sentence)
+                if end is not None:
+                    pieces.append(end.group(0))
+                    position = end.end()
+                continue
+            cited = citation.valid
+            if not any(
+                quote in texts.get(number, "")
+                for quote in quotes for number in cited
+            ):
+                found = {
+                    number
+                    for quote in quotes
+                    for number, text in texts.items()
+                    if quote in text
+                }
+                if len(found) == 1:
+                    group = groups[0]
+                    sentence = (
+                        sentence[:group.start()]
+                        + f"[{found.pop()}]"
+                        + sentence[group.end():]
+                    )
+                    counts["moved"] += 1
+                elif not found:
+                    counts["unplaced"] += len(quotes)
+        pieces.append(sentence)
+        if end is not None:
+            pieces.append(end.group(0))
+            position = end.end()
+    return "".join(pieces), counts
+
+
+def _plain(text: str) -> str:
+    """Return text for quote matching: no line-end hyphens, one space.
+
+    Parameters
+    ----------
+    text: str
+        Passage or quoted text.
+
+    Returns
+    -------
+    str
+        Casefolded text with single spaces and words rejoined across
+        line-end hyphens ("advan- tage" becomes "advantage").
+
+    """
+
+    text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
+    text = text.replace("’", "'")
+    return " ".join(text.split()).casefold()
 
 
 def take_notes(

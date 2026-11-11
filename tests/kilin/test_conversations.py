@@ -677,6 +677,31 @@ class TestStoreBranching(ConversationStoreFixture):
         self.assertEqual(self._state(parent)["turns"][0]["question"],
                          "Original")
 
+    def test_branch_preserves_core_timeline_on_selected_turns(self):
+        """Keep timing with the copied answer rather than a GUI sidecar."""
+        parent = self.store.create()
+        activity = {
+            "elapsed_ms": 50,
+            "steps": [{
+                "phase": "generating", "label": "Generating answer", "ms": 50,
+            }],
+        }
+        turns = [
+            {"question": "Q1", "answer": "A1", "timeline": activity},
+            {"question": "Q2", "answer": "A2", "timeline": activity},
+        ]
+        self._persist(parent, {"turns": turns})
+        branch = self.store.create(
+            branch_from=parent.conversation_id, turn_count=1
+        )
+        branched = self._state(branch)["turns"]
+        self.assertEqual(branched, turns[:1])
+        branched[0]["timeline"]["steps"][0]["ms"] = 0
+        self.assertEqual(
+            self._state(parent)["turns"][0]["timeline"]["steps"][0]["ms"],
+            50,
+        )
+
     def test_branch_does_not_copy_parent_identity_or_metadata(self):
         parent = self.store.create()
         self._persist(parent, {"checkpoint_id": "one", "custom": 4})

@@ -24,6 +24,7 @@ from kilin.tools._shared.document_notes import (
     clean_notes,
     notes_prompt,
     plan_parts,
+    quote_citations,
     take_notes,
 )
 
@@ -93,6 +94,14 @@ class TestDocumentNotes(unittest.TestCase):
             ["- Fact [2]", "- Both [1, 2]"],
         )
 
+    def test_ranges_in_notes_are_checked_against_part(self) -> None:
+        """Accept supported ranges and reject partly unsupported ones.
+
+        """
+
+        reply = "- Supported [1-2]\n- Wrong [1, 3-9]"
+        self.assertEqual(clean_notes(reply, [1, 2]), ["- Supported [1-2]"])
+
     def test_invalid_answer_citations(self) -> None:
         """Report only citation numbers outside the available range.
 
@@ -100,6 +109,57 @@ class TestDocumentNotes(unittest.TestCase):
 
         self.assertEqual(answer_citations("Found [2], [3, 9]", 3), [9])
         self.assertEqual(answer_citations("No citations", 2), [])
+        self.assertEqual(answer_citations("Found [3-9]", 3), [])
+
+    def test_quote_citations_move_to_the_passage_with_the_quote(self) -> None:
+        """Cite the one given passage that contains a quoted phrase.
+
+        """
+
+        passages = {
+            1: "BRAPH is a graph theory software.",
+            10: "It provides a clear modular\nstruc- ture for new objects.",
+            12: "Results in patients with MCI.",
+        }
+        answer, counts = quote_citations(
+            'It has a "clear modular structure" [1]. It is software [1].',
+            passages,
+        )
+
+        self.assertEqual(
+            answer,
+            'It has a "clear modular structure" [10]. It is software [1].',
+        )
+        self.assertEqual(counts, {"moved": 1, "unplaced": 0})
+
+    def test_quote_citations_leave_supported_or_unclear_quotes(self) -> None:
+        """Change nothing when the cited passage, or no single one, fits.
+
+        """
+
+        passages = {1: "one two three four", 2: "one two three five"}
+        cases = (
+            ('Says “two three four” [1].', {"moved": 0, "unplaced": 0}),
+            ('Says "one two three" [9].', {"moved": 0, "unplaced": 0}),
+            ('Says "six seven eight" [1].', {"moved": 0, "unplaced": 1}),
+            ('Says "BRAPH" [2].', {"moved": 0, "unplaced": 0}),
+            ('Says "two three four" [2] and [1].',
+             {"moved": 0, "unplaced": 0}),
+        )
+        for text, counts in cases:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    quote_citations(text, passages), (text, counts)
+                )
+
+    def test_quote_citations_do_not_rewrite_invalid_ranges(self) -> None:
+        """Leave incorrect spans for explicit validation reporting.
+
+        """
+
+        passages = {1: "a clear modular structure"}
+        answer = 'It has a "clear modular structure" [1-999999999].'
+        self.assertEqual(quote_citations(answer, passages)[0], answer)
 
     def test_take_notes_uses_fake_model_and_traces_results(self) -> None:
         """Generate cited notes with callbacks and no real model.

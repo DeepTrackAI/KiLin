@@ -190,9 +190,12 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "apply_indexing_settings",
             ),
             (
-                {"action": "save_answer_timeline", "timestamp": "now",
-                 "timeline": {"elapsed_ms": 10, "steps": []}},
-                "save_answer_timeline",
+                {"action": "save_source_cards", "settings": {"x": 1}},
+                "save_source_card_settings",
+            ),
+            (
+                {"action": "regenerate_source_cards"},
+                "regenerate_source_cards",
             ),
         ]
         for command, method in samples:
@@ -203,6 +206,20 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 self.assertEqual(
                     getattr(worker, method).call_count, expected
                 )
+
+    def test_obsolete_timeline_writer_is_not_an_engine_command(
+        self,
+    ) -> None:
+        """Do not silently write presentation timings to another file."""
+        worker, events = self._run([
+            '{"action":"save_answer_timeline","timestamp":"t"}'
+        ])
+        self.assertEqual(events, [
+            {"event": "error", "message": "Unknown command."}
+        ])
+        self.assertFalse(hasattr(
+            type(worker), "save_answer_timeline"
+        ))
 
     def test_optional_fields_keep_their_existing_defaults(self) -> None:
         """Do not require optional answer and source-selection fields."""
@@ -712,7 +729,8 @@ class TestGUIProtocolEvents(unittest.TestCase):
         ).read_text(encoding="utf-8")
         handled = set(re.findall(r'data\.event === "([a-z_]+)"', script))
         self.assertEqual(handled, {
-            "answer_cancelled", "answer_delta", "answer_phase",
+            "answer_activity", "answer_cancelled", "answer_delta",
+            "answer_phase",
             "answer_settings_failed", "answer_settings_saved",
             "answered",
             "backend_failed", "backend_preference_failed",
@@ -720,6 +738,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "conversation_delete_started",
             "conversation_opened", "conversation_viewed", "conversations",
             "error", "indexing_applied",
+            "source_cards_applied", "source_cards_regenerated",
             "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",

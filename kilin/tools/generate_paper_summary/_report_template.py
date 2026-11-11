@@ -806,7 +806,7 @@ def count_words(text: str) -> int:
 
 
 def count_items(text: str) -> int:
-    """Count the list items (``-``, ``*``, ``•``, or ``1.`` lines) in content.
+    """Count list items (``-``, ``*``, ``•``, or ``1.``) in content.
 
     Parameters
     ----------

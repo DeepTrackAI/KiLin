@@ -74,9 +74,11 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID``
+- ``RETRIEVAL_STRATEGY_HYBRID`` and
+  ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
 
-    Canonical string value for the hybrid search pipeline.
+    Canonical string values for hybrid and four-channel source-first
+    retrieval.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -109,7 +111,7 @@ Module Structure
 
 - ``RetrievalStrategy``
 
-    Type alias for ``"hybrid"``.
+    Type alias for ``"hybrid"`` or ``"source_first"``.
 
 - ``load_project_types``
 
@@ -147,6 +149,9 @@ from kilin.defaults import (
     require_default_int,
     require_default_nonnegative_int,
 )
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_MODES, EvidenceLimits,
+)
 from kilin.repository import normalize_extensions
 from kilin.tools._contract import reject_unknown
 from kilin.tools._registry import ToolUse, parse_tool
@@ -167,6 +172,7 @@ __all__ = [
     "RETRIEVAL_MODE_SEARCH",
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
+    "RETRIEVAL_STRATEGY_SOURCE_FIRST",
     "CodeGraphSetting",
     "HistoryPolicy",
     "Intent",
@@ -235,14 +241,19 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
         "1000 and 200000."
     )
 
-# Search pipeline used by RETRIEVAL_MODE_SEARCH. Only the existing hybrid
-# pipeline (semantic, lexical, code graph, fused) exists; new strategies
-# need benchmarks before they are added.
-RetrievalStrategy: TypeAlias = Literal["hybrid"]
+# Search pipelines for RETRIEVAL_MODE_SEARCH. ``hybrid`` combines passage
+# channels; ``source_first`` fuses four source rankings.
+RetrievalStrategy: TypeAlias = Literal["hybrid", "source_first"]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
+RETRIEVAL_STRATEGY_SOURCE_FIRST: Final[RetrievalStrategy] = "source_first"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
 )
+# Source-first defaults and validation bounds for selected sources.
+_DEFAULT_MAX_SOURCES: Final[int] = 3
+_MAX_SOURCES_LIMIT: Final[int] = 50
+_PASSAGES_PER_SOURCE_LIMIT: Final[int] = 10
 
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
@@ -273,11 +284,20 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid"
-        Search pipeline used when searching; only ``hybrid`` exists.
+    retrieval_strategy: "hybrid" | "source_first"
+        Search pipeline used when searching: ``hybrid`` fuses passage
+        ranks and ``source_first`` fuses independent source ranks.
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
+    cues: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns searched in a question whose wording
+        means this intent ("give me an overview of the Smith paper"); a
+        match sets the intent after the router has judged the history.
+    requires: tuple[re.Pattern[str], ...]
+        Case-insensitive patterns of which a question must match one for
+        the router's choice of this intent to stand (a reference check
+        needs words such as "references" or "cite"). Empty: no condition.
     include_related_evidence: bool
         When searching, also supply the evidence cited by the earlier turns
         the router marked as related, so follow-ups keep their sources.
@@ -296,6 +316,17 @@ class Intent:
         ``None`` inherits the session setting; ``True`` or ``False``
         overrides it without changing the session. Defaults to ``None``.
         Tool-backed intents must leave this unset or null.
+    max_sources: int | None
+        Source-first limit on represented sources; None defaults to 3.
+    passages_per_source: int | None
+        Source-first per-source target; None defaults to one passage.
+    max_passages: int
+        Hard number of source-first evidence passages.
+    evidence_tokens: int
+        Hard estimated source-first evidence-token budget including headers.
+    coverage: "bounded" | "exhaustive"
+        Whether ordinary questions require all indexed sources. Explicit
+        questions asking about all sources always request exhaustive mode.
 
     """
 
@@ -307,11 +338,42 @@ class Intent:
     retrieval_mode: RetrievalMode
     retrieval_strategy: RetrievalStrategy
     shortcuts: tuple[re.Pattern[str], ...] = ()
+    cues: tuple[re.Pattern[str], ...] = ()
+    requires: tuple[re.Pattern[str], ...] = ()
     include_related_evidence: bool = False
     prefer_source_code: bool = False
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
     thinking: bool | None = None
+    max_sources: int | None = None
+    passages_per_source: int | None = None
+    max_passages: int = 8
+    evidence_tokens: int = 5_000
+    coverage: str = "bounded"
+
+    def source_limits(self) -> EvidenceLimits:
+        """Resolve the validated source-first limits for this intent.
+
+        Returns
+        -------
+        EvidenceLimits
+            Per-intent limits independent of the project retrieval count.
+
+        """
+
+        return EvidenceLimits(
+            max_sources=(
+                self.max_sources if self.max_sources is not None
+                else _DEFAULT_MAX_SOURCES
+            ),
+            passages_per_source=(
+                self.passages_per_source
+                if self.passages_per_source is not None else 1
+            ),
+            max_passages=self.max_passages,
+            max_tokens=self.evidence_tokens,
+            coverage=self.coverage,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +412,16 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
+    source_cards_enabled: bool
+        Enable the optional independent source-card index.
+    source_card_kind: str | None
+        Preferred card kind, or None for no default.
+    source_cards_automatic: bool
+        Generate missing cards during indexing.
+    document_headers: bool
+        Prefix searchable passages with document metadata, such as title,
+        author, section, and page. Independent from source-card generation.
+        Defaults to ``False``.
 
     """
 
@@ -367,6 +439,10 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
+    document_headers: bool = False
+    source_cards_enabled: bool = False
+    source_card_kind: str | None = None
+    source_cards_automatic: bool = False
 
     @property
     def label(self) -> str:
@@ -414,6 +490,44 @@ def _text(type_id: str, data: dict, field: str, required: bool = True) -> str:
         raise ValueError(f"Project type {type_id!r} needs text for {field!r}.")
 
     return value.strip()
+
+
+def _patterns(
+    where: str, data: dict, field: str
+) -> tuple[re.Pattern[str], ...]:
+    """Compile a list of case-insensitive regular expressions.
+
+    Parameters
+    ----------
+    where: str
+        Intent location for errors.
+    data: dict
+        The intent's JSON object.
+    field: str
+        Field name, such as ``"shortcuts"`` or ``"cues"``.
+
+    Returns
+    -------
+    tuple[re.Pattern[str], ...]
+        The compiled patterns; empty when the field is missing.
+
+    Raises
+    ------
+    ValueError
+        If the field is not a list of texts or a pattern is invalid.
+
+    """
+
+    patterns = []
+    for pattern in _texts(where, data, field):
+        try:
+            patterns.append(re.compile(pattern, re.IGNORECASE))
+        except re.error as error:
+            raise ValueError(
+                f"Intent {where!r} {field} pattern {pattern!r} is not a "
+                f"valid regular expression: {error}"
+            ) from error
+    return tuple(patterns)
 
 
 def _texts(type_id: str, data: dict, field: str) -> tuple[str, ...]:
@@ -534,6 +648,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "history",
             "retrieval",
             "shortcuts",
+            "cues",
+            "requires",
             "tool",
             "thinking",
         ),
@@ -550,6 +666,11 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "include_related_evidence",
             "prefer_source_code",
             "max_tokens",
+            "max_sources",
+            "passages_per_source",
+            "max_passages",
+            "evidence_tokens",
+            "coverage",
         ),
     )
 
@@ -594,6 +715,41 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             f"{', '.join(RETRIEVAL_STRATEGY_CHOICES)}."
         )
 
+    numeric_limits = (
+        ("max_sources", 1, _MAX_SOURCES_LIMIT),
+        ("passages_per_source", 1, _PASSAGES_PER_SOURCE_LIMIT),
+        ("max_passages", 1, 200),
+        ("evidence_tokens", 1000, _MAX_DOCUMENT_TOKENS),
+    )
+    for key, minimum, maximum in numeric_limits:
+        if key not in retrieval:
+            continue
+        value = retrieval[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Intent {where!r} retrieval.{key} must be a whole "
+                f"number from {minimum} to {maximum}."
+            )
+    source_only = (
+        "max_sources", "passages_per_source", "max_passages",
+        "evidence_tokens", "coverage",
+    )
+    if any(key in retrieval for key in source_only) and (
+        strategy != RETRIEVAL_STRATEGY_SOURCE_FIRST
+        or mode != RETRIEVAL_MODE_SEARCH
+        or tool is not None
+    ):
+        raise ValueError(
+            f"Intent {where!r} source-first evidence limits require "
+            'retrieval.mode="search" and strategy="source_first".'
+        )
+    coverage = retrieval.get("coverage", "bounded")
+    if coverage not in COVERAGE_MODES:
+        raise ValueError(
+            f"Intent {where!r} retrieval.coverage must be bounded "
+            "or exhaustive."
+        )
+
     related = retrieval.get("include_related_evidence", False)
     if type(related) is not bool:
         raise ValueError(
@@ -622,15 +778,7 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
     if guidance is not None and not isinstance(guidance, str):
         raise ValueError(f"Intent {where!r} answer_guidance must be text.")
 
-    shortcuts = []
-    for pattern in _texts(where, data, "shortcuts"):
-        try:
-            shortcuts.append(re.compile(pattern, re.IGNORECASE))
-        except re.error as error:
-            raise ValueError(
-                f"Intent {where!r} shortcut {pattern!r} is not a valid "
-                f"regular expression: {error}"
-            ) from error
+    shortcuts = _patterns(where, data, "shortcuts")
 
     return Intent(
         intent_id=intent_id,
@@ -643,12 +791,19 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         history_policy=policy,
         retrieval_mode=mode,
         retrieval_strategy=strategy,
-        shortcuts=tuple(shortcuts),
+        shortcuts=shortcuts,
+        cues=_patterns(where, data, "cues"),
+        requires=_patterns(where, data, "requires"),
         include_related_evidence=related,
         prefer_source_code=prefer_source,
         max_tokens=max_tokens,
         tool=tool,
         thinking=thinking,
+        max_sources=retrieval.get("max_sources"),
+        passages_per_source=retrieval.get("passages_per_source"),
+        max_passages=retrieval.get("max_passages", 8),
+        evidence_tokens=retrieval.get("evidence_tokens", 5000),
+        coverage=coverage,
     )
 
 
@@ -726,7 +881,10 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
 
     # The type check rejects 1 and 0, which equal True and False.
     capabilities = _object(type_id, data, "capabilities")
-    reject_unknown(f"{type_id}.capabilities", capabilities, ("code_graph",))
+    reject_unknown(
+        f"{type_id}.capabilities", capabilities,
+        ("code_graph", "document_headers", "source_cards"),
+    )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
         bool,
@@ -736,6 +894,33 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             f"Project type {type_id!r} capabilities.code_graph must be true, "
             'false, or "auto".'
         )
+
+    document_headers = capabilities.get("document_headers", False)
+    if type(document_headers) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r}: capabilities.document_headers "
+            "must be true "
+            "or false."
+        )
+
+    source_cards = _object(type_id, capabilities, "source_cards")
+    reject_unknown(
+        f"{type_id}.capabilities.source_cards", source_cards,
+        ("enabled", "kind", "automatic"),
+    )
+    source_cards_enabled = source_cards.get("enabled", False)
+    source_cards_automatic = source_cards.get(
+        "automatic", source_cards_enabled
+    )
+    for setting in (source_cards_enabled, source_cards_automatic):
+        if type(setting) is not bool:
+            raise ValueError("Source-card project capability must be boolean.")
+    source_card_kind = source_cards.get("kind")
+    if source_card_kind is not None and (
+        not isinstance(source_card_kind, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]*", source_card_kind)
+    ):
+        raise ValueError("Source-card kind must be a snake-case identifier.")
 
     history = _object(type_id, data, "history")
     reject_unknown(f"{type_id}.history", history, ("recent_turns",))
@@ -783,6 +968,10 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
         suggestions=_texts(type_id, data, "suggestions"),
+        document_headers=document_headers,
+        source_cards_enabled=source_cards_enabled,
+        source_card_kind=source_card_kind,
+        source_cards_automatic=source_cards_automatic,
     )
 
 

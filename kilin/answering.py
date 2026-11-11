@@ -130,7 +130,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import json
 from pathlib import PureWindowsPath
@@ -221,6 +221,17 @@ HISTORY_CITATION_MARKER: Final[str] = "[source]"
 # Reference-detection cues are compiled with case-insensitive matching.
 _REFERS_BACK: Final[re.Pattern[str]] = require_default_pattern(
     _ANSWERING_DEFAULTS, "REFERS_BACK_PATTERN", "ANSWERING", flags=re.I
+)
+# A tool that works on an earlier answer is not meant by a question that
+# names a file and says nothing about earlier answers ("In Figure 1G of
+# smith20.pdf, what does 79.7 represent?").
+_NAMED_FILE: Final[re.Pattern[str]] = re.compile(
+    r"\b[\w.-]+\.(?:pdf|md|txt|docx?|py|ipynb|m|json)\b", re.I
+)
+_EARLIER_ANSWER: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:you|your|cited|quoted|listed|answer|answers|previous|earlier"
+    r"|above|just|that|this|these|those|them)\b",
+    re.I,
 )
 # Common words are excluded from term matching but keep their configured
 # vocabulary independent of Python source code.
@@ -612,6 +623,7 @@ def _router_prompt(
     project: ProjectType,
     representations: list[dict[str, object]],
     question: str,
+    exclude: frozenset[str] = frozenset(),
 ) -> tuple[str, str]:
     """Build the router's system and user prompts.
 
@@ -625,6 +637,8 @@ def _router_prompt(
         listed.
     question: str
         The new question.
+    exclude: frozenset[str], optional
+        Intent IDs left out of the list. Defaults to none.
 
     Returns
     -------
@@ -638,6 +652,7 @@ def _router_prompt(
     intents = "\n".join(
         f"- {intent_id}: {intent.description}"
         for intent_id, intent in project.intents.items()
+        if intent_id not in exclude
     )
     listed = [item for item in representations if not item.get("skip")]
     listed = listed[-MAX_LISTED_TURNS:]
@@ -678,6 +693,7 @@ Example: {{"intent": "{project.default_intent}", "standalone": true}}"""
             intent_id
             for intent_id, intent in project.intents.items()
             if intent.retrieval_mode == RETRIEVAL_MODE_REUSE
+            and intent_id not in exclude
         ),
         None,
     )
@@ -824,7 +840,15 @@ def route_question(
     with the turn's question, sources, or summary. Turns whose intent
     neither reads history nor retrieves (small talk) are not listed to the
     router and are never related. A question left with no related turns
-    is standalone.
+    is standalone. An intent whose cue the question matches replaces the
+    router's choice ("give me an overview of the Smith paper"). Otherwise,
+    when the wording rules out the router's choice, the router is asked
+    once more without the ruled-out intents, and the default intent is
+    used when that fails: an intent with ``requires`` patterns needs one
+    of them to match, and a tool that works on an earlier answer
+    (``follows_up``) is not meant when the question names a file and says
+    nothing of earlier answers ("In Figure 1G of smith20.pdf, what does
+    79.7 represent?").
 
     """
 
@@ -879,6 +903,34 @@ def route_question(
     standalone = decision.standalone or (bool(dropped) and not kept)
 
     intent = project.intents.get(decision.intent)
+    fallback = decision.fallback
+    cued = _cued_intent(project, question)
+    if cued is not None and cued != decision.intent:
+        # Clear wording decides the intent; the router judged the history.
+        fallback = (
+            f"intent {cued} set by the question's wording (router chose "
+            f"{decision.intent})"
+        )
+        decision = RouteDecision(**{**_fields(decision), "intent": cued})
+        intent = project.intents[cued]
+    elif intent is not None and cued is None:
+        excluded = _unmeant_intents(project, question)
+        if decision.intent in excluded:
+            # The wording rules out the router's choice: ask once more
+            # without it, and use the default intent when that fails.
+            replaced = decision.intent
+            retry = _reroute(
+                chat, project, representations, question, len(turns),
+                excluded,
+            )
+            decision = RouteDecision(
+                **{**_fields(decision), "intent": retry}
+            )
+            intent = project.intents[retry]
+            fallback = (
+                f"intent {replaced} replaced by {retry}: "
+                + excluded[replaced]
+            )
     if (
         not kept
         and intent is not None
@@ -912,10 +964,126 @@ def route_question(
             "standalone": standalone,
             "related_turn_ids": tuple(kept),
         },
-        fallback=decision.fallback,
+        fallback=fallback,
         refers_back=pointing,
         dropped_turns=tuple(dropped),
     )
+
+
+def _cued_intent(project: ProjectType, question: str) -> str | None:
+    """Return the first intent whose cue the question matches, if any.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    str | None
+        The intent ID, in the project type's order; None without a match.
+
+    """
+
+    return next(
+        (
+            intent_id
+            for intent_id, intent in project.intents.items()
+            if any(pattern.search(question) for pattern in intent.cues)
+        ),
+        None,
+    )
+
+
+def _unmeant_intents(project: ProjectType, question: str) -> dict[str, str]:
+    """Return the intents a question's wording rules out, with the reason.
+
+    Parameters
+    ----------
+    project: ProjectType
+        Current project type with its intents.
+    question: str
+        The new question.
+
+    Returns
+    -------
+    dict[str, str]
+        Intent ID to reason. An intent with ``requires`` patterns is ruled
+        out when the question matches none of them. A tool that works on an
+        earlier answer (``follows_up``) is ruled out when the question
+        names a file and says nothing of earlier answers.
+
+    """
+
+    new_about_file = bool(
+        _NAMED_FILE.search(question) and not _EARLIER_ANSWER.search(question)
+    )
+    excluded: dict[str, str] = {}
+    for intent_id, intent in project.intents.items():
+        if intent.requires and not any(
+            pattern.search(question) for pattern in intent.requires
+        ):
+            excluded[intent_id] = "the question lacks its required words"
+        elif (
+            new_about_file
+            and intent.tool is not None
+            and TOOL_REGISTRY[intent.tool.name].follows_up
+        ):
+            excluded[intent_id] = (
+                "the question names a file and no earlier answer"
+            )
+    return excluded
+
+
+def _reroute(
+    chat: _Chat,
+    project: ProjectType,
+    representations: list[dict[str, object]],
+    question: str,
+    turn_count: int,
+    excluded: Mapping[str, str],
+) -> str:
+    """Ask the router for an intent again, without the excluded intents.
+
+    Parameters
+    ----------
+    chat: ChatSession
+        Router model session.
+    project: ProjectType
+        Current project type with its intents.
+    representations: list[dict[str, object]]
+        One representation per earlier turn.
+    question: str
+        The new question.
+    turn_count: int
+        Number of earlier turns.
+    excluded: Mapping[str, str]
+        Intents left out of the router's list.
+
+    Returns
+    -------
+    str
+        The router's new intent, or the default intent when the call
+        fails or names an excluded intent.
+
+    """
+
+    system, prompt = _router_prompt(
+        project, representations, question, frozenset(excluded)
+    )
+    try:
+        retry = _parse_route(
+            side_reply(
+                chat, system, prompt, max_new_tokens=_ROUTER_MAX_TOKENS
+            ),
+            project,
+            turn_count,
+        ).intent
+    except Exception:  # The default intent is always safe.
+        return project.default_intent
+    return project.default_intent if retry in excluded else retry
 
 
 def refers_back(question: str) -> bool:
