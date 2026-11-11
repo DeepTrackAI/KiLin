@@ -60,6 +60,8 @@ __all__ = [
     "MODEL_CALLS",
     "CALL_SECONDS",
     "DEFAULT_CONFIRMATION",
+    "DEFAULT_DISCOVERY_STRATEGY",
+    "DEFAULT_DISCOVERY_TOKENS",
     "DEFAULT_FILES",
     "DEFAULT_LARGE_BATCHES",
     "DEFAULT_PASSAGES",
@@ -83,6 +85,7 @@ _GROUPS = {
     "SETTINGS": {
         "FILES", "PASSAGES", "PASSAGE_TOKENS",
         "QUICK_FILES", "CONFIRMATION", "LARGE_BATCHES",
+        "DISCOVERY_STRATEGY", "DISCOVERY_TOKENS",
     },
     "STATEMENT": {"MIN_WORDS", "ROUTER_TOKENS", "ROUTER_WORD_SHARE"},
     "ESTIMATES": {
@@ -119,6 +122,14 @@ if DEFAULT_CONFIRMATION not in CONFIRMATION_CHOICES:
     raise ValueError(f"{_WHERE}.CONFIRMATION is not a supported policy.")
 DEFAULT_LARGE_BATCHES: Final[int] = require_int(
     _SETTINGS, "LARGE_BATCHES", _WHERE, 0, 1000
+)
+DEFAULT_DISCOVERY_STRATEGY: Final[str] = require_string(
+    _SETTINGS, "DISCOVERY_STRATEGY", _WHERE
+)
+if DEFAULT_DISCOVERY_STRATEGY not in ("hybrid", "source_first"):
+    raise ValueError(f"{_WHERE}.DISCOVERY_STRATEGY is unsupported.")
+DEFAULT_DISCOVERY_TOKENS: Final[int] = require_int(
+    _SETTINGS, "DISCOVERY_TOKENS", _WHERE, 300, 16000
 )
 
 MIN_WORDS: Final[int] = require_int(

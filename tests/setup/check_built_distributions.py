@@ -36,7 +36,9 @@ def check_built_distributions(root: Path) -> None:
     wheels = sorted(dist.glob("kilin-*.whl"))
     sdists = sorted(dist.glob("kilin-*.tar.gz"))
     if len(wheels) != 1 or len(sdists) != 1:
-        raise AssertionError("Expected one KíLín wheel and one source tarball")
+        raise AssertionError(
+            "Expected one KíLín wheel and one source tarball"
+        )
 
     with zipfile.ZipFile(wheels[0]) as archive:
         matches = [

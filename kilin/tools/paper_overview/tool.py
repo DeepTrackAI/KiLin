@@ -73,6 +73,7 @@ from typing import Final
 
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import answer_citations
 from kilin.tools._shared.choose_document import choose_document
 from kilin.tools.paper_overview import _configuration as _config
@@ -260,7 +261,12 @@ def run(
         request.guidance,
     )
     answer = context.write(system, prompt, None)
-    summary["invalid_citations"] = answer_citations(answer, len(chunks))
+    citation_report = inspect_citations(answer, len(chunks))
+    summary["invalid_citations"] = list(citation_report.invalid_numbers)
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
     if guessed:
         answer += (
             f"\n\n*This is about {path.name}; name the paper if you "

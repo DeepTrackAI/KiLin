@@ -19,6 +19,7 @@ import unittest
 from unittest.mock import Mock
 
 from kilin.project_type import project_type
+from kilin.retrievals.requests import RetrievalResult
 from kilin.tools import suggest_reference as tool
 from kilin.tools._contract import ToolRequest
 from kilin.tools._registry import TOOL_SUGGEST_REFERENCE
@@ -88,7 +89,9 @@ class TestStatement(unittest.TestCase):
     def test_quoted_or_after_a_colon(self) -> None:
         router = Mock()
         self.assertEqual(
-            tool.statement_of(f"which paper supports “{STATEMENT}”?", router),
+            tool.statement_of(
+                f"which paper supports “{STATEMENT}”?", router
+            ),
             STATEMENT,
         )
         self.assertEqual(
@@ -127,7 +130,7 @@ class TestSuggestReferenceRun(unittest.TestCase):
 
     def _run(
         self, question: str = f"suggest a reference for: {STATEMENT}",
-        choice: str = "continue", **settings: object,
+        choice: str = "continue", retrieve=None, **settings: object,
     ) -> tuple[object, SimpleNamespace]:
         def ask_model(system: str, prompt: str, tokens: int) -> str:
             if "(review.md)" in prompt:
@@ -152,6 +155,7 @@ class TestSuggestReferenceRun(unittest.TestCase):
             ask_router=Mock(return_value="NONE"),
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
+            retrieve=retrieve,
         )
         request = ToolRequest(question, question)
         return tool.run(
@@ -234,6 +238,50 @@ class TestSuggestReferenceRun(unittest.TestCase):
         )
         self.assertIn("add the paper you have in mind", result.answer)
         self.assertEqual(result.evidence, ())
+
+    def test_source_first_discovers_card_ranked_candidates(self) -> None:
+        discovery = Mock(return_value=RetrievalResult(
+            (self.chunks[3],),
+            (Path("other.md"), Path("review.md")),
+            {"mode": "bounded", "complete": True},
+        ))
+        result, context = self._run(
+            retrieve=discovery, discovery_strategy="source_first", files=2,
+        )
+        self.assertEqual(result.summary["discovery_strategy"],
+                         "source_first")
+        self.assertEqual(result.summary["papers_checked"], 2)
+        self.assertEqual(result.summary["discovery_passages"], 1)
+        self.assertEqual(result.summary["discovery_coverage"]["mode"],
+                         "bounded")
+        request = discovery.call_args.args[0]
+        self.assertEqual(request.strategy, "source_first")
+        self.assertEqual(request.limits.max_sources, 2)
+        self.assertEqual(request.card_kinds, ("scientific_paper",))
+        self.assertIn("review.md", result.answer)
+        self.assertIn("other.md", result.answer)
+        self.assertEqual(context.ask_model.call_count, 2)
+
+    def test_source_first_missing_callback_does_not_fallback(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "requires ToolContext"):
+            self._run(discovery_strategy="source_first")
+
+    def test_hybrid_remains_default_and_ignores_retrieve(self) -> None:
+        discovery = Mock(side_effect=AssertionError("Not called"))
+        result, _ = self._run(retrieve=discovery)
+        self.assertEqual(result.summary["discovery_strategy"], "hybrid")
+        discovery.assert_not_called()
+
+    def test_discovery_settings_validation(self) -> None:
+        for settings in (
+            {"discovery_strategy": "papers"},
+            {"discovery_tokens": 299},
+            {"discovery_tokens": 16001},
+            {"discovery_tokens": True},
+        ):
+            with self.subTest(settings=settings):
+                with self.assertRaises(ValueError):
+                    tool.parse_settings(settings, "test")
 
     def test_plan_quick_and_cancel(self) -> None:
         result, context = self._run(

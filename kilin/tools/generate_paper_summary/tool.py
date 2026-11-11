@@ -7,7 +7,7 @@ project's ``outputs/`` folder. Templates live in the project's
 ``templates/`` folder, which receives only the project type's required
 templates on creation; the question picks one by title or name, and the
 intent's default applies otherwise. It is KíLín's reference example of a
-custom tool (see tutorial 160): it composes existing capabilities instead
+custom tool (see tutorial 170): it composes existing capabilities instead
 of re-implementing them.
 
 1. Choose the paper: a file in ``outputs/`` the question names by its

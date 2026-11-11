@@ -1,4 +1,4 @@
-"""Regression tests for the PR4 notebook and read-only trace analysis.
+"""Regression tests for the trace notebook and read-only analysis.
 
 Tests use synthetic KíLín traces and never load a language model, download
 artifacts, or modify the production answering and tracing implementations.

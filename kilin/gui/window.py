@@ -241,6 +241,10 @@ class ChatBridge(QObject):
         Move a closed project into the deleted folder beside it.
     applyIndexingSettings(settings_json)
         Save the open project's indexing settings and rebuild its index.
+    saveSourceCardSettings(settings_json)
+        Save the source-card policy and both model configurations.
+    regenerateSourceCards()
+        Regenerate source cards without rebuilding passage indexes.
 
     **Answering and conversation management.**
 
@@ -1314,6 +1318,30 @@ class ChatBridge(QObject):
         self.commandRequested.emit(
             {"action": "delete_project", "project": directory}
         )
+
+    @Slot(str)
+    def saveSourceCardSettings(self, settings_json: str) -> None:
+        """Persist core-owned card settings for the active project.
+
+        Parameters
+        ----------
+        settings_json: str
+            JSON containing policy and both backend generation settings.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_source_cards",
+            "settings": json.loads(settings_json),
+        })
+
+    @Slot()
+    def regenerateSourceCards(self) -> None:
+        """Rebuild source cards without rebuilding ordinary indexes."""
+
+        self.commandRequested.emit({
+            "action": "regenerate_source_cards",
+        })
 
     @Slot(str)
     def applyIndexingSettings(self, settings_json: str) -> None:

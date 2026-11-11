@@ -12,7 +12,12 @@
   "answer_guidance": "Follow any length or format the question asks for (for example 'in two sentences' or 'as a list'). Otherwise keep the answer concise: about 150-300 words, or more when the question asks for detail, such as a step-by-step walkthrough of a script. Prioritize the main points, do not repeat sentences, and finish with a complete sentence.",
   "capabilities": {
     "code_graph": "auto",
-    "paper_index": true
+    "document_headers": true,
+    "source_cards": {
+      "enabled": true,
+      "kind": "scientific_paper",
+      "automatic": true
+    }
   },
   "history": {
     "recent_turns": 2
@@ -27,8 +32,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 3,
+        "strategy": "source_first",
+        "max_sources": 3,
+        "passages_per_source": 1,
+        "max_passages": 8,
+        "evidence_tokens": 5000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -64,9 +73,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 8,
-        "passages_per_paper": 2,
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },
@@ -285,9 +297,12 @@
       },
       "retrieval": {
         "mode": "search",
-        "strategy": "papers",
-        "max_papers": 8,
-        "passages_per_paper": 1,
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 1,
+        "max_passages": 12,
+        "evidence_tokens": 8000,
+        "coverage": "bounded",
         "include_related_evidence": true
       }
     },

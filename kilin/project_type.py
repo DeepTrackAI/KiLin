@@ -74,10 +74,11 @@ Module Structure
 
     Ordered collection of accepted retrieval modes.
 
-- ``RETRIEVAL_STRATEGY_HYBRID`` and ``RETRIEVAL_STRATEGY_PAPERS``
+- ``RETRIEVAL_STRATEGY_HYBRID`` and
+  ``RETRIEVAL_STRATEGY_SOURCE_FIRST``
 
-    Canonical string values for the hybrid search pipeline and for the
-    pipeline that chooses papers first.
+    Canonical string values for hybrid and four-channel source-first
+    retrieval.
 
 - ``RETRIEVAL_STRATEGY_CHOICES``
 
@@ -110,7 +111,7 @@ Module Structure
 
 - ``RetrievalStrategy``
 
-    Type alias for ``"hybrid"``.
+    Type alias for ``"hybrid"`` or ``"source_first"``.
 
 - ``load_project_types``
 
@@ -148,6 +149,9 @@ from kilin.defaults import (
     require_default_int,
     require_default_nonnegative_int,
 )
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_MODES, EvidenceLimits,
+)
 from kilin.repository import normalize_extensions
 from kilin.tools._contract import reject_unknown
 from kilin.tools._registry import ToolUse, parse_tool
@@ -168,7 +172,7 @@ __all__ = [
     "RETRIEVAL_MODE_SEARCH",
     "RETRIEVAL_STRATEGY_CHOICES",
     "RETRIEVAL_STRATEGY_HYBRID",
-    "RETRIEVAL_STRATEGY_PAPERS",
+    "RETRIEVAL_STRATEGY_SOURCE_FIRST",
     "CodeGraphSetting",
     "HistoryPolicy",
     "Intent",
@@ -237,22 +241,19 @@ if not _MIN_DOCUMENT_TOKENS <= DOCUMENT_MAX_TOKENS <= _MAX_DOCUMENT_TOKENS:
         "1000 and 200000."
     )
 
-# Search pipeline used by RETRIEVAL_MODE_SEARCH: the hybrid pipeline
-# (semantic, lexical, code graph, fused), or the same pipeline choosing
-# papers first (``retrieval_papers.py``), for types that index papers.
-# New strategies need benchmarks before they are added.
-RetrievalStrategy: TypeAlias = Literal["hybrid", "papers"]
+# Search pipelines for RETRIEVAL_MODE_SEARCH. ``hybrid`` combines passage
+# channels; ``source_first`` fuses four source rankings.
+RetrievalStrategy: TypeAlias = Literal["hybrid", "source_first"]
 RETRIEVAL_STRATEGY_HYBRID: Final[RetrievalStrategy] = "hybrid"
-RETRIEVAL_STRATEGY_PAPERS: Final[RetrievalStrategy] = "papers"
+RETRIEVAL_STRATEGY_SOURCE_FIRST: Final[RetrievalStrategy] = "source_first"
 RETRIEVAL_STRATEGY_CHOICES: Final[tuple[RetrievalStrategy, ...]] = (
     RETRIEVAL_STRATEGY_HYBRID,
-    RETRIEVAL_STRATEGY_PAPERS,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
 )
-# Papers the ``papers`` strategy chooses by default, and the accepted range.
-_DEFAULT_MAX_PAPERS: Final[int] = 3
-_MAX_PAPERS_LIMIT: Final[int] = 50
-# Most passages guaranteed to each chosen paper.
-_PASSAGES_PER_PAPER_LIMIT: Final[int] = 10
+# Source-first defaults and validation bounds for selected sources.
+_DEFAULT_MAX_SOURCES: Final[int] = 3
+_MAX_SOURCES_LIMIT: Final[int] = 50
+_PASSAGES_PER_SOURCE_LIMIT: Final[int] = 10
 
 # Whether a project type builds and searches the code graph.
 CodeGraphSetting: TypeAlias = bool | Literal["auto"]
@@ -283,10 +284,9 @@ class Intent:
     retrieval_mode: "search" | "document" | "reuse" | "none"
         ``search``, ``document`` (one whole file or function), ``reuse``
         (the related turn's evidence), or ``none``.
-    retrieval_strategy: "hybrid" | "papers"
-        Search pipeline used when searching: ``hybrid``, or ``papers``,
-        which ranks papers first and fills the evidence from the best ones
-        (only for project types with ``paper_index``).
+    retrieval_strategy: "hybrid" | "source_first"
+        Search pipeline used when searching: ``hybrid`` fuses passage
+        ranks and ``source_first`` fuses independent source ranks.
     shortcuts: tuple[re.Pattern[str], ...]
         Case-insensitive patterns for whole messages that obviously have
         this intent, such as greetings; a match skips the router model.
@@ -316,12 +316,17 @@ class Intent:
         ``None`` inherits the session setting; ``True`` or ``False``
         overrides it without changing the session. Defaults to ``None``.
         Tool-backed intents must leave this unset or null.
-    max_papers: int
-        Papers the ``papers`` strategy fills the evidence from. Defaults to
-        ``3``.
-    passages_per_paper: int
-        Passages the ``papers`` strategy guarantees to each chosen paper;
-        zero guarantees one to the best paper only. Defaults to ``0``.
+    max_sources: int | None
+        Source-first limit on represented sources; None defaults to 3.
+    passages_per_source: int | None
+        Source-first per-source target; None defaults to one passage.
+    max_passages: int
+        Hard number of source-first evidence passages.
+    evidence_tokens: int
+        Hard estimated source-first evidence-token budget including headers.
+    coverage: "bounded" | "exhaustive"
+        Whether ordinary questions require all indexed sources. Explicit
+        questions asking about all sources always request exhaustive mode.
 
     """
 
@@ -340,8 +345,35 @@ class Intent:
     max_tokens: int = DOCUMENT_MAX_TOKENS
     tool: ToolUse | None = None
     thinking: bool | None = None
-    max_papers: int = _DEFAULT_MAX_PAPERS
-    passages_per_paper: int = 0
+    max_sources: int | None = None
+    passages_per_source: int | None = None
+    max_passages: int = 8
+    evidence_tokens: int = 5_000
+    coverage: str = "bounded"
+
+    def source_limits(self) -> EvidenceLimits:
+        """Resolve the validated source-first limits for this intent.
+
+        Returns
+        -------
+        EvidenceLimits
+            Per-intent limits independent of the project retrieval count.
+
+        """
+
+        return EvidenceLimits(
+            max_sources=(
+                self.max_sources if self.max_sources is not None
+                else _DEFAULT_MAX_SOURCES
+            ),
+            passages_per_source=(
+                self.passages_per_source
+                if self.passages_per_source is not None else 1
+            ),
+            max_passages=self.max_passages,
+            max_tokens=self.evidence_tokens,
+            coverage=self.coverage,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -380,10 +412,16 @@ class ProjectType:
         Headings the desktop app shows in an empty chat.
     suggestions: tuple[str, ...]
         Example requests the desktop app shows in an empty chat.
-    paper_index: bool
-        Index documents as papers: search headers with each document's
-        title, author, section and page, and paper cards that summarize
-        each document. Defaults to ``False``.
+    source_cards_enabled: bool
+        Enable the optional independent source-card index.
+    source_card_kind: str | None
+        Preferred card kind, or None for no default.
+    source_cards_automatic: bool
+        Generate missing cards during indexing.
+    document_headers: bool
+        Prefix searchable passages with document metadata, such as title,
+        author, section, and page. Independent from source-card generation.
+        Defaults to ``False``.
 
     """
 
@@ -401,7 +439,10 @@ class ProjectType:
     answer_guidance: str = ""
     welcome_prompts: tuple[str, ...] = ()
     suggestions: tuple[str, ...] = ()
-    paper_index: bool = False
+    document_headers: bool = False
+    source_cards_enabled: bool = False
+    source_card_kind: str | None = None
+    source_cards_automatic: bool = False
 
     @property
     def label(self) -> str:
@@ -625,8 +666,11 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "include_related_evidence",
             "prefer_source_code",
             "max_tokens",
-            "max_papers",
-            "passages_per_paper",
+            "max_sources",
+            "passages_per_source",
+            "max_passages",
+            "evidence_tokens",
+            "coverage",
         ),
     )
 
@@ -671,23 +715,39 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             f"{', '.join(RETRIEVAL_STRATEGY_CHOICES)}."
         )
 
-    max_papers = retrieval.get("max_papers", _DEFAULT_MAX_PAPERS)
-    if (
-        type(max_papers) is not int
-        or not 1 <= max_papers <= _MAX_PAPERS_LIMIT
+    numeric_limits = (
+        ("max_sources", 1, _MAX_SOURCES_LIMIT),
+        ("passages_per_source", 1, _PASSAGES_PER_SOURCE_LIMIT),
+        ("max_passages", 1, 200),
+        ("evidence_tokens", 1000, _MAX_DOCUMENT_TOKENS),
+    )
+    for key, minimum, maximum in numeric_limits:
+        if key not in retrieval:
+            continue
+        value = retrieval[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Intent {where!r} retrieval.{key} must be a whole "
+                f"number from {minimum} to {maximum}."
+            )
+    source_only = (
+        "max_sources", "passages_per_source", "max_passages",
+        "evidence_tokens", "coverage",
+    )
+    if any(key in retrieval for key in source_only) and (
+        strategy != RETRIEVAL_STRATEGY_SOURCE_FIRST
+        or mode != RETRIEVAL_MODE_SEARCH
+        or tool is not None
     ):
         raise ValueError(
-            f"Intent {where!r} retrieval.max_papers must be a whole number "
-            f"from 1 to {_MAX_PAPERS_LIMIT}."
+            f"Intent {where!r} source-first evidence limits require "
+            'retrieval.mode="search" and strategy="source_first".'
         )
-    per_paper = retrieval.get("passages_per_paper", 0)
-    if (
-        type(per_paper) is not int
-        or not 0 <= per_paper <= _PASSAGES_PER_PAPER_LIMIT
-    ):
+    coverage = retrieval.get("coverage", "bounded")
+    if coverage not in COVERAGE_MODES:
         raise ValueError(
-            f"Intent {where!r} retrieval.passages_per_paper must be a whole "
-            f"number from 0 to {_PASSAGES_PER_PAPER_LIMIT}."
+            f"Intent {where!r} retrieval.coverage must be bounded "
+            "or exhaustive."
         )
 
     related = retrieval.get("include_related_evidence", False)
@@ -739,8 +799,11 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         max_tokens=max_tokens,
         tool=tool,
         thinking=thinking,
-        max_papers=max_papers,
-        passages_per_paper=per_paper,
+        max_sources=retrieval.get("max_sources"),
+        passages_per_source=retrieval.get("passages_per_source"),
+        max_passages=retrieval.get("max_passages", 8),
+        evidence_tokens=retrieval.get("evidence_tokens", 5000),
+        coverage=coverage,
     )
 
 
@@ -819,7 +882,8 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
     # The type check rejects 1 and 0, which equal True and False.
     capabilities = _object(type_id, data, "capabilities")
     reject_unknown(
-        f"{type_id}.capabilities", capabilities, ("code_graph", "paper_index")
+        f"{type_id}.capabilities", capabilities,
+        ("code_graph", "document_headers", "source_cards"),
     )
     code_graph = capabilities.get("code_graph", CODE_GRAPH_AUTO)
     if code_graph not in CODE_GRAPH_CHOICES or type(code_graph) not in (
@@ -831,12 +895,32 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             'false, or "auto".'
         )
 
-    paper_index = capabilities.get("paper_index", False)
-    if type(paper_index) is not bool:
+    document_headers = capabilities.get("document_headers", False)
+    if type(document_headers) is not bool:
         raise ValueError(
-            f"Project type {type_id!r} capabilities.paper_index must be true "
+            f"Project type {type_id!r}: capabilities.document_headers "
+            "must be true "
             "or false."
         )
+
+    source_cards = _object(type_id, capabilities, "source_cards")
+    reject_unknown(
+        f"{type_id}.capabilities.source_cards", source_cards,
+        ("enabled", "kind", "automatic"),
+    )
+    source_cards_enabled = source_cards.get("enabled", False)
+    source_cards_automatic = source_cards.get(
+        "automatic", source_cards_enabled
+    )
+    for setting in (source_cards_enabled, source_cards_automatic):
+        if type(setting) is not bool:
+            raise ValueError("Source-card project capability must be boolean.")
+    source_card_kind = source_cards.get("kind")
+    if source_card_kind is not None and (
+        not isinstance(source_card_kind, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_]*", source_card_kind)
+    ):
+        raise ValueError("Source-card kind must be a snake-case identifier.")
 
     history = _object(type_id, data, "history")
     reject_unknown(f"{type_id}.history", history, ("recent_turns",))
@@ -859,16 +943,6 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         intent_id: _parse_intent(type_id, intent_id, value)
         for intent_id, value in raw_intents.items()
     }
-    for intent in intents.values():
-        if (
-            intent.retrieval_strategy == RETRIEVAL_STRATEGY_PAPERS
-            and not paper_index
-        ):
-            raise ValueError(
-                f"Intent {type_id}.intents.{intent.intent_id} uses the "
-                '"papers" retrieval strategy, which needs '
-                "capabilities.paper_index."
-            )
     default_intent = data.get("default_intent", next(iter(intents)))
     if default_intent not in intents:
         raise ValueError(
@@ -894,7 +968,10 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         ),
         welcome_prompts=_texts(type_id, data, "welcome_prompts"),
         suggestions=_texts(type_id, data, "suggestions"),
-        paper_index=paper_index,
+        document_headers=document_headers,
+        source_cards_enabled=source_cards_enabled,
+        source_card_kind=source_card_kind,
+        source_cards_automatic=source_cards_automatic,
     )
 
 

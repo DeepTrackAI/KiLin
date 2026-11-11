@@ -86,6 +86,52 @@ exact values and constraints belong in the tool's README and
 `_configuration.py`. Invalid JSON or missing, unknown, mistyped or
 out-of-range values must fail validation rather than change policy silently.
 
+## Retrieval evidence budgets and tool-owned limits
+
+Source-first retrieval budgets (`max_sources`, `passages_per_source`,
+`max_passages`, `evidence_tokens`, `coverage`) belong to an ordinary
+model-answering intent's `retrieval` object in its project-type JSON.
+They are not generic tool inference limits. An intent with a `tool`
+executes the registered tool in place of the ordinary answer pipeline;
+its own validated `part_tokens`, batch sizes, number of model calls,
+confirmation policy and other exposed settings apply instead.
+
+Tools can reuse the pure `kilin.retrievals.evidence_budget.EvidenceLimits`
+and `allocate_evidence` functions for **their own** source/passage limits,
+but must explicitly expose, validate and document any such settings in
+their own tool package. Existing tools do not silently inherit source-first
+budgets.
+
+See [Source-first configuration and coverage](retrieval_pipeline.md#per-intent-source-first-configuration)
+for exact accepted values, limits, estimate semantics, and coverage notices.
+
+## Tool retrieval and settings
+
+`ToolContext.rank(query)` remains a complete hybrid ranking of original
+chunks. For tools needing source-card discovery and answer-ready bounded
+evidence, `ToolContext.retrieve(RetrievalRequest(...))` is an optional
+service. `RetrievalRequest` from `kilin.retrievals.requests` contains the
+strategy, explicit `EvidenceLimits`, source scope, optional comparison, and
+optional registered card-kind filter; `RetrievalResult` contains original
+chunks, selected source paths, and coverage metadata. No answering model is
+called by retrieval. Tools do not automatically inherit the ordinary
+question-answering intent's evidence budgets.
+
+For `suggest_reference`, the tool-local `SETTINGS` values in
+`defaults.json` define `DISCOVERY_STRATEGY` (default `hybrid`) and
+`DISCOVERY_TOKENS` (default `8000`). The project-type intent's `tool` object
+may override these settings, followed by saved project `[tool.name]`
+settings. When `source_first` is explicitly selected, candidate papers
+are source-ranked using scientific-paper cards where present. The tool
+continues to verify claims against separately ranked original passages;
+that second passage ranking can incur another query embedding. Its existing
+`FILES`, `PASSAGES`, and `PASSAGE_TOKENS` remain authoritative for how many
+papers are judged and how much content is read for each judgment.
+
+Other tools, especially exhaustive scanners and full-document readers,
+retain their existing retrieval behavior. A selected source does not imply
+that every passage was read or that the source supports the claim.
+
 ## Creating a tool
 
 Follow the [registration and extension checklist](extension_interfaces.md#implementing-a-built-in-tool)

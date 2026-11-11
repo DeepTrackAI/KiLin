@@ -62,7 +62,9 @@ Examples
 --------
 >>> from pathlib import Path
 >>> from kilin.chunking import Chunk
->>> from kilin.retrievals.papers import DocumentInfo, document_headers
+>>> from kilin.retrievals.document_headers import (
+...     DocumentInfo, document_headers,
+... )
 >>> chunk = Chunk("c1", Path("smith20.pdf"), "1. Introduction\\nText.",
 ...               1, 2, "pdf_page", None, "Page 1")
 >>> info = {Path("smith20.pdf"): DocumentInfo("A study", "Smith")}

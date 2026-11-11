@@ -823,3 +823,18 @@ button.effort-title { display: flex; align-items: center; justify-content: cente
 details::details-content { block-size: 0; overflow: hidden; transition: block-size .2s ease, content-visibility .2s allow-discrete; }
 details[open]::details-content { block-size: auto; }
 @media (prefers-reduced-motion: reduce) { details::details-content { transition: none; } }
+
+/* Keep optional source-card controls visually distinct from chunk settings. */
+.source-card-settings {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.source-card-settings h4 { margin: 0 0 8px; }
+.source-card-settings > label:not(.check-row) { display: block; margin-top: 8px; }
+.source-card-settings > input, .source-card-settings > select {
+  box-sizing: border-box;
+  width: 100%;
+}
+.source-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.source-card-actions button { flex: 0 1 auto; }

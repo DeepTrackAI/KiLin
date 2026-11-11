@@ -94,6 +94,8 @@ from typing import Final
 
 from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
+from kilin.retrievals.evidence_budget import EvidenceLimits
+from kilin.retrievals.requests import RetrievalRequest
 from kilin.tools._contract import (
     ToolContext,
     ToolRequest,
@@ -156,7 +158,9 @@ _ORDER: Final[dict[str, int]] = {
     ))
 }
 # Text in quotation marks: the statement, when the user quotes it.
-_QUOTED: Final[re.Pattern[str]] = re.compile(r"[\"“«]([^\"”»]+)[\"”»]")
+_QUOTED: Final[re.Pattern[str]] = re.compile(
+    r"[\"“«]([^\"”»]+)[\"”»]"
+)
 # A word, for comparing the statement with texts.
 _WORD: Final[re.Pattern[str]] = re.compile(r"[^\W_]+")
 # A bracketed number, which the chat would read as a link to evidence.
@@ -181,6 +185,10 @@ class SuggestReferenceSettings:
         Papers judged by the quick version (1-20).
     confirmation: ConfirmationPolicy
         When to ask before judging: always, when_large, or never.
+    discovery_strategy: "hybrid" | "source_first"
+        Candidate discovery strategy; hybrid preserves prior behavior.
+    discovery_tokens: int
+        Maximum estimated tokens in source-first discovery evidence.
     large_batches: int
         With ``when_large``, plans with more papers than this ask first
         (0-1000).
@@ -193,6 +201,8 @@ class SuggestReferenceSettings:
     quick_files: int = _config.DEFAULT_QUICK_FILES
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
+    discovery_strategy: str = _config.DEFAULT_DISCOVERY_STRATEGY
+    discovery_tokens: int = _config.DEFAULT_DISCOVERY_TOKENS
 
 
 def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
@@ -223,6 +233,7 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         (
             "files", "passages", "passage_tokens",
             "quick_files", "confirmation", "large_batches",
+            "discovery_strategy", "discovery_tokens",
         ),
     )
     defaults = SuggestReferenceSettings()
@@ -242,6 +253,14 @@ def parse_settings(data: dict, where: str) -> SuggestReferenceSettings:
         ),
         large_batches=check_int(
             where, data, "large_batches", defaults.large_batches, 0, 1000
+        ),
+        discovery_strategy=check_choice(
+            where, data, "discovery_strategy",
+            defaults.discovery_strategy, ("hybrid", "source_first"),
+        ),
+        discovery_tokens=check_int(
+            where, data, "discovery_tokens",
+            defaults.discovery_tokens, 300, 16000,
         ),
     )
 
@@ -512,7 +531,36 @@ def run(
     rank = cache(context.rank)
 
     context.progress("Finding the papers most related to the statement")
-    files, holding = candidate_files(statement, by_file, rank, settings.files)
+    if settings.discovery_strategy == "source_first":
+        retrieve = getattr(context, "retrieve", None)
+        if retrieve is None:
+            raise RuntimeError(
+                "source_first discovery requires ToolContext.retrieve."
+            )
+        discovery = retrieve(RetrievalRequest(
+            query=statement,
+            strategy="source_first",
+            limits=EvidenceLimits(
+                max_sources=settings.files,
+                passages_per_source=1,
+                max_passages=settings.files,
+                max_tokens=settings.discovery_tokens,
+            ),
+            card_kinds=("scientific_paper",),
+        ))
+        files = [
+            path for path in discovery.sources if path in by_file
+        ][:settings.files]
+        holding: list[Path] = []
+        summary["discovery_coverage"] = discovery.coverage
+        # Verification still ranks original chunks independently, so this
+        # opt-in strategy can incur an extra query embedding.
+        summary["discovery_passages"] = len(discovery.passages)
+    else:
+        files, holding = candidate_files(
+            statement, by_file, rank, settings.files
+        )
+    summary["discovery_strategy"] = settings.discovery_strategy
     summary["left_out"] = [path.as_posix() for path in holding]
     if not files:
         context.done("No paper to check", evidence_count=0)

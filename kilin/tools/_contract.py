@@ -30,7 +30,8 @@ Key Features
 
 - **Context**
 
-    KíLín's services, as plain callables.
+    KíLín's services, including optional bounded retrieval, as plain
+    callables; complete hybrid ranking remains unchanged.
 
 - **Result**
 
@@ -96,6 +97,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from kilin.chunking import Chunk
     from kilin.retrievals import CodeGraph, HybridResult
+    from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
     from kilin.tools._shared.planning import ToolPlan
     from kilin.trace_logging import TraceSink
 
@@ -240,6 +242,10 @@ class ToolContext:
         ``write_pdf(markdown, path, label=...)`` attempts a one-page PDF
         and returns the actual page count. ``None`` when no renderer is
         available (for example notebooks without Qt). Defaults to ``None``.
+    retrieve: Callable[[RetrievalRequest], RetrievalResult] | None, optional
+        Return bounded original evidence with source-first discovery and
+        coverage reporting. None for contexts that provide ranking only.
+        Tool-owned limits do not inherit answering-intent budgets.
     choose: Callable[[str, tuple[str, ...]], int | None] | None, optional
         ``choose(question, options)`` asks the user to pick one option and
         returns its index, or None when they cancel; None where nobody can
@@ -266,6 +272,7 @@ class ToolContext:
     trace_turn_id: str | None
     write_pdf: Callable[..., int] | None = None
     choose: Callable[[str, tuple[str, ...]], int | None] | None = None
+    retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
 
 
 @dataclass(frozen=True, slots=True)

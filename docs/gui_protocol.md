@@ -112,6 +112,8 @@ paths and source paths remain subject to downstream core validation.
 | `rename_project` | `name` | Rename the project |
 | `delete_project` | `project` | Move that closed project to `.deleted/` beside it (`kilin.project.delete_project`); then send `projects` |
 | `apply_indexing` | `settings` | Atomically save validated indexing settings, reopen the project and revalidate its index; send `indexing_applied` with the `profile` only after reopening succeeds |
+| `save_source_cards` | `settings` | Save project-wide source-card policy and both backend generation models, then reconcile derived cards only; send `source_cards_applied` with resolved settings and outcome counts |
+| `regenerate_source_cards` | None | Confirmed user action regenerating derived cards without rescanning chunks or rebuilding ordinary retrieval indexes; send `source_cards_regenerated` with counts |
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
 | `save_answer_timeline` | None | `timestamp` defaults to `""`; `timeline` defaults to `None` |
 | `tool_settings` | None | List the open project's tools and their settings |
@@ -210,6 +212,36 @@ retained until a matching readiness response confirms the new preferences;
 only then can the folder-confirmation follow-up run. A backend or model
 failure still affects normal setup readiness independently of terms saving.
 
+### Source-card settings and regeneration
+
+The `settings` and `opened` events include `source_cards` (the validated
+project-wide indexing policy and independent MLX/PyTorch generation models).
+`opened` also includes `source_card_summary` (total, valid, ineligible,
+failed, and embedded card counts). Source-card generation uses the existing
+`progress` event with `stage: building_source_cards` and `current`/`total`
+counts. The browser displays these separately from ordinary retrieval
+indexing. A saved policy has precedence over its project type's defaults;
+model selections are stored independently of interactive answering models.
+
+A new project's `open` settings may include `_gui_source_cards`. The core
+validates the entire payload before preparing the project, then writes its
+own `[source_cards]` and `[source_card_generation]` profile sections before
+initial indexing. The page never writes `profile.ini` directly. Models may
+be loaded only in accordance with the project's download policy, which the
+GUI sets to disallow implicit downloads during preparation.
+
+`save_source_cards` saves the policy and both backend model choices before
+reconciling only the card indexes. Valid cached cards remain reusable when
+only generation-model settings change. The engine restores the previous
+profile on failure and reports errors explicitly. `regenerate_source_cards`
+forces new attempts for selected cards, without touching ordinary indexes.
+The GUI requires confirmation before sending the regeneration command.
+During a warm refresh, the RAG core temporarily unloads the answering and
+separate router models only when generation is needed. It then reloads the
+answering model and restores history, settings, and token totals. An
+unrecoverable restore failure closes the session rather than leaving the
+model state silently inconsistent.
+
 ### Indexing-settings failure recovery
 
 The frontend shows an in-progress status until `indexing_applied` confirms
@@ -277,7 +309,7 @@ can accompany an event.
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `install_commands` (backend-to-command map), `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`, `copyright` (the Settings copyright line, built from the package authors)); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`); `terms_acceptance_saved` (`version`); `terms_acceptance_failed` (`version`, `reason`, `message`, and `current_version` for outdated terms) |
 | Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |

@@ -161,6 +161,32 @@ class TestWithProjectSettings(ToolSettingsFixture):
             changed.settings.max_model_calls, use.settings.max_model_calls
         )
 
+    def test_suggest_reference_discovery_override_is_project_owned(self):
+        use = project_type("literature").intents["suggest_reference"].tool
+        self.assertEqual(use.settings.discovery_strategy, "hybrid")
+        tool = self.tool("suggest_reference")
+        self.assertEqual(tool["settings"]["discovery_tokens"], 8000)
+        saved = save_tool_settings(self.root, "suggest_reference", {
+            "discovery_strategy": "source_first",
+            "discovery_tokens": 12000,
+        })
+        configured = next(
+            item for item in saved
+            if item["name"] == "suggest_reference"
+        )
+        self.assertEqual(
+            configured["settings"]["discovery_strategy"], "source_first"
+        )
+        changed = with_project_settings(self.root, use)
+        self.assertEqual(changed.settings.discovery_tokens, 12000)
+        self.assertEqual(changed.settings.files, use.settings.files)
+        self.assertEqual(use.settings.discovery_strategy, "hybrid")
+        save_tool_settings(self.root, "suggest_reference", {
+            "discovery_strategy": "hybrid",
+            "discovery_tokens": 8000,
+        })
+        self.assertIs(with_project_settings(self.root, use), use)
+
     def test_invalid_saved_values_are_rejected_before_a_run(self):
         use = project_type("literature").intents["fact_finding"].tool
         with (self.root / "profile.ini").open("a", encoding="utf-8") as file:

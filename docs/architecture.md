@@ -43,7 +43,7 @@ presentation state). Their lifetimes and owners must not be conflated.
 | Project lifecycle | `project.py` validates `profile.ini`, creates/opens workspaces; `project_layout.py` plans shared folders and tool resources. |
 | Workspace contents | `workspace.py` imports cumulative sources; `project_files.py` edits outputs/templates; `workspace_resources.py` validates packaged resource declarations. |
 | Selection and text | `repository.py` enforces scan policy and manifests; `sources/` supplies readers and provenance-bearing source units; `chunking.py` creates bounded chunks. |
-| Retrieval | `retrievals/` builds semantic/lexical indexes and code graphs, persists checked index bundles, fuses rankings, and identifies named-document context. |
+| Retrieval | `retrievals/` builds semantic, lexical, graph and optional source-card indexes, persists validated records, fuses rankings and identifies named-document context. |
 | Answering | `rag.py` coordinates an operation; `answering.py` routes intents and selects history; `chat.py` generates text; `embeddings.py` produces query/document vectors. |
 | Models | `runtime.py`, `model_defaults.py`, `huggingface.py`, `query_formats.py` choose backends, model IDs, cached snapshots and embedding-query formats. |
 | Tools | `tools/_registry.py` resolves configured built-in tool packages; `_contract.py` defines requests, context, and results; `_shared/` holds reusable private services. |
@@ -78,8 +78,8 @@ creation and later source import.
    for collision and rollback rules, including empty projects.
 3. **Open session.** `RAGSession` resolves paths, acquires exclusive
    conversation ownership, opens a trace or disabled-trace equivalent,
-   inspects source changes and builds or reuses indexes, then constructs
-   model sessions.
+   inspects source changes, builds or reuses ordinary and configured
+   source-card indexes, then constructs model sessions.
 4. **Answer.** Project-type intents determine routing, history policy,
    retrieval mode and optional tool. Evidence and its provenance accompany
    the model or tool answer; successful turns are checkpointed.

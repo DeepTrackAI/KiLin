@@ -94,6 +94,14 @@ class TestDocumentNotes(unittest.TestCase):
             ["- Fact [2]", "- Both [1, 2]"],
         )
 
+    def test_ranges_in_notes_are_checked_against_part(self) -> None:
+        """Accept supported ranges and reject partly unsupported ones.
+
+        """
+
+        reply = "- Supported [1-2]\n- Wrong [1, 3-9]"
+        self.assertEqual(clean_notes(reply, [1, 2]), ["- Supported [1-2]"])
+
     def test_invalid_answer_citations(self) -> None:
         """Report only citation numbers outside the available range.
 
@@ -101,6 +109,7 @@ class TestDocumentNotes(unittest.TestCase):
 
         self.assertEqual(answer_citations("Found [2], [3, 9]", 3), [9])
         self.assertEqual(answer_citations("No citations", 2), [])
+        self.assertEqual(answer_citations("Found [3-9]", 3), [])
 
     def test_quote_citations_move_to_the_passage_with_the_quote(self) -> None:
         """Cite the one given passage that contains a quoted phrase.
@@ -142,6 +151,15 @@ class TestDocumentNotes(unittest.TestCase):
                 self.assertEqual(
                     quote_citations(text, passages), (text, counts)
                 )
+
+    def test_quote_citations_do_not_rewrite_invalid_ranges(self) -> None:
+        """Leave incorrect spans for explicit validation reporting.
+
+        """
+
+        passages = {1: "a clear modular structure"}
+        answer = 'It has a "clear modular structure" [1-999999999].'
+        self.assertEqual(quote_citations(answer, passages)[0], answer)
 
     def test_take_notes_uses_fake_model_and_traces_results(self) -> None:
         """Generate cited notes with callbacks and no real model.

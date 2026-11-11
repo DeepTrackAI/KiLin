@@ -13,8 +13,9 @@ otherwise every indexed file. Reading everything takes time, so by default
 the user always chooses first: read everything, a quick answer, or cancel.
 When the question names exact terms, the quick answer takes notes on only
 the passages that mention them; otherwise, or when no passage mentions
-them, it answers from the best-ranked passages directly. Passages are numbered once across all files, so every
-citation is unambiguous, and citations to passages that do not exist are
+them, it answers from the best-ranked passages directly. Passages are
+numbered once across all files, so every citation is unambiguous, and
+citations to passages that do not exist are
 counted in the summary.
 
 Parts beyond ``max_model_calls`` are not read, and the answer says so. A
@@ -84,15 +85,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from time import perf_counter
 from typing import Final
 
 from kilin.tools._shared.model_results import partial_result
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
+from kilin.tools._shared.citations import inspect_citations
 from kilin.tools._shared.document_notes import (
-    answer_citations,
     plan_parts,
     quote_citations,
     take_notes,
@@ -132,13 +132,6 @@ _REPLY_TOKENS_PER_SECOND: Final[float] = _config.REPLY_TOKENS_PER_SECOND
 _NOTES_PROMPT_TOKENS: Final[int] = _config.NOTES_PROMPT_TOKENS
 _CALL_SECONDS: Final[float] = _config.CALL_SECONDS
 _QUICK_ANSWER_SECONDS: Final[float] = _config.QUICK_ANSWER_SECONDS
-# A citation such as [3], [3, 5], or [3-5] (with a hyphen or an en dash).
-_CITATION_GROUP: Final[re.Pattern[str]] = re.compile(
-    r"\[(\d+(?:\s*[,–-]\s*\d+)*)\]"
-)
-_CITATION_RANGE: Final[re.Pattern[str]] = re.compile(
-    r"(\d+)(?:\s*[–-]\s*(\d+))?"
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -483,7 +476,8 @@ def run(
     answer, quotes = quote_citations(
         answer, {number_of[index]: texts[index] for index in given}
     )
-    invalid = answer_citations(answer, len(numbering))
+    citation_report = inspect_citations(answer, len(numbering))
+    invalid = list(citation_report.invalid_numbers)
     if choice == PLAN_CHOICE_QUICK:
         which = (
             "passages that mention " + " or ".join(terms)
@@ -513,6 +507,11 @@ def run(
             "seconds": round(perf_counter() - started, 1),
         }
     )
+
+    if citation_report.invalid_groups:
+        summary["invalid_citation_groups"] = list(
+            citation_report.invalid_groups
+        )
 
     # Evidence ``n`` is the passage the answer cites as [n].
     cited = _cited(answer, len(numbering)) - {
@@ -612,22 +611,7 @@ def _cited(answer: str, count: int) -> set[int]:
 
     """
 
-    numbers: set[int] = set()
-    for group in _CITATION_GROUP.findall(answer):
-        for piece in re.split(r"\s*,\s*", group):
-            match = _CITATION_RANGE.fullmatch(piece)
-            if match is None:
-                continue
-
-            first = int(match.group(1))
-            last = int(match.group(2) or first)
-            numbers.update(
-                number
-                for number in range(first, last + 1)
-                if 1 <= number <= count
-            )
-    return numbers
-
+    return set(inspect_citations(answer, count).valid)
 
 def _estimate(
     parts: list[list[int]], texts: list[str]

@@ -871,7 +871,9 @@ def _result(
             current = sentence.path
             lines.append(f"\n**{names[current]}**\n")
         cite = citations[sentence.chunk.identifier]
-        lines.append(f"- “{sentence.text}” (line {sentence.line}) [{cite}]")
+        lines.append(
+            f"- “{sentence.text}” (line {sentence.line}) [{cite}]"
+        )
     if len(found) > len(listed):
         lines.append(
             f"\nListed the first {len(listed)} of {len(found)} sentences."

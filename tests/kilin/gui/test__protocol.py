@@ -190,6 +190,14 @@ class TestGUIProtocolCommands(unittest.TestCase):
                 "apply_indexing_settings",
             ),
             (
+                {"action": "save_source_cards", "settings": {"x": 1}},
+                "save_source_card_settings",
+            ),
+            (
+                {"action": "regenerate_source_cards"},
+                "regenerate_source_cards",
+            ),
+            (
                 {"action": "save_answer_timeline", "timestamp": "now",
                  "timeline": {"elapsed_ms": 10, "steps": []}},
                 "save_answer_timeline",
@@ -720,6 +728,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "conversation_delete_started",
             "conversation_opened", "conversation_viewed", "conversations",
             "error", "indexing_applied",
+            "source_cards_applied", "source_cards_regenerated",
             "workspace_conflict",
             "folder_changed", "installation_complete",
             "installation_model_complete", "installation_progress",

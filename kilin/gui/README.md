@@ -270,7 +270,7 @@ is loaded, and unknown settings are rejected. The tools are:
   at most 750 words. Edit a supplied template, or add your
   own `.md` template and name it in the question ("…with the lab_summary
   template"); the rules (limits in brackets after a heading, `{citation}`
-  and `{references}` placeholders) are in tutorial 160 and in
+  and `{references}` placeholders) are in tutorial 170 and in
   `kilin/tools/generate_paper_summary/_report_template.py`. The headline and each section are
   written separately and checked in Python (word and item limits), with
   targeted fixes; the result is saved as Markdown in the project's
@@ -307,8 +307,8 @@ one valid type must remain. Neither `code` nor `literature` is mandatory.
 Restart KíLín after editing. The first registered type is the initial GUI
 selection. Welcome prompts and their selection history are dynamic for all
 types; absent prompts fall back to "What would you like to work on?".
-Tutorial 150 explains
-project types and intents and builds a new type; tutorial 160 shows how to
+Tutorial 160 explains
+project types and intents and builds a new type; tutorial 170 shows how to
 write and register a new tool.
 
 ## Models and generation settings

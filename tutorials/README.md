@@ -29,7 +29,7 @@ The notebooks that load models now use `ALLOW_DOWNLOAD = False` by default.
 Set it to `True` only when you intend to access the network and download
 missing weights. The Hugging Face cache is shared outside the checkout.
 An already-cached model may still require a substantial first load.
-Tutorials 130 and 140 use the download setting saved in each project
+Tutorials 140 and 150 use the download setting saved in each project
 profile: newly created tutorial projects disable downloads, while
 resuming a project preserves its existing setting.
 
@@ -47,10 +47,12 @@ resuming a project preserves its existing setting.
 - [100 · Persistent indexes](./100_persistent_indexes.ipynb): Save retrieval indexes and reuse them when their inputs are unchanged.
 - [110 · Hybrid ranking](./110_hybrid_ranking.ipynb): Combine semantic, lexical, and code-aware rankings.
 - [120 · Retrieval expansion](./120_context_expansion.ipynb): Add context for explicitly named files, functions, and code relationships.
-- [130 · Project chat](./130_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
-- [140 · Execution traces](./140_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
-- [150 · Project types](./150_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [160 · Custom tools](./160_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [130 · Source cards](./130_source_cards.ipynb): Inspect scientific-paper cards, provenance, independent persistence, and four-channel source-first retrieval without loading a model.
+- [140 · Project chat](./140_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
+- [150 · Execution traces](./150_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
+- [160 · Project types](./160_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
+- [170 · Custom tools](./170_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [180 · Research-assistant capstone](./180_end_to_end_research_assistant.ipynb): Create a literature project from bundled example notes, evaluate offline retrieval and citations, and optionally run a complete RAG session.
 
 ## Choose a learning path
 
@@ -61,18 +63,21 @@ resuming a project preserves its existing setting.
 | Experiment with a local chatbot | [30](./30_model_chat.ipynb) | Chat |
 | Understand semantic retrieval and persistent indexes | [60](./60_embeddings.ipynb), [70](./70_semantic_retrieval.ipynb), [100](./100_persistent_indexes.ipynb) | Embedding |
 | Combine evidence and examine retrieval guarantees | [110](./110_hybrid_ranking.ipynb), [120](./120_context_expansion.ipynb) | Embedding |
-| Use the complete project-question-answering workflow | [130](./130_project_chat.ipynb), [140](./140_logging_trace.ipynb) | Chat and embedding |
-| Design project-specific behavior and tools | [150](./150_project_types.ipynb), [160](./160_create_custom_tool.ipynb) | No for the main examples; real-model sections are optional |
+| Inspect source-card indexing and source-first retrieval | [130](./130_source_cards.ipynb) | No |
+| Use the complete project-question-answering workflow | [140](./140_project_chat.ipynb), [150](./150_logging_trace.ipynb) | Chat and embedding |
+| Design project-specific behavior and tools | [160](./160_project_types.ipynb), [170](./170_create_custom_tool.ipynb) | No for the main examples; real-model sections are optional |
+| Apply and verify the complete research workflow | [180](./180_end_to_end_research_assistant.ipynb) | No for the core checks; chat and embedding models optional |
 
 If you only want an introduction to KíLín as an end user, start with 10,
-20, and 130. The intermediate notebooks are explanations of the internals,
-not prerequisites for using the GUI or project chat.
+20, and 140, then try the integrated example in 180. The intermediate
+notebooks explain the internals; they are not prerequisites for the GUI
+or project chat.
 
 ## Where the examples get their data
 
 Most tutorials work with the included `kilin/` Python package. The source
-code is itself a realistic, reproducible example repository. Tutorials 140
-and 160 use literature PDFs:
+code is itself a realistic, reproducible example repository.
+Tutorials 150 and 170 use literature PDFs:
 
 - The complete supplementary article corpus, if available, lives under
   `_si_article_/literature_repo/`, with PDF files under `papers/`.
@@ -80,10 +85,15 @@ and 160 use literature PDFs:
   are intentionally absent from space-saving source ZIP exports. Their
   contents remain part of the full supplementary materials, not mandatory
   dependencies of the tutorial series.
-- When a paper is absent from that corpus, Tutorials 140 and 160 use the
+- When a paper is absent from that corpus, Tutorials 150 and 170 use the
   small PDFs provided in `tests/fixtures/`. They tell you which file was
   selected. If neither location exists, the notebook raises an informative
   `FileNotFoundError` instead of silently choosing unrelated documents.
+
+Tutorial 180 instead uses four small, fictional Markdown research notes
+from `tutorials/data/180_research_pilot/`. Its deterministic steps work
+without a language model; the full RAG run is explicitly opt-in. The
+fictional measurements must not be cited as research findings.
 
 For a real project, replace the example source directory with your own
 existing code or literature folder. The original source files are input;
@@ -98,17 +108,16 @@ after checking the smaller examples. Some notebooks use embedding batches
 to avoid processing the entire corpus in one model call.
 
 Example workspaces and indexes are created below `sandbox/`, not in the
-original source directory. Tutorials 140 and 160 automatically choose a
-new numbered workspace if an earlier run exists; they do not recursively
-delete an earlier one. The other tutorials may write to documented paths
-below `sandbox/`; inspect these paths before changing them. Do not add
+original source directory. Tutorials 150, 170, and 180 automatically
+choose a new numbered workspace if an earlier run exists; they do not
+recursively delete an earlier one. The other tutorials may write to documented paths below `sandbox/`; inspect these paths before changing them. Do not add
 `sandbox/`, Hugging Face model caches, or source PDFs to version control.
 
 Traces may contain prompts, retrieved passages, model output, paths, and
 other sensitive information. A trace file may also contain the resumable
 conversation record. Keep workspaces private and review the
 [trace-recording guide](../docs/trace_recording.md) before deleting or
-sharing them. Disable detailed tracing in Tutorial 130 if not needed.
+sharing them. Disable detailed tracing in Tutorial 140 if not needed.
 
 ## After a tutorial
 

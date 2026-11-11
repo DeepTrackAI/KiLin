@@ -292,7 +292,8 @@ class TestParseVerdict(unittest.TestCase):
         )
         comment = parse_verdict(reply, PASSAGES)[3]
         self.assertIn(
-            "“Running extends lifespan in every mammal studied.”, is not in "
+            "“Running extends lifespan in every mammal "
+            "studied.”, is not in "
             "the passages",
             comment,
         )

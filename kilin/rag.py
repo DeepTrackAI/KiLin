@@ -3,6 +3,7 @@
 ``RAGSession`` opens a configured project, loads an embedding session, reuses
 or builds source chunks and retrieval indexes, then loads a chat session.
 For each question it combines semantic, lexical, and code-based rankings,
+optionally selecting sources first using independent source-card vectors,
 expands explicitly requested context, and formats evidence into the model's
 user prompt. Returned ``Evidence`` records identify the supplied excerpts;
 the module checks citation identifiers against the supplied evidence
@@ -20,14 +21,15 @@ parameters. One authoritative conversation JSON path stores resumable state.
 When tracing is enabled for a RAG session, its trace output is required to use
 that same path; tracing therefore cannot silently redirect conversation
 persistence. The session has side effects: initialization may create files,
-rebuild indexes, load models, and download missing model files according to the
-profile. ``trace=None`` enables full tracing here, unlike
-the low-level chat and embedding classes.
+rebuild indexes, generate missing source cards with a separate model, and
+download missing model files according to the profile. ``trace=None``
+enables full tracing here, unlike the low-level chat and embedding classes.
 
-History and expanded evidence have no automatic summarization or shared
-prompt-token budget. A retrieval count limits the initial fused ranking, not
-necessarily the final expanded evidence set. Explicit cleanup releases owned
-models and trace resources.
+History and expanded evidence are not summarized automatically. Source-first
+intents enforce hard passage and estimated evidence-token budgets after
+expansion and related-turn additions; other strategies keep their existing
+behavior. The budgets do not cover chat history or guarantee exact model
+context-token accounting. Explicit cleanup releases model and trace resources.
 
 Key Features
 ------------
@@ -134,8 +136,9 @@ dependencies must already be suitable for its profile.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass, replace
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -193,7 +196,7 @@ from kilin.project_type import (
     RETRIEVAL_MODE_DOCUMENT,
     RETRIEVAL_MODE_REUSE,
     RETRIEVAL_MODE_SEARCH,
-    RETRIEVAL_STRATEGY_PAPERS,
+    RETRIEVAL_STRATEGY_SOURCE_FIRST,
     project_type,
 )
 from kilin.query_formats import (
@@ -205,24 +208,37 @@ from kilin.repository import (
     compare_repository_manifests,
     scan_repository,
 )
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_EXHAUSTIVE,
+    EvidenceLimits,
+    allocate_evidence,
+    coverage_report,
+    evidence_block,
+)
 from kilin.retrievals.model_identity import embedding_model_identity
-from kilin.retrievals.strategies.retrieval_papers import (
-    asks_for_all_papers,
-    card_similarities,
-    rank_papers,
-    relevant_papers,
-    select_paper_passages,
+from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
+from kilin.retrievals.strategies.retrieval_semantic import (
+    _validate_semantic_embeddings,
 )
-from kilin.retrievals.paper_cards import (
-    PaperCard,
-    card_passages,
-    card_prompt,
-    card_texts,
-    load_cards,
-    parse_card,
-    save_cards,
+from kilin.retrievals.source_coverage import asks_for_all_sources
+from kilin.retrievals.strategies.retrieval_code import CodeResult
+from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
+from kilin.retrievals.strategies.retrieval_sources import (
+    select_source_passages,
+    source_first_search,
 )
-from kilin.retrievals.papers import (
+from kilin.retrievals.source_cards.index import (
+    SourceCardMatch,
+    search_source_cards,
+)
+from kilin.retrievals.source_cards import (
+    SOURCE_CARD_KINDS,
+    SourceCardIndex,
+    SourceCardVectorIndex,
+)
+from kilin.retrievals.source_cards.indexing import reconcile_source_cards
+from kilin.source_card_policy import read_source_card_policy
+from kilin.retrievals.document_headers import (
     DOCUMENT_HEADER_FORMAT,
     DOCUMENT_KINDS,
     DocumentInfo,
@@ -364,10 +380,6 @@ _TEXT_CACHE: Final[str] = "source_text.json"
 # How indexed text is built from passages (``_retrieval_text``); a change
 # rebuilds saved indexes.
 RETRIEVAL_TEXT_FORMAT: Final[str] = "code-path-and-module-summary-v1"
-# Saved paper cards (``paper_cards.py``), in the index folder.
-_PAPER_CARDS: Final[str] = "paper_cards.json"
-# Longest reply for one paper card.
-_CARD_MAX_NEW_TOKENS: Final[int] = 1_200
 # Longest module summary put in front of a code passage for searching.
 _SUMMARY_MAX_CHARACTERS: Final[int] = 200
 # Opening of a module docstring, after optional comment lines.
@@ -956,6 +968,9 @@ class RAGSession:
                 chunks, indexes, status, source_changes = (
                     self._prepare_retrieval(embedding_session)
                 )
+            source_cards, source_card_vectors = self._prepare_source_cards(
+                chunks, indexes, embedding_session,
+            )
             self._emit_progress(
                 "loading_chat_model",
                 90.0,
@@ -971,9 +986,6 @@ class RAGSession:
                 allow_download=profile.allow_download,
                 trace=self.trace,
                 block_unrequested_cjk=profile.block_unrequested_cjk,
-            )
-            paper_cards, paper_card_vectors = self._prepare_paper_cards(
-                chunks, chat_session, embedding_session
             )
             self._emit_progress(
                 "loading_conversation",
@@ -1037,8 +1049,8 @@ class RAGSession:
         self.embedding_session = embedding_session
         self.chat_session = chat_session
         self.chunks = chunks
-        self.paper_cards = paper_cards
-        self.paper_card_vectors = paper_card_vectors
+        self.source_cards = source_cards
+        self.source_card_vectors = source_card_vectors
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
@@ -1602,6 +1614,7 @@ class RAGSession:
             )
 
             retrieval_started = perf_counter()
+            coverage_notice = ""
             if mode == RETRIEVAL_MODE_REUSE:
                 evidence = _merge_evidence(
                     [
@@ -1636,6 +1649,26 @@ class RAGSession:
                     self._ask_router,
                     list(dict.fromkeys(chunk.path for chunk in self.chunks)),
                 )
+                source_limits = None
+                source_report: dict[str, object] = {}
+                if (
+                    intent.retrieval_strategy
+                    == RETRIEVAL_STRATEGY_SOURCE_FIRST
+                ):
+                    source_limits = intent.source_limits()
+                    if asks_for_all_sources(question):
+                        source_limits = replace(
+                            source_limits, coverage=COVERAGE_EXHAUSTIVE
+                        )
+                if (
+                    source_limits is not None
+                    and source_limits.coverage == COVERAGE_EXHAUSTIVE
+                    and asks_for_all_sources(question)
+                    and len(scope) == 1
+                ):
+                    # A single inferred focus must not silently narrow an
+                    # explicit request about every source in the project.
+                    scope = ()
                 evidence = self._retrieve(
                     search_text,
                     retrieval_count,
@@ -1645,11 +1678,21 @@ class RAGSession:
                     ),
                     scope=scope,
                     prefer_source_code=intent.prefer_source_code,
-                    papers=(
-                        (intent.max_papers, intent.passages_per_paper)
+                    **(
+                        {"source_first": (
+                            source_limits.max_sources,
+                            source_limits.passages_per_source > 1,
+                        )}
                         if getattr(intent, "retrieval_strategy", None)
-                        == RETRIEVAL_STRATEGY_PAPERS
-                        else None
+                        == RETRIEVAL_STRATEGY_SOURCE_FIRST
+                        else {}
+                    ),
+                    **(
+                        {
+                            "source_limits": source_limits,
+                            "source_report": source_report,
+                        }
+                        if source_limits is not None else {}
                     ),
                 )
                 found = len(evidence)
@@ -1667,6 +1710,82 @@ class RAGSession:
                     )
                     effective["related_evidence_count"] = len(evidence) - found
                     effective["evidence_from_turns"] = related_turns
+                if source_limits is not None:
+                    # This *final* limit includes context expansion and
+                    # related turns; neither can bypass the hard budget.
+                    chosen_sources = tuple(
+                        source_report.get("selected_sources", ())
+                    )
+                    limited = allocate_evidence(
+                        evidence, source_limits,
+                        priority_sources=chosen_sources,
+                    )
+                    evidence = tuple(
+                        replace(item, citation=index)
+                        for index, item in enumerate(limited.items, 1)
+                    )
+                    indexed = tuple(dict.fromkeys(
+                        item.path for item in self.chunks
+                    ))
+                    # Exhaustive mode means *all requested sources*, not
+                    # merely those retained by the source-count cap.
+                    if source_limits.coverage == COVERAGE_EXHAUSTIVE:
+                        if len(scope) > 1:
+                            requested = tuple(dict.fromkeys(scope))
+                        elif len(scope) == 1 and not (
+                            source_limits.passages_per_source > 1
+                        ):
+                            requested = tuple(scope)
+                        else:
+                            requested = tuple(dict.fromkeys((
+                                *indexed, *self._source_files()
+                            )))
+                    else:
+                        requested = chosen_sources or tuple(scope)
+                    unreadable = tuple(
+                        path for path in requested
+                        if path not in set(indexed)
+                    )
+                    raw_hits = source_report.get("budget_limits_hit", ())
+                    # A source omitted before passage selection must still
+                    # be attributed to the limit that excluded it.
+                    candidates = source_report.get("candidate_sources", ())
+                    source_hits: list[str] = []
+                    if len(candidates) > len(chosen_sources):
+                        if len(chosen_sources) >= source_limits.max_sources:
+                            source_hits.append("sources")
+                        if len(chosen_sources) >= source_limits.max_passages:
+                            source_hits.append("passages")
+                    hits = tuple(dict.fromkeys((
+                        *raw_hits, *source_hits, *limited.limits_hit
+                    )))
+                    coverage = coverage_report(
+                        requested, evidence,
+                        mode=source_limits.coverage,
+                        unavailable=unreadable,
+                        limits_hit=hits,
+                    )
+                    effective["coverage"] = coverage
+                    effective["evidence_limits"] = asdict(source_limits)
+                    trace.emit(
+                        "retrieval.coverage", component="retrieval",
+                        data=coverage, turn_id=turn_id,
+                    )
+                    if (
+                        source_limits.coverage == COVERAGE_EXHAUSTIVE
+                        and not coverage["complete"]
+                    ):
+                        coverage_notice = (
+                            "Coverage incomplete: evidence was included "
+                            f"from {coverage['represented_sources']} of "
+                            f"{coverage['requested_sources']} requested "
+                            "sources. The remaining sources were not "
+                            "represented in this answer."
+                        )
+                        if coverage["unindexed_sources"]:
+                            coverage_notice += (
+                                " Some sources had no searchable text."
+                            )
                 report_phase(
                     ANSWER_PHASE_EVIDENCE_READY,
                     message=f"{found} references found",
@@ -1842,6 +1961,13 @@ class RAGSession:
                 )
                 if finish_reason in ("length", "stop"):
                     effective["finish_reason"] = finish_reason
+
+            # The coverage notice is deterministic, not an assertion made
+            # by the model. Stream it after the model's answer when needed.
+            if coverage_notice:
+                answer += "\n\n" + coverage_notice
+                if token_callback is not None:
+                    token_callback("\n\n" + coverage_notice)
 
             # One fast, deterministic check; do not modify or retry the
             # answer even when the model cites unavailable evidence.
@@ -2193,15 +2319,167 @@ class RAGSession:
             chunks, indexes, status, source_changes = self._prepare_retrieval(
                 self.embedding_session
             )
+        cards, vectors = self._prepare_source_cards(
+            chunks, indexes, self.embedding_session,
+        )
         self.chunks = chunks
         self.indexes = indexes
         self.index_status = status
         self.source_changes = source_changes
-        self.paper_cards, self.paper_card_vectors = (
-            self._prepare_paper_cards(
-                chunks, self.chat_session, self.embedding_session
-            )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
+
+    def regenerate_source_cards(self: RAGSession) -> None:
+        """Regenerate selected cards without rebuilding ordinary indexes.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed or source cards are disabled.
+
+        Notes
+        -----
+        The card model is loaded only while the answering and router
+        models are released. The conversation is restored afterwards.
+        Existing chunk, semantic, lexical, and graph indexes are retained.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        policy = read_source_card_policy(
+            self.project.root, project_type(self.project.profile.type_id)
         )
+        if not policy.enabled:
+            raise RuntimeError("Enable source cards before regenerating.")
+        cards, vectors = self._prepare_source_cards(
+            self.chunks, self.indexes, self.embedding_session,
+            force_regenerate=True,
+        )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
+
+    def refresh_source_cards(self: RAGSession) -> None:
+        """Reconcile cards without touching ordinary retrieval indexes.
+
+        Raises
+        ------
+        RuntimeError
+            If the session is closed.
+
+        Notes
+        -----
+        Only missing or outdated cards need inference. A changed model
+        configuration does not invalidate previously valid cards.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        cards, vectors = self._prepare_source_cards(
+            self.chunks, self.indexes, self.embedding_session,
+        )
+        self.source_cards = cards
+        self.source_card_vectors = vectors
+
+    @contextmanager
+    def _card_generation_guard(self: RAGSession) -> Iterator[None]:
+        """Release interactive models while card inference uses memory.
+
+        Yields
+        ------
+        None
+            Source-card inference may run after interactive models close.
+
+        Raises
+        ------
+        RuntimeError
+            If restoring the interactive session fails. The incomplete
+            session is closed explicitly, requiring a project reopen.
+
+        Notes
+        -----
+        The answering history, generation settings, and token totals are
+        restored. A separately loaded router is released and reloaded
+        lazily on its next use. A warm no-generation reconciliation never
+        enters this guard.
+
+        """
+
+        if self._closed:
+            raise RuntimeError("This RAG session is closed.")
+        previous = self.chat_session
+        messages = [dict(message) for message in previous.messages]
+        options = {
+            "thinking": previous.thinking,
+            "temperature": previous.temperature,
+            "max_new_tokens": previous.max_new_tokens,
+        }
+        totals = (
+            previous.input_token_total, previous.output_token_total
+        )
+        router = getattr(self, "_router_session", None)
+        self._router_session = None
+        self.chat_session = None
+        release_error = None
+        for model in (
+            router if router is not previous else None, previous
+        ):
+            if model is None:
+                continue
+            try:
+                model.close()
+            except BaseException as error:
+                if release_error is None:
+                    release_error = error
+                else:
+                    release_error.add_note(
+                        f"Additional model release failure: {error!r}"
+                    )
+        if release_error is not None:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                release_error.add_note(
+                    f"Session cleanup failed: {cleanup_error!r}"
+                )
+            raise RuntimeError(
+                "Could not release interactive models for card generation. "
+                "Reopen the project."
+            ) from release_error
+        try:
+            self.trace.emit(
+                "source_cards.chat.released", component="rag"
+            )
+            yield
+        finally:
+            try:
+                restored = self._new_chat_session(
+                    previous.model_id, **options
+                )
+                try:
+                    restored.restore_history(messages)
+                    restored.input_token_total = totals[0]
+                    restored.output_token_total = totals[1]
+                except BaseException:
+                    restored.close()
+                    raise
+                self.chat_session = restored
+                self.trace.emit(
+                    "source_cards.chat.restored", component="rag"
+                )
+            except BaseException as error:
+                self.chat_session = None
+                try:
+                    self.close()
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"Session cleanup failed: {cleanup_error!r}"
+                    )
+                raise RuntimeError(
+                    "Could not restore the answering model after card "
+                    "generation. Reopen the project."
+                ) from error
 
     def use_chat_model(self: RAGSession, model_id: str) -> None:
         """Switch the answering model while preserving conversation state.
@@ -3139,7 +3417,10 @@ class RAGSession:
         status_callback: Callable[[str], None] | None = None,
         scope: Sequence[Path] = (),
         prefer_source_code: bool = False,
-        papers: tuple[int, int] | None = None,
+        source_first: tuple[int, bool] | None = None,
+        source_limits: EvidenceLimits | None = None,
+        source_report: dict[str, object] | None = None,
+        card_kinds: tuple[str, ...] = (),
     ) -> tuple[Evidence, ...]:
         """Run hybrid retrieval and deterministic context expansion.
 
@@ -3170,11 +3451,21 @@ class RAGSession:
             ``demote_documentation``) and keep ``SOURCE_SEARCH_RESULTS``
             fused results (at least the retrieval count). Defaults to
             ``False``.
-        papers: tuple[int, int] | None, optional
-            For the ``papers`` strategy, the most papers to choose and the
-            passages guaranteed to each (``_paper_passages``); ignored when
-            one document is named. ``None`` keeps hybrid retrieval.
-            Defaults to ``None``.
+        source_first: tuple[int, bool] | None, optional
+            Activate the independent four-channel source ranking. The tuple
+            supplies the maximum selected sources and whether a named source
+            can be compared with others. ``None`` preserves the existing
+            hybrid retrieval. Defaults to ``None``.
+
+        source_limits: EvidenceLimits | None, optional
+            Source-first hard evidence limits. None preserves the original
+            source-first behavior for direct callers without evidence limits.
+        source_report: dict[str, object] | None, optional
+            Optional mutable output for selected and available source paths
+            and evidence-budget diagnostics. Defaults to ``None``.
+        card_kinds: tuple[str, ...], optional
+            Only these card kinds participate in source-first discovery.
+            Empty permits every kind. Defaults to ``()``.
 
         Returns
         -------
@@ -3184,10 +3475,10 @@ class RAGSession:
 
         Notes
         -----
-        Semantic search receives the configured query format, while lexical and
-        code searches use the raw question. Explicit context expansion is not
-        capped by retrieval_count. Trace details use previews; the evidence
-        records keep full chunk text.
+        Semantic search receives the configured query format, while lexical
+        and code searches use the raw question. Source-first evidence limits
+        apply after expansion; other strategies keep their prior expansion
+        behavior. Trace details use previews and evidence keeps full text.
 
         The semantic loop already scores every chunk. Retain that complete
         ranking for related-passage scoring and for ``_rank_everything``
@@ -3212,10 +3503,24 @@ class RAGSession:
             if status_callback is not None:
                 status_callback(message)
 
+        if source_first is not None and (
+            type(source_first) is not tuple
+            or len(source_first) != 2
+            or type(source_first[0]) is not int
+            or source_first[0] < 1
+            or type(source_first[1]) is not bool
+        ):
+            raise ValueError("Invalid source_first retrieval settings.")
+        if source_limits is not None and source_first is None:
+            raise ValueError("Source limits require source_first retrieval.")
+        if card_kinds and source_first is None:
+            raise ValueError("Card filters require source_first retrieval.")
         if not self.chunks:
             report("No indexed source passages; skipping retrieval")
             return ()
         count = retrieval_count or self.project.profile.retrieval_count
+        if source_limits is not None:
+            count = source_limits.max_passages
         report("Formatting the search query")
         query_text = self._format_query(question)
         trace = getattr(self, "trace", NullTraceLogger())
@@ -3264,11 +3569,17 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Embedding the query and running semantic search")
-            # Paper search compares the same query vector with the papers'
-            # cards, so the query is embedded here, once.
-            card_vectors = getattr(self, "paper_card_vectors", None) or {}
+            # Source-card ranking reuses the semantic query embedding.
+            vector_index = getattr(self, "source_card_vectors", None)
             query_vector = None
-            if papers is not None and card_vectors:
+            has_source_cards = (
+                isinstance(vector_index, SourceCardVectorIndex)
+                and any(
+                    not card_kinds or entry.kind in card_kinds
+                    for entry in vector_index.records
+                )
+            )
+            if source_first is not None and has_source_cards:
                 query_vector = (
                     self.embedding_session.embed_query(query_text)
                     if trace_turn_id is None
@@ -3307,13 +3618,15 @@ class RAGSession:
             turn_id=trace_turn_id,
         ):
             report("Running lexical search")
-            lexical = keep(
-                lexical_search(
-                    self.indexes.lexical,
-                    question,
-                    count=depth,
-                )
+            lexical_results = lexical_search(
+                self.indexes.lexical,
+                question,
+                count=(
+                    max(depth, len(self.chunks))
+                    if source_first is not None else depth
+                ),
             )
+            lexical = keep(lexical_results[:depth])
         trace.emit(
             "retrieval.lexical.ranked",
             component="retrieval",
@@ -3329,6 +3642,7 @@ class RAGSession:
             component="retrieval",
             turn_id=trace_turn_id,
         ):
+            code_results: list[CodeResult] = []
             if not self.indexes.code_graph.entities:
                 code = []
                 report(
@@ -3341,14 +3655,16 @@ class RAGSession:
                 report("No code named in the question; skipping graph search")
             else:
                 report("Searching relationships between source entities")
-                code = keep(
-                    code_search(
-                        self.indexes.code_graph,
-                        self.chunks,
-                        question,
-                        count=depth,
-                    )
+                code_results = code_search(
+                    self.indexes.code_graph,
+                    self.chunks,
+                    question,
+                    count=(
+                        max(depth, len(self.chunks))
+                        if source_first is not None else depth
+                    ),
                 )
+                code = keep(code_results[:depth])
                 report(
                     "Relationship search ranked "
                     f"{len(code)} results"
@@ -3389,33 +3705,60 @@ class RAGSession:
         )
         report(f"Hybrid ranking kept {len(combined)} results")
 
-        # Paper search chooses papers first. One named paper keeps its own
-        # passages, except in a comparison, which needs other papers too.
+        # Source-first ranking can prioritize one or several named files.
         named = list(scope)
-        papers_chosen = False
-        if papers is not None and (len(named) != 1 or papers[1] > 0):
-            chosen = self._paper_passages(
-                question,
+        sources_chosen = False
+        chosen_source_paths: tuple[Path, ...] = ()
+        source_metadata: dict[str, object] = {}
+        if source_first is not None:
+            card_matches = (
+                search_source_cards(
+                    vector_index,
+                    query_vector,
+                    count=len(vector_index.records),
+                )
+                if query_vector is not None and has_source_cards
+                else ()
+            )
+            if card_kinds:
+                card_matches = tuple(
+                    match for match in card_matches
+                    if match.kind in card_kinds
+                )
+            chosen = self._source_passages(
                 semantic_results,
-                query_vector,
-                card_vectors,
+                lexical_results,
+                code_results,
+                card_matches,
                 count=count,
-                max_papers=papers[0],
-                per_paper=papers[1],
+                max_sources=(
+                    source_limits.max_sources
+                    if source_limits is not None else source_first[0]
+                ),
+                compare=source_first[1],
                 scope=named,
                 trace_turn_id=trace_turn_id,
+                per_source=(
+                    source_limits.passages_per_source
+                    if source_limits is not None else 1
+                ),
+                metadata=source_metadata,
             )
+            chosen_source_paths = tuple(
+                source_metadata.get("selected_sources", ())
+            )
+            if source_report is not None:
+                source_report.update(source_metadata)
             if chosen:
                 combined = chosen
-                papers_chosen = True
+                sources_chosen = True
                 report(
-                    f"Kept {len(combined)} passages from "
-                    f"{len({r.chunk.path for r in combined})} papers"
+                    f"Selected {len(combined)} original passages from "
+                    f"{len({r.chunk.path for r in combined})} sources"
                 )
-
         # A named document supplies the primary passages; expansion may
         # still add useful context from elsewhere in the repository.
-        if len(named) == 1 and not papers_chosen:
+        if len(named) == 1 and not sources_chosen:
             focused = [
                 result
                 for result in self._rank_everything(
@@ -3480,7 +3823,7 @@ class RAGSession:
         # A paper named in the question is searched (above), not added in
         # full: a whole paper is tens of thousands of tokens of evidence.
         expansion_plan = plan
-        if self._indexes_papers() and plan.paths:
+        if self._uses_document_headers() and plan.paths:
             documents = {
                 chunk.path for chunk in self.chunks
                 if chunk.kind in DOCUMENT_KINDS
@@ -3498,6 +3841,18 @@ class RAGSession:
             expansion_plan,
             relevance,
         )
+        if source_first is not None and source_limits is not None:
+            # Expansion must not bypass the selected source set.
+            allowed = set(chosen_source_paths)
+            expanded = [
+                chunk for chunk in expanded if chunk.path in allowed
+            ]
+        elif source_first is not None and len(named) > 1:
+            # Retain explicit scopes for direct calls without evidence limits.
+            allowed = set(named)
+            expanded = [
+                chunk for chunk in expanded if chunk.path in allowed
+            ]
         direct_paths = set(plan.paths) | set(scope)
         direct_ids = {
             chunk.identifier for chunk in _chunks_for_functions(
@@ -3573,6 +3928,21 @@ class RAGSession:
             )
             for index, chunk in enumerate(expanded, start=1)
         )
+        if source_limits is not None:
+            selected = allocate_evidence(
+                evidence, source_limits,
+                priority_sources=chosen_source_paths,
+            )
+            evidence = tuple(
+                replace(item, citation=index)
+                for index, item in enumerate(selected.items, start=1)
+            )
+            if source_report is not None:
+                source_report.update({
+                    "budget_omitted": selected.omitted,
+                    "budget_limits_hit": selected.limits_hit,
+                    "budget_estimated_tokens": selected.estimated_tokens,
+                })
         trace.emit(
             "evidence.finalized",
             component="retrieval",
@@ -3596,6 +3966,130 @@ class RAGSession:
             turn_id=trace_turn_id,
         )
         return evidence
+
+    def _retrieve_for_tool(
+        self: RAGSession,
+        request: RetrievalRequest,
+        trace_turn_id: str | None = None,
+    ) -> RetrievalResult:
+        """Return bounded original chunks through the shared tool API.
+
+        Parameters
+        ----------
+        request: RetrievalRequest
+            Tool-owned retrieval strategy, source scope, and hard limits.
+        trace_turn_id: str | None, optional
+            Active tool turn, used for retrieval trace events.
+
+        Returns
+        -------
+        RetrievalResult
+            Source-ranked candidates, original chunks, and coverage.
+
+        Raises
+        ------
+        TypeError
+            If the request is not a validated retrieval request.
+        RuntimeError
+            If returned evidence cannot be located in the source index.
+
+        Notes
+        -----
+        Reuse the answering pipeline's indexing and query embeddings.
+        This method makes no language-model calls and does not change the
+        active conversation. Caller limits are independent of project-type
+        answering intents; full ``ToolContext.rank`` remains available.
+
+        """
+
+        if not isinstance(request, RetrievalRequest):
+            raise TypeError("Expected a RetrievalRequest.")
+        limits = request.limits
+        for kind in request.card_kinds:
+            SOURCE_CARD_KINDS.get(kind)
+        source_first = (
+            (limits.max_sources, request.compare)
+            if request.strategy == "source_first" else None
+        )
+        details: dict[str, object] = {}
+        evidence = self._retrieve(
+            request.query,
+            retrieval_count=limits.max_passages,
+            trace_turn_id=trace_turn_id,
+            scope=request.scope,
+            source_first=source_first,
+            source_limits=(
+                limits if source_first is not None else None
+            ),
+            source_report=details,
+            card_kinds=request.card_kinds,
+        )
+        if request.scope and (
+            len(request.scope) > 1 or not request.compare
+        ):
+            allowed = set(request.scope)
+            evidence = tuple(
+                item for item in evidence if item.path in allowed
+            )
+        chosen_sources = tuple(details.get("selected_sources", ()))
+        final = allocate_evidence(
+            evidence, limits,
+            priority_sources=chosen_sources or request.scope,
+        )
+        evidence = final.items
+        keys = {
+            (
+                item.path, item.start_line, item.end_line,
+                item.text, item.symbol, item.cell,
+            ): item
+            for item in self.chunks
+        }
+        passages = []
+        for item in evidence:
+            key = (
+                item.path, item.start_line, item.end_line,
+                item.text, item.symbol, item.cell,
+            )
+            if key not in keys:
+                raise RuntimeError(
+                    "Retrieved evidence is absent from indexed chunks."
+                )
+            passages.append(keys[key])
+        if request.strategy == "source_first":
+            sources = chosen_sources
+        else:
+            sources = tuple(dict.fromkeys(
+                item.path for item in passages
+            ))
+        if limits.coverage == COVERAGE_EXHAUSTIVE:
+            requested = request.scope or tuple(dict.fromkeys((
+                *(item.path for item in self.chunks),
+                *self._source_files(),
+            )))
+        else:
+            requested = sources or request.scope
+        indexed = {item.path for item in self.chunks}
+        candidates = details.get("candidate_sources", ())
+        hits = set(final.limits_hit)
+        hits.update(details.get("budget_limits_hit", ()))
+        if len(candidates) > len(sources):
+            if len(sources) >= limits.max_sources:
+                hits.add("sources")
+            if len(sources) >= limits.max_passages:
+                hits.add("passages")
+        coverage = coverage_report(
+            requested, evidence,
+            mode=limits.coverage,
+            unavailable=tuple(
+                path for path in requested if path not in indexed
+            ),
+            limits_hit=tuple(sorted(hits)),
+        )
+        getattr(self, "trace", NullTraceLogger()).emit(
+            "retrieval.tool.coverage", component="retrieval",
+            data=coverage, turn_id=trace_turn_id,
+        )
+        return RetrievalResult(tuple(passages), sources, coverage)
 
     def _run_tool(
         self: RAGSession,
@@ -3820,6 +4314,9 @@ class RAGSession:
             trace_turn_id=trace_turn_id,
             write_pdf=pdf_writer,
             choose=choice_callback,
+            retrieve=lambda query: self._retrieve_for_tool(
+                query, trace_turn_id
+            ),
         )
 
         request = ToolRequest(
@@ -3998,105 +4495,124 @@ class RAGSession:
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
 
-    def _paper_passages(
+    def _source_passages(
         self: RAGSession,
-        question: str,
-        semantic_results: Sequence[SemanticResult],
-        query_vector: Sequence[float] | None,
-        card_vectors: Mapping[Path, Sequence[Sequence[float]]],
+        semantic: Sequence[SemanticResult],
+        lexical: Sequence[LexicalResult],
+        code: Sequence[CodeResult],
+        cards: Sequence[SourceCardMatch],
         *,
         count: int,
-        max_papers: int,
-        per_paper: int,
+        max_sources: int,
+        compare: bool,
         scope: Sequence[Path],
         trace_turn_id: str | None,
+        per_source: int = 1,
+        metadata: dict[str, object] | None = None,
     ) -> list[HybridResult]:
-        """Choose papers for a question, then passages inside them.
+        """Select sources by four-channel RRF, then original passages.
 
         Parameters
         ----------
-        question: str
-            Search text.
-        semantic_results: Sequence[SemanticResult]
-            Complete semantic ranking for this question.
-        query_vector: Sequence[float] | None
-            Embedded question, or ``None`` when no card has vectors.
-        card_vectors: Mapping[pathlib.Path, Sequence[Sequence[float]]]
-            Search vectors of the papers' cards.
+        semantic: Sequence[SemanticResult]
+            Complete semantic chunk ranking for the current query.
+        lexical: Sequence[LexicalResult]
+            Complete lexical chunk ranking for the same query.
+        code: Sequence[CodeResult]
+            Complete applicable code-graph chunk ranking.
+        cards: Sequence[SourceCardMatch]
+            Ranked source-card matches from the same query embedding.
         count: int
-            Passages to keep at least.
-        max_papers: int
-            Most papers to choose.
-        per_paper: int
-            Passages guaranteed to each chosen paper; zero guarantees one
-            to the best paper only.
+            Maximum initial original passages.
+        max_sources: int
+            Maximum sources to consider, within the passage count.
+        compare: bool
+            Whether a single named source may include additional sources.
         scope: Sequence[pathlib.Path]
-            Documents the question means. Several limit the papers to
-            them; a single one (in a comparison) is always chosen first,
-            with other relevant papers.
+            Explicit source selections; several form a strict restriction.
         trace_turn_id: str | None
-            Turn identifier for trace events.
+            Trace identifier for this retrieval turn.
+        per_source: int, optional
+            Target passages per source after the first. Defaults to ``1``.
+        metadata: dict[str, object] | None, optional
+            Mutable diagnostics with selected source paths. Defaults to None.
 
         Returns
         -------
         list[HybridResult]
-            Passages of the chosen papers (``select_paper_passages``), best
-            first; empty when no paper was ranked.
+            Original chunks selected from independently ranked sources.
 
         Notes
         -----
-        Papers are ranked by fusing the similarity of the question to their
-        cards with the rank of their best passage (``rank_papers``); papers
-        without a card are ranked by their passages only. Unless the
-        question asks about all papers (``asks_for_all_papers``), only
-        papers with a passage among the ``count`` best passages of the
-        collection are chosen (``relevant_papers``), at least two when
-        each paper gets passages (a comparison).
+        Source-first callers can set per-source passage targets and hard
+        evidence limits independently of the ordinary retrieval count.
 
         """
 
-        everything = self._rank_everything(
-            question, trace_turn_id, semantic_results=semantic_results
+        ranked_sources = source_first_search(
+            semantic=semantic,
+            lexical=lexical,
+            code=code,
+            cards=cards,
+            count=max(len(self.chunks), len(cards), 1),
         )
-        scores = (
-            card_similarities(query_vector, card_vectors)
-            if query_vector is not None
-            else {}
+        indexed_paths = {chunk.path for chunk in self.chunks}
+        available = [
+            item for item in ranked_sources if item.path in indexed_paths
+        ]
+        named = list(dict.fromkeys(scope))
+        if len(named) > 1:
+            allowed = set(named)
+            available = [
+                item for item in available if item.path in allowed
+            ]
+        elif len(named) == 1:
+            target = [
+                item for item in available if item.path == named[0]
+            ]
+            others = [
+                item for item in available if item.path != named[0]
+            ]
+            available = [*target, *others] if compare else target
+
+        limit = min(max_sources, count)
+        chosen = [item.path for item in available[:limit]]
+        full_passages = hybrid_search(
+            semantic=semantic,
+            lexical=lexical,
+            code=code,
+            count=len(self.chunks),
         )
-        ranked = rank_papers(everything, scores)
-        required = list(scope) if len(scope) == 1 else []
-        if len(scope) > 1:
-            ranked = [paper for paper in ranked if paper.path in set(scope)]
-        elif not asks_for_all_papers(question):
-            ranked = relevant_papers(
-                ranked,
-                everything,
-                depth=count,
-                minimum=2 if per_paper > 0 else 1,
-                required=required,
-            )
-        chosen = [paper.path for paper in ranked[:max_papers]]
-        passages = select_paper_passages(
-            everything, chosen, count=count, per_paper=per_paper
+        passages = select_source_passages(
+            full_passages, chosen, count=count,
+            per_source=per_source,
         )
+        if metadata is not None:
+            metadata.update({
+                "selected_sources": tuple(chosen),
+                "candidate_sources": tuple(
+                    item.path for item in available
+                ),
+                "ranked_source_count": len(available),
+            })
         trace = getattr(self, "trace", NullTraceLogger())
         trace.emit(
-            "retrieval.papers.ranked",
+            "retrieval.sources.ranked",
             component="retrieval",
             data={
-                "papers": [
+                "sources": [
                     {
-                        "path": paper.path,
-                        "score": paper.score,
-                        "card_rank": paper.card_rank,
-                        "passage_rank": paper.passage_rank,
-                        "chosen": paper.path in chosen,
+                        "path": item.path,
+                        "score": item.score,
+                        "channel_ranks": item.channel_ranks,
+                        "chosen": item.path in chosen,
                     }
-                    for paper in ranked
+                    for item in ranked_sources
                 ],
-                "max_papers": max_papers,
-                "passages_per_paper": per_paper,
-                "kept_count": len(passages),
+                "max_sources": max_sources,
+                "selected_count": len(chosen),
+                "passage_count": len(passages),
+                "scope": named,
             },
             turn_id=trace_turn_id,
         )
@@ -4535,17 +5051,17 @@ class RAGSession:
         if ".pdf" in profile.extensions:
             metadata["pdf_text_extractor"] = PDF_TEXT_EXTRACTOR
         # Recorded only for paper projects, so other indexes stay valid.
-        if self._indexes_papers():
+        if self._uses_document_headers():
             metadata["document_headers"] = DOCUMENT_HEADER_FORMAT
         return metadata
 
-    def _indexes_papers(self: RAGSession) -> bool:
+    def _uses_document_headers(self: RAGSession) -> bool:
         """Return whether the project type indexes documents as papers.
 
         Returns
         -------
         bool
-            The project type's ``paper_index`` capability; false when the
+            The project type's ``document_headers`` capability; false when the
             profile names no type or an unregistered one.
 
         """
@@ -4559,7 +5075,7 @@ class RAGSession:
         except ValueError:
             # An unregistered type has no paper index.
             return False
-        return bool(getattr(definition, "paper_index", False))
+        return bool(getattr(definition, "document_headers", False))
 
     def _document_infos(
         self: RAGSession, chunks: Sequence[Chunk]
@@ -4575,11 +5091,11 @@ class RAGSession:
         -------
         dict[pathlib.Path, DocumentInfo]
             One entry per file with document passages; empty unless the
-            project type indexes papers (``paper_index``).
+            project type indexes papers (``document_headers``).
 
         """
 
-        if not self._indexes_papers():
+        if not self._uses_document_headers():
             return {}
         by_path: dict[Path, list[Chunk]] = {}
         for chunk in chunks:
@@ -4611,194 +5127,78 @@ class RAGSession:
         infos = self._document_infos(chunks)
         return document_headers(chunks, infos) if infos else {}
 
-    def _prepare_paper_cards(
+    def _prepare_source_cards(
         self: RAGSession,
         chunks: Sequence[Chunk],
-        chat_session: ChatSession,
+        indexes: PersistentIndexes,
         embedding_session: EmbeddingSession,
-    ) -> tuple[
-        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
-    ]:
-        """Reuse or write the card of each paper, with its search vectors.
+        *,
+        force_regenerate: bool = False,
+    ) -> tuple[SourceCardIndex, SourceCardVectorIndex | None]:
+        """Reconcile cards after ordinary indexes without answering inference.
 
         Parameters
         ----------
         chunks: Sequence[Chunk]
-            Indexed passages.
-        chat_session: ChatSession
-            Answering model, asked without thinking for each new card.
+            Current source chunks, already indexed for ordinary retrieval.
+        indexes: PersistentIndexes
+            Existing indexes, used to check the card vector dimension.
         embedding_session: EmbeddingSession
-            Embedding model for the cards' search vectors.
+            Shared embedding model; no additional model is loaded for vectors.
+        force_regenerate: bool, optional
+            Recreate all selected cards. Defaults to ``False``.
 
         Returns
         -------
-        tuple[dict, dict]
-            Cards and their search vectors by document path; empty unless
-            the project type indexes papers (``paper_index``).
+        tuple[SourceCardIndex, SourceCardVectorIndex | None]
+            Current derived card content and vector indexes.
 
         Notes
         -----
-        A saved card is reused while its file's SHA-256 and the card format
-        are unchanged and the model wrote it completely; its vectors are
-        reused while the embedding model is the same. A card that cannot be
-        written is kept with its title only, without search vectors, and
-        is written again when the file or the answering model changes.
-        Failures never stop the session from opening: without cards,
-        retrieval searches passages only.
+        The independent card generator is lazy and released on return,
+        before the interactive answering model is loaded. Ineligible and
+        failed cards never prevent passage-based retrieval.
 
         """
 
-        if not chunks or not self._indexes_papers():
-            return {}, {}
-        try:
-            return self._build_paper_cards(
-                chunks, chat_session, embedding_session
-            )
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            # Cards only guide retrieval; passage search still works.
-            self.trace.exception(
-                "paper_cards.failed", error, component="rag"
-            )
-            return {}, {}
-
-    def _build_paper_cards(
-        self: RAGSession,
-        chunks: Sequence[Chunk],
-        chat_session: ChatSession,
-        embedding_session: EmbeddingSession,
-    ) -> tuple[
-        dict[Path, PaperCard], dict[Path, tuple[tuple[float, ...], ...]]
-    ]:
-        """Reuse, write, embed, and save the cards of every paper.
-
-        Parameters
-        ----------
-        chunks: Sequence[Chunk]
-            Indexed passages.
-        chat_session: ChatSession
-            Answering model for new cards.
-        embedding_session: EmbeddingSession
-            Embedding model for the cards' search vectors.
-
-        Returns
-        -------
-        tuple[dict, dict]
-            Cards and search vectors by document path.
-
-        """
-
-        file = self.project.indexes / _PAPER_CARDS
-        saved, saved_vectors, saved_identity = load_cards(file)
         manifest = getattr(self, "_current_source_manifest", None) or {}
-        hashes = {
-            Path(name): str(item.get("sha256", ""))
-            for name, item in dict(manifest.get("files", {})).items()
-        }
-        identity = getattr(
-            embedding_session, "_retrieval_model_identity", None
-        ) or str(getattr(embedding_session, "model_id", ""))
-        by_path: dict[Path, list[Chunk]] = {}
-        for chunk in chunks:
-            if chunk.kind in DOCUMENT_KINDS:
-                by_path.setdefault(chunk.path, []).append(chunk)
-        infos = self._document_infos(chunks)
-        cards: dict[Path, PaperCard] = {}
-        vectors: dict[Path, tuple[tuple[float, ...], ...]] = {}
-        model = str(getattr(chat_session, "model_id", ""))
-        # A card is written again when its file changed, or when a card
-        # the same model could not write may now succeed with another one.
-        pending = [
-            path for path in sorted(by_path)
-            if not (
-                path in saved
-                and saved[path].sha256 == hashes.get(path)
-                and (saved[path].complete or saved[path].model == model)
-            )
-        ]
         started = perf_counter()
-        for path in sorted(by_path):
-            if path not in pending:
-                cards[path] = saved[path]
-                continue
+
+        def report(current: int, total: int) -> None:
+            """Forward deterministic source-card generation progress.
+
+            Parameters
+            ----------
+            current: int
+                Completed card attempts.
+            total: int
+                Number of pending attempts.
+
+            """
+
             self._emit_count_progress(
-                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
-                pending.index(path), len(pending), started,
+                "building_source_cards", 86.0, 89.0,
+                "Summarizing papers", current, total, started,
             )
-            info = infos.get(path)
-            title = (
-                info.title if info is not None and info.title != path.stem
+
+        infos = self._document_infos(chunks)
+        return reconcile_source_cards(
+            self.project, chunks, manifest, embedding_session,
+            backend=self.backend,
+            titles={path: item.title for path, item in infos.items()},
+            expected_dimension=(
+                len(indexes.semantic.embeddings[0])
+                if isinstance(indexes, PersistentIndexes)
+                and indexes.semantic.embeddings else None
+            ),
+            trace=self.trace, progress=report,
+            force_regenerate=force_regenerate,
+            generation_guard=(
+                self._card_generation_guard
+                if getattr(self, "chat_session", None) is not None
                 else None
-            )
-            passages = card_passages(by_path[path])
-            system, prompt = card_prompt(path.name, passages)
-            try:
-                reply = side_reply(
-                    chat_session, system, prompt,
-                    max_new_tokens=_CARD_MAX_NEW_TOKENS,
-                    require_complete=True,
-                )
-            except (
-                IncompleteModelResponse, RuntimeError, ValueError
-            ) as error:
-                self.trace.exception(
-                    "paper_card.failed", error, component="rag",
-                    data={"path": path.as_posix()},
-                )
-                reply = ""
-            cards[path] = parse_card(
-                reply, passages, path=path,
-                sha256=hashes.get(path, ""), title=title, model=model,
-            )
-            self.trace.emit(
-                "paper_card.written", component="rag",
-                data={
-                    "path": path.as_posix(),
-                    "complete": cards[path].complete,
-                    "passage_count": len(passages),
-                },
-            )
-        if pending:
-            self._emit_count_progress(
-                "building_paper_cards", 91.0, 96.0, "Summarizing papers",
-                len(pending), len(pending), started,
-            )
-        # Vectors follow the embedding model, not the card text alone. A
-        # card with its title only adds nothing to the passages' headers,
-        # so it is not embedded and its paper is found by its passages.
-        to_embed = [
-            path for path, card in cards.items()
-            if card.complete and (
-                path in pending
-                or saved_identity != identity
-                or len(saved_vectors.get(path, ())) != len(card_texts(card))
-            )
-        ]
-        texts = [text for path in to_embed for text in card_texts(cards[path])]
-        fresh = embedding_session.embed_documents(texts) if texts else []
-        position = 0
-        for path, card in cards.items():
-            if path in to_embed:
-                count = len(card_texts(card))
-                vectors[path] = tuple(
-                    tuple(vector)
-                    for vector in fresh[position:position + count]
-                )
-                position += count
-            elif card.complete:
-                vectors[path] = saved_vectors[path]
-            else:
-                vectors[path] = ()
-        if to_embed or set(saved) != set(cards):
-            save_cards(file, cards, vectors, identity)
-        self.trace.emit(
-            "paper_cards.ready", component="rag",
-            data={
-                "card_count": len(cards),
-                "written": len(pending),
-                "embedded": len(to_embed),
-            },
+            ),
         )
-        return cards, vectors
 
     def _parameters(
         self: RAGSession, retrieval_count: int | None = None
@@ -5508,18 +5908,7 @@ def _answer_prompt(
         return question
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
-        # Render evidence from either host with POSIX separators.
-        location = (
-            f"{PureWindowsPath(str(item.path)).as_posix()}:"
-            f"{item.start_line}-{item.end_line}"
-        )
-        symbol = f" ({item.symbol})" if item.symbol else ""
-        role = (
-            f" [context: {item.context_role}]" if item.context_role else ""
-        )
-        sections.append(
-            f"[{item.citation}] {location}{symbol}{role}\n{item.text}"
-        )
+        sections.append(evidence_block(item, item.citation))
     sections.append(
         "Prioritize direct evidence about the requested target. "
         "Related evidence can explain dependencies or alternatives. "

@@ -5,7 +5,9 @@
     "PASSAGE_TOKENS": 4000,
     "QUICK_FILES": 2,
     "CONFIRMATION": "when_large",
-    "LARGE_BATCHES": 5
+    "LARGE_BATCHES": 5,
+    "DISCOVERY_STRATEGY": "hybrid",
+    "DISCOVERY_TOKENS": 8000
   },
   "STATEMENT": {
     "MIN_WORDS": 4,

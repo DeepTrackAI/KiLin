@@ -107,6 +107,64 @@ class TestEngineCreation(unittest.TestCase):
         self.assertIn("depth = 3, 4, 5, 6, 7", profile)
         self.assertIn("mlx = Qwen/Qwen3-1.7B-MLX-4bit", profile)
 
+    def test_source_card_preferences_precede_first_indexing(self):
+        """Save card choices before a new project session is constructed."""
+        from kilin.gui import engine as gui_engine
+        from kilin.model_settings import (
+            read_source_card_generation_settings,
+        )
+        from kilin.source_card_policy import read_source_card_policy
+        from kilin.project_type import project_type
+
+        target = self.root / "cards-before-index"
+        settings = self.engine._source_card_settings(None, "literature")
+        settings["policy"]["automatic"] = False
+        settings["models"]["mlx"]["model_id"] = "example/card-mlx"
+        settings["models"]["torch"]["model_id"] = "example/card-torch"
+        seen = []
+
+        class CheckingSession(FakeSession):
+            """Observe persisted settings before RAG session startup."""
+
+            def __init__(self, directory, **options):
+                """Assert profile writes precede any model work."""
+                path = Path(directory)
+                policy = read_source_card_policy(
+                    path, project_type("literature")
+                )
+                self_assert = (policy.enabled, policy.automatic)
+                seen.append(self_assert)
+                seen.append(read_source_card_generation_settings(
+                    path, "mlx"
+                ).model_id)
+                super().__init__(directory, **options)
+
+        with patch.object(gui_engine, "RAGSession", CheckingSession):
+            self.engine.open_project(
+                [str(self.source)], "literature", str(target),
+                settings={"_gui_source_cards": settings},
+            )
+        self.assertEqual(self.events[-1]["event"], "opened")
+        self.assertEqual(seen, [(True, False), "example/card-mlx"])
+        self.assertEqual(
+            read_source_card_generation_settings(target, "torch").model_id,
+            "example/card-torch",
+        )
+
+    def test_invalid_new_card_preferences_leave_current_project(self):
+        """Reject malformed card settings before creating a workspace."""
+        settings = self.engine._source_card_settings(None, "literature")
+        settings["models"]["torch"]["max_input_tokens"] = 0
+        original = self.engine.session
+        target = self.root / "invalid-new-card-settings"
+        self.engine.open_project(
+            [str(self.source)], "literature", str(target),
+            settings={"_gui_source_cards": settings},
+        )
+        self.assertEqual(self.events[-1]["event"], "error")
+        self.assertIs(self.engine.session, original)
+        self.assertFalse(target.exists())
+
     def test_gui_router_preference_is_saved_for_new_projects(self):
         """Seed the project from user preferences, not the core fallback."""
 

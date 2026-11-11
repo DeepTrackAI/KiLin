@@ -25,15 +25,43 @@ identifiers supplied by a project or caller. The identifiers use the form
 | `DEFAULT_CHAT_MODEL_TORCH` | `Qwen/Qwen3-8B` | Initial chat model identifier for the PyTorch backend. |
 | `DEFAULT_ROUTER_MODEL_MLX` | `Qwen/Qwen3-4B-MLX-4bit` | Core default intent router for MLX when a project has no saved router. |
 | `DEFAULT_ROUTER_MODEL_TORCH` | `Qwen/Qwen3-4B` | Core default intent router for PyTorch when a project has no saved router. |
+| `DEFAULT_SOURCE_CARD_MODEL_MLX` | `Qwen/Qwen3-8B-MLX-4bit` | Independent source-card generation model for MLX. |
+| `DEFAULT_SOURCE_CARD_MODEL_TORCH` | `Qwen/Qwen3-8B` | Independent source-card generation model for PyTorch. |
 | `DEFAULT_EMBEDDING_MODEL_MLX` | `mlx-community/Qwen3-Embedding-0.6B-4bit-DWQ` | Initial embedding model identifier for MLX. |
 | `DEFAULT_EMBEDDING_MODEL_TORCH` | `Qwen/Qwen3-Embedding-0.6B` | Initial embedding model identifier for PyTorch. |
 
-All six values must be nonempty strings. Core router selection reads the
+All eight values must be nonempty strings. Core router selection reads the
 project's saved ``[router]`` setting first; the packaged router default
 is used only when the project has no saved or legacy router. Explicit
 ``RAGSession(router_model=...)`` overrides the saved selection for that
 session. The GUI may save a user-preference router for a newly created
 project. These defaults do not automatically download a model.
+
+## `SOURCE_CARD_GENERATION` -- auxiliary inference parameters
+
+Owned by `kilin/model_settings.py`, independently of answering and routing.
+The associated source-card model identifiers are defined in `DEFAULT_MODELS`.
+
+| Key | Default | Meaning |
+| --- | ---: | --- |
+| `THINKING` | `false` | Disable thinking by default while generating card content. Exact boolean. |
+| `TEMPERATURE` | `0.0` | Finite, nonnegative generation temperature; zero requests greedy decoding. |
+| `MAX_INPUT_TOKENS` | `5000` | Estimated budget for the full scientific-paper prompt and selected passages; the card kind enforces it during prompt construction. |
+| `MAX_NEW_TOKENS` | `1200` | Strict positive output-token cap applied to each generation. |
+
+The token budgets must be positive integers no greater than 200,000.
+A project's `[source_card_generation]` section in `profile.ini` may
+override `mlx`, `torch`, `thinking`, `temperature`, `max_input_tokens`, and
+`max_new_tokens`. Missing keys inherit the packaged values. Model selection
+and parameters do not inherit router or interactive generation settings.
+The project's existing `models.allow_download` policy is authoritative;
+there is no source-card-specific download override.
+
+Reading settings never loads a model or modifies a project. Saving them
+uses the core atomic profile writer. The configured model is loaded only
+for a requested card-generation batch, and valid existing cards are not
+regenerated just because the model changes. Indexing policy and automatic generation are controlled separately by
+project-type defaults, saved project settings, and source overrides.
 
 ## `REPOSITORY` — source-file selection
 

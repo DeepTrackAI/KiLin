@@ -62,19 +62,32 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/code_graph/extensions/__init__.py`](../kilin/retrievals/code_graph/extensions/__init__.py) | Group language-specific code-relationship extraction hooks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_m.py`](../kilin/retrievals/code_graph/extensions/code_graph_m.py) | Extract lightweight MATLAB relationships using textual patterns. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/code_graph/extensions/code_graph_py.py`](../kilin/retrievals/code_graph/extensions/code_graph_py.py) | Extract heuristic relationships from Python syntax trees. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/evidence_budget.py`](../kilin/retrievals/evidence_budget.py) | Apply deterministic passage, source, and evidence-token budgets. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/test_evidence_budget.py) |
 | [`kilin/retrievals/document_reading.py`](../kilin/retrievals/document_reading.py) | Read one whole document or function as evidence. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/paper_cards.py`](../kilin/retrievals/paper_cards.py) | Build, store, and describe paper cards. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/papers.py`](../kilin/retrievals/papers.py) | Describe the documents of a literature project for searching. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/requests.py`](../kilin/retrievals/requests.py) | Define bounded retrieval requests and results for core and tools. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/source_coverage.py`](../kilin/retrievals/source_coverage.py) | Recognize questions requiring complete source coverage. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/test_source_coverage.py) |
+| [`kilin/retrievals/document_headers.py`](../kilin/retrievals/document_headers.py) | Extract document titles and section metadata for retrieval headers. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/descriptors.py`](../kilin/retrievals/source_cards/descriptors.py) | Build source descriptions from the existing selected files and chunks. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/generation.py`](../kilin/retrievals/source_cards/generation.py) | Run isolated, lazy source-card model generation with dedicated project settings. | [Model management](model_management.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/kinds/__init__.py`](../kilin/retrievals/source_cards/kinds/__init__.py) | Expose trusted scientific-paper card kinds and extensible interfaces. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/kinds/) |
+| [`kilin/retrievals/source_cards/kinds/scientific_paper.py`](../kilin/retrievals/source_cards/kinds/scientific_paper.py) | Generate provenance-linked scientific-paper cards in one model call. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/kinds/) |
+| [`kilin/retrievals/source_cards/index.py`](../kilin/retrievals/source_cards/index.py) | Validate and search separate source-card records and embeddings, and plan incremental reuse. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/indexing.py`](../kilin/retrievals/source_cards/indexing.py) | Reconcile source cards and vectors after normal project retrieval indexing. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/models.py`](../kilin/retrievals/source_cards/models.py) | Represent source cards independently of any particular source kind. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/persistence.py`](../kilin/retrievals/source_cards/persistence.py) | Atomically store source-card outcomes and bound vectors in separate, checksummed files. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
+| [`kilin/retrievals/source_cards/registry.py`](../kilin/retrievals/source_cards/registry.py) | Register trusted source-card kinds without project-defined code imports. | [Tool extension contracts](extension_interfaces.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
 | [`kilin/retrievals/context_expansion.py`](../kilin/retrievals/context_expansion.py) | Expand retrieval context from explicit source references in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/__init__.py`](../kilin/retrievals/strategies/__init__.py) | Expose the concrete retrieval strategies and their result records. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_code.py`](../kilin/retrievals/strategies/retrieval_code.py) | Retrieve chunks near code entities recognized in a question. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_hybrid.py`](../kilin/retrievals/strategies/retrieval_hybrid.py) | Combine retrieval rankings through reciprocal-rank fusion. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_lexical.py`](../kilin/retrievals/strategies/retrieval_lexical.py) | Build and query a sparse TF-IDF index over retrieval chunks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
-| [`kilin/retrievals/strategies/retrieval_papers.py`](../kilin/retrievals/strategies/retrieval_papers.py) | Choose papers first, then passages inside them. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/strategies/retrieval_semantic.py`](../kilin/retrievals/strategies/retrieval_semantic.py) | Build and query an embedding-based chunk index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
+| [`kilin/retrievals/strategies/retrieval_sources.py`](../kilin/retrievals/strategies/retrieval_sources.py) | Rank sources across four channels, then select original passages. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/runtime.py`](../kilin/runtime.py) | Choose backend and device names without loading inference models. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
+| [`kilin/source_card_policy.py`](../kilin/source_card_policy.py) | Resolve core-owned source-card indexing policy for one project. | [Configuration](configuration.md) | [Policy tests](../tests/kilin/test_source_card_policy.py) |
 | [`kilin/sources/__init__.py`](../kilin/sources/__init__.py) | Expose source-file records and structured source extraction. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/__init__.py`](../kilin/sources/extensions/__init__.py) | Group optional suffix-specific source readers and extractors. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -90,6 +103,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_model_calls.py`](../kilin/tools/_model_calls.py) | Validate and resolve tool-owned internal thinking policies. | [Tool packages](tool_packages.md) | [Policy tests](../tests/kilin/tools/test__model_calls.py) |
 | [`kilin/tools/_registry.py`](../kilin/tools/_registry.py) | Register KíLín's tools and resolve an intent's tool. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/__init__.py`](../kilin/tools/_shared/__init__.py) | Private services shared by registered KíLín tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_shared/citations.py`](../kilin/tools/_shared/citations.py) | Validate bounded passage citations for document tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/test_citations.py) |
 | [`kilin/tools/_shared/claims.py`](../kilin/tools/_shared/claims.py) | Judge whether a cited work supports the sentence that cites it. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/_rating.py`](../kilin/tools/_shared/_rating.py) | Rate citation suitability from checked evidence, not search rank. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
 | [`kilin/tools/_shared/choose_document.py`](../kilin/tools/_shared/choose_document.py) | Choose the source document a request is about, or ask the user. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -158,19 +172,19 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | ---: |
 | Answering pipeline | 3 |
 | Architecture | 2 |
-| Configuration | 3 |
+| Configuration | 4 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
-| Model management | 7 |
+| Model management | 8 |
 | Per-tool README | 41 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 18 |
+| Retrieval pipeline | 28 |
 | Source pipeline | 12 |
-| Tool extension contracts | 20 |
+| Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 128.**
+**Total production Python modules: 143.**
 
 ## Non-Python resources and UI assets
 
@@ -183,7 +197,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/gui/web/`](../kilin/gui/web/) | HTML layout, styling and JavaScript state/events | [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/gui/icons/`](../kilin/gui/icons/) | Packaged native GUI icon assets | [GUI architecture](gui_architecture.md) |
 | [`kilin/tools/`](../kilin/tools/) | Registered tools' READMEs, `defaults.json` files and summary templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
-| [`tutorials/`](../tutorials/) | Sixteen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
+| [`tutorials/`](../tutorials/) | Eighteen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
 | [`assets/`](../assets/) | Maintenance, benchmark and notebook-validation assets | [Development](development.md), [Performance](performance.md) |
 | [`pyproject.toml`](../pyproject.toml) | Python requirements, dependency extras, package data, tooling | [Development](development.md) |
 | [`tests/`](../tests/) | Unit/integration suites and independent runner | [Development](development.md) |

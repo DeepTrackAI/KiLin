@@ -665,65 +665,163 @@ class TestProjectTypeFields(ProjectTypeFixture):
                 with self.assertRaisesRegex(ValueError, "code_graph"):
                     self._load(f"graphbad{index}", data)
 
-    def test_paper_index_accepts_booleans_only(self) -> None:
+    def test_document_headers_accepts_booleans_only(self) -> None:
         """Default to no paper index and reject non-boolean settings."""
 
-        self.assertFalse(self._load("paperdefault", _type_data()).paper_index)
+        self.assertFalse(
+            self._load("paperdefault", _type_data()).document_headers
+        )
         for index, value in enumerate((True, False)):
             data = _type_data()
-            data["capabilities"] = {"paper_index": value}
+            data["capabilities"] = {"document_headers": value}
             self.assertIs(
-                self._load(f"paperok{index}", data).paper_index, value
+                self._load(f"paperok{index}", data).document_headers, value
             )
         for index, value in enumerate((1, 0, None, "true", [])):
             with self.subTest(value=value):
                 data = _type_data()
-                data["capabilities"] = {"paper_index": value}
-                with self.assertRaisesRegex(ValueError, "paper_index"):
+                data["capabilities"] = {"document_headers": value}
+                with self.assertRaisesRegex(ValueError, "document_headers"):
                     self._load(f"paperbad{index}", data)
 
-    def test_papers_strategy_needs_paper_index_and_valid_limits(self) -> None:
-        """Validate the papers strategy and its paper and passage limits."""
+    def test_retired_papers_strategy_and_settings_are_rejected(self):
+        """Reject obsolete configuration with and without headers."""
+
+        for enabled in (False, True):
+            with self.subTest(document_headers=enabled):
+                data = _type_data()
+                data["capabilities"] = {
+                    "document_headers": enabled,
+                }
+                intent = next(iter(data["intents"].values()))
+                intent["retrieval"] = {
+                    "mode": "search", "strategy": "papers",
+                }
+                with self.assertRaisesRegex(
+                    ValueError, "retrieval strategy"
+                ):
+                    self._load(f"retiredpapers{enabled}", data)
+
+        for index, key in enumerate((
+            "max_papers", "passages_per_paper",
+        )):
+            with self.subTest(key=key):
+                data = _type_data()
+                intent = next(iter(data["intents"].values()))
+                intent["retrieval"] = {
+                    "mode": "search", "strategy": "source_first",
+                    key: 2,
+                }
+                with self.assertRaisesRegex(ValueError, key):
+                    self._load(f"retiredsetting{index}", data)
+
+    def test_source_first_strategy_is_generic_and_opt_in(self) -> None:
+        """Allow source-first without paper indexing or stored card kinds."""
 
         data = _type_data()
         intent = next(iter(data["intents"].values()))
-        intent["retrieval"] = {"mode": "search", "strategy": "papers"}
-        with self.assertRaisesRegex(ValueError, "paper_index"):
-            self._load("papersneedindex", data)
-        data["capabilities"] = {"paper_index": True}
-        loaded = next(iter(self._load("papersok", data).intents.values()))
+        intent["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+            "max_sources": 4, "passages_per_source": 1,
+        }
+        config = self._load("sourcefirst", data)
+        self.assertFalse(config.document_headers)
+        self.assertFalse(config.source_cards_enabled)
+        selected = next(iter(config.intents.values()))
+        self.assertEqual(selected.retrieval_strategy, "source_first")
+        self.assertEqual(selected.max_sources, 4)
+        self.assertEqual(selected.passages_per_source, 1)
         self.assertEqual(
-            (loaded.retrieval_strategy, loaded.max_papers,
-             loaded.passages_per_paper),
-            ("papers", 3, 0),
+            selected.source_limits().max_sources, 4
         )
-        for index, (key, value) in enumerate((
-            ("max_papers", 0), ("max_papers", 51), ("max_papers", True),
-            ("passages_per_paper", -1), ("passages_per_paper", 11),
-            ("passages_per_paper", 1.5),
-        )):
-            with self.subTest(key=key, value=value):
-                bad = deepcopy(data)
-                next(iter(bad["intents"].values()))["retrieval"][key] = value
-                with self.assertRaisesRegex(ValueError, key):
-                    self._load(f"paperslimit{index}", bad)
+        self.assertEqual(
+            selected.source_limits().passages_per_source, 1
+        )
+        default_data = _type_data()
+        next(iter(default_data["intents"].values()))["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+        }
+        default = next(iter(self._load(
+            "sourcefirstdefaults", default_data
+        ).intents.values()))
+        self.assertEqual(default.source_limits().max_sources, 3)
+        self.assertEqual(default.source_limits().passages_per_source, 1)
+        self.assertEqual(
+            project_type("literature").intents[
+                "question_answering"
+            ].retrieval_strategy,
+            "source_first",
+        )
 
     def test_packaged_literature_type_indexes_papers(self) -> None:
         """Index papers for literature projects but not for code projects."""
 
         literature = project_type("literature")
-        self.assertTrue(literature.paper_index)
-        self.assertFalse(project_type("code").paper_index)
+        self.assertTrue(literature.document_headers)
+        self.assertFalse(project_type("code").document_headers)
         for intent_id in ("question_answering", "compare_sources",
                           "report_generation"):
             with self.subTest(intent=intent_id):
                 self.assertEqual(
                     literature.intents[intent_id].retrieval_strategy,
-                    "papers",
+                    "source_first",
                 )
+        limits = literature.intents["compare_sources"].source_limits()
         self.assertEqual(
-            literature.intents["compare_sources"].passages_per_paper, 2
+            (limits.max_sources, limits.passages_per_source,
+             limits.max_passages, limits.max_tokens),
+            (8, 2, 16, 9000),
         )
+
+    def test_source_first_limits_are_per_intent_and_validated(self):
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        intent["retrieval"] = {
+            "mode": "search", "strategy": "source_first",
+            "max_sources": 7, "passages_per_source": 3,
+            "max_passages": 12, "evidence_tokens": 7500,
+            "coverage": "exhaustive",
+        }
+        loaded = next(iter(self._load(
+            "sourcebudgetok", data
+        ).intents.values()))
+        self.assertEqual(
+            loaded.source_limits().max_sources, 7
+        )
+        self.assertEqual(loaded.source_limits().max_passages, 12)
+        self.assertEqual(loaded.source_limits().max_tokens, 7500)
+        self.assertEqual(loaded.source_limits().coverage, "exhaustive")
+        invalid = (
+            ("max_sources", True),
+            ("passages_per_source", 0),
+            ("max_passages", 201),
+            ("evidence_tokens", 999),
+            ("coverage", "all"),
+        )
+        for count, (key, value) in enumerate(invalid):
+            with self.subTest(key=key, value=value):
+                original = intent["retrieval"][key]
+                intent["retrieval"][key] = value
+                try:
+                    with self.assertRaisesRegex(ValueError, key):
+                        self._load(f"sourcebudgetbad{count}", data)
+                finally:
+                    intent["retrieval"][key] = original
+
+    def test_source_first_limits_cannot_be_ignored_by_other_modes(self):
+        data = _type_data()
+        intent = next(iter(data["intents"].values()))
+        for count, (mode, strategy) in enumerate((
+            ("search", "hybrid"), ("document", "source_first"),
+            ("none", "source_first"),
+        )):
+            with self.subTest(mode=mode, strategy=strategy):
+                intent["retrieval"] = {
+                    "mode": mode, "strategy": strategy,
+                    "max_passages": 8,
+                }
+                with self.assertRaisesRegex(ValueError, "source-first"):
+                    self._load(f"budgetmode{count}", data)
 
     def test_history_recent_turns_range(self) -> None:
         """Accept zero through one hundred turns, rejecting invalid values."""
