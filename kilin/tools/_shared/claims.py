@@ -88,14 +88,14 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Final
 
-from kilin._model_completion import IncompleteModelResponse
+from kilin._model_completion import IncompleteModelResponse, strip_thinking
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.sentences import Sentence
@@ -115,8 +115,11 @@ __all__ = [
     "Support",
     "Verdict",
     "claim_passages",
+    "focus_claims",
+    "focus_prompt",
     "judge_support",
     "quote_line_range",
+    "parse_focus",
     "parse_verdict",
     "support_prompt",
     "verdict_label",
@@ -169,6 +172,10 @@ _SOURCE: Final[re.Pattern[str]] = re.compile(
 # Reciprocal-rank fusion constant: a passage at rank r of one query scores
 # 1 / (_FUSION + r).
 _FUSION: Final[int] = 60
+# One focused claim: "[3]: the method of ..." or "3: ...".
+_FOCUS_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*[-*]?\s*\[?(\d{1,3})\]?\s*[:.)-]\s*(.+)$", re.M
+)
 # A word hyphenated across lines in extracted text ("perfor- mance").
 _HYPHENATED: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])-\s+(?=[a-z])")
 # A word, for comparing quotes: letters only.
@@ -220,6 +227,10 @@ class Claim:
         Used only to disambiguate the citing sentence.
     match_status: str
         ``found`` or ``probable`` for the cited paper identity.
+    focus: str
+        For a sentence citing several references, the sentence rewritten
+        by the answering model around the part this reference supports,
+        keeping the context (``focus_claims``); empty otherwise.
 
     """
 
@@ -232,6 +243,7 @@ class Claim:
     cited_for: str = ""
     after: str = ""
     match_status: str = "found"
+    focus: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,12 +337,132 @@ def verdict_label(verdict: str) -> str:
     return _LABELS.get(verdict, verdict)
 
 
+def focus_prompt(
+    sentence: str, before: str, after: str, numbers: Sequence[int]
+) -> tuple[str, str]:
+    """Return the prompts that split a sentence among its references.
+
+    Parameters
+    ----------
+    sentence: str
+        The citing sentence, with its markers in brackets where they
+        stand.
+    before: str
+        Preceding sentences of the paragraph, or empty.
+    after: str
+        The following sentence of the paragraph, or empty.
+    numbers: Sequence[int]
+        The references to write a focused claim for.
+
+    Returns
+    -------
+    tuple[str, str]
+        System prompt and user prompt, asking for one line per reference.
+
+    """
+
+    system = (
+        "You split a sentence of a scientific paper into what each of its "
+        "references is cited for. Use only the paper's own words and "
+        "context; add no facts."
+    )
+    context = "".join(
+        f'{label}: "{text}"\n'
+        for label, text in (("Preceding context", before),
+                            ("Following context", after))
+        if text
+    )
+    lines = "\n".join(f"[{number}]: <claim>" for number in numbers)
+    user = f"""A paper writes this sentence, citing several references:
+
+"{sentence}"
+{context}
+Several references often support a sentence together, each for one part:
+a method, a dataset, a finding, an example. For each reference below,
+rewrite the sentence as one short, self-contained claim stating only what
+that reference is cited for, keeping the context needed to understand it
+(what "this", "it" or "these" refer to). When the sentence does not
+separate them, give the whole claim.
+
+Answer with exactly one line per reference:
+{lines}"""
+    return system, user
+
+
+def parse_focus(reply: str, numbers: Sequence[int]) -> dict[int, str]:
+    """Read the focused claims from a reply to ``focus_prompt``.
+
+    Parameters
+    ----------
+    reply: str
+        The model's reply.
+    numbers: Sequence[int]
+        The references asked about.
+
+    Returns
+    -------
+    dict[int, str]
+        The claim of each reference that has a nonempty line ("[3]: ..."
+        or "3: ..."); thinking and other lines are ignored.
+
+    """
+
+    wanted = set(numbers)
+    found: dict[int, str] = {}
+    for match in _FOCUS_LINE.finditer(strip_thinking(reply)):
+        number, text = int(match.group(1)), match.group(2).strip().strip('"')
+        if number in wanted and text and text != "<claim>":
+            found.setdefault(number, text)
+    return found
+
+
+def focus_claims(
+    sentence: str,
+    before: str,
+    after: str,
+    numbers: Sequence[int],
+    ask_model: Callable[[str, str, int | None], str],
+) -> dict[int, str]:
+    """Rewrite a sentence once per reference, with the answering model.
+
+    Parameters
+    ----------
+    sentence: str
+        The citing sentence, with its markers in brackets.
+    before: str
+        Preceding context, or empty.
+    after: str
+        Following context, or empty.
+    numbers: Sequence[int]
+        The references to write a focused claim for.
+    ask_model: Callable[[str, str, int | None], str]
+        The answering model (``ToolContext.ask_model``).
+
+    Returns
+    -------
+    dict[int, str]
+        The focused claim of each reference the reply gives; empty when
+        the call fails, so the claims are checked as before.
+
+    """
+
+    if not numbers:
+        return {}
+    try:
+        reply = ask_model(*focus_prompt(sentence, before, after, numbers),
+                          None)
+    except Exception:  # Without a focus, the whole sentence is judged.
+        return {}
+    return parse_focus(reply, numbers)
+
+
 def claim_passages(
     texts: Sequence[str],
     cited: Sequence[Chunk],
     rank: Callable[[str], list],
     count: int,
     max_tokens: int,
+    skip: Collection[str] = (),
 ) -> tuple[Chunk, ...]:
     """Return the cited file's passages most related to a claim.
 
@@ -350,6 +482,9 @@ def claim_passages(
     max_tokens: int
         Most estimated tokens of all passages together; the best-ranked
         passage is always taken.
+    skip: Collection[str], optional
+        Identifiers of passages already read, left out (for a second,
+        wider reading). Defaults to none.
 
     Returns
     -------
@@ -365,7 +500,7 @@ def claim_passages(
         position = 0
         for result in rank(text):
             index = order.get(result.chunk.identifier)
-            if index is None:
+            if index is None or result.chunk.identifier in skip:
                 continue
             fused[index] = fused.get(index, 0.0) + 1 / (_FUSION + position)
             position += 1
@@ -415,6 +550,12 @@ def verification_prompt(
         others = (
             f"\nThe sentence also cites {listed}; reference [{number}] only "
             "needs to support its own part of it."
+        )
+    if claim.focus:
+        others += (
+            f'\nThe part [{number}] is cited for, rewritten from the sentence '
+            f'and its context: "{claim.focus}". Judge [{number}] on this '
+            "part; the other references cover the rest of the sentence."
         )
     cited_for = ""
     if claim.cited_for:

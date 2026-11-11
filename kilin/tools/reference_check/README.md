@@ -14,7 +14,17 @@ For "check the references of the Smith paper", the tool:
    paper the earlier turns discussed, or the user's choice).
 2. Reads the reference list with the shared extractor
    (`kilin/tools/_shared/references.py`). A PDF's list is read again in
-   column order, and each entry keeps its printed number.
+   column order, and each entry keeps its printed number. The list ends at
+   the next heading (Acknowledgements, Supplementary information, another
+   reference list), a table or figure caption, or numbering that starts
+   again at 1, so a table printed after it adds no entries; a number that
+   does not follow the previous entry's (a page range wrapped onto a new
+   line, "…919–\n927. https://doi…") stays inside its entry. A paper with
+   several lists (for example main and supplementary references, each
+   numbered from 1) has one list checked: the one the question names
+   ("the supplementary references"), otherwise the user chooses; without
+   anyone to ask, the first list is checked and the answer says so. The
+   in-text citations are looked for in the text that cites that list.
 3. Matches each entry to a project file (`_matching.py`): by the file's
    DOI, by its PDF metadata title and the entry's first author, or by the
    file's first page. Each entry is **found**, **probable** (for example
@@ -26,6 +36,11 @@ For "check the references of the Smith paper", the tool:
    and superscripts in PDFs, confirmed by the printed font size and
    raised position (exponents in formulas and subscripts are left out).
    Papers using only written-out numbered references are recognized.
+   A sentence broken by a page break (page number, footer, running head)
+   is joined first; a superscript marker broken over two lines
+   ("accumulation⁵⁹⁻" / "⁶¹") is read whole when the rest is printed small
+   at the start of the next line; and a count in parentheses before a
+   superscript ("high (3)⁴⁵,⁴⁶") is not taken for a function argument.
    It reports references never cited and numbers cited beyond the list.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
@@ -42,7 +57,15 @@ For "check the references of the Smith paper", the tool:
    paper actually reports the described study. The model answers
    with a verdict (supported, partly supported, not supported,
    contradicted, background, or no matching passage), the passage
-   sentence it rests on, and a critical comment. A cited file without
+   sentence it rests on, and a critical comment. A sentence citing
+   several references together is first rewritten once per reference by
+   the model (one call per sentence), keeping the context and focusing on
+   the part that reference is cited for; each reference is judged on its
+   part, and the focused claim is also used to rank the cited passages.
+   A claim found not supported, or without a matching passage, is read
+   again with the next best-ranked passages (`RETRY_PASSAGES`) in a
+   second call; a better verdict from that reading replaces the first,
+   and the comment says which reading it came from. A cited file without
    searchable text is reported as no text, without a model call. Python
    checks the answer: a quote not found in the passages is dropped, and a
    reference is called contradicted only with a confirmed quote, otherwise
@@ -147,6 +170,18 @@ are internal thresholds. All values are read and validated on import.
   output tokens (or its available context if no maximum was configured).
   An explicit override accepts 100–131072 and is capped by any session
   maximum.
+- `RETRY_PASSAGES` (default `8`): When a claim comes out not supported
+  or without a matching passage, this many further passages of the cited
+  work (the next best-ranked, within `PASSAGE_TOKENS`) are read in a
+  second model call before deciding; 0 turns the second look off.
+  Allowed range: 0–20.
+- `FOCUS_CLAIMS` (default `true`): For a sentence citing several
+  references together, the answering model first rewrites it once per
+  reference, keeping the context and focusing on the part that reference
+  is cited for; each reference is then checked against its own part, so
+  one covering only part of the sentence is not called not supported for
+  the rest. One extra model call per such sentence. Allowed values: true,
+  false.
 - `MAX_MODEL_CALLS` (default `100`): Most claims checked; later ones are
   reported as not checked. Allowed range: 1–1000.
 - `QUICK_CLAIMS` (default `5`): Claims checked by the quick version, in
