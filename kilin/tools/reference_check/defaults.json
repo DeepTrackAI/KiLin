@@ -4,6 +4,8 @@
     "VERIFY": true,
     "PASSAGES": 6,
     "PASSAGE_TOKENS": 5000,
+    "RETRY_PASSAGES": 8,
+    "FOCUS_CLAIMS": true,
     "MAX_MODEL_CALLS": 100,
     "QUICK_CLAIMS": 5,
     "CONFIRMATION": "when_large",
