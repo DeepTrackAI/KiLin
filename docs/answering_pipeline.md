@@ -217,6 +217,12 @@ chat history if a pre-commit failure would otherwise leave uncommitted
 messages in memory. A model's `finish_reason = length` is checked by the completion contract
 below; truncated text is not accepted as a successful final answer.
 
+When the question is about several documents (a number of them, "review
+the five articles", or all of them, "all the papers") and the evidence
+comes from at least two, the evidence prompt names those documents and
+asks the model to cover each in turn under its own heading, saying plainly
+when one is not relevant or the evidence does not cover it.
+
 An intent can override thinking for this direct model answer only. A
 missing or null policy inherits the session setting; an explicit boolean
 is passed to `ChatSession.reply(thinking=...)` without reconfiguring the

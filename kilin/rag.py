@@ -6036,7 +6036,10 @@ def _answer_prompt(
 
     Notes
     -----
-    Evidence text is inserted without semantic validation. The current label
+    A question about several documents ("the five articles", "all the
+    papers") also asks for each source of the evidence in turn
+    (``_per_source_instruction``). Evidence text is inserted without
+    semantic validation. The current label
     includes path, line range, optional symbol and context role, but not
     notebook cell or PDF page metadata. This is prompt construction, not
     instruction isolation
@@ -6065,12 +6068,52 @@ def _answer_prompt(
     )
     if isinstance(guidance, str) and guidance.strip():
         sections[-1] += " " + guidance.strip()
+    per_source = _per_source_instruction(question, evidence)
+    if per_source:
+        sections[-1] += " " + per_source
     # The question again, last, so its own length or format wins.
     sections.append(
         "Answer this question as asked, including any length or format it "
         f"requests:\n{question}"
     )
     return "\n\n".join(sections)
+
+
+def _per_source_instruction(
+    question: str, evidence: Sequence[Evidence]
+) -> str:
+    """Ask for each source in turn when the question is about several.
+
+    Parameters
+    ----------
+    question: str
+        The user's question.
+    evidence: Sequence[Evidence]
+        The numbered evidence.
+
+    Returns
+    -------
+    str
+        For a question about every source ("all the papers") or a number
+        of them ("the five articles"), with evidence from at least two
+        sources: an instruction naming those sources and asking for each in
+        turn, saying plainly when one is not relevant or not covered;
+        otherwise empty.
+
+    """
+
+    sources = list(dict.fromkeys(item.path.name for item in evidence))
+    count = requested_source_count(question)
+    if len(sources) < 2 or not (
+        count >= 2 or asks_for_all_sources(question)
+    ):
+        return ""
+    return (
+        f"The question is about several documents; the evidence comes from "
+        f"{len(sources)}: {', '.join(sources)}. Cover each of them in turn, "
+        "under a short heading naming it, and say plainly when one is not "
+        "relevant to the question or the evidence does not cover it."
+    )
 
 
 def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:

@@ -137,6 +137,34 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertNotIn("cell=3", prompt)
         self.assertNotIn("Short.", rag._answer_prompt("Q", evidence, 3))
 
+    def test_answer_prompt_covers_each_document_asked_about(self) -> None:
+        """Ask for each source in turn for questions about several."""
+
+        evidence = (
+            replace(_evidence(1), path=Path("a.pdf")),
+            replace(_evidence(2), path=Path("b.pdf")),
+            replace(_evidence(3), path=Path("a.pdf")),
+        )
+        for question in ("Review the five articles for relevance.",
+                         "Compare the datasets of all the papers."):
+            with self.subTest(question=question):
+                prompt = rag._answer_prompt(question, evidence)
+                self.assertIn(
+                    "the evidence comes from 2: a.pdf, b.pdf. Cover each of "
+                    "them in turn", prompt,
+                )
+                self.assertIn("not relevant to the question", prompt)
+                self.assertTrue(prompt.endswith(question))
+        for question, items in (
+            ("How does BRAPH 2 differ from BRAPH?", evidence),
+            ("Review the five articles for relevance.", evidence[:1]),
+        ):
+            with self.subTest(question=question, sources=len(items)):
+                self.assertNotIn(
+                    "Cover each of them",
+                    rag._answer_prompt(question, items),
+                )
+
     def test_answer_prompt_normalizes_foreign_platform_paths(self) -> None:
         """Display evidence paths with forward slashes on every host."""
 
