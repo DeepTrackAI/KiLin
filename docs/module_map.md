@@ -68,6 +68,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/retrievals/model_identity.py`](../kilin/retrievals/model_identity.py) | Identify the embedding model that produced a retrieval index. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/requests.py`](../kilin/retrievals/requests.py) | Define bounded retrieval requests and results for core and tools. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_coverage.py`](../kilin/retrievals/source_coverage.py) | Recognize questions requiring complete source coverage. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/test_source_coverage.py) |
+| [`kilin/retrievals/source_descriptions.py`](../kilin/retrievals/source_descriptions.py) | Resolve papers a question describes instead of naming. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/test_source_descriptions.py) |
 | [`kilin/retrievals/document_headers.py`](../kilin/retrievals/document_headers.py) | Extract document titles and section metadata for retrieval headers. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/persistence.py`](../kilin/retrievals/persistence.py) | Serialize retrieval indexes with source and payload integrity checks. | [Retrieval pipeline](retrieval_pipeline.md) | [Retrieval tests](../tests/kilin/retrievals/) |
 | [`kilin/retrievals/source_cards/__init__.py`](../kilin/retrievals/source_cards/__init__.py) | Expose generic source-card contracts and the trusted kind registry. | [Retrieval pipeline](retrieval_pipeline.md) | [Source-card tests](../tests/kilin/retrievals/source_cards/) |
@@ -187,13 +188,13 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 42 |
 | Project workspaces | 6 |
-| Retrieval pipeline | 28 |
+| Retrieval pipeline | 29 |
 | Source pipeline | 18 |
 | Tool extension contracts | 23 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 152.**
+**Total production Python modules: 147.**
 
 ## Non-Python resources and UI assets
 

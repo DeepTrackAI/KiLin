@@ -1718,6 +1718,7 @@ class RAGSession:
                     ),
                     self._ask_router,
                     list(dict.fromkeys(chunk.path for chunk in self.chunks)),
+                    self._card_metadata(),
                 )
                 source_limits = None
                 source_report: dict[str, object] = {}
@@ -4582,6 +4583,31 @@ class RAGSession:
 
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
+
+    def _card_metadata(self: RAGSession) -> dict[Path, dict[str, str]]:
+        """Return each source's card metadata, for described documents.
+
+        Returns
+        -------
+        dict[pathlib.Path, dict[str, str]]
+            The metadata of every valid source card by source path (for a
+            source with several card kinds, their fields merged, the first
+            kind's value winning); empty without cards.
+
+        """
+
+        records = getattr(
+            getattr(self, "source_cards", None), "records", ()
+        )
+        merged: dict[Path, dict[str, str]] = {}
+        for record in records or ():
+            card = getattr(record.result, "card", None)
+            if card is None:
+                continue
+            fields = merged.setdefault(card.path, {})
+            for key, value in card.metadata:
+                fields.setdefault(key, value)
+        return merged
 
     def _source_passages(
         self: RAGSession,

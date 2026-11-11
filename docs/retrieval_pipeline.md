@@ -329,6 +329,18 @@ document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
 
+A document can also be described instead of named ("the 2017 paper", "the
+BRAPH 2 paper", "the earlier BRAPH framework"). `retrievals/
+source_descriptions.py` matches such a description against the source
+cards: a year against the card's year (or, when the card has none, the
+year an author-year file name starts with), and every other word against
+the card's title; "earlier" or "original" (and "later" or "newer") pick
+the oldest (or newest) of the papers that fit. A description resolves only
+when exactly one paper fits; a paper with no known year fits any year, so
+it keeps a year description ambiguous. A resolved description limits the
+search as a named file does; with "it" in the question ("compare it with
+the 2017 paper") the earlier turns' document is kept too.
+
 ## Four-channel source-first retrieval and evidence budgets
 
 `retrievals/strategies/retrieval_sources.py` ranks sources independently

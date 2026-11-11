@@ -256,6 +256,24 @@ class TestSourceFirstRAG(unittest.TestCase):
         )
         self.assertEqual(len({item.path for item in evidence}), 4)
 
+    def test_card_metadata_for_described_documents(self):
+        session = fixtures._session()
+        card = SimpleNamespace(
+            path=Path("a.pdf"),
+            metadata=(("title", "BRAPH: graph software"), ("year", "2017")),
+        )
+        session.source_cards = SimpleNamespace(records=(
+            SimpleNamespace(result=SimpleNamespace(card=card)),
+            SimpleNamespace(result=SimpleNamespace(card=None)),
+        ))
+        self.assertEqual(
+            session._card_metadata(),
+            {Path("a.pdf"): {"title": "BRAPH: graph software",
+                             "year": "2017"}},
+        )
+        session.source_cards = None
+        self.assertEqual(session._card_metadata(), {})
+
     def test_reject_invalid_source_first_requests(self):
         session = _session()
         for argument in ((0, False), (2, "no"), (True, False)):
