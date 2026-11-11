@@ -88,6 +88,23 @@ def check_installed_package() -> None:
         raise AssertionError("Installed wheel author metadata differs")
     if installed_version != manifest["version"]:
         raise AssertionError("Installed wheel version differs from source")
+    distribution = metadata.distribution("kilin")
+    licences = [
+        item for item in (distribution.files or ())
+        if item.parts[-2:] == ("licenses", "LICENSE")
+        and item.parts[0].endswith(".dist-info")
+    ]
+    if len(licences) != 1:
+        raise AssertionError("Wheel must include exactly one Apache LICENSE")
+    licence = Path(distribution.locate_file(licences[0]))
+    content = licence.read_text(encoding="utf-8")
+    if (
+        "Apache License" not in content
+        or "Version 2.0, January 2004" not in content
+        or "END OF TERMS AND CONDITIONS" not in content
+    ):
+        raise AssertionError("Installed LICENSE is missing or incomplete")
+
     if "PySide6" in sys.modules:
         raise AssertionError("Core imports must not load PySide6")
 
@@ -132,8 +149,12 @@ def check_installed_package() -> None:
             raise AssertionError(f"The app extra does not list {package_name}")
     from kilin.gui._paths import gui_install_command
 
-    if 'pip install "kilin[app]"' not in gui_install_command("mlx"):
-        raise AssertionError("An installed copy must suggest kilin[app]")
+    for backend in ("mlx", "torch"):
+        command = gui_install_command(backend)
+        if f"kilin[gui,{backend}]" not in command:
+            raise AssertionError(
+                f"Installed repair advice must target {backend}: {command}"
+            )
     print(f"Verified kilin {metadata.version('kilin')} wheel resources")
 
 

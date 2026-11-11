@@ -116,6 +116,7 @@ const document = {createElement() {return element();}};
 let requiredModels = [];
 let readinessEnvironmentReady = true;
 let installCommand = "";
+let installCommands = {};
 let readinessMissingCount = 0;
 let cachedModels = new Set();
 let kilinReady = true;
@@ -123,6 +124,8 @@ let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
 let acceptingTerms = false;
+let pendingTermsVersion = "";
+let acknowledgedTermsVersion = "";
 let confirmedBackendPreference = "mlx";
 const showSetupLock = () => {};
 const refreshModelStatus = () => {};
@@ -178,6 +181,7 @@ const document = {createElement() {return element();}};
 let requiredModels = [];
 let readinessEnvironmentReady = true;
 let installCommand = "";
+let installCommands = {};
 let readinessMissingCount = 0;
 let cachedModels = new Set();
 let kilinReady = true;
@@ -185,6 +189,8 @@ let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
 let acceptingTerms = false;
+let pendingTermsVersion = "";
+let acknowledgedTermsVersion = "";
 let confirmedBackendPreference = "mlx";
 const shownTerms = [];
 const showSetupLock = () => {};
@@ -197,6 +203,8 @@ let pointed = 0;
 const pointToProjectsFolder = () => { pointed += 1; };
 let welcomes = 0;
 const showWelcome = () => { welcomes += 1; };
+const setWelcomeError = () => {};
+const showSetupConfirmations = () => {};
 """ + handler + r"""
 const readiness = (fields) => onEvent(JSON.stringify({
   event: "readiness", backend: "mlx", ready: true,
@@ -220,11 +228,16 @@ assert.deepEqual(steps.slice(2), [
 assert.equal(byId("readiness-status").textContent, "2 missing");
 assert.equal(byId("readiness-summary").textContent,
   "Confirm the projects folder and accept the terms of use to finish setup.");
-// Accepting the terms in the dialog points to the folder next.
+// Readiness cannot acknowledge a pending Qt write.
 acceptingTerms = true;
+pendingTermsVersion = "v1";
+readiness({folder_confirmed: false, terms_accepted: true});
+assert.equal(acceptingTerms, true);
+assert.equal(pointed, 0);
+onEvent(JSON.stringify({event: "terms_acceptance_saved", version: "v1"}));
+assert.equal(acceptingTerms, false);
 readiness({folder_confirmed: false, terms_accepted: true});
 assert.equal(pointed, 1);
-assert.equal(acceptingTerms, false);
 readiness({folder_confirmed: true, terms_accepted: false});
 assert.equal(kilinReady, false);
 assert.equal(byId("readiness-summary").textContent,

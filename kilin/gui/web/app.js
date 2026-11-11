@@ -111,15 +111,19 @@ let activeReference = null;
 let installedBackends = {};
 let requiredModels = [];
 let readinessEnvironmentReady = false;
-// How to install the GUI and backend here: uv in a checkout, pip otherwise.
+// Repair commands from Python, one per backend and installation type.
 let installCommand = "";
+let installCommands = {};
 // KíLín setup also asks to confirm the projects folder and to agree to the
 // current terms of use (``termsVersion``), once each.
 let folderConfirmed = true;
 let termsAccepted = true;
 let termsVersion = "";
-// Continue was clicked; Qt is saving the agreement.
+// The in-flight terms version identifies the Qt acknowledgement to accept.
 let acceptingTerms = false;
+let pendingTermsVersion = "";
+// Retain a successful Qt write if an earlier readiness reply arrives late.
+let acknowledgedTermsVersion = "";
 // New-project readiness; saved projects use their own profiles.
 let kilinReady = true;
 // Required models still missing, and whether they are being downloaded.
@@ -1114,8 +1118,9 @@ function renderModelsPanel() {
   const installed = installedBackends[activeBackend];
   const mlx = activeBackend === "mlx";
   // Only a missing backend needs a note above the levels.
+  const repair = installCommands[activeBackend] || "the KíLín installer";
   byId("models-backend").textContent = installed ? ""
-    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${installCommand.replace(/--extra (mlx|torch)\b/, `--extra ${activeBackend}`) || "the KíLín installer"}, then restart KíLín.`;
+    : `${activeBackend.toUpperCase()} packages are not installed. Install them with ${repair}, then restart KíLín.`;
   byId("models-backend").classList.toggle("hidden", Boolean(installed));
 
   const chat = document.createElement("section");
@@ -1734,15 +1739,26 @@ function renderTerms(text) {
  */
 function showWelcome() {
   const dialog = byId("welcome");
-  byId("terms-agree").checked = termsAccepted;
+  // Do not erase a checked agreement after a failed save: retry is allowed.
+  if (termsAccepted) byId("terms-agree").checked = true;
   byId("terms-agree").closest("label").classList.toggle("hidden", termsAccepted);
-  byId("accept-terms").textContent = termsAccepted ? "Close" : "Continue";
   byId("welcome-hint").classList.add("hidden");
   showSetupConfirmations();
   if (dialog.open) return;
   dialog.showModal();
   // Opening focuses "Read the full terms of use"; the dialog takes it.
   dialog.focus?.();
+}
+
+/**
+ * Display a recoverable save error inside the non-dismissible terms dialog.
+ *
+ * @param message Message to display, or an empty string to clear it.
+ */
+function setWelcomeError(message) {
+  const host = byId("welcome-error");
+  host.textContent = message;
+  host.classList.toggle("hidden", !message);
 }
 
 /**
@@ -1768,8 +1784,11 @@ function showSetupConfirmations() {
   byId("confirm-workspace-note").classList.toggle("hidden", folderConfirmed);
   confirm.disabled = busy || ready || !bridge;
   confirm.title = ready ? "Confirm it from the start screen." : "";
-  // Continue needs the box ticked; Close (terms already accepted) does not.
-  byId("accept-terms").disabled = !termsAccepted
+  // Continue needs the box ticked; Close needs no additional confirmation.
+  const continueButton = byId("accept-terms");
+  continueButton.textContent = termsAccepted ? "Close"
+    : acceptingTerms ? "Saving agreement…" : "Continue";
+  continueButton.disabled = !termsAccepted
     && (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked);
 }
 
@@ -1783,6 +1802,7 @@ function showSetupLock() {
   install.textContent = installingModels ? "Stop downloading" : "Install required models";
   install.disabled = installingModels ? false : busy || !readinessEnvironmentReady || !readinessMissingCount;
   byId("use-installed").disabled = busy || !readinessEnvironmentReady;
+  byId("use-legacy-workspace").disabled = busy || ready;
   byId("open").disabled = busy || !bridge || !kilinReady;
   byId("close-models").disabled = false;
   byId("close-models").title = "";
@@ -5371,10 +5391,46 @@ function onEvent(raw) {
     error.textContent = data.message;
     error.classList.remove("hidden");
     byId("model-download-status").textContent = data.message;
+  } else if (data.event === "terms_acceptance_saved") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    if (data.version !== termsVersion) {
+      // The page now shows different terms than the version Qt saved.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      setWelcomeError("The terms have changed. Review and accept them again.");
+      bridge?.requestReadiness();
+    } else {
+      acknowledgedTermsVersion = data.version;
+      termsAccepted = true;
+      setWelcomeError("");
+      byId("welcome").close?.();
+    }
+    showSetupConfirmations();
+  } else if (data.event === "terms_acceptance_failed") {
+    if (!acceptingTerms || data.version !== pendingTermsVersion) return;
+    acceptingTerms = false;
+    pendingTermsVersion = "";
+    setWelcomeError(data.message || "Could not save the agreement. Try again.");
+    if (data.reason === "outdated_version") {
+      // Do not reuse a checkbox checked for terms that are no longer current.
+      termsAccepted = false;
+      acknowledgedTermsVersion = "";
+      termsVersion = "";
+      byId("terms-agree").checked = false;
+      bridge?.requestReadiness();
+    }
+    showSetupConfirmations();
   } else if (data.event === "readiness") {
     requiredModels = data.required_models || [];
     readinessEnvironmentReady = Boolean(data.environment_ready);
     installCommand = data.install_command || installCommand;
+    installCommands = data.install_commands || {
+      [data.backend]: installCommand,
+    };
     cachedModels = new Set(data.cached_models || []);
     const card = byId("first-run-setup");
     const steps = byId("readiness-steps");
@@ -5383,7 +5439,7 @@ function onEvent(raw) {
     runtime.textContent = data.environment_ready
       ? `${String(data.backend).toUpperCase()} runtime is ready`
       : data.unavailable_reason
-        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommand}, then restart KíLín`;
+        || `${String(data.backend).toUpperCase()} runtime is missing; install it with ${installCommands[data.backend] || "the KíLín installer"}, then restart KíLín`;
     runtime.classList.toggle("complete", data.environment_ready);
     steps.append(runtime);
     const replacements = data.replacements || {};
@@ -5400,10 +5456,22 @@ function onEvent(raw) {
       item.dataset.model = modelId;
       steps.append(item);
     }
-    // After the models: confirm the projects folder, then agree to the terms.
+    // A readiness reply can predate a Qt terms-write acknowledgement.
     folderConfirmed = Boolean(data.folder_confirmed);
-    termsAccepted = Boolean(data.terms_accepted);
-    termsVersion = data.terms_version || "";
+    const nextTermsVersion = data.terms_version || "";
+    if (termsVersion && termsVersion !== nextTermsVersion) {
+      byId("terms-agree").checked = false;
+    }
+    termsVersion = nextTermsVersion;
+    const savedReadiness = acknowledgedTermsVersion === termsVersion
+      && Boolean(acknowledgedTermsVersion);
+    const termsJustAccepted = savedReadiness && Boolean(data.terms_accepted);
+    if (termsJustAccepted || (acknowledgedTermsVersion && !savedReadiness)) {
+      acknowledgedTermsVersion = "";
+    }
+    if (!acceptingTerms) {
+      termsAccepted = Boolean(data.terms_accepted) || savedReadiness;
+    }
     const folderStep = document.createElement("li");
     folderStep.textContent = folderConfirmed
       ? `Projects folder: ${data.projects_folder}`
@@ -5417,12 +5485,9 @@ function onEvent(raw) {
     steps.append(folderStep, termsStep);
     renderTerms(data.terms || "");
     byId("copyright").textContent = data.copyright || "";
-    // Just accepted in the welcome dialog: the folder is the next step.
-    const termsJustAccepted = acceptingTerms && termsAccepted;
-    acceptingTerms = false;
-    // The terms come first: the welcome dialog stays until they are accepted.
+    // The terms dialog closes only on a confirmed write, not on readiness.
     if (!termsAccepted && termsVersion) showWelcome();
-    else if (termsAccepted && byId("accept-terms").textContent === "Continue") byId("welcome").close?.();
+    else if (termsAccepted && !acceptingTerms) byId("welcome").close?.();
     const setupReady = Boolean(data.ready) && folderConfirmed && termsAccepted;
     if (folderConfirmed && termsAccepted) clearSetupReminder();
     // Always available; it opens by itself when something is missing.
@@ -5805,6 +5870,10 @@ function onEvent(raw) {
     showSourceSync(data);
   } else if (data.event === "projects_folder") {
     showProjectsFolder(data);
+  } else if (data.event === "projects_folder_cancelled") {
+    finishProjectsFolderSwitch();
+  } else if (data.event === "projects_folder_failed") {
+    finishProjectsFolderSwitch(data.message);
   } else if (data.event === "sources_checked") {
     if (attachedAsk) return addAttachedSources(data);
     setBusy(false);
@@ -5981,6 +6050,9 @@ function onEvent(raw) {
 // UI handlers validate user input before issuing bridge commands.
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
+byId("use-legacy-workspace").addEventListener(
+  "click", useLegacyProjectsFolder,
+);
 byId("confirm-workspace").addEventListener("click", () => {
   if (!bridge || busy) return;
   if (ready) return changeProjectsFolder(false);
@@ -5996,11 +6068,13 @@ byId("terms-agree").addEventListener("change", () => {
 });
 byId("accept-terms").addEventListener("click", () => {
   if (termsAccepted) return byId("welcome").close();
-  if (!bridge || !termsVersion || !byId("terms-agree").checked) return;
-  // Qt saves the agreement; the next readiness check closes the dialog.
+  if (acceptingTerms || !bridge || !termsVersion || !byId("terms-agree").checked) return;
+  // Only the Qt write acknowledgement permits closing the dialog.
   acceptingTerms = true;
+  pendingTermsVersion = termsVersion;
+  setWelcomeError("");
   showSetupConfirmations();
-  bridge.acceptTerms(termsVersion);
+  bridge.acceptTerms(pendingTermsVersion);
 });
 // Escape cannot skip the terms before they are accepted. The browser may
 // close a dialog opened without a click despite a cancelled "cancel", so
@@ -6251,6 +6325,8 @@ function showProjectSettings() {
   // saved folder, Confirm projects folder confirms the one in use.
   byId("default-workspace").disabled = ready || !projectsFolderInfo?.saved
     || projectsFolderInfo.saved === projectsFolderInfo.standard;
+  byId("use-legacy-workspace").disabled = ready || busy;
+  byId("use-legacy-workspace").title = why;
   byId("browse-workspace").title = why;
   byId("default-workspace").title = why;
   // A note only when the chosen folder is missing.
@@ -6259,6 +6335,18 @@ function showProjectSettings() {
     ? `${projectsFolderInfo.saved} is not available, so KíLín uses the default folder.`
     : "";
   byId("workspace-note").classList.toggle("hidden", !missing);
+  const legacy = projectsFolderInfo?.legacy || "";
+  const canReuseLegacy = Boolean(
+    legacy && legacy !== projectsFolderInfo?.folder,
+  );
+  byId("legacy-workspace-choice").classList.toggle(
+    "hidden", !canReuseLegacy,
+  );
+  byId("legacy-workspace-note").textContent = canReuseLegacy
+    ? `Existing KíLín projects may be at ${legacy}. Use that folder to `
+      + "keep working with them, or confirm a different folder. "
+      + "No project files will be moved."
+    : "";
   showSetupConfirmations();
   // An open project keeps the backend it was made with.
   byId("backend").title = ready ? "Set when the project was created." : "";
@@ -6357,6 +6445,32 @@ function changeProjectsFolder(useDefault) {
   if (!useDefault) return bridge.chooseProjectsFolder();
   setBusy(true, "Switching to the default projects folder…");
   bridge.useDefaultProjectsFolder();
+}
+
+/**
+ * Reuse a previous installed-app projects directory without moving files.
+ *
+ * Qt rechecks the old folder before saving it as the user's choice.
+ */
+function useLegacyProjectsFolder() {
+  if (!bridge || busy || !projectsFolderInfo?.legacy) return;
+  if (ready) return changeProjectsFolder(false);
+  switchingProjectsFolder = true;
+  setBusy(true, "Opening the previous projects folder…");
+  bridge.useLegacyProjectsFolder();
+}
+
+/**
+ * Restore the start screen after a cancelled or failed folder selection.
+ *
+ * @param message Error text, or an empty string for a cancelled chooser.
+ */
+function finishProjectsFolderSwitch(message = "") {
+  if (switchingProjectsFolder) {
+    switchingProjectsFolder = false;
+    setBusy(false);
+  }
+  if (message) showError(message);
 }
 
 /**

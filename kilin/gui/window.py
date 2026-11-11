@@ -86,6 +86,7 @@ from PySide6.QtWidgets import QFileDialog, QMainWindow, QMenu, QWidget
 from kilin._project_creation import cleanup_stopped_creation
 from kilin.conversation_format import conversation_state
 from kilin.gui._paths import (
+    available_legacy_workspace_directory,
     default_workspace_directory,
     saved_workspace_folder,
     standard_workspace_directory,
@@ -172,6 +173,8 @@ class ChatBridge(QObject):
         Choose the folder where KíLín keeps its projects.
     useDefaultProjectsFolder()
         Choose the standard projects folder.
+    useLegacyProjectsFolder()
+        Reuse the previous installed-app folder, without moving projects.
     confirmProjectsFolder()
         Confirm the projects folder in use, as KíLín setup asks.
     acceptTerms(version)
@@ -416,6 +419,10 @@ class ChatBridge(QObject):
         )
         if path:
             self.projectsFolderChosen.emit(path)
+        else:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_cancelled",
+            }))
 
     @Slot()
     def useDefaultProjectsFolder(self) -> None:
@@ -432,10 +439,36 @@ class ChatBridge(QObject):
             folder = str(standard_workspace_directory())
         except ValueError as error:
             self.event.emit(
-                json.dumps({"event": "error", "message": str(error)})
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
             )
             return
         self.projectsFolderChosen.emit(folder)
+
+    @Slot()
+    def useLegacyProjectsFolder(self) -> None:
+        """Reuse an existing legacy projects folder, without moving data.
+
+        Notes
+        -----
+        Resolve and validate the candidate again when clicked; the folder
+        may have changed since the frontend received its suggestion.
+
+        """
+
+        folder = available_legacy_workspace_directory()
+        if folder is None:
+            self.event.emit(json.dumps({
+                "event": "projects_folder_failed",
+                "message": (
+                    "The previous projects folder is no longer available. "
+                    "Choose a folder with Browse instead."
+                ),
+            }))
+            return
+        self.projectsFolderChosen.emit(str(folder))
 
     @Slot()
     def confirmProjectsFolder(self) -> None:
@@ -445,7 +478,10 @@ class ChatBridge(QObject):
             folder = str(default_workspace_directory())
         except ValueError as error:
             self.event.emit(
-                json.dumps({"event": "error", "message": str(error)})
+                json.dumps({
+                    "event": "projects_folder_failed",
+                    "message": str(error),
+                })
             )
             return
         self.projectsFolderChosen.emit(folder)
@@ -458,25 +494,41 @@ class ChatBridge(QObject):
         ----------
         version: str
             Version of the terms the page showed. Only the current
-            ``TERMS_VERSION`` is saved; an outdated page is ignored.
+            ``TERMS_VERSION`` is saved; an outdated version is rejected.
 
         Notes
         -----
-        The version is saved in the app-wide preferences; readiness is
-        checked again after a successful write.
+        Qt acknowledges successful persistence before requesting readiness.
+        Failures are reported to the welcome dialog for user-controlled retry.
 
         """
 
         if version != TERMS_VERSION:
+            self.event.emit(json.dumps({
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "outdated_version",
+                "current_version": TERMS_VERSION,
+                "message": (
+                    "The terms of use have changed. Review the current "
+                    "version and accept it again."
+                ),
+            }))
             return
         try:
             write_defaults({"terms_accepted": version})
         except (OSError, ValueError) as error:
             self.event.emit(json.dumps({
-                "event": "error",
+                "event": "terms_acceptance_failed",
+                "version": version,
+                "reason": "save_failed",
                 "message": f"Could not save the agreement: {error}",
             }))
             return
+        self.event.emit(json.dumps({
+            "event": "terms_acceptance_saved",
+            "version": version,
+        }))
         self.commandRequested.emit({"action": "readiness"})
 
     @Slot()
@@ -485,10 +537,10 @@ class ChatBridge(QObject):
 
         Notes
         -----
-        Sends ``projects_folder`` with ``folder`` (in use), ``standard``
-        (used without a choice), ``saved`` (the choice, or ""), and
-        ``missing``: the saved folder is gone or not mounted, so the
-        standard one is used.
+        Sends ``projects_folder`` with the effective, standard, and saved
+        folders; ``missing`` reports an unavailable saved folder, while
+        ``legacy`` offers an existing old installed-app directory. No
+        project is moved or selected without user confirmation.
 
         """
 
@@ -501,6 +553,7 @@ class ChatBridge(QObject):
             )
             return
         saved = saved_workspace_folder()
+        legacy = available_legacy_workspace_directory()
         self.event.emit(
             json.dumps(
                 {
@@ -508,6 +561,7 @@ class ChatBridge(QObject):
                     "folder": folder,
                     "standard": standard,
                     "saved": saved,
+                    "legacy": str(legacy) if legacy else "",
                     "missing": bool(saved)
                     and not Path(saved).expanduser().is_dir(),
                 }
@@ -1720,7 +1774,7 @@ class ChatWindow(QMainWindow):
             self.bridge.event.emit(
                 json.dumps(
                     {
-                        "event": "error",
+                        "event": "projects_folder_failed",
                         "message": (
                             f"Could not save the projects folder: {error}"
                         ),
