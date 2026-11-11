@@ -54,8 +54,8 @@ subsequent session activation is a separate stage.
 The page receives validated `type_id` entries from the core registry, selects
 the first in filename order and keeps prompt-selection state for each type.
 Labels and welcome content come from the type definition, with generic
-source-independent fallbacks. Packaged `code` and `literature` definitions
-are examples, not a GUI allowlist.
+source-independent fallbacks. Packaged definitions are examples,
+not a GUI allowlist.
 
 The engine previews directories through the core scanner and individual files
 through the explicit-file path. The page uses `reason_code`, not display

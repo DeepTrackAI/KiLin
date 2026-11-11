@@ -37,12 +37,14 @@ from _si_article_.benchmarks.common import (  # noqa: E402
     open_or_initialize,
     verbatim_overlap_chars,
 )
-from kilin import PROJECT_TYPE_ID_CODE  # noqa: E402
 from kilin.project import (  # noqa: E402
     configure_project,
     prepare_project_workspace,
     synchronize_project_workspace,
 )
+
+# These fixtures intentionally benchmark the packaged code-repository type.
+CODE_BENCHMARK_TYPE = "code"
 
 GOLD_SETS = {
     "dogfood_kilin_code.json": 22,
@@ -255,7 +257,7 @@ class TestBenchmarkArtifacts(unittest.TestCase):
             (source / "large.py").write_text("x = 1\n" * 200_000)
             (source / "config.json").write_text('{"valid": true}\n')
             project = prepare_project_workspace(
-                source, PROJECT_TYPE_ID_CODE, base / "workspaces"
+                source, CODE_BENCHMARK_TYPE, base / "workspaces"
             )
             self.assertTrue((project.source / "config.json").is_file())
             self.assertFalse((project.source / "large.py").exists())
@@ -278,18 +280,18 @@ class TestOpenOrInitialize(unittest.TestCase):
     def test_creates_a_project_in_a_new_folder(self) -> None:
         with TemporaryDirectory() as folder:
             root = Path(folder) / "benchmark"
-            project = open_or_initialize(root, PROJECT_TYPE_ID_CODE)
+            project = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             self.assertTrue((root / "profile.ini").is_file())
             self.assertEqual(project.root.resolve(), root.resolve())
 
     def test_reopens_an_existing_project_with_its_settings(self) -> None:
         with TemporaryDirectory() as folder:
             root = Path(folder) / "benchmark"
-            project = open_or_initialize(root, PROJECT_TYPE_ID_CODE)
+            project = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             configure_project(project.root, {"extensions": ".py"})
             project.source.mkdir(parents=True, exist_ok=True)
             (project.source / "kept.py").write_text("value = 1\n")
-            reopened = open_or_initialize(root, PROJECT_TYPE_ID_CODE)
+            reopened = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             self.assertEqual(reopened.profile.extensions, (".py",))
             self.assertTrue((reopened.source / "kept.py").is_file())
 
@@ -298,7 +300,7 @@ class TestOpenOrInitialize(unittest.TestCase):
             root = Path(folder) / "benchmark"
             (root / "repository").mkdir(parents=True)
             (root / "repository" / "stale.py").write_text("value = 1\n")
-            project = open_or_initialize(root, PROJECT_TYPE_ID_CODE)
+            project = open_or_initialize(root, CODE_BENCHMARK_TYPE)
             self.assertTrue((root / "profile.ini").is_file())
             self.assertFalse((project.source / "stale.py").exists())
 

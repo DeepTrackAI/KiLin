@@ -317,7 +317,7 @@ def prepare_code_project(
             workspace.rename(retired)
     if project is None:
         project = kilin.prepare_project_workspace(
-            source, kilin.PROJECT_TYPE_ID_CODE, WORKSPACE_DIRECTORY
+            source, "code", WORKSPACE_DIRECTORY
         )
         if project.root != workspace:
             raise RuntimeError(

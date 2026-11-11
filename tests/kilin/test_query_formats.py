@@ -17,7 +17,7 @@ import unittest
 
 import kilin
 from kilin import query_formats
-from kilin.project_type import project_type
+from kilin.project_type import load_project_types, project_type
 from kilin.query_formats import format_qwen3_query
 
 
@@ -170,9 +170,9 @@ class TestQwen3QueryFormatting(unittest.TestCase):
                     format_qwen3_query("Where is the code?", instruction)
 
     def test_project_type_instructions_are_supported(self) -> None:
-        """Format retrieval instructions from both built-in project types."""
+        """Format retrieval instructions from all packaged project types."""
 
-        for type_id in ("code", "literature"):
+        for type_id in load_project_types():
             with self.subTest(type_id=type_id):
                 instruction = project_type(type_id).retrieval_instruction
                 query = format_qwen3_query("Where is the answer?", instruction)

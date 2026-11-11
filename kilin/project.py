@@ -43,10 +43,6 @@ Key Features
 Module Structure
 ----------------
 
-- ``PROJECT_TYPE_ID_CODE`` and ``PROJECT_TYPE_ID_LITERATURE``
-
-    String identifiers for the standard packaged project types.
-
 - ``PROJECT_TYPE_IDS``
 
     All packaged type IDs in deterministic filename order, not an enum.
@@ -109,7 +105,7 @@ Access submodule-only configuration helpers through their actual namespace:
 
 >>> import kilin.project
 >>> profile = kilin.project.default_project_profile(
-...     kilin.PROJECT_TYPE_ID_CODE
+...     kilin.PROJECT_TYPE_IDS[0]
 ... )
 
 """
@@ -176,8 +172,6 @@ from kilin.trace_logging import NullTraceLogger, TraceSink
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 
 __all__ = [
-    "PROJECT_TYPE_ID_CODE",
-    "PROJECT_TYPE_ID_LITERATURE",
     "PROJECT_TYPE_IDS",
     "ProjectTypeId",
     "ProjectProfile",
@@ -192,10 +186,6 @@ __all__ = [
     "configure_project",
     "delete_project",
 ]
-
-# Standard identifiers do not require their definitions to be installed.
-PROJECT_TYPE_ID_CODE: Final[ProjectTypeId] = "code"
-PROJECT_TYPE_ID_LITERATURE: Final[ProjectTypeId] = "literature"
 
 # Deleted projects are moved here, beside the projects themselves.
 DELETED_PROJECTS_FOLDER: Final[str] = ".deleted"

@@ -160,14 +160,15 @@ class TestProjectTypeIds(ProjectFixture):
     """Check the mapping from type definitions to project defaults."""
 
     def test_registry_identifiers_are_not_a_builtin_allowlist(self) -> None:
-        """Expose all configured types without requiring standard names."""
+        """Expose configured types without type-specific Python constants."""
 
         current = load_project_types()
         self.assertEqual(project.PROJECT_TYPE_IDS, tuple(current))
         self.assertTrue(project.PROJECT_TYPE_IDS)
         self.assertFalse(hasattr(project, "_check_built_in_kinds"))
-        self.assertEqual(project.PROJECT_TYPE_ID_CODE, "code")
-        self.assertEqual(project.PROJECT_TYPE_ID_LITERATURE, "literature")
+        self.assertFalse(
+            any(name.startswith("PROJECT_TYPE_ID_") for name in vars(project))
+        )
 
     def test_default_profiles_match_loaded_packaged_definitions(self) -> None:
         """File filters and size limits follow data, not hard-coded values."""
@@ -227,12 +228,12 @@ class TestProjectTypeIds(ProjectFixture):
 class TestProjectInitialization(ProjectFixture):
     """Exercise creating and reopening project profiles in actual folders."""
 
-    def test_initialize_both_types_without_modifying_source_files(
+    def test_initialize_all_types_without_modifying_source_files(
         self,
     ) -> None:
-        """Initialize each built-in type and preserve existing data."""
+        """Initialize every packaged type and preserve existing data."""
 
-        for type_id in ("code", "literature"):
+        for type_id in project.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 directory = self._folder(type_id)
                 original = self._write(
@@ -298,7 +299,7 @@ class TestProjectInitialization(ProjectFixture):
 
         original = self._folder("original")
         self._write(original, "notes.md", "text")
-        for type_id in ("code", "literature"):
+        for type_id in project.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 created = (
                     project.initialize_project(
@@ -415,7 +416,7 @@ class TestProjectProfileValidation(ProjectFixture):
     def test_default_template_round_trip(self) -> None:
         """Parse the canonical INI format without changing its contents."""
 
-        for type_id in ("code", "literature"):
+        for type_id in project.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 root = self._profile(f"roundtrip-{type_id}", type_id=type_id)
                 parsed = project.open_project(root)

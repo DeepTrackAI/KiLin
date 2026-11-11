@@ -109,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     backend = kilin.choose_backend(args.backend)
     from kilin.model_settings import default_router_model
     model = args.model or default_router_model(backend)
-    project = kilin.project_type(kilin.PROJECT_TYPE_ID_CODE)
+    project = kilin.project_type("code")
     print(f"Router model: {model} ({backend})")
     router = kilin.ChatSession(
         model,

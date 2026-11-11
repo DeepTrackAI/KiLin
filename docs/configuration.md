@@ -241,10 +241,13 @@ and [Trace recording](trace_recording.md).
 `ProjectTypeId` is an open string alias, not a closed enum. A validated
 `ProjectType` has an `id`; an individual `ProjectProfile` has a `type_id`.
 `kilin.PROJECT_TYPE_IDS` contains all packaged IDs in filename order.
-`PROJECT_TYPE_ID_CODE` and `PROJECT_TYPE_ID_LITERATURE` name the standard
-configurations without requiring their presence. Any nonempty collection
-of valid packaged definitions is supported. An unknown ID or an empty or
-invalid registry is an error. Definitions are cached: restart after edits.
+The JSON filename stem is the type ID: applications use the IDs returned
+by the registry, rather than one Python constant per packaged type. Any
+nonempty collection of valid packaged definitions is supported. An unknown
+ID or an empty or invalid registry is an error. Definitions are cached:
+restart after edits. Callers of the removed `PROJECT_TYPE_ID_CODE` and
+`PROJECT_TYPE_ID_LITERATURE` constants should use the corresponding `"code"`
+and `"literature"` identifiers, or query the registry for generic selection.
 
 The current representations are:
 
