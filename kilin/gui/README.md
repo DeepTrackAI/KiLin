@@ -86,6 +86,9 @@ records supplied with that answer.
 LaTeX maths (`$…$`, `\(…\)`, `$$…$$`, `\[…\]`) is drawn by the bundled
 KaTeX (`web/katex/`, MIT) as MathML, without fonts or network access;
 LaTeX it cannot read stays as text.
+Fenced `latex` blocks display source text with long lines wrapped, while
+preserving explicit line breaks and indentation. Other code blocks retain
+their horizontal scrolling behavior.
 Files attached to a message are first added to the project's sources and
 indexed, without the add dialog; the question then lists their `sources/`
 paths. The question shows them as chips that open the workspace tree there.
@@ -198,9 +201,10 @@ use link, under a copyright line built from the package authors.
 The initial setup blocks project interaction until terms acceptance and
 projects-folder confirmation succeed. After that, saved projects can be
 resumed without downloading new models; creating and answering in new
-projects still requires the configured models. Repeated creation from the
-same sources allocates
-independent numbered folders. An explicitly selected occupied destination is
+projects still requires the configured models. Changing the type selected
+for a new project does not filter or hide existing resumable projects.
+Repeated creation from the same sources allocates independent numbered
+folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
@@ -453,9 +457,8 @@ silently reset. Updates use atomic replacement, and no package files are
 modified. When working from a source checkout, edits made directly to the
 shipped `defaults.json` remain readable as checkout defaults but are not
 copied into the user-preferences file. Before reinstalling an earlier KíLín
-version with edited installed defaults, manually preserve those edits:
-automatic migration from previously mutable package resources is not part
-of this PR.
+version with edited installed defaults, manually preserve those edits.
+KíLín does not automatically migrate edits to installed package resources.
 
 **Generation defaults** for new projects remain core-owned in
 `kilin/kilin_defaults.json` (`PROJECT_PROFILE`): `thinking=true`,
@@ -517,9 +520,12 @@ See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking
 ## Conversations, references, and progress
 
 New chat creates a separate conversation record while retaining earlier
-conversations in the picker. It does not archive and delete the previous GUI
-conversation. Branch copies resumable parent state and records parent and
-checkpoint identifiers; it does not copy the entire parent event history.
+conversations in the picker; it does not archive or delete the previous GUI
+conversation. The chat producing an answer is italicized with a spinner in
+the left panel, even while another chat is being read. The indicator clears
+on completion, cancellation, or failure and is not saved. Branch copies
+resumable parent state and records parent and checkpoint identifiers; it
+does not copy the entire parent event history.
 Renaming a conversation updates display metadata. The chat heading and the
 floating top bar show only the open chat's name and turn count. The left
 panel lists projects; right-click the open project to rename it, and its
@@ -544,17 +550,20 @@ the original lock companion is reused. See
 [conversation-file ownership](../../docs/conversation_ownership.md) for the
 error and recovery contract.
 
-Select an answer to inspect its evidence. A citation requests a preview of
-that evidence's source location through the bridge. Reference responses are
-matched to the currently selected turn and citation before being displayed,
-so a late response does not overwrite a newer selection.
+Clicking an answer selects its evidence when the side panels are visible;
+selecting text does not change the current reference. Ordinary answer clicks
+do not open hidden panels. Clicking a citation opens the panels and requests
+a preview of the cited source through the bridge. Pressing Enter or Space on
+a focused answer also explicitly opens its references. Reference responses
+are matched to the currently selected turn and citation before being
+displayed, so a late response does not overwrite a newer selection.
 
 The interface displays backend phases as they happen: loading a model,
 identifying intent, retrieving or reusing references, and reading the
 references before the first word streams. Reading time grows with the
 references and the selected history; earlier turns enter as question and
-answer text only. Each label
-stays at least 0.6 seconds and a newer phase replaces queued ones, so the
+answer text only. Each queued label
+is displayed briefly (currently 450 ms), and later stages follow it, so the
 display is at most one short step behind. A timer runs from Ask.
 
 Answers stream as they are generated: the engine forwards text a few times
@@ -586,12 +595,16 @@ questions rather than model-written text.
 
 The selected intent determines the history (question and answer text only,
 never earlier evidence) and retrieval mode (search, reuse earlier
-references, or none). A shimmering line under the pending answer shows
-the phases that apply: intent identification, included conversation
-history, retrieval, and reading references before generation. A finished
-answer shows "Took Ns"; expanding it lists the actual steps and measured
-durations. The selected router model also writes chat titles without
-switching the answering model.
+references, or none). The core reports an ordered activity stream with
+intent identification, history decisions, retrieval (including skipped
+work), tool progress, and generation. The pending answer shows these same
+labels in an expandable live list, including events that describe skipped
+operations; the GUI does not filter them. A finished answer shows "Took Ns";
+expanding it lists the identical core-recorded activities with measured
+durations. The GUI estimates the times of in-flight activities; completed
+timings are stored with each turn and appear for notebook-generated answers
+as well. Enabled traces also record each activity start. The selected
+router model writes chat titles without switching the answering model.
 
 Stop terminates the engine and starts a fresh backend process. Loaded models
 and unsaved work are lost; previously completed writes remain on disk. Reopen

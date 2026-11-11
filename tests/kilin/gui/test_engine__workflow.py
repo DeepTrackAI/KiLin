@@ -70,6 +70,7 @@ class TestEngineWorkflow(unittest.TestCase):
             question,
             token_callback=ANY,
             phase_callback=ANY,
+            activity_callback=ANY,
             pdf_writer=ANY,
             stop_requested=ANY,
             **options,
@@ -77,6 +78,7 @@ class TestEngineWorkflow(unittest.TestCase):
         options = session.ask.call_args.kwargs
         self.assertTrue(callable(options["token_callback"]))
         self.assertTrue(callable(options["phase_callback"]))
+        self.assertTrue(callable(options["activity_callback"]))
 
     @patch("kilin.gui.engine.download_model")
     def test_download_accepts_explicit_catalog_and_custom_models(
@@ -142,6 +144,12 @@ class TestEngineWorkflow(unittest.TestCase):
         )
         self.assertEqual(answered["turn"]["answer"], "New answer")
         self.assertEqual(events[-1]["event"], "reset")
+        activity = {
+            "index": 0, "phase": "routing",
+            "label": "Identifying intent", "started_ms": 0,
+        }
+        session.ask.call_args.kwargs["activity_callback"](activity)
+        self.assertEqual(events[-1], {"event": "answer_activity", **activity})
 
     @patch("kilin.gui.engine.RAGSession")
     @patch("kilin.gui.engine.prepare_sources_workspace")

@@ -515,6 +515,7 @@ class TestRAGAnswerValidation(unittest.TestCase):
             {"retrieval_count": 1.5},
             {"confirm_callback": "yes"},
             {"phase_callback": "yes"},
+            {"activity_callback": "yes"},
             {"retrieval_query": " "},
             {"retrieval_query": 10},
             {"reuse_evidence": 1},

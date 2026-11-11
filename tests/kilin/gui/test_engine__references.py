@@ -1,4 +1,4 @@
-"""Preserve saved evidence previews and answer timelines in the GUI.
+"""Preserve evidence previews and core-owned timelines in the GUI.
 
 Tests use lightweight event and turn objects, without Qt or models.
 
@@ -11,15 +11,16 @@ Tests use lightweight event and turn objects, without Qt or models.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
 
 from kilin.gui.engine import (
     ChatEngine, _reference_context, _turn_payloads
 )
-from kilin.rag import Evidence
+from kilin.answer_timeline import AnswerTimeline, AnswerTimelineStep
+from kilin.rag import ConversationTurn, Evidence
 
 
 class TestReferencePreview(unittest.TestCase):
@@ -105,49 +106,48 @@ class TestReferencePreview(unittest.TestCase):
 
 
 class TestAnswerTimelines(unittest.TestCase):
-    """A resumed chat shows how long each answer took, as it did live."""
+    """Receive recorded core timelines without GUI-side persistence."""
 
     def test_saved_timelines_return_with_their_turns(self) -> None:
-        """Restore valid timing data from the persisted turn timeline."""
+        """Serialize the timeline already attached to each completed turn."""
         with TemporaryDirectory() as folder:
             root = Path(folder)
-            engine = ChatEngine(root, lambda event: None)
-            first = SimpleNamespace(timestamp="2026-10-07T10:00:00+00:00")
-            second = SimpleNamespace(timestamp="2026-10-07T10:05:00+00:00")
-            engine.session = SimpleNamespace(
-                project=SimpleNamespace(root=root), turns=[first, second]
+            timeline = AnswerTimeline(4200, (
+                AnswerTimelineStep("routing", "Identifying intent", 1200),
+                AnswerTimelineStep("generating", "Generating answer", 3000),
+            ))
+            first = ConversationTurn(
+                "2026-10-07T10:00:00+00:00", "First?", "Yes.",
+                (), {"usage": {"input_tokens": 1, "output_tokens": 2}},
+                timeline,
             )
-            timeline = {
+            second = ConversationTurn(
+                "2026-10-07T10:05:00+00:00", "Second?", "No.",
+                (), {}, None,
+            )
+            payloads = json.loads(json.dumps(_turn_payloads([
+                first, second,
+            ])))
+            self.assertEqual(payloads[0]["timeline"], {
                 "elapsed_ms": 4200,
-                "steps": [{"label": "Identifying intent", "ms": 1200}],
-            }
-            engine.save_answer_timeline(first.timestamp, timeline)
-            # A malformed timeline from the page is ignored.
-            engine.save_answer_timeline(second.timestamp, {"steps": "x"})
-
-            with patch(
-                "kilin.gui.engine.asdict",
-                side_effect=lambda turn: {"timestamp": turn.timestamp},
-            ):
-                payloads = _turn_payloads([first, second], root)
-
-            self.assertEqual(payloads[0]["timeline"], timeline)
-            self.assertNotIn("timeline", payloads[1])
-            self.assertTrue((root / "logs" / "answer_timelines.json").exists())
-
-    def test_without_saved_timelines_turns_are_unchanged(self) -> None:
-        """Leave turn payloads unchanged when no timeline exists."""
-        with TemporaryDirectory() as folder:
-            engine = ChatEngine(Path(folder), lambda event: None)
-            engine.session = SimpleNamespace(
-                project=SimpleNamespace(root=Path(folder)), turns=[]
+                "steps": [
+                    {"phase": "routing", "label": "Identifying intent",
+                     "ms": 1200},
+                    {"phase": "generating", "label": "Generating answer",
+                     "ms": 3000},
+                ],
+            })
+            self.assertEqual(payloads[0]["question"], "First?")
+            self.assertEqual(payloads[0]["parameters"], first.parameters)
+            self.assertIsNone(payloads[1]["timeline"])
+            self.assertFalse(
+                (root / "logs" / "answer_timelines.json").exists()
             )
-            turn = SimpleNamespace(timestamp="t")
-            with patch(
-                "kilin.gui.engine.asdict",
-                side_effect=lambda turn: {"timestamp": turn.timestamp},
-            ):
-                self.assertEqual(
-                    _turn_payloads([turn], Path(folder)),
-                    [{"timestamp": "t"}],
-                )
+
+    def test_without_timing_turns_keep_other_fields(self) -> None:
+        """Preserve a valid answer lacking timing with a null timeline."""
+        turn = ConversationTurn("t", "Q", "A", (), {"x": 1})
+        self.assertEqual(_turn_payloads([turn]), [{
+            "timestamp": "t", "question": "Q", "answer": "A",
+            "evidence": (), "parameters": {"x": 1}, "timeline": None,
+        }])

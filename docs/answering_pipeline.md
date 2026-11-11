@@ -25,7 +25,8 @@ profile before opening and ensure models are cached.
 conversation path and project/index state. `ChatSession` separately owns the
 loaded answering model and in-memory formatted messages; the router may
 share that session or be a separate loaded chat model. The optional GUI
-adapts callbacks and persists presentation-only metadata. A `ToolContext`
+adapts callbacks and displays core-owned timelines without maintaining a
+separate record. A `ToolContext`
 provides scoped operations for registered built-in tools, not arbitrary
 filesystem or Python execution.
 
@@ -51,7 +52,7 @@ ask(question, options)
    |     `-- ChatSession.reply() with history + evidence prompt
    +-- validate completion or retain an explicitly incomplete result
    +-- deterministic citation-ID check; collect token usage
-   +-- form ConversationTurn + compact representation
+   +-- freeze core activity timeline; form ConversationTurn + representation
    +-- persist checkpoint; append committed turn
    `-- notify completed phase (observer)
 ```
@@ -64,6 +65,55 @@ for event wire fields and the distinction between backend and frontend
 operation states. A callback's failure **before** commitment can abort the
 turn; a failure in the final completed notification is traced but should not
 recast a successfully committed answer as a failed generation.
+
+### Core answer timelines
+
+`RAGSession.ask()` is the single owner of answer activities. It converts
+existing phase notifications into an ordered stream of activity starts,
+including intent and conversation-history decisions, retrieval results,
+skipped retrieval, detailed tool messages, and generation transitions. It
+reports each start through the optional `activity_callback` with an index,
+phase, label, and monotonic start offset (`started_ms`). The GUI uses these
+labels unchanged; it never derives, suppresses, or renames timeline entries.
+Repeated notifications for an activity already in progress update that
+activity rather than creating artificial duplicate starts.
+
+When diagnostic tracing is enabled, those same activity starts appear as
+`answer.activity` events, with the identical fields and order.
+Tracing is optional: each committed `ConversationTurn.timeline` still stores
+an `AnswerTimeline` with `elapsed_ms` and ordered `AnswerTimelineStep`
+records (`phase`, `label`, `ms`). The record contains the same activities
+reported live and traced, with each span measured by the core monotonic
+clock. Durations are non-overlapping and add to the recorded total. This
+recording requires neither GUI callbacks nor diagnostic tracing.
+
+The duration measures `ask()` up to the conversation checkpoint. It includes
+routing, history selection, retrieval, model or tool execution, and time
+waiting for tool confirmation. The `saving` activity begins before the
+checkpoint and is retained, but the disk write is excluded from timing.
+The post-commit `completed` phase is a status notification, not an activity
+in the already-committed turn. Model loading before `ask()` and GUI rendering
+are outside the core timeline. No extra model inference or conversation
+checkpoint writes are introduced; optional traces receive additional
+activity events, with bounded refresh frequency.
+
+For example, notebook code can inspect the committed timeline directly:
+
+```python
+answer = session.ask("How is the lexical index built?")
+timeline = session.turns[-1].timeline
+if timeline is not None:
+    print(f"Answer processing: {timeline.elapsed_ms} ms")
+    for step in timeline.steps:
+        print(step.phase, step.label, step.ms)
+```
+
+The timeline is part of the turn in the authoritative checkpoint and follows
+that turn when a conversation is branched. An interrupted or uncommitted
+answer has no saved timeline. Turns without a timeline remain readable,
+but have no recorded activity breakdown. The GUI reads timelines directly
+from saved turns and does not maintain a separate timing file or attempt
+to reconstruct missing activity data.
 
 ## Intent routing and fallback
 

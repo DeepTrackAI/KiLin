@@ -157,6 +157,7 @@ __all__ = [
     "FAILURE_POLICY_RAISE",
     "FAILURE_POLICY_WARN",
     "FailurePolicy",
+    "TRACE_EVENT_ANSWER_ACTIVITY",
     "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
     "TRACE_EVENT_LLM_CALL_INPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT",
@@ -180,6 +181,7 @@ FAILURE_POLICY_CHOICES: Final[tuple[FailurePolicy, ...]] = (
     FAILURE_POLICY_RAISE,
 )
 
+TRACE_EVENT_ANSWER_ACTIVITY: Final[str] = "answer.activity"
 TRACE_EVENT_EMBEDDING_TOKENS_PREPARED: Final[str] = (
     "embedding.tokens.prepared"
 )
@@ -617,8 +619,8 @@ class TraceLogger:
         -----
         Closed or failed loggers return before validation. Enabled tracing
         retains all supplied event types, including token diagnostics. Event
-        sequencing is serialized within this logger. Progress-only rewrites
-        can be throttled; other events trigger an output refresh. Arbitrary
+        sequencing is serialized within this logger. Progress and activity
+        updates can be throttled; other events trigger a refresh. Arbitrary
         payload content is not automatically redacted.
 
         """
@@ -1058,8 +1060,9 @@ class TraceLogger:
 
         Notes
         -----
-        Progress updates rewrite at most once per configured interval in this
-        method; other events rewrite immediately. OSError is passed to
+        Progress updates and answer-activity starts share one bounded
+        rewrite interval; other events rewrite immediately. The checkpoint
+        flushes all queued events. OSError is passed to
         _handle_io_failure. The event remains in memory when writing fails.
 
         """
@@ -1069,7 +1072,10 @@ class TraceLogger:
             now = perf_counter()
             event_type = str(event["event_type"])
             if (
-                event_type != TRACE_EVENT_PROGRESS_UPDATED
+                event_type not in (
+                    TRACE_EVENT_PROGRESS_UPDATED,
+                    TRACE_EVENT_ANSWER_ACTIVITY,
+                )
                 or now - self._last_readable_write >= 0.5
             ):
                 self._write_readable_trace()

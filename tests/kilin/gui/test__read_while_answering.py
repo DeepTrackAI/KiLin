@@ -60,11 +60,18 @@ class TestSavedConversationTurns(unittest.TestCase):
         (traces / name).write_text(json.dumps(payload), encoding="utf-8")
 
     def test_turns_of_the_requested_chat_with_their_timing(self):
-        """Find the chat by ID and add saved timings by timestamp."""
+        """Keep each timeline stored within the matching saved turn."""
 
         with TemporaryDirectory() as temporary:
             root = Path(temporary)
-            first = {"timestamp": "t1", "question": "Q1", "answer": "A1"}
+            timing = {"elapsed_ms": 1200, "steps": [{
+                "phase": "generating", "label": "Generating answer",
+                "ms": 1200,
+            }]}
+            first = {
+                "timestamp": "t1", "question": "Q1", "answer": "A1",
+                "timeline": timing,
+            }
             second = {"timestamp": "t2", "question": "Q2", "answer": "A2"}
             self._save(root, "conversation_1.json", {
                 "conversation_id": "other", "turns": [second],
@@ -72,12 +79,11 @@ class TestSavedConversationTurns(unittest.TestCase):
             self._save(root, "conversation_2.json", {
                 "conversation_id": "wanted", "turns": [first],
             })
-            timing = {"elapsed_ms": 1200, "steps": []}
-            (root / "logs" / "answer_timelines.json").write_text(
-                json.dumps({"t1": timing}), encoding="utf-8"
-            )
             turns = self.read(root, "wanted")
-        self.assertEqual(turns, [{**first, "timeline": timing}])
+            self.assertFalse(
+                (root / "logs" / "answer_timelines.json").exists()
+            )
+        self.assertEqual(turns, [first])
 
     def test_missing_or_unreadable_chats_give_none(self):
         """An unknown ID or a broken file is not shown as an empty chat."""

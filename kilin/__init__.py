@@ -54,6 +54,7 @@ except _PackageNotFoundError:
         __version__ = _tomllib.load(_stream)["project"]["version"]
 
 from .chat import ASSISTANT_ROLE, SYSTEM_ROLE, USER_ROLE, ChatSession
+from .answer_timeline import AnswerTimeline, AnswerTimelineStep
 from .chunking import Chunk, chunk_source_units
 from .embeddings import EmbeddingSession
 from .model_defaults import (
@@ -232,6 +233,7 @@ from .trace_logging import (
     FAILURE_POLICY_CHOICES,
     FAILURE_POLICY_RAISE,
     FAILURE_POLICY_WARN,
+    TRACE_EVENT_ANSWER_ACTIVITY,
     TRACE_EVENT_EMBEDDING_TOKENS_PREPARED,
     TRACE_EVENT_LLM_CALL_INPUT,
     TRACE_EVENT_LLM_CALL_OUTPUT,
@@ -274,6 +276,8 @@ __all__ = [
     "ANSWER_PHASE_SAVING",
     "ASSISTANT_ROLE",
     "AnswerPhase",
+    "AnswerTimeline",
+    "AnswerTimelineStep",
     "BACKEND_AUTO",
     "BACKEND_CHOICES",
     "BACKEND_MLX",
@@ -328,6 +332,7 @@ __all__ = [
     "SemanticResult",
     "SourceFile",
     "SourceUnit",
+    "TRACE_EVENT_ANSWER_ACTIVITY",
     "TRACE_EVENT_EMBEDDING_TOKENS_PREPARED",
     "TRACE_EVENT_LLM_CALL_INPUT",
     "TRACE_EVENT_LLM_CALL_OUTPUT",

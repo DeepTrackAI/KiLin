@@ -423,8 +423,10 @@ class TestRAGAnswerOrchestration(unittest.TestCase):
                          {"name": "tool"})
         self.assertEqual(session.turns[-1].evidence, (_evidence(),))
         tokens.assert_called_once_with("tool answer")
-        self.assertEqual(mocks.run.call_args.kwargs["token_callback"],
-                         tokens)
+        forwarded = mocks.run.call_args.kwargs["token_callback"]
+        self.assertTrue(callable(forwarded))
+        # A wrapper observes the first emitted output without altering it.
+        self.assertIsNot(forwarded, tokens)
 
     def test_tool_that_streamed_does_not_repeat_answer(self) -> None:
         """Avoid replaying an answer already streamed by the tool."""

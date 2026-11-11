@@ -25,6 +25,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/__init__.py`](../kilin/__init__.py) | Expose the package-level KíLín API. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
 | [`kilin/_model_completion.py`](../kilin/_model_completion.py) | Validate completed model replies and diagnose incomplete output. | [Answering pipeline](answering_pipeline.md) | [Completion tests](../tests/kilin/test__model_completion.py) |
 | [`kilin/_project_creation.py`](../kilin/_project_creation.py) | Reserve empty destinations and allocate independent projects exclusively. | [Project workspaces](project_workspaces.md) | [Creation tests](../tests/kilin/test_project__creation.py) |
+| [`kilin/answer_timeline.py`](../kilin/answer_timeline.py) | Record lightweight, persistent timing for an answered conversation turn. | [Answering pipeline](answering_pipeline.md) | [Timeline tests](../tests/kilin/test_answer_timeline.py) |
 | [`kilin/answering.py`](../kilin/answering.py) | Route questions by intent and select conversation history. | [Answering pipeline](answering_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/atomic_writes.py`](../kilin/atomic_writes.py) | Replace or exclusively publish text files atomically. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/chat.py`](../kilin/chat.py) | Manage one loaded language model and its in-memory conversation. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
@@ -170,7 +171,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 
 | Owner | Modules |
 | --- | ---: |
-| Answering pipeline | 3 |
+| Answering pipeline | 4 |
 | Architecture | 2 |
 | Configuration | 4 |
 | Conversation ownership | 4 |
@@ -184,7 +185,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 143.**
+**Total production Python modules: 144.**
 
 ## Non-Python resources and UI assets
 
