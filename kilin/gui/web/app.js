@@ -247,11 +247,6 @@ function updateFloatingHeader() {
 }
 
 /**
- * Hide and clear the previously offered saved-project shortcut.
- */
-function hideResume() { byId("saved-projects").classList.add("hidden"); }
-
-/**
  * Ask the engine for a saved project only on an idle setup screen.
  */
 function refreshSavedProject() {
@@ -327,7 +322,10 @@ function renderSavedProjects(projects) {
   const shown = JSON.stringify(projects.map((project) => [
     project.project, project.name, projectTypes[project.type_id]?.label || project.type_id,
   ]));
-  if (host.dataset.shown === shown) return;
+  if (host.dataset.shown === shown) {
+    host.classList.toggle("hidden", !host.children.length);
+    return;
+  }
   host.dataset.shown = shown;
   const scroll = host.querySelector(".saved-project-list")?.scrollTop || 0;
   host.replaceChildren();
@@ -6778,7 +6776,6 @@ for (const id of ["temperature", "max-new-tokens"]) {
   byId(id).addEventListener("change", saveAnswerNumbers);
 }
 byId("type-id").addEventListener("change", () => {
-  hideResume();
   bridge?.requestSettings(byId("type-id").value, "");
   refreshSavedProject();
 });

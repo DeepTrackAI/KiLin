@@ -201,9 +201,10 @@ use link, under a copyright line built from the package authors.
 The initial setup blocks project interaction until terms acceptance and
 projects-folder confirmation succeed. After that, saved projects can be
 resumed without downloading new models; creating and answering in new
-projects still requires the configured models. Repeated creation from the
-same sources allocates
-independent numbered folders. An explicitly selected occupied destination is
+projects still requires the configured models. Changing the type selected
+for a new project does not filter or hide existing resumable projects.
+Repeated creation from the same sources allocates independent numbered
+folders. An explicitly selected occupied destination is
 never reused: the interface offers to resume an existing project separately,
 without importing pending sources or applying new-project settings, or lets
 you choose another destination. The current session stays open on conflicts.
