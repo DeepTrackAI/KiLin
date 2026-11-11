@@ -52,10 +52,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 3,
-        "passages_per_source": 2,
-        "max_passages": 8,
-        "evidence_tokens": 5000,
+        "max_sources": 6,
+        "passages_per_source": 3,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
@@ -73,10 +73,10 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 4,
-        "passages_per_source": 2,
-        "max_passages": 10,
-        "evidence_tokens": 6000,
+        "max_sources": 8,
+        "passages_per_source": 3,
+        "max_passages": 20,
+        "evidence_tokens": 12000,
         "coverage": "bounded",
         "include_related_evidence": true
       }
