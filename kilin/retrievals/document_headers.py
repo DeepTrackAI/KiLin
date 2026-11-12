@@ -180,8 +180,8 @@ def document_info(
     -------
     DocumentInfo
         The PDF metadata title and first author when plausible; the first
-        ``#`` heading of a Markdown file; otherwise the file name without
-        its suffix and no author.
+        ``#`` heading of a Markdown or Word file; otherwise the file name
+        without its suffix and no author.
 
     Notes
     -----
@@ -194,7 +194,7 @@ def document_info(
     author: str | None = None
     if path.suffix.lower() == ".pdf":
         title, author = _pdf_metadata(source / path)
-    elif path.suffix.lower() == ".md":
+    elif path.suffix.lower() in {".md", ".doc", ".docx"}:
         for chunk in chunks:
             match = _MARKDOWN_TITLE.search(chunk.text)
             if match is not None:
