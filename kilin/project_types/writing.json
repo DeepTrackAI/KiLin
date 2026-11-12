@@ -5,11 +5,12 @@
     ".pdf",
     ".md",
     ".txt",
-    ".py"
+    ".py",
+    ".ipynb"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to research or verify a manuscript claim.",
-  "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it.",
+  "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it. Avoid long lists and negative parallelism as much as possible.",
   "answer_guidance": "For drafting or editing, provide the requested text without an unnecessary preamble. For research or verification, give a clear evidence-based answer; respect any requested length or format.",
   "capabilities": {
     "code_graph": "auto",
