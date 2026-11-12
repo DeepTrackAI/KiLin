@@ -193,7 +193,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | --- | --- |
 | [`kilin/kilin_defaults.json`](../kilin/kilin_defaults.json) | Validated, packaged core settings | [Package defaults](package_defaults.md) |
 | [`kilin/repository_reason_codes.json`](../kilin/repository_reason_codes.json) | Shared scanner/GUI reason-code vocabulary | [Source pipeline](source_pipeline.md), [GUI protocol](gui_protocol.md) |
-| [`kilin/project_types/`](../kilin/project_types/) | Built-in `code`/`literature` type definitions | [Configuration](configuration.md), [Extension interfaces](extension_interfaces.md) |
+| [`kilin/project_types/`](../kilin/project_types/) | Validated packaged project type definitions | [Configuration](configuration.md), [Extension interfaces](extension_interfaces.md) |
 | [`kilin/gui/defaults.json`](../kilin/gui/defaults.json) | Immutable GUI initial settings | [Configuration](configuration.md), [GUI README](../kilin/gui/README.md) |
 | [`kilin/gui/web/`](../kilin/gui/web/) | HTML layout, styling and JavaScript state/events | [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/gui/icons/`](../kilin/gui/icons/) | Packaged native GUI icon assets | [GUI architecture](gui_architecture.md) |

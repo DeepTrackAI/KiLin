@@ -38,13 +38,12 @@ class TestProjectTypeContract(unittest.TestCase):
     """Keep identifiers, profile fields, and metadata unambiguous."""
 
     def test_public_names_and_dataclass_fields(self) -> None:
-        """Expose canonical identifiers without old Python API aliases."""
+        """Use registry IDs without per-type Python exports or old aliases."""
 
         for owner in (kilin, project):
             self.assertIs(owner.ProjectTypeId, str)
             for name in (
-                "ProjectTypeId", "PROJECT_TYPE_ID_CODE",
-                "PROJECT_TYPE_ID_LITERATURE", "PROJECT_TYPE_IDS",
+                "ProjectTypeId", "PROJECT_TYPE_IDS",
             ):
                 self.assertIn(name, owner.__all__)
             for old in (
@@ -53,6 +52,18 @@ class TestProjectTypeContract(unittest.TestCase):
             ):
                 self.assertFalse(hasattr(owner, old))
                 self.assertNotIn(old, owner.__all__)
+            self.assertFalse(
+                any(
+                    name.startswith("PROJECT_TYPE_ID_")
+                    for name in vars(owner)
+                )
+            )
+            self.assertFalse(
+                any(
+                    name.startswith("PROJECT_TYPE_ID_")
+                    for name in owner.__all__
+                )
+            )
         self.assertEqual(kilin.PROJECT_TYPE_IDS, tuple(load_project_types()))
         self.assertIn("id", {field.name for field in fields(ProjectType)})
         self.assertNotIn("kind", {field.name for field in fields(ProjectType)})
@@ -138,7 +149,9 @@ from kilin.rag import RAGSession
 from kilin.runtime import BACKEND_TORCH
 
 assert kilin.PROJECT_TYPE_IDS == ("alpha", "zeta")
-assert kilin.PROJECT_TYPE_ID_CODE == "code"
+assert not any(
+    name.startswith("PROJECT_TYPE_ID_") for name in vars(kilin)
+)
 for absent in ("code", "literature", "missing"):
     try:
         kilin.project_type(absent)

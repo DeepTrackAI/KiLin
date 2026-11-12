@@ -33,8 +33,8 @@ not export every public object from every submodule.
 Examples
 --------
 >>> import kilin
->>> kilin.PROJECT_TYPE_ID_CODE
-'code'
+>>> isinstance(kilin.PROJECT_TYPE_IDS, tuple)
+True
 
 """
 
@@ -94,8 +94,6 @@ from .query_formats import (
 )
 from .project import (
     PROJECT_TYPE_IDS,
-    PROJECT_TYPE_ID_CODE,
-    PROJECT_TYPE_ID_LITERATURE,
     ProjectTypeId,
     ProjectProfile,
     QAProject,
@@ -313,8 +311,6 @@ __all__ = [
     "LexicalResult",
     "PersistentIndexes",
     "PROJECT_TYPE_IDS",
-    "PROJECT_TYPE_ID_CODE",
-    "PROJECT_TYPE_ID_LITERATURE",
     "ProjectTypeId",
     "QUERY_FORMAT_CHOICES",
     "QUERY_FORMAT_PLAIN",

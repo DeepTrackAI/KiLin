@@ -1,0 +1,101 @@
+{
+  "display_name": "Scientific writing",
+  "description": "A scientific writing workspace for drafting, revising, researching, and checking manuscript text.",
+  "extensions": [
+    ".pdf",
+    ".md",
+    ".txt",
+    ".py",
+    ".ipynb"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to research or verify a manuscript claim.",
+  "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it. Avoid long lists and negative parallelism as much as possible.",
+  "answer_guidance": "For drafting or editing, provide the requested text without an unnecessary preamble. For research or verification, give a clear evidence-based answer; respect any requested length or format.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 4
+  },
+  "default_intent": "writing",
+  "intents": {
+    "writing": {
+      "description": "Draft, outline, rewrite, edit, polish, shorten, expand, translate, or improve manuscript text using text supplied by the user and the recent conversation. Examples: 'rewrite this abstract', 'improve the introduction', 'draft a conclusion', 'make this paragraph clearer'. Do not retrieve sources or perform a fact-check as part of this intent; requests to find evidence or verify scientific claims belong to research or verification.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:rewrite|revise|edit|polish|proofread|rephrase|shorten|expand|tighten)\\s+(?:this|the|my|our|following)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|outline|write)\\s+(?:an?|the|this|my|our)\\s+(?:abstract|introduction|paragraph|section|conclusion|outline|draft)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:improve|make)\\s+(?:this|the|my|our)\\s+(?:abstract|introduction|paragraph|section|text|draft)\\b"
+      ],
+      "system_prompt": "Work from the user's supplied text and relevant recent conversation, without retrieving project sources. For a revision, preserve the author's meaning, technical terminology, mathematical expressions, LaTeX syntax, and existing citation keys. Do not introduce new factual claims or bibliography entries. Do not add KíLín evidence labels such as [1] or convert those labels into LaTeX citations. Return the proposed draft or revision directly; explain edits only when requested.",
+      "history": {
+        "policy": "recent"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "research": {
+      "description": "Find, summarize, or explain facts and background from the indexed papers, documentation, and other project sources to inform a manuscript. Examples: 'what do the sources say about this method?', 'find evidence about indexing', 'explain how source cards work'. Do not edit a supplied draft or evaluate a particular claim for correctness; use writing or verification instead.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:find|retrieve|locate|search\\s+for)\\s+(?:the\\s+)?(?:relevant\\s+)?(?:sources|papers|references|documentation|evidence)\\b",
+        "^\\s*what\\s+do\\s+(?:the\\s+)?(?:sources|documents|papers|documentation)\\s+say\\b"
+      ],
+      "system_prompt": "Answer from the retrieved project evidence. Put numbered source references such as [1] directly after the factual statements they support. Distinguish what the indexed sources establish from what remains unknown. Do not invent references, and do not treat retrieval numbers as bibliography keys for the manuscript.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 6,
+        "passages_per_source": 3,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "verification": {
+      "description": "Check whether scientific or technical statements in a draft are supported, contradicted, or not established by the indexed project sources. Examples: 'verify these claims', 'fact-check this paragraph', 'does the evidence support this statement?'. Report findings without automatically rewriting manuscript text. Not for proofreading, formatting, or stylistic editing.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:verify|fact[ -]?check|check\\s+(?:the\\s+)?(?:factual\\s+)?(?:accuracy|claims|statements))\\b",
+        "^\\s*(?:does|do)\\s+(?:the|these)\\s+(?:sources|papers|documents|evidence)\\s+support\\b"
+      ],
+      "system_prompt": "Evaluate each requested scientific or technical statement against the retrieved evidence. Clearly distinguish supported, contradicted, and not-established statements, citing the corresponding source numbers such as [1]. Absence of supporting evidence is not proof that a statement is false. Do not silently rewrite the manuscript or convert internal evidence numbers into bibliography keys.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 3,
+        "max_passages": 20,
+        "evidence_tokens": 12000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    }
+  },
+  "welcome_prompts": [
+    "Which section of your manuscript would you like to work on?",
+    "Would you like to draft, revise, research, or verify a passage?",
+    "Paste a passage for editing, or ask a question about your sources."
+  ],
+  "suggestions": [
+    "Rewrite this abstract for clarity",
+    "Draft an introduction from my notes",
+    "Shorten this paragraph without changing its meaning",
+    "Improve the structure of this section",
+    "Find sources supporting this claim",
+    "What do the project sources say about …?",
+    "Verify the technical claims in this paragraph",
+    "Check whether these statements are supported by the documents"
+  ]
+}
