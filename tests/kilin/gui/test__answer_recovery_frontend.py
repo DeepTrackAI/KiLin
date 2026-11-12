@@ -235,14 +235,18 @@ console.log("stopping passed");
         source = _APP.read_text(encoding="utf-8")
         script = r"""
 const assert = require("node:assert/strict");
-const box = { value: "" };
+const box = { value: "", style: {}, scrollHeight: 54 };
 const byId = (id) => {
   assert.equal(id, "question");
   return box;
 };
 let unansweredQuestion = "Why?";
 """
-        script += _function(source, "restoreUnansweredQuestion")
+        for name in (
+            "resizeQuestionInput", "setQuestionDraft",
+            "restoreUnansweredQuestion",
+        ):
+            script += _function(source, name)
         script += r"""
 restoreUnansweredQuestion();
 assert.equal(box.value, "Why?");

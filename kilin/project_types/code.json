@@ -1,5 +1,5 @@
 {
-  "display_name": "Code repository",
+  "display_name": "Code Repository",
   "description": "A software repository with source code and documentation.",
   "extensions": [
       ".py",
