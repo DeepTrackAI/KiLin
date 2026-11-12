@@ -143,6 +143,19 @@ _DOCUMENT_NOUNS: Final[str] = (
     r"(?:paper|article|study|review|preprint|book|thesis|report|chapter|"
     r"manuscript|work)s?(?![a-z])"
 )
+# Nouns that mark a plain-word stem as the name of a file, by the kind of
+# file: "the hinton paper" names ``hinton.pdf`` and "the chat module" names
+# ``chat.py``, but "the configuration file" names neither, because "file"
+# fits any file the question talks about.
+_DOCUMENT_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".pdf", ".md", ".txt", ".tex", ".rst", ".docx", ".doc", ".odt",
+     ".html", ".htm", ".epub"}
+)
+_DOCUMENT_MARKERS: Final[str] = (
+    rf"(?:{_DOCUMENT_NOUNS}|documents?(?![a-z]))"
+)
+_NOTEBOOK_MARKERS: Final[str] = r"notebooks?(?![a-z])"
+_CODE_MARKERS: Final[str] = r"(?:module|script)s?(?![a-z])"
 
 
 @dataclass(frozen=True, slots=True)
@@ -329,8 +342,8 @@ def named_paths(
     list[pathlib.Path]
         Files named by full path; otherwise by file name; otherwise by
         file stem of at least four characters ("smith2020"; a plain-word
-        stem such as ``project`` only when marked as a file name, see
-        ``_names_stem``); otherwise,
+        stem such as ``project`` only when marked as the name of that kind
+        of file, see ``_names_stem``); otherwise,
         with ``authors``, by a name that starts an author-year file stem
         ("smith", "Smith's paper", or "smith20" for ``smith2020.pdf``;
         "lee25" for ``lee25networks.pdf``). A stem without digits
@@ -354,7 +367,7 @@ def named_paths(
         path
         for path in paths
         if len(path.stem) >= _MIN_STEM_LENGTH
-        and _names_stem(text, path.stem.casefold())
+        and _names_stem(text, path)
     ]
     if stems or not authors:
         return stems
@@ -376,15 +389,15 @@ def named_paths(
     ]
 
 
-def _names_stem(text: str, stem: str) -> bool:
+def _names_stem(text: str, path: Path) -> bool:
     """Whether a question names a file by its stem.
 
     Parameters
     ----------
     text: str
         Case-folded question.
-    stem: str
-        Case-folded file stem.
+    path: pathlib.Path
+        Candidate file.
 
     Returns
     -------
@@ -392,32 +405,38 @@ def _names_stem(text: str, stem: str) -> bool:
         True when the stem appears as a whole word and either looks like a
         file name (it contains a digit, ``_``, ``-``, or ``.``, as in
         ``smith2020`` or ``data_loader``), or is marked as one: in
-        backticks, or followed by a word such as "file", "module",
-        "script", "notebook", or a document noun ("the project module",
-        "the hinton paper").
+        backticks, or followed by a noun for that kind of file. A document
+        (``.pdf``, ``.md``, ...) takes a document noun ("the hinton paper",
+        "the architecture document"), a notebook takes "notebook", and any
+        other file takes "module" or "script" ("the project module").
 
     Notes
     -----
     A plain-word stem alone ("the project type", "the chat model") does
-    not name ``project.py`` or ``chat.py``, so ordinary words do not limit
-    the search to one file.
+    not name ``project.py`` or ``chat.py``, and neither does a stem
+    followed by "file" ("the configuration file" for
+    ``configuration.md``, "the config file" for ``config.py``): such
+    phrases usually describe something the question is about, and a
+    wrong match would limit the search to one file.
 
     """
 
+    stem = path.stem.casefold()
     if not _mentions(text, stem):
         return False
     if any(character.isdigit() or character in "_-." for character in stem):
         return True
-    name = rf"(?<![\w.]){re.escape(stem)}(?![\w])"
     if re.search(rf"`{re.escape(stem)}`", text):
         return True
-    return bool(
-        re.search(
-            rf"{name}\s+(?:(?:file|module|script|notebook)s?(?![a-z])|"
-            rf"{_DOCUMENT_NOUNS})",
-            text,
-        )
-    )
+    suffix = path.suffix.casefold()
+    if suffix in _DOCUMENT_SUFFIXES:
+        markers = _DOCUMENT_MARKERS
+    elif suffix == ".ipynb":
+        markers = _NOTEBOOK_MARKERS
+    else:
+        markers = _CODE_MARKERS
+    name = rf"(?<![\w.]){re.escape(stem)}(?![\w])"
+    return bool(re.search(rf"{name}\s+{markers}", text))
 
 
 def _cites_author(text: str, word: str) -> bool:

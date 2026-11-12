@@ -322,6 +322,18 @@ not request the entire collection. A paper named in a question is
 searched, not appended in full: code-oriented full-file expansion
 applies only to code files.
 
+A file is named in a question (`named_paths` in
+`retrievals/document_reading.py`) by its path, its file name, a stem that
+looks like a file name (with a digit, `_`, `-` or `.`, as in `smith2020`),
+a stem in backticks, or an author-year citation. A plain-word stem counts
+only when followed by a noun for that kind of file: a document noun for
+documents ("the hinton paper", "the architecture document"), "notebook" for
+notebooks, "module" or "script" for other files ("the chat module"). "File"
+is not enough: "the configuration file" in a question, or in text pasted
+into it, does not name `configuration.md`, and "the config file" does not
+name `config.py`. A named file limits the search to that file, so a weak
+match would silently leave the rest of the project out.
+
 Which document a follow-up means (`document_scope` in
 `tools/_shared/choose_document.py`) is decided by its wording when that is
 clear: words for one document ("its limitations", "that study") keep the
