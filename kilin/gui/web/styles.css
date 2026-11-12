@@ -496,7 +496,7 @@ button:disabled { opacity: .62; cursor: default; }
 .ai-disclaimer { flex: none; margin: 0 0 6px; color: var(--muted); font-size: 11px; line-height: 1.4; text-align: center; }
 .reading-failed { color: var(--muted); }
 .composer { position: sticky; z-index: 5; bottom: 0; flex: none; display: block; padding: 13px 15px 10px; border-radius: 22px; }
-.composer textarea { display: block; width: 100%; min-height: 54px; max-height: 150px; padding: 4px; resize: none; border: 0; background: transparent; }
+.composer textarea { display: block; width: 100%; min-height: 54px; max-height: 250px; padding: 4px; overflow-y: auto; resize: none; border: 0; background: transparent; }
 .composer textarea:focus { box-shadow: none; }
 .composer-actions, .composer-right { display: flex; align-items: center; gap: 8px; }
 .composer-actions { justify-content: space-between; }

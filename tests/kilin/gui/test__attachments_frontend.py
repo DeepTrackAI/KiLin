@@ -62,7 +62,7 @@ class TestAttachmentsFrontend(unittest.TestCase):
         )
         start = events.index('data.event === "error"')
         failed = events[start:]
-        self.assertIn('byId("question").value = attachedAsk.question;', failed)
+        self.assertIn("setQuestionDraft(attachedAsk.question);", failed)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_attachments_flow_and_chips(self):

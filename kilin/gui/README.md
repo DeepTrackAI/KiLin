@@ -519,6 +519,10 @@ See [Per-intent thinking policy](../../docs/configuration.md#per-intent-thinking
 
 ## Conversations, references, and progress
 
+The message box expands as text is typed, pasted, or restored from a draft.
+It contracts when text is removed or after a message is sent. At 250 pixels
+it scrolls internally rather than displacing more of the conversation. **Enter** sends; **Shift+Enter** inserts a newline.
+
 New chat creates a separate conversation record while retaining earlier
 conversations in the picker; it does not archive or delete the previous GUI
 conversation. The chat producing an answer is italicized with a spinner in
