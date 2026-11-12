@@ -5,7 +5,10 @@ is about one statement and the project's papers. The tool:
 
 1. Takes the statement from the question (``statement_of``): quoted text,
    the text after a colon, or what the router model copies out of the
-   question, checked to be the user's own words.
+   question, checked to be the user's own words. A request for the paper
+   to cite for a named software, method or dataset ("which paper should
+   I cite for BRAPH2?", ``named_subject``) becomes the statement that the
+   paper introduces it.
 2. Ranks project passages and keeps the papers with the best-ranked
    passages (``candidate_files``). Only a document explicitly identified
    as a draft is excluded; verbatim similarity does not prove identity.
@@ -35,6 +38,12 @@ Key Features
     The model is told that a paper repeating a claim with a citation is
     not its source, and to say so.
 
+- **Papers that introduce a name**
+
+    "What should I cite for TrackMate?" asks for the paper that
+    introduces TrackMate, not for support of a claim, and is judged
+    that way.
+
 - **No false draft identification**
 
     A paper containing the exact statement can still be verified.
@@ -49,6 +58,11 @@ Module Structure
 - ``statement_of``
 
     The statement a question asks a reference for.
+
+- ``named_subject`` and ``name_statement``
+
+    The software, method or dataset a question asks the paper for, and
+    the statement that a paper introduces it.
 
 - ``candidate_files``
 
@@ -139,6 +153,8 @@ __all__ = [
     "SuggestReferenceSettings",
     "candidate_files",
     "chat_answer",
+    "name_statement",
+    "named_subject",
     "parse_settings",
     "run",
     "statement_of",
@@ -161,6 +177,32 @@ _ORDER: Final[dict[str, int]] = {
 _QUOTED: Final[re.Pattern[str]] = re.compile(
     r"[\"“«]([^\"”»]+)[\"”»]"
 )
+# A request for the paper that introduces a named software, method or
+# dataset: "which paper should I cite for BRAPH2?", "the reference for
+# TrackMate in my paper", "the article that introduced U-Net".
+_NAME_REQUEST: Final[re.Pattern[str]] = re.compile(
+    r"(?:\b(?:cite|citation|reference|source)s?\s+(?:for|of)\s+"
+    r"|\bcite\s+"
+    r"|\b(?:paper|article|publication|work|study)\s+(?:that\s+|which\s+)?"
+    r"(?:introduce[sd]?|present(?:s|ed)?|propose[sd]?)\s+)"
+    r"(?P<name>[^:\"“”«»?!]+?)"
+    r"(?:\s+(?:in|for)\s+(?:my|our|the|a|this)\s+\w+)?\s*[?!.]*\s*$",
+    re.IGNORECASE,
+)
+# Most words of a name ("the BRAPH 2 software").
+_NAME_WORDS: Final[int] = 4
+# Words a name may contain besides its own: what kind of thing it is.
+_NAME_KINDS: Final[frozenset[str]] = frozenset({
+    "software", "toolbox", "toolkit", "package", "library", "framework",
+    "tool", "method", "model", "algorithm", "dataset", "database",
+    "atlas", "pipeline", "platform", "program", "plugin", "plug-in",
+    "version", "network", "architecture",
+})
+# Words that point back at text rather than name something ("cite this").
+_NOT_NAMES: Final[frozenset[str]] = frozenset({
+    "this", "that", "these", "those", "it", "them", "my", "our", "its",
+    "i", "me",
+})
 # A word, for comparing the statement with texts.
 _WORD: Final[re.Pattern[str]] = re.compile(r"[^\W_]+")
 # A bracketed number, which the chat would read as a link to evidence.
@@ -326,6 +368,96 @@ def statement_of(
     return question.strip()
 
 
+def named_subject(question: str) -> str | None:
+    """Return the name a question asks the paper to cite for.
+
+    Parameters
+    ----------
+    question: str
+        The question as typed.
+
+    Returns
+    -------
+    str | None
+        The software, method or dataset whose paper the question asks for
+        ("BRAPH2" in "which paper should I cite for BRAPH2?", "BRAPH 2
+        software" in "the reference for the BRAPH 2 software"), or
+        ``None`` when the question asks a reference for a statement.
+
+    Notes
+    -----
+    A name has at most four words and looks like one: each word has a
+    capital letter or a digit ("BRAPH2", "TrackMate", "U-Net"), or says
+    what kind of thing it is ("software", "dataset"). "What should I cite
+    for anomalous diffusion?" is a topic, not a name, and "cite this"
+    points back at text, so both stay statements. A lower-case name
+    ("scikit-learn") is not recognized and is handled as a statement.
+
+    """
+
+    match = _NAME_REQUEST.search(question.strip())
+    if match is None:
+        return None
+    name = match["name"].strip().strip("'`‘’").strip()
+    name = re.sub(r"^(?:the|a|an)\s+", "", name, flags=re.IGNORECASE)
+    words = name.split()
+    if not 1 <= len(words) <= _NAME_WORDS:
+        return None
+    if any(word.casefold() in _NOT_NAMES for word in words):
+        return None
+    named = [_looks_named(word) for word in words]
+    if not any(named) or not all(
+        is_name or word.casefold() in _NAME_KINDS
+        for word, is_name in zip(words, named)
+    ):
+        return None
+    return name
+
+
+def name_statement(name: str) -> str:
+    """Return the statement that a paper introduces a name.
+
+    Parameters
+    ----------
+    name: str
+        A software, method or dataset ("BRAPH2").
+
+    Returns
+    -------
+    str
+        "BRAPH2 (BRAPH 2) was introduced (first presented) in this work.":
+        with the other spelling of a name that joins or separates its
+        version number, so that passages written either way are found.
+
+    """
+
+    joined = re.sub(r"(?<=[A-Za-z]) (?=\d)", "", name)
+    spaced = re.sub(r"(?<=[A-Za-z])(?=\d)", " ", name)
+    other = joined if joined != name else spaced
+    shown = f"{name} ({other})" if other != name else name
+    return f"{shown} was introduced (first presented) in this work."
+
+
+def _looks_named(word: str) -> bool:
+    """Whether a word looks like part of a name.
+
+    Parameters
+    ----------
+    word: str
+        One word of a question.
+
+    Returns
+    -------
+    bool
+        True when it has a capital letter or a digit.
+
+    """
+
+    return any(
+        character.isupper() or character.isdigit() for character in word
+    )
+
+
 def candidate_files(
     statement: str,
     by_file: dict[Path, list[Chunk]],
@@ -369,7 +501,8 @@ def candidate_files(
 
 
 def chat_answer(
-    statement: str, supports: Sequence[Support], note: str = ""
+    statement: str, supports: Sequence[Support], note: str = "",
+    name: str = "",
 ) -> tuple[str, tuple[Chunk, ...]]:
     """Return the answer and the quoted passages it cites.
 
@@ -381,6 +514,9 @@ def chat_answer(
         Each paper's judgement, in any order.
     note: str, optional
         Why some papers were not judged. Defaults to ``""``.
+    name: str, optional
+        The name whose introducing paper the question asks for, shown
+        instead of the statement. Defaults to ``""``.
 
     Returns
     -------
@@ -406,7 +542,11 @@ def chat_answer(
         s for s in ordered
         if s.verdict not in _SUGGESTED and s.verdict != VERDICT_BACKGROUND
     ]
-    lines = [f"**Statement:** “{_escape(statement)}”", ""]
+    lines = [
+        f"**Looking for:** the paper that introduces {_escape(name)}"
+        if name else f"**Statement:** “{_escape(statement)}”",
+        "",
+    ]
     evidence: list[Chunk] = []
 
     if suggested:
@@ -510,9 +650,16 @@ def run(
     """
 
     summary: dict[str, object] = {"name": "suggest_reference"}
-    statement = statement_of(
-        request.question, getattr(context, "ask_router", None)
-    )
+    name = named_subject(request.question)
+    if name is not None:
+        # "Which paper should I cite for BRAPH2?": the paper that
+        # introduces it, judged as a statement that it does.
+        statement = name_statement(name)
+        summary["name"] = name
+    else:
+        statement = statement_of(
+            request.question, getattr(context, "ask_router", None)
+        )
     summary["statement"] = statement
     if len(_words(statement)) < _config.MIN_WORDS:
         context.done("No statement", evidence_count=0)
@@ -647,7 +794,9 @@ def run(
          "reason": "model_result"}
         for support in supports if support.verdict == VERDICT_FAILED
     ]
-    answer, quoted = chat_answer(statement, supports, " ".join(notes))
+    answer, quoted = chat_answer(
+        statement, supports, " ".join(notes), name or ""
+    )
     verdicts = Counter(support.verdict for support in supports)
     summary.update(
         {

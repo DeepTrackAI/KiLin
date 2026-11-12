@@ -117,6 +117,43 @@ class TestStatement(unittest.TestCase):
         self.assertEqual(tool.statement_of(question, broken), question)
 
 
+    def test_named_subject(self) -> None:
+        for question, name in (
+            ("which paper should I cite for BRAPH2?", "BRAPH2"),
+            ("What should I cite for TrackMate in my paper?", "TrackMate"),
+            ("the reference for the BRAPH 2 software", "BRAPH 2 software"),
+            ("which article introduced U-Net?", "U-Net"),
+            ("how do I cite BRAPH 2?", "BRAPH 2"),
+            ("Which paper should I cite for DeepTrack 2.1?", "DeepTrack 2.1"),
+            # Statements, topics and text pointed at are not names.
+            ("what should I cite for anomalous diffusion?", None),
+            (f"suggest a reference for: {STATEMENT}", None),
+            ("find a citation for BRAPH2 being widely used", None),
+            ("What can I cite for this sentence: cells move", None),
+            ("a reference for This claim", None),
+            ("cite this", None),
+            ("which paper describes MRI?", None),
+        ):
+            with self.subTest(question=question):
+                self.assertEqual(tool.named_subject(question), name)
+
+    def test_name_statement_has_both_spellings(self) -> None:
+        self.assertEqual(
+            tool.name_statement("BRAPH2"),
+            "BRAPH2 (BRAPH 2) was introduced (first presented) in this "
+            "work.",
+        )
+        self.assertEqual(
+            tool.name_statement("BRAPH 2"),
+            "BRAPH 2 (BRAPH2) was introduced (first presented) in this "
+            "work.",
+        )
+        self.assertEqual(
+            tool.name_statement("TrackMate"),
+            "TrackMate was introduced (first presented) in this work.",
+        )
+
+
 class TestSuggestReferenceRun(unittest.TestCase):
     """A full run on a small Markdown project."""
 
@@ -293,6 +330,23 @@ class TestSuggestReferenceRun(unittest.TestCase):
         result, context = self._run(choice="cancel", confirmation="always")
         context.ask_model.assert_not_called()
         self.assertIn("Not checked (cancelled)", result.answer)
+
+    def test_named_subject_looks_for_the_introducing_paper(self) -> None:
+        result, context = self._run(
+            question="which paper should I cite for BRAPH2?"
+        )
+        context.ask_router.assert_not_called()
+        self.assertEqual(result.summary["name"], "BRAPH2")
+        statement = (
+            "BRAPH2 (BRAPH 2) was introduced (first presented) in this work."
+        )
+        self.assertEqual(result.summary["statement"], statement)
+        prompts = [c.args[1] for c in context.ask_model.call_args_list]
+        self.assertTrue(all(statement in prompt for prompt in prompts))
+        self.assertTrue(result.answer.startswith(
+            "**Looking for:** the paper that introduces BRAPH2\n"
+        ))
+        self.assertNotIn("**Statement:**", result.answer)
 
     def test_no_statement(self) -> None:
         result, context = self._run(question="suggest a reference")

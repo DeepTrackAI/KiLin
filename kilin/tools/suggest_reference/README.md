@@ -14,6 +14,15 @@ cells", the tool:
    colon; otherwise the router model copies it out of the question, and
    its copy is used only when most of its words are the question's. A
    statement shorter than `MIN_WORDS` words gets a request to write it.
+   A request for the paper to cite for a named software, method or
+   dataset ("which paper should I cite for BRAPH2?", "the reference for
+   TrackMate") is recognized without the router: the name has at most four
+   words, each with a capital letter or digit, or a word such as
+   "software" or "dataset". The statement becomes "BRAPH2 (BRAPH 2) was
+   introduced (first presented) in this work", with both spellings of a
+   version number, so that the paper that introduces it is found and
+   judged, rather than papers that merely use it. A lower-case name
+   ("scikit-learn") is not recognized and is taken as a statement.
 2. Uses the configured `DISCOVERY_STRATEGY`: `hybrid` (default) ranks
    project passages and keeps the `FILES` best-related papers, while
    `source_first` ranks sources across semantic, lexical, graph, and
