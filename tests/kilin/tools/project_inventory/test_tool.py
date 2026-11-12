@@ -70,6 +70,12 @@ class TestProjectInventory(unittest.TestCase):
 
         self.assertEqual(tool.file_types_in("List PDFs"), (".pdf",))
         self.assertEqual(tool.file_types_in("text files"), (".txt",))
+        self.assertEqual(
+            tool.file_types_in("How many Word documents?"), (".doc", ".docx")
+        )
+        self.assertEqual(tool.file_types_in("List the .docx"), (".docx",))
+        self.assertEqual(tool.file_types_in("List the .doc"), (".doc",))
+        self.assertEqual(tool.file_types_in("Find the word MRI"), ())
         context = Mock()
         context.source_files.return_value = {
             Path("a.pdf"): 123,
