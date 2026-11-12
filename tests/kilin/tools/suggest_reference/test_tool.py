@@ -137,6 +137,54 @@ class TestStatement(unittest.TestCase):
             with self.subTest(question=question):
                 self.assertEqual(tool.named_subject(question), name)
 
+    def test_router_reports_a_name(self) -> None:
+        question = (
+            "what's the original reference for the brain connectivity "
+            "toolbox braph?"
+        )
+        self.assertIsNone(tool.named_subject(question))  # Lower case.
+        for reply, name in (
+            ("NAME: braph", "braph"),
+            ('NAME: "the brain connectivity toolbox braph".',
+             "brain connectivity toolbox braph"),
+        ):
+            with self.subTest(reply=reply):
+                self.assertEqual(
+                    tool.request_of(question, Mock(return_value=reply)),
+                    (tool.name_statement(name), name),
+                )
+        self.assertEqual(
+            tool.request_of(
+                "which paper should I cite when using scikit-learn?",
+                Mock(return_value="NAME: scikit-learn"),
+            )[1],
+            "scikit-learn",
+        )
+        # A name not in the question, or a topic, is not trusted.
+        topic = "what should I cite for anomalous diffusion in cells?"
+        for question, reply in (
+            (question, "NAME: BRAPH 3"),
+            (topic, "NAME: anomalous diffusion"),
+        ):
+            with self.subTest(question=question, reply=reply):
+                self.assertEqual(
+                    tool.request_of(question, Mock(return_value=reply)),
+                    (question.strip(), ""),
+                )
+        # A statement reply is used as before.
+        self.assertEqual(
+            tool.request_of(
+                topic, Mock(return_value="anomalous diffusion in cells")
+            ),
+            ("anomalous diffusion in cells", ""),
+        )
+        # A pattern-recognized name needs no router call.
+        router = Mock()
+        self.assertEqual(
+            tool.request_of("cite for BRAPH2", router)[1], "BRAPH2"
+        )
+        router.assert_not_called()
+
     def test_name_statement_has_both_spellings(self) -> None:
         self.assertEqual(
             tool.name_statement("BRAPH2"),

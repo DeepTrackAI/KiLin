@@ -22,7 +22,8 @@ Module Structure
 
     The registry entry points for this tool.
 
-- ``statement_of``, ``candidate_files`` and ``chat_answer``
+- ``request_of``, ``statement_of``, ``candidate_files`` and
+  ``chat_answer``
 
     The statement in a question, the papers worth checking, and the
     answer.
@@ -47,6 +48,7 @@ from kilin.tools.suggest_reference.tool import (
     name_statement,
     named_subject,
     parse_settings,
+    request_of,
     run,
     statement_of,
 )
@@ -58,6 +60,7 @@ __all__ = [
     "name_statement",
     "named_subject",
     "parse_settings",
+    "request_of",
     "run",
     "statement_of",
 ]

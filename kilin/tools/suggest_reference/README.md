@@ -21,8 +21,13 @@ cells", the tool:
    "software" or "dataset". The statement becomes "BRAPH2 (BRAPH 2) was
    introduced (first presented) in this work", with both spellings of a
    version number, so that the paper that introduces it is found and
-   judged, rather than papers that merely use it. A lower-case name
-   ("scikit-learn") is not recognized and is taken as a statement.
+   judged, rather than papers that merely use it. Other wordings, and
+   lower-case names ("the braph toolbox", "scikit-learn"), are left to the
+   router call that copies the statement: it may answer `NAME: <name>`
+   instead, which is used only when the name is in the question and looks
+   like one (a capital letter, digit or hyphen, or a word such as
+   "toolbox" in the question). A topic the router takes for a name
+   ("anomalous diffusion") stays a statement.
 2. Uses the configured `DISCOVERY_STRATEGY`: `hybrid` (default) ranks
    project passages and keeps the `FILES` best-related papers, while
    `source_first` ranks sources across semantic, lexical, graph, and
