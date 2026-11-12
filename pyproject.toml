@@ -25,8 +25,10 @@ classifiers = [
 dependencies = [
     "huggingface-hub==1.29.0",
     "numpy==2.5.2",
+    "olefile==0.47",
     "pdfminer-six==20260107",
     "pypdf==6.16.2",
+    "python-docx==1.2.0",
 ]
 
 # Install one computation backend for model work; GUI adds only Qt.
