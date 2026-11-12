@@ -3,6 +3,7 @@
   "description": "A collection of scientific literature and related documents.",
   "extensions": [
     ".pdf",
+    ".docx",
     ".md",
     ".txt"
   ],
