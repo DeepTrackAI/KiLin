@@ -125,6 +125,8 @@ __all__ = [
 # File types load_output can read, as for indexed sources.
 READABLE_SUFFIXES: Final[tuple[str, ...]] = (
     ".pdf",
+    ".doc",
+    ".docx",
     ".md",
     ".txt",
     ".py",

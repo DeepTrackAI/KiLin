@@ -277,7 +277,7 @@ _FILE_REFERENCE = re.compile(
     flags=re.I,
 )
 # File types in outputs/ that can be a paper.
-_SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".md", ".txt")
+_SUFFIXES: Final[tuple[str, ...]] = (".pdf", ".doc", ".docx", ".md", ".txt")
 # Template setting: a plain file name, so it cannot point outside templates/.
 _TEMPLATE_NAME = re.compile(r"[A-Za-z0-9][\w-]*")
 
