@@ -251,6 +251,11 @@ class ToolContext:
         returns its index, or None when they cancel; None where nobody can
         be asked (notebooks), so tools fall back to their best guess.
         Defaults to ``None``.
+    model_attempt_count: Callable[[], int] | None, optional
+        Cumulative number of internal answering-model generation attempts,
+        including incomplete attempts and bounded recovery, for this tool
+        run. ``None`` when the context cannot expose attempt accounting.
+        The count can be sampled around ``ask_model`` without an extra call.
 
     """
 
@@ -273,6 +278,7 @@ class ToolContext:
     write_pdf: Callable[..., int] | None = None
     choose: Callable[[str, tuple[str, ...]], int | None] | None = None
     retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
+    model_attempt_count: Callable[[], int] | None = None
 
 
 @dataclass(frozen=True, slots=True)

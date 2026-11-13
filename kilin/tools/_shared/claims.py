@@ -172,7 +172,7 @@ _SOURCE: Final[re.Pattern[str]] = re.compile(
 # Reciprocal-rank fusion constant: a passage at rank r of one query scores
 # 1 / (_FUSION + r).
 _FUSION: Final[int] = 60
-# One focused claim: "[3]: the method of ..." or "3: ...".
+# One model-proposed retrieval hint: "[3]: the method of ...".
 _FOCUS_LINE: Final[re.Pattern[str]] = re.compile(
     r"^\s*[-*]?\s*\[?(\d{1,3})\]?\s*[:.)-]\s*(.+)$", re.M
 )
@@ -339,7 +339,7 @@ def verdict_label(verdict: str) -> str:
 def focus_prompt(
     sentence: str, before: str, after: str, numbers: Sequence[int]
 ) -> tuple[str, str]:
-    """Return the prompts that split a sentence among its references.
+    """Return prompts for reference-specific retrieval hints.
 
     Parameters
     ----------
@@ -351,7 +351,7 @@ def focus_prompt(
     after: str
         The following sentence of the paragraph, or empty.
     numbers: Sequence[int]
-        The references to write a focused claim for.
+        References for which to propose retrieval hints.
 
     Returns
     -------
@@ -389,7 +389,7 @@ Answer with exactly one line per reference:
 
 
 def parse_focus(reply: str, numbers: Sequence[int]) -> dict[int, str]:
-    """Read the focused claims from a reply to ``focus_prompt``.
+    """Read retrieval hints from the reply to ``focus_prompt``.
 
     Parameters
     ----------
@@ -401,8 +401,8 @@ def parse_focus(reply: str, numbers: Sequence[int]) -> dict[int, str]:
     Returns
     -------
     dict[int, str]
-        The claim of each reference that has a nonempty line ("[3]: ..."
-        or "3: ..."); thinking and other lines are ignored.
+        The retrieval hint for each reference with a nonempty line
+        ("[3]: ..." or "3: ..."); thinking and other lines are ignored.
 
     """
 
@@ -422,7 +422,7 @@ def focus_claims(
     numbers: Sequence[int],
     ask_model: Callable[[str, str, int | None], str],
 ) -> dict[int, str]:
-    """Rewrite a sentence once per reference, with the answering model.
+    """Ask once for reference-specific retrieval hints.
 
     Parameters
     ----------
@@ -433,15 +433,15 @@ def focus_claims(
     after: str
         Following context, or empty.
     numbers: Sequence[int]
-        The references to write a focused claim for.
+        References for which to propose retrieval hints.
     ask_model: Callable[[str, str, int | None], str]
         The answering model (``ToolContext.ask_model``).
 
     Returns
     -------
     dict[int, str]
-        The focused claim of each reference the reply gives; empty when
-        the call fails, so the claims are checked as before.
+        The retrieval hint for each reference; empty when the call fails.
+        Hints never replace the original citing sentence for verification.
 
     """
 

@@ -158,6 +158,36 @@ class TestToolRecovery(unittest.TestCase):
         self.assertTrue(chat.thinking)
         self.assertEqual(chat.temperature, 0.6)
 
+    def test_context_exposes_recovery_attempt_count(self):
+        """Share adapter attempts with a tool without an extra model call."""
+
+        session = _session()
+        session.chat_session = _ScriptChat([
+            ("<think>unfinished", "length"), ("Recovered", "stop"),
+        ])
+
+        def run(use, request, context):
+            """Observe the adapter counter around a single request."""
+
+            before = context.model_attempt_count()
+            answer = context.ask_model("System", "Original request", None)
+            after = context.model_attempt_count()
+            return ToolResult(
+                answer, (), {"name": use.name, "attempts": after - before}
+            )
+
+        with patch.object(rag, "run_tool", side_effect=run):
+            result = session._run_tool(
+                ToolUse("reference_check", object()),
+                "Check it", RouteDecision("test", True),
+                trace_turn_id=None, report_phase=Mock(),
+            )
+        self.assertEqual(result.summary["attempts"], 2)
+        self.assertEqual(
+            len(result.summary["internal_generation"]["calls"]), 2
+        )
+        self.assertEqual(len(session.chat_session.observations), 2)
+
     def test_real_chat_counts_both_attempts(self):
         session = _session()
         with patch.object(rag.ChatSession, "_load"):

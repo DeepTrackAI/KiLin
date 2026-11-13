@@ -375,8 +375,11 @@ class ReferenceReport:
         Which reference list was checked when the paper has several;
         empty otherwise.
     model_calls: dict[str, int]
-        Actual invocations of the answering model for claim focusing,
+        Logical requests to the answering-model adapter for focusing,
         initial verification, and second looks, plus their total.
+    model_attempts: dict[str, int] | None
+        Actual generation attempts by stage, including recovery and failed
+        attempts; ``None`` without adapter-level accounting.
 
     """
 
@@ -393,6 +396,7 @@ class ReferenceReport:
     lookup_note: str = ""
     list_note: str = ""
     model_calls: dict[str, int] = field(default_factory=dict)
+    model_attempts: dict[str, int] | None = None
 
     def count(self, status: str) -> int:
         """Return how many entries have a match status.
@@ -995,6 +999,10 @@ def run(
             "beyond_list": list(report.scan.beyond_list),
             "claims_checked": len(report.verdicts),
             "model_calls": report.model_calls,
+            **(
+                {"model_attempts": report.model_attempts}
+                if report.model_attempts is not None else {}
+            ),
             "suitability": [
                 {
                     "reference": verdict.claim.number,
@@ -1255,7 +1263,7 @@ def _link_markdown(link: ReferenceLink) -> str:
 
 
 def _model_call_line(report: ReferenceReport) -> str:
-    """Summarize actual answering-model calls without conflating claims.
+    """Distinguish logical model requests from generation attempts.
 
     Parameters
     ----------
@@ -1265,16 +1273,26 @@ def _model_call_line(report: ReferenceReport) -> str:
     Returns
     -------
     str
-        A Markdown line showing the model calls by verification stage.
+        Markdown showing requests and known attempts by verification stage.
 
     """
 
-    counts = report.model_calls
+    requests = report.model_calls
+    line = (
+        f"**Model requests:** {requests['total']} "
+        f"({requests['focusing']} focusing, "
+        f"{requests['initial']} initial, "
+        f"{requests['second_look']} second looks)."
+    )
+    if report.model_attempts is None:
+        return line
+    attempts = report.model_attempts
     return (
-        f"**Model calls:** {counts['total']} "
-        f"({counts['focusing']} focusing, "
-        f"{counts['initial']} initial, "
-        f"{counts['second_look']} second looks)."
+        line + "\n\n"
+        f"**Generation attempts:** {attempts['total']} "
+        f"({attempts['focusing']} focusing, "
+        f"{attempts['initial']} initial, "
+        f"{attempts['second_look']} second looks), counting any recovery."
     )
 
 
@@ -1300,8 +1318,8 @@ def _verify(
     Returns
     -------
     ReferenceReport
-        Verdicts, the reason for any unchecked claims, and actual
-        answering-model call counts, including unsuccessful invocations.
+        Verdicts, the reason for unchecked claims, request counts and,
+        when available, actual generation-attempt counts by stage.
 
     """
 
@@ -1357,8 +1375,8 @@ def _verify(
     normal = limit + focus
     summary = (
         f"Check {limit} of {len(claims)} claims of {report.paper.name} "
-        f"against {files} cited papers; up to {normal} calls before "
-        f"retries, or {possible} if every claim needs a second look."
+        f"against {files} cited papers; up to {normal} model requests "
+        f"before second looks, or {possible} with all second looks."
     )
     plan = ToolPlan(
         tool="reference_check",
@@ -1375,10 +1393,11 @@ def _verify(
         quick_seconds=planned_calls(quick) * _claim_seconds(settings),
         quick_label=f"The first {quick} claims",
         details=(
-            "Estimated model time without retries: "
+            "Estimated model time without second looks: "
             f"{normal * _claim_seconds(settings):.1f} seconds; "
-            "including all possible retries: "
-            f"{possible * _claim_seconds(settings):.1f} seconds.",
+            "including all possible second looks: "
+            f"{possible * _claim_seconds(settings):.1f} seconds. "
+            "Recovery attempts can increase actual model usage.",
         ),
     )
     # The confirmation threshold has always been in checked claims.
@@ -1400,11 +1419,13 @@ def _verify(
     verdicts: list[Verdict] = []
     rank = cache(context.rank)
     calls: Counter[str] = Counter()
+    attempts: Counter[str] = Counter()
+    read_attempts = getattr(context, "model_attempt_count", None)
 
     def counted_ask(
         system: str, prompt: str, tokens: int | None, *, kind: str
     ) -> str:
-        """Count an attempted call, including one that raises an error.
+        """Count requests and observable attempts even when a call fails.
 
         Parameters
         ----------
@@ -1425,7 +1446,14 @@ def _verify(
         """
 
         calls[kind] += 1
-        return context.ask_model(system, prompt, tokens)
+        before = read_attempts() if read_attempts is not None else None
+        try:
+            return context.ask_model(system, prompt, tokens)
+        finally:
+            if before is not None and read_attempts is not None:
+                # The adapter counts every attempt before inference, even
+                # when its one eligible nonthinking recovery also fails.
+                attempts[kind] += read_attempts() - before
 
     focus_model = partial(counted_ask, kind="focusing")
     initial_model = partial(counted_ask, kind="initial")
@@ -1442,6 +1470,7 @@ def _verify(
             f"(reference [{claim.number}])"
         )
         calls_before = sum(calls.values())
+        attempts_before = sum(attempts.values())
         if settings.focus_claims and claim.also_cited:
             if claim.sentence not in focused:
                 focused[claim.sentence] = focus_claims(
@@ -1512,6 +1541,10 @@ def _verify(
                     "second_look" if second_accepted else "initial"
                 ),
                 "model_calls": sum(calls.values()) - calls_before,
+                "model_attempts": (
+                    sum(attempts.values()) - attempts_before
+                    if read_attempts is not None else None
+                ),
                 "quote_passage_id": (
                     verdict.quote_chunk.identifier
                     if verdict.quote_chunk is not None else None
@@ -1537,9 +1570,15 @@ def _verify(
         "focusing", "initial", "second_look"
     )}
     counts["total"] = sum(counts.values())
+    attempt_counts = None
+    if read_attempts is not None:
+        attempt_counts = {kind: attempts[kind] for kind in (
+            "focusing", "initial", "second_look"
+        )}
+        attempt_counts["total"] = sum(attempt_counts.values())
     return replace(
         report, verdicts=tuple(verdicts), verification=note,
-        model_calls=counts,
+        model_calls=counts, model_attempts=attempt_counts,
     )
 
 

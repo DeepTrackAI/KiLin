@@ -132,7 +132,8 @@ class TestReferenceCheckRun(unittest.TestCase):
         self, chosen: object, choice: str = "continue",
         question: str = "check the references of paper.md",
         interactive: bool = True, choose: object = None,
-        ask: object = None, **settings: object
+        ask: object = None, model_attempt_count: object = None,
+        **settings: object
     ) -> tuple[object, SimpleNamespace]:
         def ask_model(system: str, prompt: str, tokens: int) -> str:
             # Reference [2] is quoted from its file; [3] is called
@@ -151,6 +152,7 @@ class TestReferenceCheckRun(unittest.TestCase):
                 SimpleNamespace(chunk=c) for c in self.chunks
             ]),
             ask_model=Mock(side_effect=ask or ask_model),
+            model_attempt_count=model_attempt_count,
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
         )
@@ -268,8 +270,9 @@ class TestReferenceCheckRun(unittest.TestCase):
         })
         self.assertEqual(context.ask_model.call_count, 2)
         self.assertIn("2 of 3 claims were not checked", result.answer)
-        self.assertIn("**Model calls:** 2 (1 focusing, 1 initial, "
+        self.assertIn("**Model requests:** 2 (1 focusing, 1 initial, "
                       "0 second looks)", result.answer)
+        self.assertNotIn("model_attempts", result.summary)
         plan = context.confirm.call_args.args[0]
         self.assertEqual(plan.items, 3)
         self.assertEqual(plan.batches_to_run, 2)
@@ -279,7 +282,69 @@ class TestReferenceCheckRun(unittest.TestCase):
         report = (self.root / result.summary["report"]).read_text(
             encoding="utf-8"
         )
-        self.assertIn("**Model calls:** 2", report)
+        self.assertIn("**Model requests:** 2", report)
+
+    def test_generation_attempts_include_recovery_by_stage(self) -> None:
+        """Count adapter recovery separately from logical requests."""
+
+        attempts = {"count": 0}
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            """Simulate one recovery during a focusing request."""
+
+            attempts["count"] += (
+                2 if "citing several references" in prompt else 1
+            )
+            if "citing several references" in prompt:
+                return "[2]: BRAPH implements these measures."
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, context = self._run(
+            (Path("paper.md"), "named", False),
+            ask=answer, model_attempt_count=lambda: attempts["count"],
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1, "initial": 1, "second_look": 0, "total": 2,
+        })
+        self.assertEqual(result.summary["model_attempts"], {
+            "focusing": 2, "initial": 1, "second_look": 0, "total": 3,
+        })
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertIn("**Generation attempts:** 3 (2 focusing", result.answer)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("**Generation attempts:** 3", report)
+        claim_events = [
+            call.kwargs["data"]
+            for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+        ]
+        self.assertEqual(claim_events[0]["model_calls"], 2)
+        self.assertEqual(claim_events[0]["model_attempts"], 3)
+
+    def test_failed_focusing_attempt_is_still_accounted_for(self) -> None:
+        """A failed hint request remains an attempted inference."""
+
+        attempts = {"count": 0}
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            """Fail focusing, then complete the original verification."""
+
+            attempts["count"] += 1
+            if "citing several references" in prompt:
+                raise RuntimeError("Focus failed")
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, _ = self._run(
+            (Path("paper.md"), "named", False),
+            ask=answer, model_attempt_count=lambda: attempts["count"],
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["model_attempts"], {
+            "focusing": 1, "initial": 1, "second_look": 0, "total": 2,
+        })
 
     def test_claim_cap_also_applies_to_quick_selection(self) -> None:
         """Choosing quick cannot select beyond the configured claim cap."""

@@ -88,8 +88,10 @@ For "check the references of the Smith paper", the tool:
    selected passage identifiers and location, quote passage identifier,
    evidence status, bibliography match status, exact quote line range
    when identifiable, and the rating. The report and chat separately
-   give actual model calls (focusing, initial checks, second looks),
-   while the confirmation plan includes their worst-case cost.
+   give logical model requests by stage (focusing, initial checks,
+   second looks). When the KíLín adapter is used, they also give actual
+   generation attempts, including an eligible recovery attempt. The
+   confirmation plan estimates requests, not a strict bound on attempts.
    No additional model calls or network operations are used.
 7. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
@@ -139,10 +141,11 @@ narrowed from the chunk to the matching line(s). Repeated claim queries use
 request-local ranking memoization, without changing the retrieved results.
 
 The **answering model** used for internal verification inherits the main
-interface's thinking, temperature and maximum output tokens. By default,
-`ANSWER_TOKENS` is `null` and imposes no extra tool-specific cap. An
-explicit non-null override can reduce the output budget. The router is
-unchanged and remains nonthinking and deterministic.
+interface's thinking, temperature and maximum output tokens. The tool
+imposes no separate output cap for verification; `PASSAGE_TOKENS` instead
+limits the *input* evidence. See [Generation settings](#generation-settings)
+and the [shared policy](../../../docs/tool_packages.md#generation-settings-for-tools).
+The router remains nonthinking and deterministic.
 
 Limits: author-year citations ("Smith et al., 2020") are not recognised;
 superscripts are recognised only in PDFs; an unusual layout can still split
@@ -153,8 +156,11 @@ model's verdicts can be wrong, so they are pointers for the
 reader to check, with the quote and the place to look.
 
 Its `defaults.json` is independent of `kilin_defaults.json`.
-Project-type tool settings override the keys in `SETTINGS`. Other sections
-are internal thresholds. All values are read and validated on import.
+Project-type tool settings override the keys in `SETTINGS`; saved
+project-specific settings can override the project type. See
+[configuration precedence](../../../docs/configuration.md) for the full
+order. Other sections are internal thresholds. All values are read and
+validated on import.
 
 ## Defaults
 
@@ -169,11 +175,8 @@ are internal thresholds. All values are read and validated on import.
   Allowed range: 1–20.
 - `PASSAGE_TOKENS` (default `5000`): Most estimated tokens of those
   passages (an indexed passage is often 700-1000); the best-ranked one is
-  always read. Allowed range: 300–16000.
-  With `null`, the answering model inherits the main interface's maximum
-  output tokens (or its available context if no maximum was configured).
-  An explicit override accepts 100–131072 and is capped by any session
-  maximum.
+  always read. Allowed range: 300–16000 (integer, not `null`). This is an
+  *input* limit; the generation allowance is inherited separately.
 - `RETRY_PASSAGES` (default `8`): When a claim comes out not supported
   or without a matching passage, this many further passages of the cited
   work (the next best-ranked, within `PASSAGE_TOKENS`) are read in a
@@ -187,7 +190,9 @@ are internal thresholds. All values are read and validated on import.
 - `MAX_CHECKED_CLAIMS` (default `100`): Most claims selected for
   verification; later ones are reported unchecked. This is not a model-
   call budget: a claim can need a focusing call and a second reading.
-  Allowed range: 1–1000.
+  Allowed range: 1–1000. For older `reference_check` overrides, rename
+  `max_model_calls` to `max_checked_claims`; the old name is rejected.
+  Other tools' `max_model_calls` settings are unaffected.
 - `QUICK_CLAIMS` (default `5`): Claims checked by the quick version, in
   reading order. Allowed range: 1–100.
 - `CONFIRMATION` (default `"when_large"`): When to ask before checking
