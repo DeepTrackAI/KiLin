@@ -78,7 +78,7 @@ const bridge = {
   branchConversation: (count) => sent.push(count),
   newConversation: () => sent.push("new"),
 };
-const box = { value: "", focus() {} };
+const box = { value: "", style: {}, scrollHeight: 54, focus() {} };
 const byId = (id) => {
   assert.equal(id, "question");
   return box;
@@ -107,6 +107,8 @@ const conversation = {
   },
 };
 """
+        for name in ("resizeQuestionInput", "setQuestionDraft"):
+            script += _function(source, name)
         script += _function(source, "openEmptyChat")
         script += _function(source, "branchFromMessage")
         script += r"""

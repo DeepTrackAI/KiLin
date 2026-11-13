@@ -100,7 +100,15 @@ non-files and paths escaping the selected root, then uses a suffix-specific
 reader if one exists. Other inputs are decoded as UTF-8. Binary content is
 not automatically made readable by giving it a textual suffix. A PDF uses
 its dedicated selectable-text reader and may require installed PDF
-extraction dependencies.
+extraction dependencies. A Word `.docx` file is read with `python-docx`
+into Markdown-style text: headings become `#` lines, numbered or bulleted
+items become indented `-` lines, and each table row becomes one line of
+cells separated by ` | `. Indented paragraphs without numbering are not
+turned into list items. An old binary
+Word `.doc` file is read with `olefile`: the body text, paragraphs and
+table rows are kept the same way, but headings are not recognized. Word
+files are recognized by their first bytes, so a `.doc` renamed to `.docx`
+(or the reverse) is still read by the right reader.
 
 `SourceFile` contains a relative path and extracted text; `SourceUnit`
 contains a path, text, inclusive line range, kind, optional symbol/section,
@@ -115,7 +123,18 @@ It does **not execute source files or notebook cells**.
 | `sources_md.py` | ATX Markdown headings and sections |
 | `sources_ipynb.py` | Notebook JSON, code/Markdown cell text and cell coordinates |
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
+| `sources_docx.py` | Word body text in reading order; Markdown heading sections |
+| `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
 | `sources_txt.py` | Nonblank paragraph text units |
+
+Word title and author properties are read separately for literature
+search headers and the paper-summary tool. The property reader handles OLE
+(`.doc`) and OOXML (`.docx`) containers based on their signatures, returning
+missing metadata on unreadable documents. It does not invent bibliographic
+information or change the stored-file size policy. The stable
+`tests/kilin/sources/extensions/fixtures/sample.docx` fixture was converted
+from `sample.doc` with LibreOffice and has explicit title/author properties;
+it complements generated tests for specific Word list styles.
 
 The implementation uses the actual suffix-to-reader dispatch in
 `sources/sources.py` and its `extensions/` directory. An unsupported suffix
@@ -126,9 +145,11 @@ implicit features of this pipeline.
 **Coordinate conventions:** `Chunk.start_line`/`end_line` are one-based
 inclusive and refer to the source unit's coordinate system, not necessarily
 a single physical file-wide line number. Notebook positions are cell-local;
-PDF text is page-local with section provenance. Citations and source previews
-must preserve these distinctions. Altering a reader's coordinate convention
-is a compatibility-sensitive change; update tests and evidence consumers.
+PDF text is page-local with section provenance. Word (`.docx` and `.doc`)
+line numbers refer to the extracted Markdown-style text, not to Word
+pages. Citations and source previews must preserve these distinctions.
+Altering a reader's coordinate convention is a compatibility-sensitive
+change; update tests and evidence consumers.
 
 ## 4. Chunk boundaries and identifiers
 

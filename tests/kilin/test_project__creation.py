@@ -103,7 +103,7 @@ class TestExclusiveProjectCreation(unittest.TestCase):
         """Enforce ownership through the lower-level public initializer."""
         project = self.create()
         before = self.snapshot(project.root)
-        for type_id in ("code", "literature"):
+        for type_id in kilin.PROJECT_TYPE_IDS:
             with self.subTest(type_id=type_id):
                 with self.assertRaises(kilin.ProjectAlreadyExistsError):
                     kilin.initialize_project(project.root, type_id)

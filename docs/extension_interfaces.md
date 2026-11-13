@@ -22,8 +22,8 @@ snapshot.
 
 ## Creating a project type
 
-The shipped examples are `code.json` and `literature.json`. A new type is a
-packaged `<type_id>.json` resource with validated `display_name`, `description`,
+Packaged JSON files serve as examples. A new type is a
+`<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
 optional `answer_guidance`, `capabilities`, history settings, a valid
 `default_intent`, an `intents` object and optional empty-chat prompts. The
@@ -38,11 +38,12 @@ policy controls whether eligible scientific papers receive card
 summaries and stored vectors; it is not implied by `document_headers`.
 See [Retrieval pipeline](retrieval_pipeline.md).
 
-The registry requires at least one valid definition, not either standard
-type. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
+The registry requires at least one valid definition, with no mandatory
+type ID. `ProjectTypeId` is an unrestricted string alias and `ProjectType.id`
 is the filename-derived identifier. The GUI takes its initial selection
 from the first registry entry and derives labels and welcome content from
-each definition. Adding a packaged type needs no built-in-specific branch.
+each definition. Adding a packaged type needs no built-in-specific branch
+or public Python constant.
 External directories accepted by `load_project_types(directory)` are for
 explicit validation; they are not automatically registered or hot-loaded.
 
@@ -86,8 +87,9 @@ entire pipeline supports its source formats or domain reasoning.
 
 `sources/sources.py` dispatches by supported extension to modules under
 `sources/extensions/`. A reader may implement `read_source_file(path,
-relative_path)` to load non-UTF-8-backed content (the PDF reader does).
-An extractor implements `extract_source_units(...)` using the signature
+relative_path)` to load non-UTF-8-backed content (as the PDF and Word
+`.doc`/`.docx` readers do). An extractor implements
+`extract_source_units(...)` using the signature
 expected by the dispatcher. Returned records must use consistent relative
 paths, exact text, inclusive source-coordinate ranges and valid symbol,
 section and cell fields. Reading a file does not execute its code.

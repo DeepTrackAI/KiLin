@@ -55,6 +55,20 @@ class TestTutorials(unittest.TestCase):
                 introduction = "".join(document["cells"][0]["source"])
                 self.assertIn("[tutorial guide](./README.md)", introduction)
 
+    def test_numbered_notebook_cell_ids_are_unique(self) -> None:
+        """Require valid, unique IDs in all numbered notebook cells."""
+
+        for file in notebooks():
+            document = json.loads(file.read_text(encoding="utf-8"))
+            identifiers = []
+            for index, cell in enumerate(document["cells"]):
+                with self.subTest(file=file.name, cell=index):
+                    identifier = cell.get("id")
+                    self.assertIsInstance(identifier, str)
+                    self.assertRegex(identifier, r"^[A-Za-z0-9_-]{1,64}$")
+                    identifiers.append(identifier)
+            self.assertEqual(len(identifiers), len(set(identifiers)))
+
     def test_guide_and_notebook_navigation_match_series(self) -> None:
         """Keep tutorial titles, index links, and navigation synchronized."""
 

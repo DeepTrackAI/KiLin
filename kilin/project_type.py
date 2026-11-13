@@ -128,10 +128,10 @@ public API.
 Examples
 --------
 >>> from kilin.project_type import load_project_types, project_type
->>> list(load_project_types())
-['code', 'literature']
->>> project_type("code").display_name
-'Code repository'
+>>> bool(load_project_types())
+True
+>>> all(item.id == type_id for type_id, item in load_project_types().items())
+True
 
 """
 

@@ -112,7 +112,7 @@ Examples
 --------
 >>> import kilin
 >>> project = kilin.prepare_sources_workspace(
-...     ["/path/to/source_repository"], kilin.PROJECT_TYPE_ID_CODE,
+...     ["/path/to/source_repository"], kilin.PROJECT_TYPE_IDS[0],
 ...     "/path/to/new_workspace",
 ... )
 

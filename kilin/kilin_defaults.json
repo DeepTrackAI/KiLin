@@ -32,6 +32,8 @@
       ".ps1",
       ".ipynb",
       ".pdf",
+      ".doc",
+      ".docx",
       ".gitattributes",
       ".gitignore",
       ".python-version"

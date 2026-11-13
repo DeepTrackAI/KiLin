@@ -3,8 +3,8 @@
 ## Purpose and current scope
 
 KíLín is a local-first question-answering application and extensible Python
-framework for working with user-supplied code and literature. The currently
-shipped project types are `code` and `literature`. It provides a core API,
+framework for working with user-supplied code and literature. Project types
+are provided through validated JSON definitions. It provides a core API,
 retrieval, locally executed model sessions, structured conversations, a set
 of **registered built-in tools**, and an optional desktop interface. These
 are implemented capabilities. Arbitrary plugin discovery, autonomous
@@ -61,7 +61,7 @@ architecture tables are explanatory, not an alternate API specification.
 `ProjectTypeId` identifies a validated `ProjectType` configuration;
 `ProjectProfile.type_id` selects it for a workspace. All packaged type
 definitions are available in deterministic filename order, including in
-the GUI. Standard code/literature IDs are not mandatory. See
+the GUI. No particular type ID is mandatory. See
 [configuration](configuration.md#canonical-identifiers-and-schemas) for
 field names and [project workspaces](project_workspaces.md) for empty
 creation and later source import.

@@ -17,7 +17,7 @@ matrix, how to inspect changes, and what maintainers should verify.
 
 ```text
 kilin/                # Python core and optional gui/ package
-    project_types/     # Packaged declarations for code and literature
+    project_types/     # Validated packaged project type definitions
     sources/           # Format-specific text readers/extractors
     retrievals/        # Search, graph, index persistence
     tools/             # Registered built-in tools and their defaults

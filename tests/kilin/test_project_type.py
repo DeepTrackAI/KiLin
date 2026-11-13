@@ -1,9 +1,9 @@
 """Test project-type loading, validation, and packaged definitions.
 
 Use small, synthetic JSON definitions to exercise schema contracts without
-freezing the descriptions, prompts, or intent names in packaged types. The
-packaged ``code`` and ``literature`` files are checked through the public
-loader and their integration with project profile defaults.
+freezing the descriptions, prompts, or intent names in packaged types. All
+packaged definitions are checked through the public loader and their
+integration with project profile defaults.
 
 """
 
@@ -191,10 +191,10 @@ class TestPackagedProjectTypes(unittest.TestCase):
                     else:
                         self.assertIsNone(intent.thinking)
 
-    def test_builtin_defaults_follow_current_json_configuration(self) -> None:
+    def test_packaged_defaults_follow_current_json_configuration(self) -> None:
         """Project profiles adopt configured file suffixes and size limits."""
 
-        for type_id in ("code", "literature"):
+        for type_id in load_project_types():
             with self.subTest(type_id=type_id):
                 definition = project_type(type_id)
                 profile = project.default_project_profile(type_id)

@@ -1,0 +1,125 @@
+{
+  "display_name": "Writing Assistant",
+  "description": "A scientific writing workspace for drafting, revising, source-grounded drafting, researching, and checking manuscript text.",
+  "extensions": [
+    ".pdf",
+    ".md",
+    ".txt",
+    ".py"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to draft from project sources, research a topic, or verify a manuscript claim.",
+  "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it.",
+  "answer_guidance": "For ordinary drafting or editing, provide the requested text without an unnecessary preamble. For source-grounded drafting, give a clean manuscript draft followed by separate evidence notes. For research or verification, give a clear evidence-based answer; respect any requested length or format.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 4
+  },
+  "default_intent": "writing",
+  "intents": {
+    "grounded_writing": {
+      "description": "Write or expand manuscript text using indexed project sources when the requested scientific or technical details are not already established by the supplied text or conversation. Examples: \"write a section describing the architecture using project documentation\", \"draft a methods overview from the indexed sources\", \"expand this section with evidence\", \"write a technical section on indexing\". Retrieve evidence before drafting and identify unsupported details. Not for purely stylistic editing or drafting from adequate supplied notes (writing), a standalone factual question (research), or a claim check without drafting (verification).",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop|expand|revise|rewrite|update|polish|improve)\\b[^\\n]{0,220}\\b(?:based\\s+on|using|from|grounded\\s+in|supported\\s+by|drawing\\s+on)\\s+(?:(?:the|my|our)\\s+)?(?:(?:indexed|project|attached|provided|retrieved)\\s+)?(?:sources|papers|documents|docs|documentation|evidence|references)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop|expand|revise|rewrite|update|polish|improve)\\b[^\\n]{0,180}\\b(?:source[- ]grounded|evidence[- ]grounded|evidence[- ]based|fact[- ]checked)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|compose|develop)\\s+(?:(?:an?|the|my|our)\\s+)?(?:(?:scientific|technical)\\s+)?(?:section|subsection|paragraph|overview|introduction|abstract|background|methods)\\s+(?:on|about|describing|explaining|covering|of|to)\\b"
+      ],
+      "system_prompt": "Draft scientifically and technically accurate manuscript text from the retrieved project evidence and any text the user supplies. Do not invent facts, bibliographic entries, or citation keys; retain existing LaTeX commands, mathematics, and bibliography keys. Provide two separate sections: \"Manuscript draft\" containing clean, copyable manuscript prose, and \"Evidence notes\" mapping source-dependent claims in that draft to numbered retrieval citations such as [1]. Put the numbered citations immediately after the corresponding claims in the evidence notes, never inside the manuscript draft. The general instruction to cite retrieved evidence applies to evidence notes, not to manuscript prose. Do not convert retrieval numbers into LaTeX bibliography keys or infer unsupported details. If sources are missing or insufficient, identify the gap explicitly in the notes and avoid claiming verification. When evidence does not support a requested assertion, omit or qualify it instead of presenting it as fact.",
+      "answer_guidance": "Output a \"Manuscript draft\" first, followed by separate \"Evidence notes\". Keep retrieval citation markers such as [1] in the notes only; link each important source-dependent statement to its evidence there. Preserve the user's requested format (including LaTeX) for the draft. Do not invent manuscript citation keys or a bibliography. State evidential limitations in the notes.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 6,
+        "passages_per_source": 3,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "writing": {
+      "description": "Draft, outline, rewrite, edit, polish, shorten, expand, translate, or improve manuscript text using facts and text already provided by the user or recent conversation, without project retrieval. Examples: \"rewrite this abstract\", \"improve the introduction\", \"draft a conclusion from these notes\", \"make this paragraph clearer\". Use grounded_writing when creating or substantively expanding scientific text requires new factual information from project sources; use research or verification for questions or claim checks that do not ask for a draft.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:rewrite|revise|edit|polish|proofread|rephrase|shorten|expand|tighten)\\s+(?:this|the|my|our|following)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|outline|write)\\s+(?:an?|the|this|my|our)\\s+(?:abstract|introduction|paragraph|section|conclusion|outline|draft)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:improve|make)\\s+(?:this|the|my|our)\\s+(?:abstract|introduction|paragraph|section|text|draft)\\b"
+      ],
+      "system_prompt": "Work from the user's supplied text and relevant recent conversation, without retrieving project sources. For a revision, preserve the author's meaning, technical terminology, mathematical expressions, LaTeX syntax, and existing citation keys. Do not introduce new factual claims or bibliography entries. Do not add KíLín evidence labels such as [1] or convert those labels into LaTeX citations. Return the proposed draft or revision directly; explain edits only when requested.",
+      "history": {
+        "policy": "recent"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    },
+    "research": {
+      "description": "Find, summarize, or explain facts and background from the indexed papers, documentation, and other project sources to inform a manuscript. Examples: 'what do the sources say about this method?', 'find evidence about indexing', 'explain how source cards work'. Do not edit a supplied draft or evaluate a particular claim for correctness; use writing, grounded_writing, or verification instead.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:find|retrieve|locate|search\\s+for)\\s+(?:the\\s+)?(?:relevant\\s+)?(?:sources|papers|references|documentation|evidence)\\b",
+        "^\\s*what\\s+do\\s+(?:the\\s+)?(?:sources|documents|papers|documentation)\\s+say\\b"
+      ],
+      "system_prompt": "Answer from the retrieved project evidence. Put numbered source references such as [1] directly after the factual statements they support. Distinguish what the indexed sources establish from what remains unknown. Do not invent references, and do not treat retrieval numbers as bibliography keys for the manuscript.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 6,
+        "passages_per_source": 3,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "verification": {
+      "description": "Check whether scientific or technical statements in a draft are supported, contradicted, or not established by the indexed project sources. Examples: 'verify these claims', 'fact-check this paragraph', 'does the evidence support this statement?'. Report findings without automatically rewriting manuscript text. Not for proofreading, formatting, or stylistic editing.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:verify|fact[ -]?check|check\\s+(?:the\\s+)?(?:factual\\s+)?(?:accuracy|claims|statements))\\b",
+        "^\\s*(?:does|do)\\s+(?:the|these)\\s+(?:sources|papers|documents|evidence)\\s+support\\b"
+      ],
+      "system_prompt": "Evaluate each requested scientific or technical statement against the retrieved evidence. Clearly distinguish supported, contradicted, and not-established statements, citing the corresponding source numbers such as [1]. Absence of supporting evidence is not proof that a statement is false. Do not silently rewrite the manuscript or convert internal evidence numbers into bibliography keys.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 3,
+        "max_passages": 20,
+        "evidence_tokens": 12000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    }
+  },
+  "welcome_prompts": [
+    "Which section of your manuscript would you like to work on?",
+    "Would you like to write, revise, draft from sources, research, or verify a passage?",
+    "Paste a passage for editing, or ask a question about your sources."
+  ],
+  "suggestions": [
+    "Rewrite this abstract for clarity",
+    "Draft an introduction from my notes",
+    "Shorten this paragraph without changing its meaning",
+    "Improve the structure of this section",
+    "Draft a technical section using the indexed project documents",
+    "Expand this passage with evidence from the project sources",
+    "Find sources supporting this claim",
+    "What do the project sources say about …?",
+    "Verify the technical claims in this paragraph",
+    "Check whether these statements are supported by the documents"
+  ]
+}

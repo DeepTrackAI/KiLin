@@ -61,8 +61,11 @@ const keepNewProjectValue = () => {};
 byId("temperature").value = "0";
 byId("max-new-tokens").value = "8192";
 byId("thinking").checked = true;
+byId("question").style = {};
+byId("question").scrollHeight = 54;
 """
         for name in (
+            "resizeQuestionInput", "setQuestionDraft",
             "confirmedAnswerSettings", "sameAnswerSettings",
             "displayAnswerSettings", "resetAnswerSettings",
             "queueAnswerSettings", "matchesAnswerSettingsSave",

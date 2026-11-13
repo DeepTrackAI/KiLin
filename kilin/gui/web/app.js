@@ -193,6 +193,28 @@ const genericEmptyChat = {
 };
 
 /**
+ * Fit the chat editor to its content, up to the CSS height limit.
+ *
+ * Resetting the height first lets the editor contract after text is removed
+ * or its available width increases.
+ */
+function resizeQuestionInput() {
+  const input = byId("question");
+  input.style.height = "auto";
+  input.style.height = `${input.scrollHeight}px`;
+}
+
+/**
+ * Replace a chat draft and resize, including drafts restored by KíLín.
+ *
+ * @param text Text to show in the chat editor.
+ */
+function setQuestionDraft(text) {
+  byId("question").value = text;
+  resizeQuestionInput();
+}
+
+/**
  * Rebuild the project type dropdown, keeping the current choice.
  *
  * @param types Project types sent by the engine.
@@ -2897,7 +2919,7 @@ async function openWorkspaceFile(path) {
 function restoreUnansweredQuestion() {
   const question = unansweredQuestion;
   unansweredQuestion = "";
-  if (question && !byId("question").value.trim()) byId("question").value = question;
+  if (question && !byId("question").value.trim()) setQuestionDraft(question);
 }
 
 /**
@@ -4206,7 +4228,7 @@ function addMessageActions(item, turn) {
 function openEmptyChat(draft) {
   if (busy) return;
   if (!conversation.querySelector(".turn")) {
-    if (draft) byId("question").value = draft;
+    if (draft) setQuestionDraft(draft);
     byId("question").focus();
     return;
   }
@@ -4715,7 +4737,7 @@ function renderConversationEmpty() {
     button.textContent = text;
     button.addEventListener("click", () => {
       const question = byId("question");
-      question.value = text;
+      setQuestionDraft(text);
       question.focus();
       // Select the "…" so typing the missing part replaces it.
       const gap = text.indexOf("…");
@@ -5940,7 +5962,7 @@ function onEvent(raw) {
     setBusy(false);
     if (branchDraft) {
       // A branch from a question: edit it and send it again.
-      byId("question").value = branchDraft;
+      setQuestionDraft(branchDraft);
       byId("question").focus();
     }
     branchDraft = null;
@@ -6130,7 +6152,7 @@ function onEvent(raw) {
     }
     if (attachedAsk) {
       // Adding the attached files failed: give the question back.
-      byId("question").value = attachedAsk.question;
+      setQuestionDraft(attachedAsk.question);
       messageAttachments = attachedAsk.attachments;
       attachedAsk = null;
       renderAttachments();
@@ -6372,7 +6394,7 @@ byId("question-form").addEventListener("submit", (event) => {
     error.classList.remove("hidden");
     return;
   }
-  byId("question").value = "";
+  setQuestionDraft("");
   // A question goes to the chat the engine has open.
   returnToAnswer();
   const ask = {
@@ -6579,7 +6601,7 @@ function finishProjectsFolderSwitch(message = "") {
  */
 function sendQuestion(ask) {
   if (answerSettingsSave.pending || answerSettingsSave.uncertain) {
-    byId("question").value = ask.question;
+    setQuestionDraft(ask.question);
     messageAttachments = ask.attachments;
     renderAttachments();
     error.textContent = "Confirm answer settings before sending the question.";
@@ -6620,7 +6642,19 @@ function addAttachedSources(check) {
   setBusy(true, "Adding the attached files and updating the index…");
   bridge.addProjectSources(JSON.stringify(check.sources), "{}");
 }
-byId("question").addEventListener("keydown", (event) => {
+const questionInput = byId("question");
+questionInput.addEventListener("input", resizeQuestionInput);
+// Side-panel dragging also changes the input width, without a window resize.
+// Ignore height-only observations to avoid a resize feedback loop.
+let questionWidth = questionInput.offsetWidth;
+new ResizeObserver(() => {
+  const width = questionInput.offsetWidth;
+  if (width === questionWidth) return;
+  questionWidth = width;
+  resizeQuestionInput();
+}).observe(questionInput);
+resizeQuestionInput();
+questionInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     byId("question-form").requestSubmit();

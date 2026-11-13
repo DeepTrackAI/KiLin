@@ -3,7 +3,7 @@
 This package separates selected file reading from text-unit extraction.
 ``SourceFile`` stores repository-relative text, and ``SourceUnit`` adds
 structural provenance for downstream chunking. Suffix-specific hooks provide
-Python, MATLAB, Markdown, notebook, PDF, and plain-text handling.
+Python, MATLAB, Markdown, notebook, PDF, Word, and plain-text handling.
 
 Key Features
 ------------
