@@ -47,5 +47,28 @@ class TestSourceCoverage(unittest.TestCase):
                 self.assertFalse(asks_for_all_sources(question))
 
 
+<<<<<<< Updated upstream
+=======
+class TestRequestedSourceCount(unittest.TestCase):
+
+    def test_counts_of_sources(self):
+        cases = {
+            "Review the five articles for their relevance.": 5,
+            "Review the zero papers.": 0,
+            "Review the one paper.": 0,
+            "Summarize twenty articles.": 20,
+            "Compare 12 articles.": 12,
+            "Compare two papers on memory.": 2,
+            "Do all 5 project papers use the same data?": 5,
+            "How does it compare with the 2017 paper?": 0,
+            "Which of the 3 groups grew fastest?": 0,
+            "Summarize the paper.": 0,
+        }
+        for question, count in cases.items():
+            with self.subTest(question=question):
+                self.assertEqual(requested_source_count(question), count)
+
+
+>>>>>>> Stashed changes
 if __name__ == "__main__":
     unittest.main()

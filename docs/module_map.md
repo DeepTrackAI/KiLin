@@ -187,13 +187,21 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Model management | 8 |
 | Per-tool README | 42 |
 | Project workspaces | 6 |
+<<<<<<< Updated upstream
 | Retrieval pipeline | 28 |
+=======
+| Retrieval pipeline | 29 |
+>>>>>>> Stashed changes
 | Source pipeline | 18 |
 | Tool extension contracts | 23 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
+<<<<<<< Updated upstream
 **Total production Python modules: 152.**
+=======
+**Total production Python modules: 153.**
+>>>>>>> Stashed changes
 
 ## Non-Python resources and UI assets
 

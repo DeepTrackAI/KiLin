@@ -1834,6 +1834,13 @@ class RAGSession:
                         unavailable=unreadable,
                         limits_hit=hits,
                     )
+                    specified = requested_source_count(question)
+                    if specified:
+                        represented = len({item.path for item in evidence})
+                        coverage["specified_source_count"] = specified
+                        coverage["specified_count_met"] = (
+                            represented >= specified
+                        )
                     effective["coverage"] = coverage
                     effective["evidence_limits"] = asdict(source_limits)
                     trace.emit(
@@ -1854,6 +1861,19 @@ class RAGSession:
                         if coverage["unindexed_sources"]:
                             coverage_notice += (
                                 " Some sources had no searchable text."
+                            )
+                    if specified and not coverage["specified_count_met"]:
+                        represented = len({item.path for item in evidence})
+                        shortfall = (
+                            f"The question requested {specified} sources; "
+                            f"evidence represents only {represented}. "
+                            "Unrepresented sources have not been assessed."
+                        )
+                        if coverage_notice:
+                            coverage_notice += " " + shortfall
+                        else:
+                            coverage_notice = "Coverage incomplete: " + (
+                                shortfall[0].lower() + shortfall[1:]
                             )
                 report_phase(
                     ANSWER_PHASE_EVIDENCE_READY,
@@ -6012,6 +6032,51 @@ def _answer_prompt(
     return "\n\n".join(sections)
 
 
+<<<<<<< Updated upstream
+=======
+def _per_source_instruction(
+    question: str, evidence: Sequence[Evidence]
+) -> str:
+    """Ask for each source in turn when the question is about several.
+
+    Parameters
+    ----------
+    question: str
+        The user's question.
+    evidence: Sequence[Evidence]
+        The numbered evidence.
+
+    Returns
+    -------
+    str
+        For a question about every source ("all the papers") or a number
+        of them ("the five articles"), with evidence from at least two
+        sources: an instruction naming those sources and asking for each in
+        turn, saying plainly when one is not relevant or not covered;
+        otherwise empty.
+
+    """
+
+    sources = list(dict.fromkeys(item.path for item in evidence))
+    count = requested_source_count(question)
+    if len(sources) < 2 or not (
+        count >= 2 or asks_for_all_sources(question)
+    ):
+        return ""
+    basenames = [path.name for path in sources]
+    labels = [
+        path.as_posix() if basenames.count(path.name) > 1 else path.name
+        for path in sources
+    ]
+    return (
+        f"The question is about several documents; the evidence comes from "
+        f"{len(sources)}: {', '.join(labels)}. Cover each of them in turn, "
+        "under a short heading naming it, and say plainly when one is not "
+        "relevant to the question or the evidence does not cover it."
+    )
+
+
+>>>>>>> Stashed changes
 def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
     """Convert one conversation turn to JSON-safe data.
 

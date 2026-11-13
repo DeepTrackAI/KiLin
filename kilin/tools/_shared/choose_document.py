@@ -136,6 +136,19 @@ _SEVERAL_DOCUMENTS: Final[re.Pattern[str]] = re.compile(
     r"|collection|project)\b",
     re.IGNORECASE,
 )
+# One matched paper is not a complete scope for a comparison whose other
+# target may be unresolved. Do not spend an additional router model call.
+_COMPARISON: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:compar(?:e|es|ed|ing|ison|isons)|contrast(?:s|ed)?"
+    r"|differ(?:s|ent|ences)?|versus|vs\.?|between)\b",
+    re.IGNORECASE,
+)
+_MULTIPLE_TARGETS: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:all|each|every|both|these|those|other|several|multiple)\b"
+    r"(?:\W+\w+){0,2}\W+(?:papers?|articles?|studies|documents?"
+    r"|sources?|pdfs?)\b",
+    re.IGNORECASE,
+)
 
 
 def choose_document(
@@ -365,10 +378,19 @@ def document_scope(
     Returns
     -------
     tuple[list[pathlib.Path], str | None]
+<<<<<<< Updated upstream
         The files the question names; otherwise the file the earlier turns
         were about, when the request means it ("go through that paper",
         "in this paper", "does it say MRI?"); otherwise no files (the whole
         project). The second value says why.
+=======
+        Files the question names or describes (``described_sources``),
+        including the earlier file when the question says "it". If a
+        comparison leaves another target unresolved, no narrow scope is
+        selected. Otherwise, a file referred to in earlier turns can be
+        selected, or no scope is returned (the whole project). The second
+        value records why a scope was chosen.
+>>>>>>> Stashed changes
 
     Notes
     -----
@@ -381,8 +403,39 @@ def document_scope(
     """
 
     named = named_paths(request.question, sources, authors=True)
+<<<<<<< Updated upstream
     if named:
         return named, _NAMED_IN_QUESTION
+=======
+    indexed = set(sources)
+    described = described_sources(
+        request.question,
+        {path: card for path, card in (cards or {}).items()
+         if path in indexed},
+    )
+    targets = list(dict.fromkeys((*named, *described)))
+    if targets:
+        # An explicit filename wins for an ordinary one-document request;
+        # "it" also names an earlier paper only in a comparison.
+        if _POINTS_BACK.search(request.question) and (
+            not named or _COMPARISON.search(request.question)
+            or _MULTIPLE_TARGETS.search(request.question)
+        ):
+            earlier = earlier_file(request, sources, indexed)
+            if earlier is not None and earlier[0] not in targets:
+                targets.insert(0, earlier[0])
+        # An unresolved comparison target must not disappear merely
+        # because one of the documents was recognized deterministically.
+        if len(targets) < 2 and (
+            _COMPARISON.search(request.question)
+            or _MULTIPLE_TARGETS.search(request.question)
+        ):
+            return [], None
+        reason = (
+            _NAMED_IN_QUESTION if named else _DESCRIBED_IN_QUESTION
+        )
+        return targets, reason
+>>>>>>> Stashed changes
 
     earlier = earlier_file(request, sources, set(sources))
     if earlier is None:

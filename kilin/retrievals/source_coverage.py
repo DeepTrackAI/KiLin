@@ -77,3 +77,53 @@ def asks_for_all_sources(question: str) -> bool:
     return bool(
         _ALL_SOURCES.search(question) and _EXHAUSTIVE_WORDS.search(question)
     )
+<<<<<<< Updated upstream
+=======
+
+
+# Number words of a source count ("the five articles").
+_NUMBER_WORDS: Final[dict[str, int]] = {
+    word: value for value, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven "
+        "twelve thirteen fourteen fifteen sixteen seventeen eighteen "
+        "nineteen twenty".split()
+    )
+}
+_COUNT: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?P<count>{'|'.join(_NUMBER_WORDS)}|[1-9]\d?)\W+"
+    rf"(?:\w+\W+)?{_PLURAL_DOCUMENTS}\b",
+    re.IGNORECASE,
+)
+
+
+def requested_source_count(question: str) -> int:
+    """Return how many sources a question asks about, if it says.
+
+    Parameters
+    ----------
+    question: str
+        Original question, before query expansion or reformulation.
+
+    Returns
+    -------
+    int
+        The largest count of sources the question names ("review the five
+        articles" is 5, "compare two papers" is 2); 0 when it names none.
+
+    Examples
+    --------
+    >>> requested_source_count("Review the five articles for relevance")
+    5
+    >>> requested_source_count("How does it compare with the 2017 paper?")
+    0
+
+    """
+
+    counts = []
+    for match in _COUNT.finditer(question):
+        token = match.group("count").casefold()
+        counts.append(
+            _NUMBER_WORDS[token] if token in _NUMBER_WORDS else int(token)
+        )
+    return max(counts, default=0)
+>>>>>>> Stashed changes

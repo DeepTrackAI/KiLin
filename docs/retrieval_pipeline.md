@@ -329,6 +329,29 @@ document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
 
+<<<<<<< Updated upstream
+=======
+A document can also be described instead of named ("the 2017 paper", "the
+BRAPH 2 paper", "the earlier BRAPH framework"). `retrievals/
+source_descriptions.py` matches such a description against the source
+cards: a year against the card's year (or, when the card has none, the
+year an author-year file name starts with), and every other word against
+the card's title; "earlier" or "original" (and "later" or "newer") pick
+the oldest (or newest) of the papers that fit. Numbered title names such
+as "BRAPH 2" and "BRAPH2" are treated as exact version aliases, not as
+general fuzzy matches. A description resolves only when exactly one paper
+fits; a paper with no known year fits any year, so it keeps a year
+description ambiguous.
+
+Named and described targets are combined. For comparisons, all reliably
+identified sources are retained, including the earlier turn's document
+when the question says "it". When a comparison identifies only one of its
+targets ("compare these articles with the 2017 paper"), document scoping
+is withheld and the wider retrieval remains available. This conservative
+fallback prevents an inferred target from excluding an unresolved one;
+it does not guarantee that every requested source fits the evidence budget.
+
+>>>>>>> Stashed changes
 ## Four-channel source-first retrieval and evidence budgets
 
 `retrievals/strategies/retrieval_sources.py` ranks sources independently
@@ -405,15 +428,27 @@ Questions explicitly asking about *all*, *each*, or *every* source request
 exhaustive mode for that turn, regardless of the configured bounded default.
 When a request names several documents, the explicit scope is strict.
 
-If not every requested source can be represented, KíLín appends a
-deterministic **Coverage incomplete** notice to the answer, without another
-model call. It identifies how many requested sources had at least one
-passage and notes unindexed sources separately. The saved turn parameters
-contain a `coverage` record (requested/represented counts, missing paths,
-limit reasons, estimated evidence tokens and `complete`), and the trace
-receives `retrieval.coverage`. This report expresses **source representation
-in the supplied context, not an exhaustive reading of each document**.
-No additional model calls or background batches are started.
+If not every requested source can be represented in exhaustive mode,
+KíLín appends a deterministic **Coverage incomplete** notice to the
+answer, without another model call. It identifies how many requested
+sources had at least one passage and notes unindexed sources separately.
+For a bounded question explicitly asking about a number of papers (for
+example, five), a shortfall between that number and the distinct files in
+the **final** answer evidence also produces a notice. It does not turn a
+bounded request into an exhaustive search, invent the identities of
+missing papers, or raise the configured hard limits.
+
+The saved turn parameters contain a `coverage` record (requested/represented
+counts, missing paths, limit reasons, estimated evidence tokens and
+`complete`), and the trace receives `retrieval.coverage`. For an explicit
+numeric count, the record additionally contains `specified_source_count`
+and `specified_count_met`; these fields refer to the number asked for,
+not the number of individually identified files. The existing `complete`
+field still describes the explicitly selected source set. All coverage
+reports express **source representation in the supplied context, not an
+exhaustive reading of each document**. No additional model calls or
+background batches are started. Where source basenames collide, the answer
+prompt uses their distinct source-relative paths.
 
 The final limiter runs after context expansion **and** related-turn evidence
 have been considered. Expansion and follow-ups cannot bypass the passage,

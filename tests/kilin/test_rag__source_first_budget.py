@@ -48,6 +48,35 @@ class TestSourceFirstBudget(unittest.TestCase):
         self.assertLessEqual(evidence_tokens(evidence), 5000)
         session.embedding_session.embed_query.assert_called_once()
 
+    def test_comparison_scope_reaches_answer_retrieval_without_a_router(self):
+        session = fixtures._session()
+        session.chunks = [
+            chunk("old", "original graph methods", path="old.pdf"),
+            chunk("new", "new graph framework", path="new.pdf"),
+        ]
+        cards = {
+            Path("old.pdf"): {"title": "BRAPH: graph software",
+                              "year": "2017"},
+            Path("new.pdf"): {"title": "BRAPH 2: a framework",
+                              "year": "2026"},
+        }
+        intent = replace(_intent(), retrieval_strategy="source_first")
+        real_scope = rag.document_scope
+        with _answer_patches(session, intent) as mocks:
+            with (
+                patch.object(rag, "document_scope", side_effect=real_scope),
+                patch.object(session, "_card_metadata", return_value=cards),
+            ):
+                session.ask(
+                    "How does BRAPH 2 differ from the earlier BRAPH "
+                    "framework?", use_router=False,
+                )
+        self.assertEqual(
+            mocks.retrieve.call_args.kwargs["scope"],
+            [Path("new.pdf"), Path("old.pdf")],
+        )
+        self.assertEqual(session.chat_session.reply.call_count, 1)
+
     def test_oversized_chunks_do_not_bypass_expansion_budget(self):
         session = _session()
         budget = EvidenceLimits(3, 1, 3, 100)
@@ -215,10 +244,69 @@ class TestSourceFirstBudget(unittest.TestCase):
             answer = session.ask(
                 "Compare two papers", use_router=False
             )
-        self.assertNotIn("Coverage incomplete", answer)
+        self.assertIn("Coverage incomplete", answer)
+        self.assertIn("requested 2 sources", answer)
+        self.assertIn("represents only 1", answer)
+        coverage = session.turns[-1].parameters["coverage"]
+        self.assertEqual(coverage["mode"], "bounded")
+        self.assertEqual(coverage["specified_source_count"], 2)
+        self.assertFalse(coverage["specified_count_met"])
+        self.assertEqual(session.chat_session.reply.call_count, 1)
+
+    def test_numeric_count_shortfall_respects_limits_and_streams_once(self):
+        session = fixtures._session()
+        session.chunks = [
+            chunk("a", "first", path="a.pdf"),
+            chunk("b", "second", path="b.pdf"),
+            chunk("c", "third", path="c.pdf"),
+            chunk("d", "fourth", path="d.pdf"),
+            chunk("e", "fifth", path="e.pdf"),
+        ]
+        intent = replace(
+            _intent(), retrieval_strategy="source_first",
+            max_sources=2, max_passages=2, evidence_tokens=1000,
+        )
+        output = []
+        with _answer_patches(session, intent) as mocks:
+            mocks.retrieve.return_value = (
+                _evidence(1, path="a.pdf"),
+                _evidence(2, path="b.pdf"),
+            )
+            answer = session.ask(
+                "Compare five papers", use_router=False,
+                token_callback=output.append,
+            )
+        self.assertIn("requested 5 sources", answer)
+        self.assertIn("represents only 2", answer)
+        self.assertEqual(sum("Coverage incomplete" in part
+                             for part in output), 1)
+        coverage = session.turns[-1].parameters["coverage"]
+        self.assertEqual(coverage["mode"], "bounded")
+        self.assertEqual(coverage["specified_source_count"], 5)
+        self.assertFalse(coverage["specified_count_met"])
+        self.assertEqual(len(session.turns[-1].evidence), 2)
+        self.assertEqual(mocks.retrieve.call_count, 1)
+        self.assertEqual(session.chat_session.reply.call_count, 1)
         self.assertEqual(
-            session.turns[-1].parameters["coverage"]["mode"],
-            "bounded",
+            mocks.retrieve.call_args.kwargs["source_limits"].max_sources,
+            2,
+        )
+
+    def test_numeric_count_satisfied_has_no_shortfall_notice(self):
+        session = fixtures._session()
+        intent = replace(
+            _intent(), retrieval_strategy="source_first",
+            max_sources=2, max_passages=2, evidence_tokens=1000,
+        )
+        with _answer_patches(session, intent) as mocks:
+            mocks.retrieve.return_value = (
+                _evidence(1, path="a.pdf"),
+                _evidence(2, path="b.pdf"),
+            )
+            answer = session.ask("Compare two papers", use_router=False)
+        self.assertNotIn("Coverage incomplete", answer)
+        self.assertTrue(
+            session.turns[-1].parameters["coverage"]["specified_count_met"]
         )
 
     def test_related_turn_evidence_cannot_overrun_final_cap(self):

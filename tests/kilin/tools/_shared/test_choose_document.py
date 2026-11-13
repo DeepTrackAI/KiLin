@@ -58,6 +58,104 @@ class TestDocumentScopeWording(unittest.TestCase):
         self.assertEqual(scope, [Path("tiunn26braph2.pdf")])
         router.assert_called_once()
 
+<<<<<<< Updated upstream
+=======
+    def test_described_documents_resolve_through_cards(self):
+        sources = [*SOURCES, Path("mijalkov17braph.pdf")]
+        cards = {
+            Path("mijalkov17braph.pdf"): {"title": "BRAPH: graph software",
+                                          "year": "2017"},
+            Path("tiunn26braph2.pdf"): {"title": "BRAPH 2: a framework",
+                                        "year": "2026"},
+            Path("patil25deep.pdf"): {"title": "Deep learning of spectra",
+                                      "year": "2025"},
+        }
+        router = Mock(return_value="ALL")
+        cases = (
+            # "it" keeps the earlier file next to the described one.
+            ("How does it compare with the 2017 paper?",
+             [Path("tiunn26braph2.pdf"), Path("mijalkov17braph.pdf")]),
+            ("How does BRAPH 2 differ from the earlier BRAPH framework?",
+             [Path("tiunn26braph2.pdf"),
+              Path("mijalkov17braph.pdf")]),
+        )
+        for question, expected in cases:
+            with self.subTest(question=question):
+                scope, why = document_scope(
+                    ToolRequest(question, question, earlier=EARLIER),
+                    router, sources, cards,
+                )
+                self.assertEqual(scope, expected)
+                self.assertEqual(why, "described in the question")
+        router.assert_not_called()
+        # Without cards, descriptions are not resolved.
+        scope, why = document_scope(
+            ToolRequest("Summarize the 2017 paper.",
+                        "Summarize the 2017 paper.", earlier=EARLIER),
+            router, sources,
+        )
+        self.assertNotEqual(why, "described in the question")
+
+    def test_unresolved_comparison_does_not_narrow_to_one_paper(self):
+        sources = [Path("mijalkov17braph.pdf"),
+                   Path("tiunn26braph2.pdf")]
+        cards = {
+            sources[0]: {"title": "BRAPH: graph software", "year": "2017"},
+            sources[1]: {"title": "BRAPH 2: a framework", "year": "2026"},
+        }
+        router = Mock(return_value="SAME")
+        for question in (
+            "Compare these articles with the 2017 paper.",
+            "How does the 2017 paper differ from an unrelated study?",
+            "Compare mijalkov17braph.pdf with an unknown article.",
+        ):
+            with self.subTest(question=question):
+                scope, why = document_scope(
+                    ToolRequest(question, question), router, sources, cards,
+                )
+                self.assertEqual((scope, why), ([], None))
+        router.assert_not_called()
+        # "All" modifies functions here, not the document scope.
+        focused = "List all functions in mijalkov17braph.pdf."
+        self.assertEqual(
+            document_scope(ToolRequest(focused, focused), router,
+                           sources, cards),
+            ([sources[0]], "named in the question"),
+        )
+        single = "Summarize the 2017 paper."
+        self.assertEqual(
+            document_scope(ToolRequest(single, single), router,
+                           sources, cards),
+            ([sources[0]], "described in the question"),
+        )
+
+    def test_named_and_described_comparison_targets_are_combined(self):
+        sources = [Path("patil25deep.pdf"), Path("tiunn26braph2.pdf")]
+        cards = {
+            sources[1]: {"title": "BRAPH 2: a framework", "year": "2026"},
+        }
+        question = "Compare patil25deep.pdf with the BRAPH2 paper."
+        router = Mock()
+        scope, why = document_scope(
+            ToolRequest(question, question), router, sources, cards,
+        )
+        self.assertEqual(scope, sources)
+        self.assertEqual(why, "named in the question")
+        router.assert_not_called()
+
+    def test_explicit_file_wins_over_earlier_its_reference(self):
+        router = Mock(return_value="ALL")
+        question = "Explain its methods in patil25deep.pdf."
+        scope, why = document_scope(
+            ToolRequest(question, question, earlier=EARLIER),
+            router, SOURCES,
+        )
+        self.assertEqual(
+            (scope, why), ([Path("patil25deep.pdf")], "named in the question")
+        )
+        router.assert_not_called()
+
+>>>>>>> Stashed changes
     def test_named_documents_and_no_earlier_file(self):
         router = Mock()
         scope, why = document_scope(
