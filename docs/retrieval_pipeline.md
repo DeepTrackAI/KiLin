@@ -344,7 +344,7 @@ model judges only the remaining requests.
 A document can also be described instead of named ("the 2017 paper", "the
 BRAPH 2 paper", "the earlier BRAPH framework").
 `retrievals/source_descriptions.py` matches such a description against the
-source cards: a year against the card's year (or, when the card has none, 
+source cards: a year against the card's year (or, when the card has none,
 the year an author-year file name starts with), and every other word against
 the card's title; "earlier" or "original" (and "later" or "newer") pick
 the oldest (or newest) of the papers that fit. Numbered title names such
