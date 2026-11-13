@@ -92,6 +92,8 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/__init__.py`](../kilin/sources/__init__.py) | Expose source-file records and structured source extraction. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/_word_metadata.py`](../kilin/sources/_word_metadata.py) | Read optional title/author properties from Word files for citations and search. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/__init__.py`](../kilin/sources/extensions/__init__.py) | Group optional suffix-specific source readers and extractors. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_bib.py`](../kilin/sources/extensions/sources_bib.py) | Index BibTeX entries as individually searchable source units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_bbl.py`](../kilin/sources/extensions/sources_bbl.py) | Index compiled LaTeX bibliography entries as searchable source units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_doc.py`](../kilin/sources/extensions/sources_doc.py) | Read the body text of old binary Word `.doc` files. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_docx.py`](../kilin/sources/extensions/sources_docx.py) | Read Word `.docx` files as Markdown-style text with heading sections. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -99,6 +101,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/sources/extensions/sources_md.py`](../kilin/sources/extensions/sources_md.py) | Partition Markdown text at ATX-style heading lines. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_pdf.py`](../kilin/sources/extensions/sources_pdf.py) | Extract selectable PDF text and expose page-scoped source units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_py.py`](../kilin/sources/extensions/sources_py.py) | Partition Python source using syntax-tree declaration boundaries. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_tex.py`](../kilin/sources/extensions/sources_tex.py) | Partition LaTeX document text at sectioning commands. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_txt.py`](../kilin/sources/extensions/sources_txt.py) | Split plain-text sources into nonblank paragraph units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/sources.py`](../kilin/sources/sources.py) | Read selected repository files and extract provenance-bearing text units. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/tools/__init__.py`](../kilin/tools/__init__.py) | Tools that intents in a project type can use. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -121,6 +124,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/_shared/planning.py`](../kilin/tools/_shared/planning.py) | Plan expensive tool runs and let the user confirm them or choose. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/references.py`](../kilin/tools/_shared/references.py) | Find a paper's reference lists and split one into entries, as printed. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/scan_settings.py`](../kilin/tools/_shared/scan_settings.py) | Validate shared mention-scanning fields with caller-owned defaults. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/_shared/source_access.py`](../kilin/tools/_shared/source_access.py) | Resolve source files only from an authorized project selection. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/_shared/) |
 | [`kilin/tools/_shared/sentences.py`](../kilin/tools/_shared/sentences.py) | Split indexed text into distinct sentences with source positions. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/term_filter.py`](../kilin/tools/_shared/term_filter.py) | Find the passages that mention the exact terms of a question. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/_shared/terms.py`](../kilin/tools/_shared/terms.py) | Extract and validate exact search terms for registered tools. | [Tool extension contracts](extension_interfaces.md) | [Tool tests](../tests/kilin/tools/) |
@@ -150,6 +154,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/reference_check/__init__.py`](../kilin/tools/reference_check/__init__.py) | Expose the registered ``reference_check`` tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_citations.py`](../kilin/tools/reference_check/_citations.py) | Find a paper's numbered in-text citations and their citing sentences. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_configuration.py`](../kilin/tools/reference_check/_configuration.py) | Validate the defaults owned by the reference_check tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/reference_check/_latex.py`](../kilin/tools/reference_check/_latex.py) | Read a LaTeX paper's citations and bibliography. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_matching.py`](../kilin/tools/reference_check/_matching.py) | Match a paper's reference entries to the files of a project. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_resolution.py`](../kilin/tools/reference_check/_resolution.py) | Resolve missing bibliography entries without implicit network access. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/tool.py`](../kilin/tools/reference_check/tool.py) | Tool ``reference_check``: check one paper's references and citations. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -180,15 +185,15 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 41 |
+| Per-tool README | 42 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 28 |
-| Source pipeline | 15 |
-| Tool extension contracts | 22 |
+| Source pipeline | 18 |
+| Tool extension contracts | 23 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 147.**
+**Total production Python modules: 152.**
 
 ## Non-Python resources and UI assets
 

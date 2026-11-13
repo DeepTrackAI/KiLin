@@ -12,6 +12,7 @@ and file names; headings come from synthetic passages.
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -101,6 +102,37 @@ class TestDocumentInfo(unittest.TestCase):
             DocumentInfo("b", None),
         )
 
+    def test_latex_title_from_the_file(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder)
+            (source / "draft.tex").write_text(
+                "\\documentclass{article}\n"
+                "\\title{Brain networks with \\emph{BRAPH}}\n"
+                "\\begin{document}\nText.\n\\end{document}\n",
+                encoding="utf-8",
+            )
+            (source / "chapter.tex").write_text(
+                "\\section{Results}\nText.\n", encoding="utf-8"
+            )
+            self.assertEqual(
+                document_search.document_info(
+                    source, Path("draft.tex"), []
+                ),
+                DocumentInfo("Brain networks with BRAPH", None),
+            )
+            self.assertEqual(
+                document_search.document_info(
+                    source, Path("chapter.tex"), []
+                ),
+                DocumentInfo("chapter", None),
+            )
+            # A missing file falls back to the file name.
+            self.assertEqual(
+                document_search.document_info(
+                    source, Path("gone.tex"), []
+                ),
+                DocumentInfo("gone", None),
+            )
 
 class TestSectionHeadings(unittest.TestCase):
 
@@ -142,6 +174,17 @@ class TestSectionHeadings(unittest.TestCase):
                       "markdown_section", None, "Findings")
         self.assertEqual(
             document_search.section_headings([chunk]), {"m": "Findings"}
+        )
+
+    def test_latex_passages_keep_their_section(self):
+        chunks = [
+            Chunk("f", Path("d.tex"), "\\maketitle", 7, 9,
+                  "latex_front", None, None),
+            Chunk("s", Path("d.tex"), "\\section{Methods}\nText", 10, 12,
+                  "latex_section", None, "Methods"),
+        ]
+        self.assertEqual(
+            document_search.section_headings(chunks), {"s": "Methods"}
         )
 
 

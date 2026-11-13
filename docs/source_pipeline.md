@@ -125,6 +125,9 @@ It does **not execute source files or notebook cells**.
 | `sources_pdf.py` | Page-oriented selectable PDF text; page/section coordinates |
 | `sources_docx.py` | Word body text in reading order; Markdown heading sections |
 | `sources_doc.py` | Old Word 97-2003 body text in reading order; no headings |
+| `sources_tex.py` | LaTeX front matter and sections at `\part` to `\subsubsection`; setup before `\begin{document}` left out |
+| `sources_bib.py` | BibTeX entries and macros as independently indexed units with citation keys |
+| `sources_bbl.py` | Compiled LaTeX `\bibitem` references with original line and key provenance |
 | `sources_txt.py` | Nonblank paragraph text units |
 
 Word title and author properties are read separately for literature
@@ -135,6 +138,16 @@ information or change the stored-file size policy. The stable
 `tests/kilin/sources/extensions/fixtures/sample.docx` fixture was converted
 from `sample.doc` with LibreOffice and has explicit title/author properties;
 it complements generated tests for specific Word list styles.
+
+Literature profiles now allow `.bib` and `.bbl` alongside `.tex`.
+Selected bibliography files are ordinary indexed sources, not hidden
+auxiliary resources: a BibTeX entry and a compiled `\bibitem` can each
+be searched with its original source provenance. The lightweight
+extractors do not compile LaTeX or prove that a cited paper supports a
+scientific claim. Bibliographic declarations in a `.tex` document are
+resolved by `reference_check` only against files explicitly included
+in the workspace source inventory. See the
+[workspace source-access policy](security.md#workspace-source-access-policy).
 
 The implementation uses the actual suffix-to-reader dispatch in
 `sources/sources.py` and its `extensions/` directory. An unsupported suffix

@@ -42,6 +42,30 @@ For "check the references of the Smith paper", the tool:
    at the start of the next line; and a count in parentheses before a
    superscript ("high (3)⁴⁵,⁴⁶") is not taken for a function argument.
    It reports references never cited and numbers cited beyond the list.
+
+   A LaTeX paper (`.tex`) is read by `_latex.py` instead of steps 2 and 4.
+   Its references come from a `thebibliography` environment in the file,
+   else a **selected and indexed** `.bbl` companion, else the **selected
+   and indexed** `.bib` files named by `\bibliography` or
+   `\addbibresource` (with `@string` abbreviations expanded). The
+   checker never opens unselected files, even when a LaTeX command names
+   them or an unselected copy exists beside the paper. All files must
+   already be in the project source inventory. A matching bibliography
+   beside the referring `.tex` file takes precedence; otherwise one
+   uniquely named selected file can be used. Ambiguous names, rejected
+   paths and unavailable files are reported rather than guessed. The
+   workspace source boundary, including symlink and traversal checks,
+   is described in [Security](../../../docs/security.md). `\bibitem` entries keep their
+   printed order; `.bib` entries are assigned inferred numbers in
+   order of first citation and only cited ones are listed, since a
+   `.bib` file often holds a whole library. These inferred numbers need
+   not match the order in a compiled bibliography. Each `\cite`-family
+   command (`\citep`, `\citet`,
+   `\parencite`, `\autocite`, ...) is read as the numbers it prints, the
+   rest of the LaTeX is reduced to readable text line by line, and the
+   bibliography environment is left out of the text searched for
+   citations. Keys cited but missing from the bibliography are listed in
+   a note, not numbered; `\nocite` does not count as a citation.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
    the cited file's passages most related to the sentence and to what
