@@ -151,6 +151,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/reference_check/__init__.py`](../kilin/tools/reference_check/__init__.py) | Expose the registered ``reference_check`` tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_citations.py`](../kilin/tools/reference_check/_citations.py) | Find a paper's numbered in-text citations and their citing sentences. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_configuration.py`](../kilin/tools/reference_check/_configuration.py) | Validate the defaults owned by the reference_check tool. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/reference_check/_latex.py`](../kilin/tools/reference_check/_latex.py) | Read a LaTeX paper's citations and bibliography. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_matching.py`](../kilin/tools/reference_check/_matching.py) | Match a paper's reference entries to the files of a project. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/_resolution.py`](../kilin/tools/reference_check/_resolution.py) | Resolve missing bibliography entries without implicit network access. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/reference_check/tool.py`](../kilin/tools/reference_check/tool.py) | Tool ``reference_check``: check one paper's references and citations. | [Per-tool README](../kilin/tools/reference_check/README.md) | [Tool tests](../tests/kilin/tools/) |
@@ -181,7 +182,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 41 |
+| Per-tool README | 42 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 28 |
 | Source pipeline | 16 |
@@ -189,7 +190,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 148.**
+**Total production Python modules: 149.**
 
 ## Non-Python resources and UI assets
 

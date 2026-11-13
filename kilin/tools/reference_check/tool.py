@@ -171,6 +171,7 @@ from kilin.tools.reference_check._citations import (
     find_citations,
     superscript_runs,
 )
+from kilin.tools.reference_check._latex import latex_references
 from kilin.tools.reference_check._matching import (
     MATCH_FOUND,
     MATCH_MISSING,
@@ -380,6 +381,9 @@ class ReferenceReport:
     model_attempts: dict[str, int] | None
         Actual generation attempts by stage, including recovery and failed
         attempts; ``None`` without adapter-level accounting.
+    source_note: str
+        For a LaTeX paper, where its references come from and the keys
+        cited but missing from its bibliography; empty otherwise.
 
     """
 
@@ -397,6 +401,7 @@ class ReferenceReport:
     list_note: str = ""
     model_calls: dict[str, int] = field(default_factory=dict)
     model_attempts: dict[str, int] | None = None
+    source_note: str = ""
 
     def count(self, status: str) -> int:
         """Return how many entries have a match status.
@@ -507,8 +512,9 @@ def check_references(
     passages: Sequence[Chunk]
         Its passages, in order.
     file: pathlib.Path | None
-        It on disk, for a PDF's column order and superscripts; None when
-        unknown.
+        It on disk, for a PDF's column order and superscripts, or a LaTeX
+        paper's setup and the ``.bbl`` or ``.bib`` files beside it; None
+        when unknown.
     others: Sequence[PaperIdentity]
         The project's other files.
     which: int, optional
@@ -525,7 +531,13 @@ def check_references(
 
     """
 
-    entries = tuple(
+    # A LaTeX paper's \cite commands and bibliography are read as such:
+    # its references become numbered entries, its citations numbers.
+    latex = (
+        latex_references(passages, file)
+        if paper.suffix.lower() == ".tex" else None
+    )
+    entries = latex.entries if latex is not None else tuple(
         numbered_reference_entries(
             passages, _config.REFERENCE_LAYOUT, file,
             accept_short=linkable_entry, which=which,
@@ -544,7 +556,10 @@ def check_references(
         if file is not None and file.suffix.lower() == ".pdf"
         else None
     )
-    body = reference_body(passages, which)
+    body = (
+        latex.body if latex is not None
+        else reference_body(passages, which)
+    )
     scan = find_citations(
         body,
         max((entry.number for entry in entries), default=0),
@@ -581,6 +596,7 @@ def check_references(
         before=before,
         after=after,
         links=links,
+        source_note=latex.note if latex is not None else "",
     )
 
 
@@ -758,6 +774,8 @@ def report_markdown(report: ReferenceReport) -> str:
         if listed:
             lines += [f"## {heading}", "", *listed, ""]
 
+    if report.source_note:
+        lines += [f"*{report.source_note}*", ""]
     if report.lookup_note:
         lines += [f"*{report.lookup_note}*", ""]
     problems = _problems(report)
@@ -837,6 +855,8 @@ def chat_answer(
     """
 
     name = report.paper.name
+    if not report.entries and report.source_note:
+        return f"I found no references in {name}. {report.source_note}", ()
     if not report.entries:
         return (
             f"I found no reference list in {name}: no “References” (or "
@@ -845,6 +865,8 @@ def chat_answer(
         )
 
     lines = [f"**Reference check of {name}**", "", _overview(report)]
+    if report.source_note:
+        lines += ["", f"*{report.source_note}*"]
     for status, heading in (
         (MATCH_FOUND, "In the project"),
         (MATCH_PROBABLE, "Probably in the project, please check"),
@@ -1027,6 +1049,7 @@ def run(
                 for number, link in report.links.items()
             },
             "lookup_note": report.lookup_note,
+            "source_note": report.source_note,
             "report": saved.as_posix() if saved else None,
         }
     )
