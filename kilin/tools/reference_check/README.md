@@ -27,6 +27,20 @@ For "check the references of the Smith paper", the tool:
    raised position (exponents in formulas and subscripts are left out).
    Papers using only written-out numbered references are recognized.
    It reports references never cited and numbers cited beyond the list.
+
+   A LaTeX paper (`.tex`) is read by `_latex.py` instead of steps 2 and 4.
+   Its references come from a `thebibliography` environment in the file,
+   else the `.bbl` file beside it, else the `.bib` files named by
+   `\bibliography` or `\addbibresource` (read from the paper's folder,
+   with `@string` abbreviations expanded). `\bibitem` entries keep their
+   printed order; `.bib` entries are numbered in order of first citation
+   and only cited ones are listed, since a `.bib` file often holds a whole
+   library. Each `\cite`-family command (`\citep`, `\citet`,
+   `\parencite`, `\autocite`, ...) is read as the numbers it prints, the
+   rest of the LaTeX is reduced to readable text line by line, and the
+   bibliography environment is left out of the text searched for
+   citations. Keys cited but missing from the bibliography are listed in
+   a note, not numbered; `\nocite` does not count as a citation.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
    the cited file's passages most related to the sentence and to what
