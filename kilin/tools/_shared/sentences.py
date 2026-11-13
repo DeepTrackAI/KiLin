@@ -60,11 +60,16 @@ _CONTINUES: Final[re.Pattern[str]] = re.compile(
 _PAGE_NUMBER: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?:page\s*)?\d{1,4}\s*$", re.I
 )
-# Other page furniture between the halves: a footer with a bar or a link
-# ("Nature Communications |", "PLOS ONE | https://doi.org/...", "19 / 23"),
-# or a corresponding author's e-mail address.
+# Recognizable footer lines, not arbitrary URLs, DOI links or table
+# cells. Running headers and repeated footers are handled separately.
 _FURNITURE: Final[re.Pattern[str]] = re.compile(
-    r"\||https?://|\bdoi\.org/|^\s*\d+\s*/\s*\d+\s*$|\S@\S+\.\w", re.I
+    r"^\s*(?:\d+\s*/\s*\d+|[^|\n]+\|\s*(?:https?://\S*)?)\s*$",
+    re.I,
+)
+# A lone link following an independently confirmed repeated running head
+# can be a printed DOI footer, but other standalone links are content.
+_STANDALONE_LINK: Final[re.Pattern[str]] = re.compile(
+    r"https?://\S+", re.I
 )
 # Short lines repeated this often in a file are running heads or footers
 # ("Article", "(2025) 16:2748", the paper's title).
@@ -261,6 +266,16 @@ def _pieces(text: str, running: set[str]) -> list[tuple[int, str]]:
     joined: list[tuple[int, str]] = []
     index = 0
     while index < len(found):
+        if (
+            index == 0 and len(found) > 2
+            and _line_key(found[0][1]) in running
+            and _STANDALONE_LINK.fullmatch(found[1][1].strip())
+            and _CONTINUES.match(found[2][1])
+        ):
+            # Printed footer after a known running header, directly
+            # before the continuation of a sentence from last page.
+            # A lone link without this evidence remains source text.
+            index = 2
         offset, piece = found[index]
         unfinished = bool(joined) and bool(joined[-1][1].strip()) and not (
             _ENDED.search(joined[-1][1])
@@ -307,8 +322,9 @@ def _furniture(text: str, running: set[str], *, blank: bool = False) -> bool:
     Returns
     -------
     bool
-        True when every line is a page number, a footer with a bar or a
-        link, or a running head or footer; for an empty piece, ``blank``.
+        True when every line is a page number, a recognizable footer,
+        or a repeated running head or footer; for an empty piece,
+        ``blank``. A lone URL or DOI is not page furniture.
 
     """
 

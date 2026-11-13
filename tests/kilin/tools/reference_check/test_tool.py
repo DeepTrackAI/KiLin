@@ -252,6 +252,100 @@ class TestReferenceCheckRun(unittest.TestCase):
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
 
+    def test_checked_claim_limit_and_actual_model_calls(self) -> None:
+        """The claim cap is distinct from invocation counts and retries."""
+
+        result, context = self._run(
+            (Path("paper.md"), "named", False),
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1,
+            "initial": 1,
+            "second_look": 0,
+            "total": 2,
+        })
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertIn("2 of 3 claims were not checked", result.answer)
+        self.assertIn("**Model calls:** 2 (1 focusing, 1 initial, "
+                      "0 second looks)", result.answer)
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.items, 3)
+        self.assertEqual(plan.batches_to_run, 2)
+        self.assertEqual(plan.batches, 4)
+        self.assertEqual(plan.quick_items, 1)
+        self.assertEqual(plan.estimated_seconds, plan.quick_seconds)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("**Model calls:** 2", report)
+
+    def test_claim_cap_also_applies_to_quick_selection(self) -> None:
+        """Choosing quick cannot select beyond the configured claim cap."""
+
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), choice="quick",
+            quick_claims=5, max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+
+    def test_old_model_call_limit_is_rejected(self) -> None:
+        """The renamed setting must not silently acquire two meanings."""
+
+        with self.assertRaisesRegex(ValueError, "unknown settings"):
+            tool.parse_settings({"max_model_calls": 1}, "test")
+        self.assertEqual(
+            tool.parse_settings(
+                {"max_checked_claims": 1}, "test"
+            ).max_checked_claims, 1,
+        )
+
+    def test_one_claim_can_use_three_counted_model_calls(self) -> None:
+        """Focusing, checking and rereading do not consume claim slots."""
+
+        self.chunks[1:2] = [
+            chunk(
+                f"b{number}",
+                ("BRAPH implements these graph measures."
+                 if number == 10 else BRAPH if number == 1
+                 else f"Unrelated passage {number}."),
+                path="braph.md", line=number,
+            )
+            for number in range(1, 11)
+        ]
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            if "citing several references" in prompt:
+                return "[2]: BRAPH implements graph measures."
+            if "BRAPH implements these graph measures." in prompt:
+                return (
+                    "VERDICT: supported\nQUOTE: BRAPH implements these "
+                    "graph measures.\nCOMMENT: Direct evidence."
+                )
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, context = self._run_model(
+            answer, max_checked_claims=1, focus_claims=True,
+            passages=6, retry_passages=8,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1,
+            "initial": 1,
+            "second_look": 1,
+            "total": 3,
+        })
+        self.assertEqual(context.ask_model.call_count, 3)
+        events = [
+            event.kwargs["data"]
+            for event in context.trace.emit.call_args_list
+            if event.args[0] == "tool.reference_check.claim"
+        ]
+        self.assertEqual(events[0]["quote_passage_id"], "b10")
+        self.assertEqual(events[0]["verdict_stage"], "second_look")
+        self.assertEqual(events[0]["model_calls"], 3)
+
     def test_claim_rank_queries_are_cached_within_run(self) -> None:
         """Repeated citation queries need only one retrieval per string."""
 
@@ -675,14 +769,22 @@ class TestReferenceCheckRun(unittest.TestCase):
                         "[3]: BRAPH 2 implements these measures too.")
             return "VERDICT: supported\nQUOTE: NONE\nCOMMENT: Fine."
 
-        self._run_model(ask_model)
+        _, context = self._run_model(ask_model)
         focus = [p for p in prompts if "citing several references" in p]
         self.assertEqual(len(focus), 1)
         checked = [p for p in prompts if "VERDICT:" in p]
         self.assertTrue(any(
-            'cited for, rewritten from the sentence and its context: '
-            '"BRAPH implements graph measures."' in p for p in checked
+            "BRAPH implements these measures [2, 3]." in p
+            for p in checked
         ))
+        self.assertFalse(any(
+            "BRAPH implements graph measures." in p for p in checked
+        ))
+        # The hint still affects ranking, but never determines a verdict.
+        self.assertIn(
+            "BRAPH implements graph measures.",
+            [call.args[0] for call in context.rank.call_args_list]
+        )
         # The sentence citing only [2] is checked as it is.
         self.assertTrue(any(
             "We followed the protocol of [2]." in p and "rewritten" not in p
@@ -725,6 +827,35 @@ class TestReferenceCheckRun(unittest.TestCase):
             (self.root / result.summary["report"]).read_text(
                 encoding="utf-8").splitlines()
         ))
+        # The accepted second look must be reconstructable from the trace.
+        result, context = self._run_model(
+            ask_model, focus_claims=False, passages=6, retry_passages=8,
+        )
+        records = [
+            event.kwargs["data"]
+            for event in context.trace.emit.call_args_list
+            if event.args[0] == "tool.reference_check.claim"
+        ]
+        traced = [
+            entry for entry in records
+            if entry["quote_passage_id"] == "b10"
+        ]
+        self.assertEqual(len(traced), 2)
+        for entry in traced:
+            ids = {passage["id"] for passage in entry["passages"]}
+            self.assertIn("b10", ids)
+            self.assertEqual(entry["verdict_stage"], "second_look")
+            self.assertEqual(entry["readings"][-1]["stage"], "second_look")
+            self.assertIn("b10", entry["readings"][-1]["passage_ids"])
+            self.assertEqual(entry["model_calls"], 2)
+        usage = result.summary["model_calls"]
+        self.assertEqual(usage["focusing"], 0)
+        self.assertEqual(usage["initial"], 2)
+        self.assertEqual(usage["second_look"], 2)
+        self.assertEqual(usage["total"], context.ask_model.call_count)
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.batches_to_run, 4)
+        self.assertGreater(plan.estimated_seconds, plan.quick_seconds / 2)
         # Without the second look, both stay not supported.
         result, _ = self._run_model(
             ask_model, focus_claims=False, passages=6, retry_passages=0,

@@ -162,6 +162,41 @@ class TestSplitSentences(unittest.TestCase):
             ],
         )
 
+    def test_links_and_table_text_survive_page_reconstruction(self) -> None:
+        """Ordinary document content is not classified as page furniture."""
+
+        for meaningful in (
+            "https://github.com/example/repository",
+            "https://doi.org/10.1000/example",
+            "Signal | Noise",
+        ):
+            with self.subTest(content=meaningful):
+                passage = chunk(
+                    "p", "We release the source at\n\n" + meaningful
+                    + "\n\nand evaluated it across datasets."
+                )
+                sentences = split_sentences((passage,), min_words=1)
+                self.assertTrue(any(
+                    meaningful in sentence.text for sentence in sentences
+                ))
+
+    def test_standalone_link_between_passages_is_preserved(self) -> None:
+        """A lone URL without a repeated page header remains searchable."""
+
+        passages = (
+            chunk("p1", "The paper provides data at"),
+            chunk(
+                "p2", "https://github.com/example/source\nand shares "
+                "the results.", line=2,
+            ),
+        )
+        texts = [
+            sentence.text for sentence in split_sentences(
+                passages, min_words=1
+            )
+        ]
+        self.assertIn("https://github.com/example/source", " ".join(texts))
+
     def test_footers_between_the_halves_are_left_out(self) -> None:
         footer = "Nature Communications |\n\n (2025) 16:2748\n\n"
         pages = [

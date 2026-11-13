@@ -334,6 +334,37 @@ class TestReferenceEntries(unittest.TestCase):
         self.assertNotIn("Main1", supplement)
         self.assertNotIn("Intro", supplement)
 
+    def test_supplementary_methods_ends_main_reference_list(self) -> None:
+        """A supplementary section is neither an entry nor lost body."""
+
+        main = "".join(
+            f"{n}. Main{n} A. A study of cells {n}. Nature {n}, 3 "
+            f"(2019).\n" for n in range(1, 7)
+        )
+        text = (
+            "Main work cites [1].\nReferences\n" + main
+            + "Supplementary Methods\nAdditional experiments cite [1].\n"
+            "Supplementary References\n"
+            "1. Extra B. A supplementary study of cells. Cell 1, 3 "
+            "(2020).\n"
+        )
+        passages = (chunk("a", text),)
+        self.assertEqual(
+            [len(ref.entries) for ref in reference_lists(passages, LAYOUT)],
+            [6, 1],
+        )
+        self.assertTrue(all(
+            "Supplementary" not in entry.text
+            for entry in numbered_reference_entries(
+                passages, LAYOUT, which=0
+            )
+        ))
+        supplement = " ".join(
+            part.text for part in reference_body(passages, 1)
+        )
+        self.assertIn("Additional experiments cite [1].", supplement)
+        self.assertNotIn("Main1", supplement)
+
     def test_unprinted_numbers_follow_the_previous(self) -> None:
         entries = numbered_reference_entries(
             (chunk("a", TWO_COLUMN.replace("1.\n2.\n", "")),), LAYOUT

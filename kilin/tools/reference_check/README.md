@@ -58,15 +58,17 @@ For "check the references of the Smith paper", the tool:
    with a verdict (supported, partly supported, not supported,
    contradicted, background, or no matching passage), the passage
    sentence it rests on, and a critical comment. A sentence citing
-   several references together is first rewritten once per reference by
-   the model (one call per sentence), keeping the context and focusing on
-   the part that reference is cited for; each reference is judged on its
-   part, and the focused claim is also used to rank the cited passages.
+   several references together receives a model-proposed focus for each
+   reference (one call per sentence), used only as an additional retrieval
+   query. The original citing sentence stays authoritative for the
+   verdict; a model-generated rewrite cannot establish support for
+   something not asserted in that sentence.
    A claim found not supported, or without a matching passage, is read
    again with the next best-ranked passages (`RETRY_PASSAGES`) in a
    second call; a better verdict from that reading replaces the first,
-   and the comment says which reading it came from. A cited file without
-   searchable text is reported as no text, without a model call. Python
+   the comment identifies the second reading. Traces include passages
+   from both readings and identify the final verdict stage. A cited
+   file without searchable text requires no model call. Python
    checks the answer: a quote not found in the passages is dropped, and a
    reference is called contradicted only with a confirmed quote, otherwise
    not supported. The plan is traced, and the user can choose all
@@ -85,8 +87,10 @@ For "check the references of the Smith paper", the tool:
    query strings for each checked claim; trace records the context,
    selected passage identifiers and location, quote passage identifier,
    evidence status, bibliography match status, exact quote line range
-   when identifiable, and the rating. No extra model calls or network
-   operations are used.
+   when identifiable, and the rating. The report and chat separately
+   give actual model calls (focusing, initial checks, second looks),
+   while the confirmation plan includes their worst-case cost.
+   No additional model calls or network operations are used.
 7. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
    chat with the counts, the found, probable and missing references, the
@@ -176,20 +180,20 @@ are internal thresholds. All values are read and validated on import.
   second model call before deciding; 0 turns the second look off.
   Allowed range: 0–20.
 - `FOCUS_CLAIMS` (default `true`): For a sentence citing several
-  references together, the answering model first rewrites it once per
-  reference, keeping the context and focusing on the part that reference
-  is cited for; each reference is then checked against its own part, so
-  one covering only part of the sentence is not called not supported for
-  the rest. One extra model call per such sentence. Allowed values: true,
-  false.
-- `MAX_MODEL_CALLS` (default `100`): Most claims checked; later ones are
-  reported as not checked. Allowed range: 1–1000.
+  references, the answering model proposes a reference-specific search
+  hint. The original citing sentence remains authoritative for the
+  verdict: the proposed wording is never used as independent evidence.
+  One extra model call per such sentence. Allowed values: true, false.
+- `MAX_CHECKED_CLAIMS` (default `100`): Most claims selected for
+  verification; later ones are reported unchecked. This is not a model-
+  call budget: a claim can need a focusing call and a second reading.
+  Allowed range: 1–1000.
 - `QUICK_CLAIMS` (default `5`): Claims checked by the quick version, in
   reading order. Allowed range: 1–100.
 - `CONFIRMATION` (default `"when_large"`): When to ask before checking
   claims. Allowed values: always, when_large, never.
-- `LARGE_BATCHES` (default `10`): With `when_large`, plans with more claims
-  than this ask first. Allowed range: 0–1000.
+- `LARGE_BATCHES` (default `10`): With `when_large`, plans with more
+  claims than this ask first. Allowed range: 0–1000.
 - `ONLINE_LOOKUP` (default `false`): Offer online lookup during an
   ordinary reference check (without a link request). This is **not**
   authorization: an actual confirmation callback and affirmative user

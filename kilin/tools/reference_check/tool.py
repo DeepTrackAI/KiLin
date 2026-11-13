@@ -23,8 +23,9 @@ paper) and the other files of the project (the cited works). The tool:
    file's most related passages, a verdict, the passage sentence it rests
    on (checked to be in the passages), a heuristic suitability rating,
    and a critical comment. A sentence citing several references is first
-   split among them by the model (``focus_claims``), so each is judged on
-   its own part; a claim not supported by the passages read is read again
+   given a model-proposed retrieval hint (``focus_claims``), but the
+   original sentence is the only authoritative claim; a claim not
+   supported by the passages read is read again
    with more passages before deciding. The plan is shown first, and the
    user can run all claims, a few, or none.
 6. Saves the full report, with every reference, the sentences citing it
@@ -109,7 +110,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 import re
 from typing import Final
@@ -302,10 +303,11 @@ class ReferenceCheckSettings:
         Further passages read in a second model call when a claim comes
         out not supported or not found (0-20; 0 turns it off).
     focus_claims: bool
-        Whether a sentence citing several references is first rewritten
-        once per reference, focused on the part that reference supports.
-    max_model_calls: int
+        Whether to generate reference-specific retrieval hints for
+        multi-reference sentences, without replacing the original claim.
+    max_checked_claims: int
         Most claims checked (1-1000); later ones are reported unchecked.
+        Focusing and second-look calls do not consume this limit.
     quick_claims: int
         Claims checked by the quick version (1-100).
     confirmation: ConfirmationPolicy
@@ -328,7 +330,7 @@ class ReferenceCheckSettings:
     passage_tokens: int = _config.DEFAULT_PASSAGE_TOKENS
     retry_passages: int = _config.DEFAULT_RETRY_PASSAGES
     focus_claims: bool = _config.DEFAULT_FOCUS_CLAIMS
-    max_model_calls: int = _config.DEFAULT_MAX_MODEL_CALLS
+    max_checked_claims: int = _config.DEFAULT_MAX_CHECKED_CLAIMS
     quick_claims: int = _config.DEFAULT_QUICK_CLAIMS
     confirmation: ConfirmationPolicy = _config.DEFAULT_CONFIRMATION
     large_batches: int = _config.DEFAULT_LARGE_BATCHES
@@ -372,6 +374,9 @@ class ReferenceReport:
     list_note: str
         Which reference list was checked when the paper has several;
         empty otherwise.
+    model_calls: dict[str, int]
+        Actual invocations of the answering model for claim focusing,
+        initial verification, and second looks, plus their total.
 
     """
 
@@ -387,6 +392,7 @@ class ReferenceReport:
     links: dict[int, ReferenceLink] = field(default_factory=dict)
     lookup_note: str = ""
     list_note: str = ""
+    model_calls: dict[str, int] = field(default_factory=dict)
 
     def count(self, status: str) -> int:
         """Return how many entries have a match status.
@@ -433,7 +439,7 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         data,
         (
             "max_listed", "verify", "passages", "passage_tokens",
-            "retry_passages", "focus_claims", "max_model_calls",
+            "retry_passages", "focus_claims", "max_checked_claims",
             "quick_claims",
             "confirmation", "large_batches", "online_lookup",
             "max_online",
@@ -456,9 +462,9 @@ def parse_settings(data: dict, where: str) -> ReferenceCheckSettings:
         focus_claims=check_bool(
             where, data, "focus_claims", defaults.focus_claims
         ),
-        max_model_calls=check_int(
-            where, data, "max_model_calls", defaults.max_model_calls, 1,
-            1000,
+        max_checked_claims=check_int(
+            where, data, "max_checked_claims",
+            defaults.max_checked_claims, 1, 1000,
         ),
         quick_claims=check_int(
             where, data, "quick_claims", defaults.quick_claims, 1, 100
@@ -756,6 +762,8 @@ def report_markdown(report: ReferenceReport) -> str:
 
     if report.verdicts or report.verification:
         lines += ["## Claims checked against the cited papers", ""]
+        if report.model_calls:
+            lines += [_model_call_line(report), ""]
         lines += [*_verdict_table(report), ""]
         for index, verdict in enumerate(_attention(report, None), start=1):
             lines += [
@@ -850,6 +858,8 @@ def chat_answer(
     evidence: list[Chunk] = []
     if report.verdicts or report.verification:
         lines += ["", "**Claims checked against the cited papers**", ""]
+        if report.model_calls:
+            lines += [_model_call_line(report), ""]
         lines += _verdict_table(report)
         attention = _attention(report, max_listed)
         for index, verdict in enumerate(attention, start=1):
@@ -984,6 +994,7 @@ def run(
             "uncited": list(report.scan.uncited),
             "beyond_list": list(report.scan.beyond_list),
             "claims_checked": len(report.verdicts),
+            "model_calls": report.model_calls,
             "suitability": [
                 {
                     "reference": verdict.claim.number,
@@ -1243,13 +1254,37 @@ def _link_markdown(link: ReferenceLink) -> str:
     return f"[{label}]({link.url})"
 
 
+def _model_call_line(report: ReferenceReport) -> str:
+    """Summarize actual answering-model calls without conflating claims.
+
+    Parameters
+    ----------
+    report: ReferenceReport
+        The verified report with per-stage call counts.
+
+    Returns
+    -------
+    str
+        A Markdown line showing the model calls by verification stage.
+
+    """
+
+    counts = report.model_calls
+    return (
+        f"**Model calls:** {counts['total']} "
+        f"({counts['focusing']} focusing, "
+        f"{counts['initial']} initial, "
+        f"{counts['second_look']} second looks)."
+    )
+
+
 def _verify(
     report: ReferenceReport,
     by_file: dict[Path, list[Chunk]],
     settings: ReferenceCheckSettings,
     context: ToolContext,
 ) -> ReferenceReport:
-    """Check the report's claims with the answering model, after a plan.
+    """Check claims with the answering model, after an explicit cost plan.
 
     Parameters
     ----------
@@ -1258,15 +1293,15 @@ def _verify(
     by_file: dict[pathlib.Path, list[Chunk]]
         Every file's passages.
     settings: ReferenceCheckSettings
-        For the passages, limits and confirmation policy.
+        Passage selection, claim limit, and confirmation policy.
     context: ToolContext
         KíLín's services.
 
     Returns
     -------
     ReferenceReport
-        With the verdicts of the claims checked, and ``verification``
-        saying why none or not all were checked.
+        Verdicts, the reason for any unchecked claims, and actual
+        answering-model call counts, including unsuccessful invocations.
 
     """
 
@@ -1274,48 +1309,84 @@ def _verify(
     if not claims:
         return report
 
-    limit = min(len(claims), settings.max_model_calls)
-    quick = min(len(claims), settings.quick_claims)
+    limit = min(len(claims), settings.max_checked_claims)
+    quick = min(limit, settings.quick_claims)
     files = len({claim.cited for claim in claims})
 
-    def focus_calls(count: int) -> int:
-        """Return the sentence-splitting calls of the first claims."""
+    def planned_focus_calls(count: int) -> int:
+        """Count the distinct multi-reference sentences in a selection.
 
+        Parameters
+        ----------
+        count: int
+            Number of initial claims selected in reading order.
+
+        Returns
+        -------
+        int
+            Maximum focusing calls needed for that selection.
+
+        """
+
+        if not settings.focus_claims:
+            return 0
         return len({
             claim.sentence for claim in claims[:count] if claim.also_cited
-        }) if settings.focus_claims else 0
+        })
 
-    extra = (
-        f" Sentences citing several references are first split among them "
-        f"({focus_calls(limit)} more calls)." if focus_calls(limit) else ""
-    ) + (
-        f" A claim not supported by them is read again with "
-        f"{settings.retry_passages} more passages (one more call)."
-        if settings.retry_passages else ""
+    def planned_calls(count: int) -> int:
+        """Bound model calls including focusing and possible rereading.
+
+        Parameters
+        ----------
+        count: int
+            Number of claims checked.
+
+        Returns
+        -------
+        int
+            Worst-case number of model calls for the claim selection.
+
+        """
+
+        reads = count * (2 if settings.retry_passages else 1)
+        return reads + planned_focus_calls(count)
+
+    focus = planned_focus_calls(limit)
+    possible = planned_calls(limit)
+    normal = limit + focus
+    summary = (
+        f"Check {limit} of {len(claims)} claims of {report.paper.name} "
+        f"against {files} cited papers; up to {normal} calls before "
+        f"retries, or {possible} if every claim needs a second look."
     )
     plan = ToolPlan(
         tool="reference_check",
-        summary=(
-            f"Check {len(claims)} claims of {report.paper.name} against "
-            f"the {files} cited papers in the project, one model call each."
-            + extra
-        ),
+        summary=summary,
         scope=(
             f"Sentences citing a reference whose file is in the project; "
             f"{settings.passages} passages of the cited paper per claim."
         ),
         items=len(claims),
-        batches=len(claims),
-        batches_to_run=limit,
-        estimated_seconds=(limit + focus_calls(limit))
-        * _claim_seconds(settings),
+        batches=planned_calls(len(claims)),
+        batches_to_run=possible,
+        estimated_seconds=possible * _claim_seconds(settings),
         quick_items=quick,
-        quick_seconds=(quick + focus_calls(quick))
-        * _claim_seconds(settings),
+        quick_seconds=planned_calls(quick) * _claim_seconds(settings),
         quick_label=f"The first {quick} claims",
+        details=(
+            "Estimated model time without retries: "
+            f"{normal * _claim_seconds(settings):.1f} seconds; "
+            "including all possible retries: "
+            f"{possible * _claim_seconds(settings):.1f} seconds.",
+        ),
     )
+    # The confirmation threshold has always been in checked claims.
+    # Translate it to the plan's call upper bound without changing when
+    # the user is asked to confirm a run.
+    threshold = planned_calls(min(len(claims), settings.large_batches))
     choice, _asked = confirm_plan(
-        plan, settings.confirmation, settings.large_batches, context
+        plan, settings.confirmation, threshold, context
     )
     if choice == PLAN_CHOICE_CANCEL:
         return replace(
@@ -1325,10 +1396,42 @@ def _verify(
             ),
         )
 
-    to_check = claims[: quick if choice == PLAN_CHOICE_QUICK else limit]
+    to_check = claims[:quick if choice == PLAN_CHOICE_QUICK else limit]
     verdicts: list[Verdict] = []
     rank = cache(context.rank)
-    # Each sentence citing several references is split among them once.
+    calls: Counter[str] = Counter()
+
+    def counted_ask(
+        system: str, prompt: str, tokens: int | None, *, kind: str
+    ) -> str:
+        """Count an attempted call, including one that raises an error.
+
+        Parameters
+        ----------
+        system: str
+            System instructions to the answering model.
+        prompt: str
+            User prompt for the current stage.
+        tokens: int | None
+            Optional output-token limit.
+        kind: str
+            The focusing, initial, or second-look stage.
+
+        Returns
+        -------
+        str
+            The model response, as returned by the context service.
+
+        """
+
+        calls[kind] += 1
+        return context.ask_model(system, prompt, tokens)
+
+    focus_model = partial(counted_ask, kind="focusing")
+    initial_model = partial(counted_ask, kind="initial")
+    retry_model = partial(counted_ask, kind="second_look")
+
+    # Focus each multi-reference sentence only once for this selection.
     numbers: dict[Sentence, list[int]] = defaultdict(list)
     for claim in to_check:
         numbers[claim.sentence].append(claim.number)
@@ -1338,11 +1441,12 @@ def _verify(
             f"Checking claim {index} of {len(to_check)} "
             f"(reference [{claim.number}])"
         )
+        calls_before = sum(calls.values())
         if settings.focus_claims and claim.also_cited:
             if claim.sentence not in focused:
                 focused[claim.sentence] = focus_claims(
                     claim.marked or claim.sentence.text, claim.before,
-                    claim.after, numbers[claim.sentence], context.ask_model,
+                    claim.after, numbers[claim.sentence], focus_model,
                 )
             claim = replace(
                 claim, focus=focused[claim.sentence].get(claim.number, "")
@@ -1352,17 +1456,29 @@ def _verify(
         passages = claim_passages(
             queries, cited, rank, settings.passages, settings.passage_tokens,
         )
-        verdict = verify_claim(
-            claim, passages, context.ask_model
-        )
+        # The focus is only a retrieval hint. The original citing sentence
+        # remains the sole claim given to the verification model.
+        verdict = verify_claim(claim, passages, initial_model)
+        second_accepted = False
         if (
             verdict.verdict in (VERDICT_NOT_SUPPORTED, VERDICT_NOT_FOUND)
             and settings.retry_passages
         ):
-            verdict = _second_look(
-                verdict, queries, cited, rank, settings, context
+            verdict, second_accepted = _second_look(
+                verdict, queries, cited, rank, settings, context,
+                retry_model,
             )
         verdicts.append(verdict)
+        more = verdict.passages[len(passages):]
+        readings = [{
+            "stage": "initial",
+            "passage_ids": [passage.identifier for passage in passages],
+        }]
+        if more:
+            readings.append({
+                "stage": "second_look",
+                "passage_ids": [passage.identifier for passage in more],
+            })
         context.trace.emit(
             "tool.reference_check.claim",
             component="tool",
@@ -1389,8 +1505,13 @@ def _verify(
                         "start_line": passage.start_line,
                         "end_line": passage.end_line,
                     }
-                    for passage in passages
+                    for passage in verdict.passages
                 ],
+                "readings": readings,
+                "verdict_stage": (
+                    "second_look" if second_accepted else "initial"
+                ),
+                "model_calls": sum(calls.values()) - calls_before,
                 "quote_passage_id": (
                     verdict.quote_chunk.identifier
                     if verdict.quote_chunk is not None else None
@@ -1409,10 +1530,17 @@ def _verify(
     if unchecked:
         why = (
             "the quick version" if choice == PLAN_CHOICE_QUICK
-            else "the model-call limit"
+            else "the checked-claims limit"
         )
         note = f"{unchecked} of {len(claims)} claims were not checked ({why})."
-    return replace(report, verdicts=tuple(verdicts), verification=note)
+    counts = {kind: calls[kind] for kind in (
+        "focusing", "initial", "second_look"
+    )}
+    counts["total"] = sum(counts.values())
+    return replace(
+        report, verdicts=tuple(verdicts), verification=note,
+        model_calls=counts,
+    )
 
 
 # Verdicts of a second, wider reading that replace a first "not supported"
@@ -1430,7 +1558,8 @@ def _second_look(
     rank: Callable[[str], list],
     settings: ReferenceCheckSettings,
     context: ToolContext,
-) -> Verdict:
+    ask_model: Callable[[str, str, int | None], str],
+) -> tuple[Verdict, bool]:
     """Read more of the cited work before calling a claim unsupported.
 
     Parameters
@@ -1447,10 +1576,13 @@ def _second_look(
         For ``retry_passages`` and ``passage_tokens``.
     context: ToolContext
         KíLín's services.
+    ask_model: Callable[[str, str, int | None], str]
+        The answering model, counted as a second-look call.
 
     Returns
     -------
-    Verdict
+    tuple[Verdict, bool]
+        The verdict and whether the second reading was accepted.
         The second verdict when the next ``settings.retry_passages``
         best-ranked passages support, partly support or contradict the
         claim, or name the reference as background; otherwise the first,
@@ -1465,13 +1597,13 @@ def _second_look(
         skip={chunk.identifier for chunk in first.passages},
     )
     if not more:
-        return first
+        return first, False
 
     context.progress(
         f"Reading {len(more)} more passages for reference "
         f"[{first.claim.number}]"
     )
-    second = verify_claim(first.claim, more, context.ask_model)
+    second = verify_claim(first.claim, more, ask_model)
     if second.verdict in _FOUND_ON_SECOND_LOOK:
         return replace(
             second,
@@ -1480,7 +1612,7 @@ def _second_look(
                 f"{len(more)} more passages.)"
             ),
             passages=first.passages + second.passages,
-        )
+        ), True
     return replace(
         first,
         comment=(
@@ -1488,7 +1620,7 @@ def _second_look(
             "passages found no support either.)"
         ),
         passages=first.passages + more,
-    )
+    ), False
 
 
 def _claim_queries(claim: Claim) -> tuple[str, ...]:

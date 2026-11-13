@@ -419,15 +419,16 @@ class TestVerifyClaim(unittest.TestCase):
         self.assertEqual(focus_claims("S [3].", "", "", (3,), fail), {})
 
     def test_focused_claim_is_judged(self) -> None:
-        _, prompt = verification_prompt(
-            replace(CLAIM, focus="Running extends lifespan in mice."),
+        """A proposed rewrite must not replace the source claim."""
+
+        original = verification_prompt(CLAIM, PASSAGES)
+        rewritten = verification_prompt(
+            replace(CLAIM, focus="Invented phenomenon in mice."),
             PASSAGES,
         )
-        self.assertIn(
-            'The part [7] is cited for, rewritten from the sentence and its '
-            'context: "Running extends lifespan in mice."', prompt
-        )
-        self.assertNotIn("rewritten", verification_prompt(CLAIM, PASSAGES)[1])
+        self.assertEqual(original, rewritten)
+        self.assertIn(CLAIM.sentence.text, rewritten[1])
+        self.assertNotIn("Invented phenomenon", rewritten[1])
 
     def test_prompt_names_reference_context_and_passages(self) -> None:
         _, prompt = verification_prompt(CLAIM, PASSAGES)

@@ -228,9 +228,8 @@ class Claim:
     match_status: str
         ``found`` or ``probable`` for the cited paper identity.
     focus: str
-        For a sentence citing several references, the sentence rewritten
-        by the answering model around the part this reference supports,
-        keeping the context (``focus_claims``); empty otherwise.
+        Optional model-proposed retrieval hint for the reference.
+        It is not authoritative and is not used to judge support.
 
     """
 
@@ -551,12 +550,6 @@ def verification_prompt(
             f"\nThe sentence also cites {listed}; reference [{number}] only "
             "needs to support its own part of it."
         )
-    if claim.focus:
-        others += (
-            f'\nThe part [{number}] is cited for, rewritten from the sentence '
-            f'and its context: "{claim.focus}". Judge [{number}] on this '
-            "part; the other references cover the rest of the sentence."
-        )
     cited_for = ""
     if claim.cited_for:
         source = (
@@ -586,7 +579,8 @@ def verification_prompt(
 {preceding}{following}{cited_for}{others}
 The surrounding sentences identify what expressions such as "this study"
 refer to. Judge only what the cited sentence attributes to [{number}];
-do not require the cited paper to restate the citing paper's own wording.
+the original wording is authoritative, not a model paraphrase.
+Do not require the cited paper to restate the citing paper's own wording.
 When the citing sentence says that "the results of this study were
 published" in [{number}], treat this as attribution to the publication:
 use the preceding description to identify the study. If the cited work

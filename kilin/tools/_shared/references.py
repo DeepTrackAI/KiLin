@@ -158,7 +158,9 @@ _FURNITURE: Final[re.Pattern[str]] = re.compile(
 _AFTER_REFERENCES: Final[re.Pattern[str]] = re.compile(
     r"^\s*#*\s*(acknowledge?ments?|author contributions|funding|competing "
     r"interests|additional information|supplementary information|data "
-    r"availability|code availability|appendix)\s*(?::|$|\s+[A-Z][a-z])",
+    r"availability|code availability|appendix|"
+    r"(?:supplementary|supplemental)\s+"
+    r"(?:methods?|results?|discussion))\s*(?::|$|\s+[A-Z][a-z])",
     flags=re.I,
 )
 # A table or figure caption after the list ("Table 1. ...", "Fig. 2 |",
@@ -609,7 +611,7 @@ def numbered_reference_entries(
         PMID, or a DOI), unless the next line is a DOI or PMID. A number
         that does not follow the previous entry's (more than
         ``_NUMBER_STEP_MAX`` ahead, or back) starts no entry: it is part
-        of the entry ("…919–\n927. https://doi…"); a list that starts
+        of the entry ("…919–\\n927. https://doi…"); a list that starts
         again at 1 ends there. Numbers printed alone ("6.", "7.") are
         given, in order, to the entries that start without one. Page
         numbers, running heads and footers (short lines repeated
