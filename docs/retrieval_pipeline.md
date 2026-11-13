@@ -322,12 +322,36 @@ not request the entire collection. A paper named in a question is
 searched, not appended in full: code-oriented full-file expansion
 applies only to code files.
 
+A file is named in a question (`named_paths` in
+`retrievals/document_reading.py`) by its path, its file name, a stem that
+looks like a file name (with a digit, `_`, `-` or `.`, as in `smith2020`),
+a stem in backticks, or an author-year citation. A plain-word stem counts
+only when followed by a noun for that kind of file: a document noun for
+documents ("the hinton paper", "the architecture document"), "notebook" for
+notebooks, "module" or "script" for other files ("the chat module"). "File"
+is not enough: "the configuration file" in a question, or in text pasted
+into it, does not name `configuration.md`, and "the config file" does not
+name `config.py`. A named file limits the search to that file, so a weak
+match would silently leave the rest of the project out.
+
 Which document a follow-up means (`document_scope` in
 `tools/_shared/choose_document.py`) is decided by its wording when that is
 clear: words for one document ("its limitations", "that study") keep the
 document the earlier turns were about, and words for several ("these
 articles", "the other papers", "all") search the whole project. The router
 model judges only the remaining requests.
+
+A document can also be described instead of named ("the 2017 paper", "the
+BRAPH 2 paper", "the earlier BRAPH framework"). `retrievals/
+source_descriptions.py` matches such a description against the source
+cards: a year against the card's year (or, when the card has none, the
+year an author-year file name starts with), and every other word against
+the card's title; "earlier" or "original" (and "later" or "newer") pick
+the oldest (or newest) of the papers that fit. A description resolves only
+when exactly one paper fits; a paper with no known year fits any year, so
+it keeps a year description ambiguous. A resolved description limits the
+search as a named file does; with "it" in the question ("compare it with
+the 2017 paper") the earlier turns' document is kept too.
 
 ## Four-channel source-first retrieval and evidence budgets
 
@@ -338,6 +362,20 @@ source; repeated chunks or card kinds do not inflate a source's rank.
 A card-ranked source need not have any globally top-ranked passage to
 be selected. All answer evidence still comes from the original chunks,
 not from generated card statements.
+
+Fusion gives every source a position in every channel, so in a small
+project every source is ranked, however unrelated, and a position says
+nothing about how relevant a source is. Before sources are chosen,
+`relevant_sources` therefore keeps only those the question is about: a
+source the question names, a source with a passage among the first
+*count* passages of the fused passage ranking (*count* is the intent's
+evidence count), and the source whose card ranks first. A comparison
+keeps at least two sources, and a question naming a number of sources
+("review the five articles", `requested_source_count`) at least that many
+(the next ranked ones when fewer qualify).
+Exhaustive questions ("all five papers") and several named sources skip
+this cut. The trace event `retrieval.sources.ranked` lists the sources
+left out as `unrelated`.
 
 `retrievals/evidence_budget.py` adds validated per-intent **hard evidence
 limits** for source-first retrieval. Each selected source receives one

@@ -22,6 +22,10 @@ Module Structure
 
     Decide whether a question explicitly requests full source coverage.
 
+- ``requested_source_count``
+
+    How many sources a question asks about ("the five articles").
+
 Examples
 --------
 >>> asks_for_all_sources("Compare all five papers")
@@ -36,7 +40,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["asks_for_all_sources"]
+__all__ = ["asks_for_all_sources", "requested_source_count"]
 
 _DOCUMENTS: Final[str] = (
     r"(?:papers?|articles?|stud(?:y|ies)|documents?|sources?|pdfs?|works?)"
@@ -77,3 +81,49 @@ def asks_for_all_sources(question: str) -> bool:
     return bool(
         _ALL_SOURCES.search(question) and _EXHAUSTIVE_WORDS.search(question)
     )
+
+
+# Number words of a source count ("the five articles").
+_NUMBER_WORDS: Final[dict[str, int]] = {
+    word: value for value, word in enumerate(
+        "zero one two three four five six seven eight nine ten eleven "
+        "twelve thirteen fourteen fifteen sixteen seventeen eighteen "
+        "nineteen twenty".split()
+    )
+}
+_COUNT: Final[re.Pattern[str]] = re.compile(
+    rf"\b(?P<count>{'|'.join(_NUMBER_WORDS)}|[1-9]\d?)\W+"
+    rf"(?:\w+\W+)?{_PLURAL_DOCUMENTS}\b",
+    re.IGNORECASE,
+)
+
+
+def requested_source_count(question: str) -> int:
+    """Return how many sources a question asks about, if it says.
+
+    Parameters
+    ----------
+    question: str
+        Original question, before query expansion or reformulation.
+
+    Returns
+    -------
+    int
+        The largest count of sources the question names ("review the five
+        articles" is 5, "compare two papers" is 2); 0 when it names none.
+
+    Examples
+    --------
+    >>> requested_source_count("Review the five articles for relevance")
+    5
+    >>> requested_source_count("How does it compare with the 2017 paper?")
+    0
+
+    """
+
+    counts = [
+        _NUMBER_WORDS.get(match.group("count").casefold())
+        or int(match.group("count"))
+        for match in _COUNT.finditer(question)
+    ]
+    return max(counts, default=0)

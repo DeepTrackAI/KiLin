@@ -217,6 +217,12 @@ chat history if a pre-commit failure would otherwise leave uncommitted
 messages in memory. A model's `finish_reason = length` is checked by the completion contract
 below; truncated text is not accepted as a successful final answer.
 
+When the question is about several documents (a number of them, "review
+the five articles", or all of them, "all the papers") and the evidence
+comes from at least two, the evidence prompt names those documents and
+asks the model to cover each in turn under its own heading, saying plainly
+when one is not relevant or the evidence does not cover it.
+
 An intent can override thinking for this direct model answer only. A
 missing or null policy inherits the session setting; an explicit boolean
 is passed to `ChatSession.reply(thinking=...)` without reconfiguring the
@@ -332,6 +338,12 @@ in turn parameters. This is a **diagnostic**, not semantic verification of
 scientific claims, and it does not trigger a second generation attempt or
 auto-correction of the text. An answer may contain unsupported or mistaken
 claims even if all citation indices resolve.
+
+To prevent the most common invalid citation, the evidence prompt names the
+valid evidence numbers and says that bracketed numbers inside the evidence
+text are the documents' own references: passages of scientific papers
+carry their reference markers ("... memory capacity [23]"), which the
+model otherwise copies as citations.
 
 The GUI's citation previews are derived from saved exact evidence and source
 coordinates. They must not silently substitute a different file or invent
