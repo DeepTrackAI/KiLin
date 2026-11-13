@@ -132,11 +132,15 @@ The resource is loaded once per process, not watched for hot reload.
 Missing keys, invalid types and incompatible values raise errors; the
 validator does not rewrite or repair the shipped resource.
 
-The sections are `DEFAULT_MODELS`, `REPOSITORY`, `ANSWERING`, `RAG`, `CHAT`,
-`PROJECT_PROFILE`, `CHUNKING`, `PROJECT_TYPES`, and `RETRIEVAL`. The
-`DEFAULT_MODELS` section provides initial MLX/PyTorch chat, router, and
-embedding identifiers. `PROJECT_TYPES` provides bounded fallbacks for
-fields omitted in an intent (for example a default document token budget);
+The sections are `DEFAULT_MODELS`, `SOURCE_CARD_GENERATION`, `REPOSITORY`,
+`ANSWERING`, `RAG`, `CHAT`, `PROJECT_PROFILE`, `CHUNKING`, `PROJECT_TYPES`,
+and `RETRIEVAL`. `DEFAULT_MODELS` provides initial MLX/PyTorch chat,
+router, and embedding identifiers. `SOURCE_CARD_GENERATION` provides
+independent source-card inference defaults, documented in the
+[packaged defaults](package_defaults.md).
+
+`PROJECT_TYPES` provides bounded fallbacks for fields omitted in an intent
+(for example a default document token budget);
 it does not select which intent should answer an arbitrary question. `CHAT` owns the
 language/script vocabulary used in positive CJK output requests; a keyword
 mention alone does not grant permission. The per-project `[generation]`

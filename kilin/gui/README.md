@@ -623,11 +623,13 @@ reviewed and removed manually before that location can be used again.
 
 ## Trace privacy and current limits
 
-The engine entry point enables forensic tracing. Traces and conversation
-checkpoints can contain complete questions, answers, source excerpts, paths,
-settings, token identifiers, and diagnostic output. Standard trace mode is
-not a content-redaction policy: resumable conversation state may still contain
-full text. Treat the entire workspace, especially `logs/`, as sensitive data.
+The engine entry point enables diagnostic tracing. Enabled traces and
+conversation checkpoints can contain complete questions, answers, source
+excerpts, paths, settings, token identifiers, and diagnostic output. There
+is no standard/forensic mode switch or automatic redaction. Disabling
+diagnostic events does not disable resumable conversation checkpoints,
+which may still contain full text. Treat the entire workspace, especially
+`logs/`, as sensitive data.
 
 Model changes emit gui.models.change.requested/confirmed/applied events;
 downloads emit start/completion events. Source imports record the request

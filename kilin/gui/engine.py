@@ -300,7 +300,7 @@ class ChatEngine:
     active_conversation: ConversationInfo | None
         Metadata for the active conversation.
     project_trace: TraceSink
-        Active forensic or null sink.
+        Active diagnostic sink, or a null sink when tracing is disabled.
     active_trace: TraceSink
         Property exposing the current project trace to redirected backend
         output.

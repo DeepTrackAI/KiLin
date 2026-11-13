@@ -87,8 +87,9 @@ entire pipeline supports its source formats or domain reasoning.
 
 `sources/sources.py` dispatches by supported extension to modules under
 `sources/extensions/`. A reader may implement `read_source_file(path,
-relative_path)` to load non-UTF-8-backed content (the PDF reader does).
-An extractor implements `extract_source_units(...)` using the signature
+relative_path)` to load non-UTF-8-backed content (as the PDF and Word
+`.doc`/`.docx` readers do). An extractor implements
+`extract_source_units(...)` using the signature
 expected by the dispatcher. Returned records must use consistent relative
 paths, exact text, inclusive source-coordinate ranges and valid symbol,
 section and cell fields. Reading a file does not execute its code.
