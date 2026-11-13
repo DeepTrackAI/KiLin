@@ -4379,6 +4379,7 @@ class RAGSession:
             source_files=self._source_files,
             ask_router=self._ask_router,
             ask_model=ask_model,
+            model_attempt_count=lambda: len(model_calls),
             write=write,
             model_id=str(getattr(self.chat_session, "model_id", "")),
             progress=lambda message, **details: report_phase(

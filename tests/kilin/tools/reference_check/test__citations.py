@@ -306,6 +306,79 @@ class TestSuperscripts(unittest.TestCase):
             [(8, 19, 20), (19, 21), (23,), (10,), (11, 12, 13, 14)],
         )
 
+    def test_count_in_parentheses_before_a_superscript(self) -> None:
+        # "high (3)⁴⁵,⁴⁶": the parenthesis follows no function name, so
+        # the digits are a citation; "f(0)²" stays an exponent.
+        passages = (
+            chunk(
+                "a",
+                "Expression was high (3)45,46 in the leaves. The value "
+                "of f(0)2 was small in every sample.\n",
+            ),
+        )
+        superscripts = {"4546": ("shigh(3)",), "2": ("ofuef(0)",)}
+        scan = find_citations(passages, 60, superscripts, RULES)
+        self.assertEqual([c.numbers for c in scan.citations], [(45, 46)])
+
+    def test_marker_broken_over_two_lines(self) -> None:
+        # "…accumulation⁵⁹⁻" ends a line and "⁶¹" starts the next.
+        passages = (
+            chunk(
+                "a",
+                "Stress led to protein accumulation59–\n61 in plants and "
+                "more.\n",
+            ),
+        )
+        superscripts = {"59": ("mulation",), "61": ("^inplants",)}
+        scan = find_citations(passages, 70, superscripts, RULES)
+        self.assertEqual(
+            [c.numbers for c in scan.citations], [(59, 60, 61)]
+        )
+        self.assertEqual(scan.citations[0].marker, "59– 61")
+        # The rest not printed small at a line start: only the first part.
+        scan = find_citations(passages, 70, {"59": ("mulation",)}, RULES)
+        self.assertEqual([c.numbers for c in scan.citations], [(59,)])
+
+    def test_sentence_broken_by_a_page_number(self) -> None:
+        # The page number "13" sits between the halves of the sentence,
+        # and the marker is printed first on the new page.
+        passages = (
+            chunk("a", "Cells respond to stress through protein\n"),
+            chunk("b", "13\n45,46 in leaves. A new sentence starts.\n",
+                  line=2),
+        )
+        superscripts = {"4546": ("^inleaves",)}
+        scan = find_citations(passages, 60, superscripts, RULES)
+        self.assertEqual([c.numbers for c in scan.citations], [(45, 46)])
+        self.assertEqual(
+            scan.citations[0].sentence.text,
+            "Cells respond to stress through protein 45,46 in leaves.",
+        )
+        # Inside one passage, with blank lines around the number.
+        passages = (
+            chunk(
+                "a",
+                "Cells respond to stress through protein\n\n13\n\n"
+                "accumulation45,46 in leaves.\n",
+            ),
+        )
+        scan = find_citations(passages, 60, {"4546": ("mulation",)}, RULES)
+        self.assertEqual(
+            scan.citations[0].sentence.text,
+            "Cells respond to stress through protein accumulation45,46 "
+            "in leaves.",
+        )
+
+    def test_line_start_digits_need_the_same_following_text(self) -> None:
+        # Small digits first on a PDF line ("^…") count only when the text
+        # after them agrees: "day 6" elsewhere is not a citation.
+        passages = (
+            chunk("a", "Samples were taken on day 6 after the stress.\n"),
+        )
+        superscripts = {"6": ("^departme",)}
+        scan = find_citations(passages, 60, superscripts, RULES)
+        self.assertEqual(scan.citations, ())
+
     def test_real_pdf_superscripts(self) -> None:
         runs = superscript_runs(PAPER_FIXTURES / "patil25deep.pdf", RULES)
         # "...real-time monitoring of plants in modern agricultural

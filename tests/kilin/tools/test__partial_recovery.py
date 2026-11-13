@@ -328,8 +328,10 @@ class TestIndependentRecovery(unittest.TestCase):
             context.project_root = Path(directory)
             with patch.object(reference_tool, "choose_document",
                               return_value=(Path("paper.md"), "named", False)):
+                # Without splitting sentences, so the replies map to the
+                # three claims in order.
                 result = reference_tool.run(
-                    reference_tool.ReferenceCheckSettings(),
+                    reference_tool.ReferenceCheckSettings(focus_claims=False),
                     ToolRequest("Check references", "Check references"),
                     context,
                 )

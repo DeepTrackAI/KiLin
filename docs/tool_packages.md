@@ -220,7 +220,9 @@ Output-limit resolution itself never retries a call. The core's separate
 permits one narrowly eligible internal thinking recovery; it excludes final
 streaming `write`, direct answers and routers. Both attempts count toward
 actual usage, even though planning and existing `model_calls` counters count
-logical requests.
+logical requests. The reference checker additionally samples the
+adapter's attempt count around each verification request, reporting
+`model_attempts` by stage; other tools are unchanged.
 
 Successful internal replies are stripped of thinking before tool parsers
 consume them. The coordinator emits captured thinking after each completed
@@ -238,7 +240,9 @@ Customized intent tool objects must not retain `answer_tokens`,
 `note_tokens` or `section_tokens`. The corresponding packaged `SETTINGS`
 keys `ANSWER_TOKENS`, `NOTE_TOKENS` and `SECTION_TOKENS` are not accepted.
 Unknown settings fail validation rather than overriding the user allowance
-or becoming ineffective settings.
+or becoming ineffective settings. In `reference_check` only, rename a
+customized `max_model_calls` override to `max_checked_claims`; other tools
+retain their own `max_model_calls` settings.
 
 `MODEL_CALLS` accepts only `THINKING`; remove `SHORT_REPLY_THINKING` and
 `SHORT_REPLY_MAX_TOKENS` from older customized files. The old selection caps

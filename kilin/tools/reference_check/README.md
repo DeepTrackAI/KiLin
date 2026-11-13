@@ -14,7 +14,17 @@ For "check the references of the Smith paper", the tool:
    paper the earlier turns discussed, or the user's choice).
 2. Reads the reference list with the shared extractor
    (`kilin/tools/_shared/references.py`). A PDF's list is read again in
-   column order, and each entry keeps its printed number.
+   column order, and each entry keeps its printed number. The list ends at
+   the next heading (Acknowledgements, Supplementary information, another
+   reference list), a table or figure caption, or numbering that starts
+   again at 1, so a table printed after it adds no entries; a number that
+   does not follow the previous entry's (a page range wrapped onto a new
+   line, "…919–\n927. https://doi…") stays inside its entry. A paper with
+   several lists (for example main and supplementary references, each
+   numbered from 1) has one list checked: the one the question names
+   ("the supplementary references"), otherwise the user chooses; without
+   anyone to ask, the first list is checked and the answer says so. The
+   in-text citations are looked for in the text that cites that list.
 3. Matches each entry to a project file (`_matching.py`): by the file's
    DOI, by its PDF metadata title and the entry's first author, or by the
    file's first page. Each entry is **found**, **probable** (for example
@@ -26,6 +36,11 @@ For "check the references of the Smith paper", the tool:
    and superscripts in PDFs, confirmed by the printed font size and
    raised position (exponents in formulas and subscripts are left out).
    Papers using only written-out numbered references are recognized.
+   A sentence broken by a page break (page number, footer, running head)
+   is joined first; a superscript marker broken over two lines
+   ("accumulation⁵⁹⁻" / "⁶¹") is read whole when the rest is printed small
+   at the start of the next line; and a count in parentheses before a
+   superscript ("high (3)⁴⁵,⁴⁶") is not taken for a function argument.
    It reports references never cited and numbers cited beyond the list.
 5. Checks each claim (a citing sentence and one cited work that is in the
    project) with the answering model (`_shared/claims.py`). The model reads
@@ -42,8 +57,18 @@ For "check the references of the Smith paper", the tool:
    paper actually reports the described study. The model answers
    with a verdict (supported, partly supported, not supported,
    contradicted, background, or no matching passage), the passage
-   sentence it rests on, and a critical comment. A cited file without
-   searchable text is reported as no text, without a model call. Python
+   sentence it rests on, and a critical comment. A sentence citing
+   several references together receives a model-proposed focus for each
+   reference (one call per sentence), used only as an additional retrieval
+   query. The original citing sentence stays authoritative for the
+   verdict; a model-generated rewrite cannot establish support for
+   something not asserted in that sentence.
+   A claim found not supported, or without a matching passage, is read
+   again with the next best-ranked passages (`RETRY_PASSAGES`) in a
+   second call; a better verdict from that reading replaces the first,
+   the comment identifies the second reading. Traces include passages
+   from both readings and identify the final verdict stage. A cited
+   file without searchable text requires no model call. Python
    checks the answer: a quote not found in the passages is dropped, and a
    reference is called contradicted only with a confirmed quote, otherwise
    not supported. The plan is traced, and the user can choose all
@@ -62,8 +87,12 @@ For "check the references of the Smith paper", the tool:
    query strings for each checked claim; trace records the context,
    selected passage identifiers and location, quote passage identifier,
    evidence status, bibliography match status, exact quote line range
-   when identifiable, and the rating. No extra model calls or network
-   operations are used.
+   when identifiable, and the rating. The report and chat separately
+   give logical model requests by stage (focusing, initial checks,
+   second looks). When the KíLín adapter is used, they also give actual
+   generation attempts, including an eligible recovery attempt. The
+   confirmation plan estimates requests, not a strict bound on attempts.
+   No additional model calls or network operations are used.
 7. Saves `outputs/<paper>_reference_check.md` with every reference, its
    file, the sentences citing it and their verdicts, and answers in the
    chat with the counts, the found, probable and missing references, the
@@ -112,10 +141,11 @@ narrowed from the chunk to the matching line(s). Repeated claim queries use
 request-local ranking memoization, without changing the retrieved results.
 
 The **answering model** used for internal verification inherits the main
-interface's thinking, temperature and maximum output tokens. By default,
-`ANSWER_TOKENS` is `null` and imposes no extra tool-specific cap. An
-explicit non-null override can reduce the output budget. The router is
-unchanged and remains nonthinking and deterministic.
+interface's thinking, temperature and maximum output tokens. The tool
+imposes no separate output cap for verification; `PASSAGE_TOKENS` instead
+limits the *input* evidence. See [Generation settings](#generation-settings)
+and the [shared policy](../../../docs/tool_packages.md#generation-settings-for-tools).
+The router remains nonthinking and deterministic.
 
 Limits: author-year citations ("Smith et al., 2020") are not recognised;
 superscripts are recognised only in PDFs; an unusual layout can still split
@@ -126,8 +156,11 @@ model's verdicts can be wrong, so they are pointers for the
 reader to check, with the quote and the place to look.
 
 Its `defaults.json` is independent of `kilin_defaults.json`.
-Project-type tool settings override the keys in `SETTINGS`. Other sections
-are internal thresholds. All values are read and validated on import.
+Project-type tool settings override the keys in `SETTINGS`; saved
+project-specific settings can override the project type. See
+[configuration precedence](../../../docs/configuration.md) for the full
+order. Other sections are internal thresholds. All values are read and
+validated on import.
 
 ## Defaults
 
@@ -142,19 +175,30 @@ are internal thresholds. All values are read and validated on import.
   Allowed range: 1–20.
 - `PASSAGE_TOKENS` (default `5000`): Most estimated tokens of those
   passages (an indexed passage is often 700-1000); the best-ranked one is
-  always read. Allowed range: 300–16000.
-  With `null`, the answering model inherits the main interface's maximum
-  output tokens (or its available context if no maximum was configured).
-  An explicit override accepts 100–131072 and is capped by any session
-  maximum.
-- `MAX_MODEL_CALLS` (default `100`): Most claims checked; later ones are
-  reported as not checked. Allowed range: 1–1000.
+  always read. Allowed range: 300–16000 (integer, not `null`). This is an
+  *input* limit; the generation allowance is inherited separately.
+- `RETRY_PASSAGES` (default `8`): When a claim comes out not supported
+  or without a matching passage, this many further passages of the cited
+  work (the next best-ranked, within `PASSAGE_TOKENS`) are read in a
+  second model call before deciding; 0 turns the second look off.
+  Allowed range: 0–20.
+- `FOCUS_CLAIMS` (default `true`): For a sentence citing several
+  references, the answering model proposes a reference-specific search
+  hint. The original citing sentence remains authoritative for the
+  verdict: the proposed wording is never used as independent evidence.
+  One extra model call per such sentence. Allowed values: true, false.
+- `MAX_CHECKED_CLAIMS` (default `100`): Most claims selected for
+  verification; later ones are reported unchecked. This is not a model-
+  call budget: a claim can need a focusing call and a second reading.
+  Allowed range: 1–1000. For older `reference_check` overrides, rename
+  `max_model_calls` to `max_checked_claims`; the old name is rejected.
+  Other tools' `max_model_calls` settings are unaffected.
 - `QUICK_CLAIMS` (default `5`): Claims checked by the quick version, in
   reading order. Allowed range: 1–100.
 - `CONFIRMATION` (default `"when_large"`): When to ask before checking
   claims. Allowed values: always, when_large, never.
-- `LARGE_BATCHES` (default `10`): With `when_large`, plans with more claims
-  than this ask first. Allowed range: 0–1000.
+- `LARGE_BATCHES` (default `10`): With `when_large`, plans with more
+  claims than this ask first. Allowed range: 0–1000.
 - `ONLINE_LOOKUP` (default `false`): Offer online lookup during an
   ordinary reference check (without a link request). This is **not**
   authorization: an actual confirmation callback and affirmative user

@@ -88,14 +88,14 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from pathlib import Path
 import re
 from typing import Final
 
-from kilin._model_completion import IncompleteModelResponse
+from kilin._model_completion import IncompleteModelResponse, strip_thinking
 from kilin.chunking import Chunk
 from kilin.retrievals.document_reading import estimate_tokens
 from kilin.tools._shared.sentences import Sentence
@@ -115,8 +115,11 @@ __all__ = [
     "Support",
     "Verdict",
     "claim_passages",
+    "focus_claims",
+    "focus_prompt",
     "judge_support",
     "quote_line_range",
+    "parse_focus",
     "parse_verdict",
     "support_prompt",
     "verdict_label",
@@ -169,6 +172,10 @@ _SOURCE: Final[re.Pattern[str]] = re.compile(
 # Reciprocal-rank fusion constant: a passage at rank r of one query scores
 # 1 / (_FUSION + r).
 _FUSION: Final[int] = 60
+# One model-proposed retrieval hint: "[3]: the method of ...".
+_FOCUS_LINE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*[-*]?\s*\[?(\d{1,3})\]?\s*[:.)-]\s*(.+)$", re.M
+)
 # A word hyphenated across lines in extracted text ("perfor- mance").
 _HYPHENATED: Final[re.Pattern[str]] = re.compile(r"(?<=[a-z])-\s+(?=[a-z])")
 # A word, for comparing quotes: letters only.
@@ -220,6 +227,9 @@ class Claim:
         Used only to disambiguate the citing sentence.
     match_status: str
         ``found`` or ``probable`` for the cited paper identity.
+    focus: str
+        Optional model-proposed retrieval hint for the reference.
+        It is not authoritative and is not used to judge support.
 
     """
 
@@ -232,6 +242,7 @@ class Claim:
     cited_for: str = ""
     after: str = ""
     match_status: str = "found"
+    focus: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,12 +336,132 @@ def verdict_label(verdict: str) -> str:
     return _LABELS.get(verdict, verdict)
 
 
+def focus_prompt(
+    sentence: str, before: str, after: str, numbers: Sequence[int]
+) -> tuple[str, str]:
+    """Return prompts for reference-specific retrieval hints.
+
+    Parameters
+    ----------
+    sentence: str
+        The citing sentence, with its markers in brackets where they
+        stand.
+    before: str
+        Preceding sentences of the paragraph, or empty.
+    after: str
+        The following sentence of the paragraph, or empty.
+    numbers: Sequence[int]
+        References for which to propose retrieval hints.
+
+    Returns
+    -------
+    tuple[str, str]
+        System prompt and user prompt, asking for one line per reference.
+
+    """
+
+    system = (
+        "You split a sentence of a scientific paper into what each of its "
+        "references is cited for. Use only the paper's own words and "
+        "context; add no facts."
+    )
+    context = "".join(
+        f'{label}: "{text}"\n'
+        for label, text in (("Preceding context", before),
+                            ("Following context", after))
+        if text
+    )
+    lines = "\n".join(f"[{number}]: <claim>" for number in numbers)
+    user = f"""A paper writes this sentence, citing several references:
+
+"{sentence}"
+{context}
+Several references often support a sentence together, each for one part:
+a method, a dataset, a finding, an example. For each reference below,
+rewrite the sentence as one short, self-contained claim stating only what
+that reference is cited for, keeping the context needed to understand it
+(what "this", "it" or "these" refer to). When the sentence does not
+separate them, give the whole claim.
+
+Answer with exactly one line per reference:
+{lines}"""
+    return system, user
+
+
+def parse_focus(reply: str, numbers: Sequence[int]) -> dict[int, str]:
+    """Read retrieval hints from the reply to ``focus_prompt``.
+
+    Parameters
+    ----------
+    reply: str
+        The model's reply.
+    numbers: Sequence[int]
+        The references asked about.
+
+    Returns
+    -------
+    dict[int, str]
+        The retrieval hint for each reference with a nonempty line
+        ("[3]: ..." or "3: ..."); thinking and other lines are ignored.
+
+    """
+
+    wanted = set(numbers)
+    found: dict[int, str] = {}
+    for match in _FOCUS_LINE.finditer(strip_thinking(reply)):
+        number, text = int(match.group(1)), match.group(2).strip().strip('"')
+        if number in wanted and text and text != "<claim>":
+            found.setdefault(number, text)
+    return found
+
+
+def focus_claims(
+    sentence: str,
+    before: str,
+    after: str,
+    numbers: Sequence[int],
+    ask_model: Callable[[str, str, int | None], str],
+) -> dict[int, str]:
+    """Ask once for reference-specific retrieval hints.
+
+    Parameters
+    ----------
+    sentence: str
+        The citing sentence, with its markers in brackets.
+    before: str
+        Preceding context, or empty.
+    after: str
+        Following context, or empty.
+    numbers: Sequence[int]
+        References for which to propose retrieval hints.
+    ask_model: Callable[[str, str, int | None], str]
+        The answering model (``ToolContext.ask_model``).
+
+    Returns
+    -------
+    dict[int, str]
+        The retrieval hint for each reference; empty when the call fails.
+        Hints never replace the original citing sentence for verification.
+
+    """
+
+    if not numbers:
+        return {}
+    try:
+        reply = ask_model(*focus_prompt(sentence, before, after, numbers),
+                          None)
+    except Exception:  # Without a focus, the whole sentence is judged.
+        return {}
+    return parse_focus(reply, numbers)
+
+
 def claim_passages(
     texts: Sequence[str],
     cited: Sequence[Chunk],
     rank: Callable[[str], list],
     count: int,
     max_tokens: int,
+    skip: Collection[str] = (),
 ) -> tuple[Chunk, ...]:
     """Return the cited file's passages most related to a claim.
 
@@ -350,6 +481,9 @@ def claim_passages(
     max_tokens: int
         Most estimated tokens of all passages together; the best-ranked
         passage is always taken.
+    skip: Collection[str], optional
+        Identifiers of passages already read, left out (for a second,
+        wider reading). Defaults to none.
 
     Returns
     -------
@@ -365,7 +499,7 @@ def claim_passages(
         position = 0
         for result in rank(text):
             index = order.get(result.chunk.identifier)
-            if index is None:
+            if index is None or result.chunk.identifier in skip:
                 continue
             fused[index] = fused.get(index, 0.0) + 1 / (_FUSION + position)
             position += 1
@@ -445,7 +579,8 @@ def verification_prompt(
 {preceding}{following}{cited_for}{others}
 The surrounding sentences identify what expressions such as "this study"
 refer to. Judge only what the cited sentence attributes to [{number}];
-do not require the cited paper to restate the citing paper's own wording.
+the original wording is authoritative, not a model paraphrase.
+Do not require the cited paper to restate the citing paper's own wording.
 When the citing sentence says that "the results of this study were
 published" in [{number}], treat this as attribution to the publication:
 use the preceding description to identify the study. If the cited work

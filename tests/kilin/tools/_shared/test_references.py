@@ -18,6 +18,7 @@ from pathlib import Path
 import unittest
 
 from kilin.tools._shared.references import (
+    ReferenceList,
     ReferenceLayout,
     joined_text,
     numbered_reference_entries,
@@ -25,6 +26,7 @@ from kilin.tools._shared.references import (
     reference_body,
     reference_entries,
     reference_list,
+    reference_lists,
 )
 from tests.kilin.tools._shared._support import chunk
 
@@ -248,6 +250,120 @@ class TestReferenceEntries(unittest.TestCase):
             ],
         )
         self.assertIn("2013. 07.003 PMID", entries[0].text)
+
+    def test_numbers_inside_an_entry_start_no_entry(self) -> None:
+        # A page range wrapped after its dash ("919–\n927.") looks like an
+        # entry number but does not follow the previous one.
+        text = (
+            "References\n"
+            "46. Smith J, Lee K. A study of brain networks. Brain 2011; 95:\n"
+            "629–635. PMID: 21930184\n"
+            "47. Weintraub D, Simuni T. Cognitive performance in early\n"
+            "Parkinson disease. Mov Disord 2015; 30: 919–\n"
+            "927. https://doi.org/10.1002/mds.26170 PMID: 25737166\n"
+            "48. Winblad B, Amouyel P. Defeating Alzheimer disease in\n"
+            "Europe. Lancet Neurol 2016; 15: 455–532.\n"
+        )
+        entries = numbered_reference_entries((chunk("a", text),), LAYOUT)
+        self.assertEqual([e.number for e in entries], [46, 47, 48])
+        self.assertIn("919– 927. https://doi.org", entries[1].text)
+
+    def test_captions_and_restarted_numbers_end_the_list(self) -> None:
+        entries = "".join(
+            f"{n}. Author{n} A. A study number {n} of cells. "
+            f"Nature {n}, 2-3 (2019).\n"
+            for n in range(1, 7)
+        )
+        cases = (
+            "Table 1. Characteristics of the 40 participants.\n"
+            "1. Age, years 65 ± 3 and more values per group\n",
+            "Fig. 2 | The network of brain regions over the cortex.\n",
+            "Supplementary Figure S3: Additional results for all.\n",
+            "1. Patients were recruited at three clinical sites, all.\n",
+        )
+        for tail in cases:
+            with self.subTest(tail=tail.split()[0]):
+                found = numbered_reference_entries(
+                    (chunk("a", f"References\n{entries}{tail}"),), LAYOUT
+                )
+                self.assertEqual(
+                    [e.number for e in found], list(range(1, 7))
+                )
+                self.assertTrue(found[-1].text.endswith("(2019)."))
+
+    def test_several_lists_are_found_and_chosen(self) -> None:
+        main = "".join(
+            f"{n}. Main{n} A. A main study {n} of cells. Nature {n}, 2 "
+            f"(2019).\n" for n in range(1, 7)
+        )
+        extra = "".join(
+            f"{n}. Extra{n} B. A supplementary study {n}. Cell {n}, 3 "
+            f"(2020).\n" for n in range(1, 6)
+        )
+        text = (
+            "Intro cites [1] and [6].\nReferences\n" + main
+            + "Supplementary Information\nThe supplement cites [5].\n"
+            "Supplementary References\n" + extra
+        )
+        passages = (chunk("a", text),)
+        lists = reference_lists(passages, LAYOUT)
+        self.assertEqual(
+            [(found.index, found.heading, len(found.entries))
+             for found in lists],
+            [(0, "References", 6), (1, "Supplementary References", 5)],
+        )
+        self.assertIsInstance(lists[0], ReferenceList)
+        self.assertEqual(
+            lists[1].label, "Supplementary References (5 entries, 1–5)"
+        )
+        first = numbered_reference_entries(passages, LAYOUT, which=0)
+        self.assertTrue(first[0].text.startswith("Main1"))
+        self.assertTrue(
+            numbered_reference_entries(passages, LAYOUT)[0]
+            .text.startswith("Extra1")
+        )
+        # Each list's citing text: the main text, or the supplement.
+        self.assertEqual(
+            reference_body(passages, 0)[0].text.strip(),
+            "Intro cites [1] and [6].",
+        )
+        supplement = " ".join(
+            passage.text for passage in reference_body(passages, 1)
+        )
+        self.assertIn("The supplement cites [5].", supplement)
+        self.assertNotIn("Main1", supplement)
+        self.assertNotIn("Intro", supplement)
+
+    def test_supplementary_methods_ends_main_reference_list(self) -> None:
+        """A supplementary section is neither an entry nor lost body."""
+
+        main = "".join(
+            f"{n}. Main{n} A. A study of cells {n}. Nature {n}, 3 "
+            f"(2019).\n" for n in range(1, 7)
+        )
+        text = (
+            "Main work cites [1].\nReferences\n" + main
+            + "Supplementary Methods\nAdditional experiments cite [1].\n"
+            "Supplementary References\n"
+            "1. Extra B. A supplementary study of cells. Cell 1, 3 "
+            "(2020).\n"
+        )
+        passages = (chunk("a", text),)
+        self.assertEqual(
+            [len(ref.entries) for ref in reference_lists(passages, LAYOUT)],
+            [6, 1],
+        )
+        self.assertTrue(all(
+            "Supplementary" not in entry.text
+            for entry in numbered_reference_entries(
+                passages, LAYOUT, which=0
+            )
+        ))
+        supplement = " ".join(
+            part.text for part in reference_body(passages, 1)
+        )
+        self.assertIn("Additional experiments cite [1].", supplement)
+        self.assertNotIn("Main1", supplement)
 
     def test_unprinted_numbers_follow_the_previous(self) -> None:
         entries = numbered_reference_entries(

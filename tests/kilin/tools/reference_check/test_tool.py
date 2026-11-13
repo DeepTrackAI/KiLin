@@ -131,7 +131,9 @@ class TestReferenceCheckRun(unittest.TestCase):
     def _run(
         self, chosen: object, choice: str = "continue",
         question: str = "check the references of paper.md",
-        interactive: bool = True, **settings: object
+        interactive: bool = True, choose: object = None,
+        ask: object = None, model_attempt_count: object = None,
+        **settings: object
     ) -> tuple[object, SimpleNamespace]:
         def ask_model(system: str, prompt: str, tokens: int) -> str:
             # Reference [2] is quoted from its file; [3] is called
@@ -145,11 +147,12 @@ class TestReferenceCheckRun(unittest.TestCase):
 
         context = SimpleNamespace(
             project_root=self.root, chunks=self.chunks,
-            progress=Mock(), done=Mock(), choose=None,
+            progress=Mock(), done=Mock(), choose=choose,
             rank=Mock(side_effect=lambda text: [
                 SimpleNamespace(chunk=c) for c in self.chunks
             ]),
-            ask_model=Mock(side_effect=ask_model),
+            ask_model=Mock(side_effect=ask or ask_model),
+            model_attempt_count=model_attempt_count,
             confirm=Mock(return_value=choice),
             trace=SimpleNamespace(emit=Mock()), trace_turn_id=None,
         )
@@ -202,8 +205,9 @@ class TestReferenceCheckRun(unittest.TestCase):
     def test_claims_are_checked_after_confirmation(self) -> None:
         result, context = self._run((Path("paper.md"), "named", False))
         context.confirm.assert_called_once()
-        # [2] is cited twice, [3] once: three claims, one call each.
-        self.assertEqual(context.ask_model.call_count, 3)
+        # [2] is cited twice, [3] once: three claims, one call each, and
+        # one call splitting the sentence citing [2, 3] between them.
+        self.assertEqual(context.ask_model.call_count, 4)
         self.assertEqual(result.summary["claims_checked"], 3)
         self.assertEqual(
             result.summary["verdicts"],
@@ -249,6 +253,163 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertIn("*Evidence retrieval queries:*", report)
         events = [c.args[0] for c in context.trace.emit.call_args_list]
         self.assertEqual(events.count("tool.reference_check.claim"), 3)
+
+    def test_checked_claim_limit_and_actual_model_calls(self) -> None:
+        """The claim cap is distinct from invocation counts and retries."""
+
+        result, context = self._run(
+            (Path("paper.md"), "named", False),
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1,
+            "initial": 1,
+            "second_look": 0,
+            "total": 2,
+        })
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertIn("2 of 3 claims were not checked", result.answer)
+        self.assertIn("**Model requests:** 2 (1 focusing, 1 initial, "
+                      "0 second looks)", result.answer)
+        self.assertNotIn("model_attempts", result.summary)
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.items, 3)
+        self.assertEqual(plan.batches_to_run, 2)
+        self.assertEqual(plan.batches, 4)
+        self.assertEqual(plan.quick_items, 1)
+        self.assertEqual(plan.estimated_seconds, plan.quick_seconds)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("**Model requests:** 2", report)
+
+    def test_generation_attempts_include_recovery_by_stage(self) -> None:
+        """Count adapter recovery separately from logical requests."""
+
+        attempts = {"count": 0}
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            """Simulate one recovery during a focusing request."""
+
+            attempts["count"] += (
+                2 if "citing several references" in prompt else 1
+            )
+            if "citing several references" in prompt:
+                return "[2]: BRAPH implements these measures."
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, context = self._run(
+            (Path("paper.md"), "named", False),
+            ask=answer, model_attempt_count=lambda: attempts["count"],
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1, "initial": 1, "second_look": 0, "total": 2,
+        })
+        self.assertEqual(result.summary["model_attempts"], {
+            "focusing": 2, "initial": 1, "second_look": 0, "total": 3,
+        })
+        self.assertEqual(context.ask_model.call_count, 2)
+        self.assertIn("**Generation attempts:** 3 (2 focusing", result.answer)
+        report = (self.root / result.summary["report"]).read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("**Generation attempts:** 3", report)
+        claim_events = [
+            call.kwargs["data"]
+            for call in context.trace.emit.call_args_list
+            if call.args[0] == "tool.reference_check.claim"
+        ]
+        self.assertEqual(claim_events[0]["model_calls"], 2)
+        self.assertEqual(claim_events[0]["model_attempts"], 3)
+
+    def test_failed_focusing_attempt_is_still_accounted_for(self) -> None:
+        """A failed hint request remains an attempted inference."""
+
+        attempts = {"count": 0}
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            """Fail focusing, then complete the original verification."""
+
+            attempts["count"] += 1
+            if "citing several references" in prompt:
+                raise RuntimeError("Focus failed")
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, _ = self._run(
+            (Path("paper.md"), "named", False),
+            ask=answer, model_attempt_count=lambda: attempts["count"],
+            max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["model_attempts"], {
+            "focusing": 1, "initial": 1, "second_look": 0, "total": 2,
+        })
+
+    def test_claim_cap_also_applies_to_quick_selection(self) -> None:
+        """Choosing quick cannot select beyond the configured claim cap."""
+
+        result, _ = self._run(
+            (Path("paper.md"), "named", False), choice="quick",
+            quick_claims=5, max_checked_claims=1, retry_passages=0,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+
+    def test_old_model_call_limit_is_rejected(self) -> None:
+        """The renamed setting must not silently acquire two meanings."""
+
+        with self.assertRaisesRegex(ValueError, "unknown settings"):
+            tool.parse_settings({"max_model_calls": 1}, "test")
+        self.assertEqual(
+            tool.parse_settings(
+                {"max_checked_claims": 1}, "test"
+            ).max_checked_claims, 1,
+        )
+
+    def test_one_claim_can_use_three_counted_model_calls(self) -> None:
+        """Focusing, checking and rereading do not consume claim slots."""
+
+        self.chunks[1:2] = [
+            chunk(
+                f"b{number}",
+                ("BRAPH implements these graph measures."
+                 if number == 10 else BRAPH if number == 1
+                 else f"Unrelated passage {number}."),
+                path="braph.md", line=number,
+            )
+            for number in range(1, 11)
+        ]
+
+        def answer(system: str, prompt: str, tokens: object) -> str:
+            if "citing several references" in prompt:
+                return "[2]: BRAPH implements graph measures."
+            if "BRAPH implements these graph measures." in prompt:
+                return (
+                    "VERDICT: supported\nQUOTE: BRAPH implements these "
+                    "graph measures.\nCOMMENT: Direct evidence."
+                )
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: None."
+
+        result, context = self._run_model(
+            answer, max_checked_claims=1, focus_claims=True,
+            passages=6, retry_passages=8,
+        )
+        self.assertEqual(result.summary["claims_checked"], 1)
+        self.assertEqual(result.summary["model_calls"], {
+            "focusing": 1,
+            "initial": 1,
+            "second_look": 1,
+            "total": 3,
+        })
+        self.assertEqual(context.ask_model.call_count, 3)
+        events = [
+            event.kwargs["data"]
+            for event in context.trace.emit.call_args_list
+            if event.args[0] == "tool.reference_check.claim"
+        ]
+        self.assertEqual(events[0]["quote_passage_id"], "b10")
+        self.assertEqual(events[0]["verdict_stage"], "second_look")
+        self.assertEqual(events[0]["model_calls"], 3)
 
     def test_claim_rank_queries_are_cached_within_run(self) -> None:
         """Repeated citation queries need only one retrieval per string."""
@@ -318,7 +479,7 @@ class TestReferenceCheckRun(unittest.TestCase):
             self.assertIn(suffix, report)
         self.assertNotIn("(0/100)", result.answer)
         self.assertNotIn("(0/100)", report)
-        self.assertEqual(context.ask_model.call_count, 3)
+        self.assertEqual(context.ask_model.call_count, 4)
 
     def test_two_preceding_sentences_resolve_this_study(self) -> None:
         original = (
@@ -551,7 +712,8 @@ class TestReferenceCheckRun(unittest.TestCase):
             (Path("paper.md"), "named", False), choice="quick",
             quick_claims=1,
         )
-        self.assertEqual(context.ask_model.call_count, 1)
+        # The first claim's sentence cites [2, 3]: it is split first.
+        self.assertEqual(context.ask_model.call_count, 2)
         self.assertIn("2 of 3 claims were not checked (the quick version)",
                       result.answer)
 
@@ -597,6 +759,185 @@ class TestReferenceCheckRun(unittest.TestCase):
         self.assertNotIn("\\[", answer)
         self.assertIn("**3 claims checked:** 2 partly supported · 1 not "
                       "supported", result.answer)
+
+    def test_one_of_several_reference_lists_is_checked(self) -> None:
+        supplement = (
+            "Supplementary Information\n"
+            "The supplement extends the analysis [1], [2].\n"
+            "Supplementary References\n"
+            "1. Extra, A. A supplementary study of brain cells. Cell 1, "
+            "2 (2020).\n"
+            "2. Extra, B. Another supplementary study of tissue. Cell 3, "
+            "4 (2021).\n"
+        )
+        self.chunks[0] = chunk("p1", PAPER + supplement, path="paper.md")
+        cases = (
+            # (answer to the question, question, references, note part)
+            (1, "check the references of paper.md", 2, "you chose"),
+            (None, "check the supplementary references of paper.md", 2,
+             "the question names"),
+            (None, "check the main references of paper.md", 5,
+             "the question names"),
+        )
+        for answer, question, count, note in cases:
+            with self.subTest(question=question, answer=answer):
+                choose = Mock(return_value=answer)
+                result, context = self._run_with_choice(
+                    choose, question, verify=False
+                )
+                self.assertEqual(result.summary["references"], count)
+                self.assertIn(note, result.summary["reference_list"])
+                self.assertIn(note, result.answer)
+                asked = "you chose" in note
+                self.assertEqual(choose.called, asked)
+                if asked:
+                    labels = choose.call_args.args[1]
+                    self.assertEqual(
+                        labels,
+                        ("References (5 entries, 1–5)",
+                         "Supplementary References (2 entries, 1–2)"),
+                    )
+        # The supplement's citations cite its own list.
+        result, _ = self._run_with_choice(
+            Mock(return_value=1), "check paper.md", verify=False
+        )
+        self.assertEqual(result.summary["uncited"], [])
+        # Nobody to ask: the first list, and the answer says so.
+        result, _ = self._run_with_choice(None, "check paper.md",
+                                          verify=False)
+        self.assertEqual(result.summary["references"], 5)
+        self.assertIn("the first", result.answer)
+        # Cancelled: nothing is checked.
+        result, _ = self._run_with_choice(
+            Mock(return_value=None), "check paper.md", verify=False
+        )
+        self.assertIn("No reference list was chosen", result.answer)
+        self.assertNotIn("references", result.summary)
+
+    def _run_with_choice(
+        self, choose: object, question: str, **settings: object
+    ) -> tuple[object, SimpleNamespace]:
+        """Run with a ``choose`` callback for the reference-list choice."""
+
+        return self._run(
+            (Path("paper.md"), "named", False), question=question,
+            choose=choose, **settings,
+        )
+
+    def test_sentence_citing_several_references_is_focused(self) -> None:
+        prompts: list[str] = []
+
+        def ask_model(system: str, prompt: str, tokens: object) -> str:
+            prompts.append(prompt)
+            if "citing several references" in prompt:
+                return ("[2]: BRAPH implements graph measures.\n"
+                        "[3]: BRAPH 2 implements these measures too.")
+            return "VERDICT: supported\nQUOTE: NONE\nCOMMENT: Fine."
+
+        _, context = self._run_model(ask_model)
+        focus = [p for p in prompts if "citing several references" in p]
+        self.assertEqual(len(focus), 1)
+        checked = [p for p in prompts if "VERDICT:" in p]
+        self.assertTrue(any(
+            "BRAPH implements these measures [2, 3]." in p
+            for p in checked
+        ))
+        self.assertFalse(any(
+            "BRAPH implements graph measures." in p for p in checked
+        ))
+        # The hint still affects ranking, but never determines a verdict.
+        self.assertIn(
+            "BRAPH implements graph measures.",
+            [call.args[0] for call in context.rank.call_args_list]
+        )
+        # The sentence citing only [2] is checked as it is.
+        self.assertTrue(any(
+            "We followed the protocol of [2]." in p and "rewritten" not in p
+            for p in checked
+        ))
+        # Turned off: no splitting call.
+        prompts.clear()
+        self._run_model(ask_model, focus_claims=False)
+        self.assertFalse(
+            any("citing several references" in p for p in prompts)
+        )
+
+    def test_second_look_reads_more_passages(self) -> None:
+        # The cited paper has ten passages; the answer is in the last.
+        self.chunks[1:] = [
+            chunk(f"b{n}", f"Passage {n} about brain graphs and networks.\n",
+                  path="braph.md", line=n)
+            for n in range(1, 10)
+        ] + [chunk("b10", "BRAPH implements these graph measures.\n",
+                   path="braph.md", line=10)]
+        self.chunks[1] = chunk("b1", BRAPH, path="braph.md")
+        prompts: list[str] = []
+
+        def ask_model(system: str, prompt: str, tokens: object) -> str:
+            prompts.append(prompt)
+            if "BRAPH implements these graph measures" in prompt:
+                return ("VERDICT: supported\nQUOTE: BRAPH implements these "
+                        "graph measures.\nCOMMENT: Stated.")
+            return "VERDICT: not supported\nQUOTE: NONE\nCOMMENT: Absent."
+
+        result, _ = self._run_model(
+            ask_model, focus_claims=False, passages=6, retry_passages=8,
+        )
+        supported = [
+            item for item in result.summary["suitability"]
+            if item["verdict"] == "supported"
+        ]
+        self.assertEqual(len(supported), 2)
+        self.assertIn("second, wider reading", "\n".join(
+            (self.root / result.summary["report"]).read_text(
+                encoding="utf-8").splitlines()
+        ))
+        # The accepted second look must be reconstructable from the trace.
+        result, context = self._run_model(
+            ask_model, focus_claims=False, passages=6, retry_passages=8,
+        )
+        records = [
+            event.kwargs["data"]
+            for event in context.trace.emit.call_args_list
+            if event.args[0] == "tool.reference_check.claim"
+        ]
+        traced = [
+            entry for entry in records
+            if entry["quote_passage_id"] == "b10"
+        ]
+        self.assertEqual(len(traced), 2)
+        for entry in traced:
+            ids = {passage["id"] for passage in entry["passages"]}
+            self.assertIn("b10", ids)
+            self.assertEqual(entry["verdict_stage"], "second_look")
+            self.assertEqual(entry["readings"][-1]["stage"], "second_look")
+            self.assertIn("b10", entry["readings"][-1]["passage_ids"])
+            self.assertEqual(entry["model_calls"], 2)
+        usage = result.summary["model_calls"]
+        self.assertEqual(usage["focusing"], 0)
+        self.assertEqual(usage["initial"], 2)
+        self.assertEqual(usage["second_look"], 2)
+        self.assertEqual(usage["total"], context.ask_model.call_count)
+        plan = context.confirm.call_args.args[0]
+        self.assertEqual(plan.batches_to_run, 4)
+        self.assertGreater(plan.estimated_seconds, plan.quick_seconds / 2)
+        # Without the second look, both stay not supported.
+        result, _ = self._run_model(
+            ask_model, focus_claims=False, passages=6, retry_passages=0,
+        )
+        self.assertFalse(any(
+            item["verdict"] == "supported"
+            for item in result.summary["suitability"]
+        ))
+
+    def _run_model(
+        self, ask_model: object, **settings: object
+    ) -> tuple[object, SimpleNamespace]:
+        """Run on paper.md with another fake answering model."""
+
+        return self._run(
+            (Path("paper.md"), "named", False), ask=ask_model, **settings
+        )
 
     def test_cancelled_choice(self) -> None:
         result, context = self._run("Name the paper to check.")

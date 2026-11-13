@@ -12,6 +12,7 @@ needs a confirmed quote.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -29,7 +30,10 @@ from kilin.tools._shared.claims import (
     VERDICT_UNCLEAR,
     Claim,
     claim_passages,
+    focus_claims,
+    focus_prompt,
     judge_support,
+    parse_focus,
     parse_verdict,
     quote_line_range,
     support_prompt,
@@ -365,6 +369,66 @@ class TestVerifyClaim(unittest.TestCase):
             2, 1000,
         )
         self.assertEqual(picked, PASSAGES)
+
+    def test_passages_already_read_are_skipped(self) -> None:
+        third = chunk("c", "Lifespan tables.\n", path="cited.md", line=4)
+        cited = (*PASSAGES, third)
+        ranking = [SimpleNamespace(chunk=c) for c in cited]
+        picked = claim_passages(
+            ("running",), cited, lambda text: ranking, 2, 1000,
+            skip={PASSAGES[0].identifier},
+        )
+        self.assertEqual(picked, (PASSAGES[1], third))
+
+    def test_focus_prompt_and_reply(self) -> None:
+        _, prompt = focus_prompt(
+            "BRAPH uses the method [3] on the data [5].", "Before.", "",
+            (3, 5),
+        )
+        self.assertIn('"BRAPH uses the method [3] on the data [5]."', prompt)
+        self.assertIn('Preceding context: "Before."', prompt)
+        self.assertIn("[3]: <claim>\n[5]: <claim>", prompt)
+        reply = (
+            "<think>Splitting.</think>\n[3]: BRAPH uses the method of [3].\n"
+            '5: "The data analysed by BRAPH."\n[9]: Not asked.\n[3]: Again.'
+        )
+        self.assertEqual(
+            parse_focus(reply, (3, 5)),
+            {3: "BRAPH uses the method of [3].",
+             5: "The data analysed by BRAPH."},
+        )
+        self.assertEqual(parse_focus("[3]: <claim>", (3,)), {})
+
+    def test_focus_claims_calls_once_and_survives_failures(self) -> None:
+        calls = []
+
+        def ask(system: str, prompt: str, tokens: object) -> str:
+            calls.append(prompt)
+            return "[3]: The method.\n[5]: The data."
+
+        self.assertEqual(
+            focus_claims("S [3] and [5].", "", "", (3, 5), ask),
+            {3: "The method.", 5: "The data."},
+        )
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(focus_claims("S [3].", "", "", (), ask), {})
+
+        def fail(system: str, prompt: str, tokens: object) -> str:
+            raise RuntimeError("offline")
+
+        self.assertEqual(focus_claims("S [3].", "", "", (3,), fail), {})
+
+    def test_focused_claim_is_judged(self) -> None:
+        """A proposed rewrite must not replace the source claim."""
+
+        original = verification_prompt(CLAIM, PASSAGES)
+        rewritten = verification_prompt(
+            replace(CLAIM, focus="Invented phenomenon in mice."),
+            PASSAGES,
+        )
+        self.assertEqual(original, rewritten)
+        self.assertIn(CLAIM.sentence.text, rewritten[1])
+        self.assertNotIn("Invented phenomenon", rewritten[1])
 
     def test_prompt_names_reference_context_and_passages(self) -> None:
         _, prompt = verification_prompt(CLAIM, PASSAGES)
