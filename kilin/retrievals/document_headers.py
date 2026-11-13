@@ -11,8 +11,8 @@ document's title, its first author and file name, the section the passage
 belongs to, and its page. Only searching sees the header; evidence,
 citations, and the answering model keep the passage text itself.
 
-Titles come from the PDF metadata when it holds a plausible title, from the
-first ``#`` heading of a Markdown file, and otherwise from the file name.
+Titles come from plausible PDF or Word metadata, the first ``#`` heading
+of Markdown-style text, or otherwise from the file name.
 Section headings are recognized by name ("Methods", "Results", "Data
 availability") or by numbering ("3.1. Software architecture").
 
@@ -179,27 +179,36 @@ def document_info(
     Returns
     -------
     DocumentInfo
-        The PDF metadata title and first author when plausible; the first
-        ``#`` heading of a Markdown or Word file; otherwise the file name
-        without its suffix and no author.
+        The PDF or Word metadata title and first author when plausible;
+        otherwise the first ``#`` heading, or the file name without its
+        suffix if no title is available.
 
     Notes
     -----
-    Unreadable PDF metadata is ignored: the file name is used instead, so
-    indexing never fails because of a title.
+    Unreadable PDF and Word metadata is ignored, so indexing never fails
+    because of a document property.
 
     """
 
     title: str | None = None
     author: str | None = None
-    if path.suffix.lower() == ".pdf":
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
         title, author = _pdf_metadata(source / path)
-    elif path.suffix.lower() in {".md", ".doc", ".docx"}:
+    elif suffix in {".doc", ".docx"}:
+        from kilin.sources._word_metadata import read_word_metadata
+
+        raw_title, raw_author = read_word_metadata(source / path)
+        title = _clean_title(raw_title) if raw_title else None
+        author = _first_surname(raw_author) if raw_author else None
+
+    if title is None and suffix in {".md", ".doc", ".docx"}:
         for chunk in chunks:
             match = _MARKDOWN_TITLE.search(chunk.text)
             if match is not None:
                 title = _clean_title(match.group(1))
-                break
+                if title is not None:
+                    break
     return DocumentInfo(title or path.stem, author)
 
 

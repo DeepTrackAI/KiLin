@@ -73,6 +73,12 @@ class TestProjectInventory(unittest.TestCase):
         self.assertEqual(
             tool.file_types_in("How many Word documents?"), (".doc", ".docx")
         )
+        self.assertEqual(
+            tool.file_types_in("List Word docs"), (".doc", ".docx")
+        )
+        self.assertEqual(
+            tool.file_types_in("List Word doc"), (".doc", ".docx")
+        )
         self.assertEqual(tool.file_types_in("List the .docx"), (".docx",))
         self.assertEqual(tool.file_types_in("List the .doc"), (".doc",))
         self.assertEqual(tool.file_types_in("Find the word MRI"), ())

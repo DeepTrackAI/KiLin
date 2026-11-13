@@ -202,7 +202,7 @@ def file_types_in(question: str) -> tuple[str, ...]:
     if re.search(r"\btext files?\b", text):
         found.append(".txt")
     # "word" alone is too common ("the word MRI"); "Word files" counts.
-    if re.search(r"\bword (?:files?|documents?)\b", text):
+    if re.search(r"\bword (?:files?|documents?|docs?)\b", text):
         found.extend((".doc", ".docx"))
 
     for word in re.findall(r"\.?[a-z]+", text):

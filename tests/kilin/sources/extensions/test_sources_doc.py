@@ -95,6 +95,21 @@ class TestDocReading(unittest.TestCase):
             "".join(lines[unit.start_line - 1 : unit.end_line]), unit.text
         )
 
+    def test_sample_doc_and_docx_have_equivalent_body_text(self) -> None:
+        """Compare text content from both stable, converted fixtures."""
+
+        modern = FIXTURE.with_suffix(".docx")
+        old_text = sources_doc.read_source_file(
+            FIXTURE, Path("sample.doc")
+        ).text
+        new_text = sources_docx.read_source_file(
+            modern, Path("sample.docx")
+        ).text
+        # Their table row separators differ, not the underlying words.
+        self.assertEqual(
+            " ".join(old_text.split()), " ".join(new_text.split())
+        )
+
     def test_doc_renamed_to_docx_is_read(self) -> None:
         """Read an old Word file by its content, not by its name."""
 

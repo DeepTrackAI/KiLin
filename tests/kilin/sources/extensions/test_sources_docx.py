@@ -1,9 +1,9 @@
 """Unit tests for Word ``.docx`` reading.
 
-Each test builds a small Word file with ``python-docx`` in a temporary
-folder, so no binary fixture is committed. The tests cover reading order,
-headings, lists, tables, empty and damaged files, and that the extracted
-passages keep line ranges that can be cited.
+Generated files cover individual edge cases. The stable ``sample.docx``
+fixture is a LibreOffice conversion of ``sample.doc``, with explicit title
+and author properties. It verifies real-document extraction, Unicode,
+reading order, metadata, and citable source coordinates.
 
 """
 
@@ -21,6 +21,7 @@ import unittest
 from unittest.mock import patch
 
 from kilin.repository import scan_repository
+from kilin.sources._word_metadata import read_word_metadata
 from kilin.sources.sources import (
     SourceFile,
     extract_source_units,
@@ -35,6 +36,9 @@ except ModuleNotFoundError as error:
         raise
     Document = None
     sources_docx = None
+
+
+FIXTURE = Path(__file__).parent / "fixtures" / "sample.docx"
 
 
 @unittest.skipIf(sources_docx is None, "Optional Word reader unavailable")
@@ -107,6 +111,72 @@ class TestDocxReading(unittest.TestCase):
         self.assertEqual(
             self._read(document), "- Apples\n\n- Pears\n\n  - Green pears\n"
         )
+
+    def test_builtin_list_styles_and_indented_non_list(self) -> None:
+        """Respect the levels of built-in numbered and bulleted styles."""
+
+        document = Document()
+        for style, text in (
+            ("List Paragraph", "Indented, not a bullet"),
+            ("List Bullet", "First"),
+            ("List Bullet 2", "Nested"),
+            ("List Bullet 3", "Third level"),
+            ("List Number", "One"),
+            ("List Number 2", "Two"),
+            ("List Continue", "Continuation, not a bullet"),
+        ):
+            document.add_paragraph(text, style=style)
+        self.assertEqual(
+            self._read(document),
+            (
+                "Indented, not a bullet\n\n- First\n\n"
+                "  - Nested\n\n    - Third level\n\n"
+                "- One\n\n  - Two\n\n"
+                "Continuation, not a bullet\n"
+            ),
+        )
+
+    def test_explicit_numbering_zero_disables_style_list(self) -> None:
+        """Honor a paragraph's explicit suppression of style numbering."""
+
+        document = Document()
+        paragraph = document.add_paragraph("Plain", style="List Bullet")
+        numbering = paragraph._p.get_or_add_pPr().get_or_add_numPr()
+        numbering.get_or_add_numId().val = 0
+        self.assertEqual(self._read(document), "Plain\n")
+
+    def test_stable_word_fixture_reads_without_legacy_dependency(self) -> None:
+        """Read the converted sample even when olefile is unavailable."""
+
+        with patch.dict(sys.modules, {"olefile": None}):
+            source = sources_docx.read_source_file(
+                FIXTURE, Path("sample.docx")
+            )
+        self.assertIn("Study title\n\nFirst paragraph", source.text)
+        self.assertIn("café and naïve — “quotes”, α and β", source.text)
+        self.assertIn("Name | Value\nalpha | 1", source.text)
+        self.assertIn("See the website for more.", source.text)
+        self.assertIn("\\# not a heading", source.text)
+        self.assertEqual(
+            read_word_metadata(FIXTURE),
+            ("A Sample Study of Word Documents", "Ada Lovelace"),
+        )
+
+    def test_stable_fixture_keeps_citable_line_ranges(self) -> None:
+        """Match stored passage coordinates to the fixture's text lines."""
+
+        source = sources_docx.read_source_file(
+            FIXTURE, Path("sample.docx")
+        )
+        units = sources_docx.extract_source_units(source)
+        self.assertTrue(units)
+        lines = source.text.splitlines(keepends=True)
+        self.assertEqual("".join(unit.text for unit in units), source.text)
+        for unit in units:
+            self.assertEqual(
+                "".join(lines[unit.start_line - 1 : unit.end_line]),
+                unit.text,
+            )
 
     def test_tables_become_rows_in_reading_order(self) -> None:
         """Write each row on one line, between the paragraphs around it."""

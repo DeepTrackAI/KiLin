@@ -7,9 +7,10 @@ work on: it is never indexed, so a report KíLín writes there can never
 come back as a "source", and it is read only when a tool asks for it.
 
 ``load_output`` reads one file with the same readers that index sources
-(pdfminer.six layout text for PDFs, structure-aware units for Markdown and
-code) and splits it into numbered passages with the same chunker, so tools
-can cite passages exactly as they cite indexed evidence.
+(pdfminer.six layout text for PDFs, Word paragraphs and tables, and
+structure-aware units for Markdown and code), then splits it into
+numbered passages with the same chunker. Tools can cite those passages
+exactly as they cite indexed evidence.
 
 Saving validates a single filename, writes to an exclusive staging file,
 and publishes the completed content without replacing existing paths. A

@@ -64,6 +64,31 @@ class TestDocumentInfo(unittest.TestCase):
         self.assertEqual(document_search._clean_title(" A  long\ntitle "),
                          "A long title")
 
+    def test_word_metadata_and_heading_fallback(self):
+        """Prefer real Word properties, then a textual heading."""
+
+        fixture = (
+            Path(__file__).resolve().parents[1]
+            / "sources/extensions/fixtures/sample.docx"
+        )
+        info = document_search.document_info(
+            fixture.parent, Path(fixture.name), ()
+        )
+        self.assertEqual(
+            info, DocumentInfo("A Sample Study of Word Documents", "Lovelace")
+        )
+
+        title = Chunk(
+            "word", Path("missing.docx"), "# Study of Sleep\nResults", 1,
+            2, "markdown_section", None, "Study of Sleep",
+        )
+        self.assertEqual(
+            document_search.document_info(
+                fixture.parent, title.path, [title]
+            ),
+            DocumentInfo("Study of Sleep", None),
+        )
+
     def test_markdown_title_and_plain_fallback(self):
         note = Chunk("m", Path("notes/review.md"), "Intro\n# Sleep and age\n",
                      1, 3, "markdown_preamble", None, None)

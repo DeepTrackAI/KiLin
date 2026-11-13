@@ -76,7 +76,7 @@ except ModuleNotFoundError as error:
         name=error.name,
     ) from error
 
-from kilin.sources.extensions import sources_doc, sources_md
+from kilin.sources.extensions import sources_md
 from kilin.sources.sources import (
     SourceFile,
     SourceUnit,
@@ -94,6 +94,10 @@ _MAX_HEADING_LEVEL: Final[int] = 6
 # Body lines that Markdown would read as a heading or a code fence.
 _MARKDOWN_MARKUP: Final[re.Pattern[str]] = re.compile(r"^(?:#|```|~~~)")
 _CELL_SEPARATOR: Final[str] = " | "
+_OLE_SIGNATURE: Final[bytes] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+_BUILTIN_LIST_STYLE: Final[re.Pattern[str]] = re.compile(
+    r"^List (?:Bullet|Number)(?: ([2-9]))?$"
+)
 _BLOCK_SEPARATOR: Final[str] = "\n\n"
 # Errors raised by python-docx and its zip and XML layers for bad files.
 _READ_ERRORS: Final[tuple[type[Exception], ...]] = (
@@ -131,9 +135,11 @@ def read_source_file(target: Path, relative_path: Path) -> SourceFile:
     """
 
     with target.open("rb") as handle:
-        start = handle.read(len(sources_doc.OLE_SIGNATURE))
-    if start == sources_doc.OLE_SIGNATURE:
-        # An old .doc file renamed to .docx.
+        start = handle.read(len(_OLE_SIGNATURE))
+    if start == _OLE_SIGNATURE:
+        # Only an actual OLE file needs the legacy reader and olefile.
+        from kilin.sources.extensions import sources_doc
+
         return sources_doc.read_source_file(target, relative_path)
 
     try:
@@ -256,20 +262,52 @@ def _list_depth(paragraph: Paragraph) -> int | None:
 
     Notes
     -----
-    ``python-docx`` has no public list API, so the numbering properties are
-    read from the paragraph XML.
+    ``python-docx`` has no public list API. Numbering comes from paragraph
+    or inherited style XML; indented but unnumbered styles stay plain text.
+    Built-in nested list styles specify indentation without an ``ilvl``.
 
     """
 
     properties = paragraph._p.pPr
-    numbering = properties.numPr if properties is not None else None
-    if numbering is None:
-        style = paragraph.style
-        if style is not None and (style.name or "").startswith("List "):
-            return 0
+    direct = properties.numPr if properties is not None else None
+
+    # Numbering can be on the paragraph or inherited from a paragraph
+    # style. "List Paragraph" has indentation but no numbering and must
+    # not be treated as a bullet merely because its name starts "List ".
+    style = paragraph.style
+    inherited = None
+    seen: set[str] = set()
+    while style is not None and style.style_id not in seen:
+        seen.add(style.style_id)
+        properties = style._element.pPr
+        candidate = properties.numPr if properties is not None else None
+        if candidate is not None:
+            inherited = candidate
+            break
+        style = style.base_style
+
+    if direct is not None and direct.numId is not None:
+        if direct.numId.val == 0:
+            # Word uses numId=0 to suppress numbering from the style.
+            return None
+    elif inherited is None or inherited.numId is None:
         return None
-    level = numbering.ilvl
-    return level.val if level is not None else 0
+
+    if direct is not None and direct.ilvl is not None:
+        return int(direct.ilvl.val)
+    if inherited is not None and inherited.ilvl is not None:
+        return int(inherited.ilvl.val)
+
+    # Built-in List Bullet/Number 2 and 3 use distinct numbering IDs with
+    # a level-zero definition but are visibly indented. Their style name
+    # supplies the logical depth when no explicit level is recorded.
+    style = paragraph.style
+    while style is not None:
+        match = _BUILTIN_LIST_STYLE.match(style.name or "")
+        if match is not None:
+            return int(match.group(1) or 1) - 1
+        style = style.base_style
+    return 0
 
 
 def _table_rows(table: Table) -> list[str]:

@@ -35,8 +35,8 @@ A template or paper that cannot be read gives an answer saying so, without
 model calls. Problems that remain after the allowed fixes are recorded in
 the result summary and the trace; an invalid report is not published.
 The checks verify structure and length, not truth: the model can still misstate
-what the paper says. The citation uses only the PDF metadata and the first
-page; without a metadata title it names the file. Reference entries are
+what the paper says. The citation uses PDF or Word metadata and the opening
+passages; without a metadata title it names the file. Reference entries are
 found with layout rules, so an unusual layout can split or join entries
 wrongly, but every entry is the paper's own text.
 
@@ -675,7 +675,7 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
     Parameters
     ----------
     file: pathlib.Path | None
-        The paper on disk, for its PDF metadata; None when unknown.
+        The paper on disk, for PDF or Word metadata; None when unknown.
     passages: tuple[Chunk, ...]
         The paper's passages, for the DOI, year, and author count.
 
@@ -684,8 +684,8 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
     str
         For example ``Smith, J. A. et al. A Study of
         ... https://doi.org/10.1038/... (2025).``: the first author and the
-        title come from the PDF metadata; the DOI and year are added only
-        when printed on the first page. Without a metadata title of at
+        title come from PDF or Word metadata; the DOI and year are added
+        only when found in the opening passages. Without a title of at
         least three words, the file name, saying so (for example
         ``smith2020.pdf (the file has no title metadata).``).
 
@@ -695,24 +695,34 @@ def paper_citation(file: Path | None, passages: tuple[Chunk, ...]) -> str:
         f"{file.name if file else 'The paper'} (the file has no title "
         "metadata)."
     )
-    if file is None or file.suffix.lower() != ".pdf" or not file.is_file():
+    if file is None or not file.is_file():
         return fallback
 
-    try:
-        from pypdf import PdfReader
+    suffix = file.suffix.lower()
+    if suffix == ".pdf":
+        try:
+            from pypdf import PdfReader
 
-        metadata = PdfReader(file).metadata or {}
-    except Exception:  # Unreadable metadata: name the file instead.
+            metadata = PdfReader(file).metadata or {}
+            raw_title = metadata.get("/Title")
+            raw_author = metadata.get("/Author")
+        except Exception:  # pylint: disable=broad-exception-caught
+            return fallback
+    elif suffix in {".doc", ".docx"}:
+        from kilin.sources._word_metadata import read_word_metadata
+
+        raw_title, raw_author = read_word_metadata(file)
+    else:
         return fallback
 
-    title = " ".join(str(metadata.get("/Title") or "").split()).rstrip(".")
+    title = " ".join(str(raw_title or "").split()).rstrip(".")
     if len(title.split()) < 3:
         return fallback
 
     first = paper_beginning(passages)
     authors = [
         name.strip()
-        for name in re.split(r";|,| and ", str(metadata.get("/Author") or ""))
+        for name in re.split(r";|,| and ", str(raw_author or ""))
         if name.strip() and not name.strip().lower().startswith("for ")
     ]
 
