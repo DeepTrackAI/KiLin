@@ -6,7 +6,8 @@
     ".doc",
     ".docx",
     ".md",
-    ".txt"
+    ".txt",
+    ".tex"
   ],
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Given a question about academic literature, retrieve relevant research papers, abstracts, and citations that help answer the question.",

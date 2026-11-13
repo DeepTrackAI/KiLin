@@ -12,7 +12,8 @@ belongs to, and its page. Only searching sees the header; evidence,
 citations, and the answering model keep the passage text itself.
 
 Titles come from plausible PDF or Word metadata, the first ``#`` heading
-of Markdown-style text, or otherwise from the file name.
+of Markdown-style text, ``\\title{...}`` in a LaTeX file, or otherwise from
+the file name.
 Section headings are recognized by name ("Methods", "Results", "Data
 availability") or by numbering ("3.1. Software architecture").
 
@@ -84,6 +85,7 @@ import re
 from typing import Final
 
 from kilin.chunking import Chunk
+from kilin.sources.extensions.sources_tex import latex_title
 
 __all__ = [
     "DOCUMENT_HEADER_FORMAT",
@@ -98,7 +100,10 @@ __all__ = [
 DOCUMENT_HEADER_FORMAT: Final[str] = "document-title-section-page-v1"
 # Prose passages of documents; code passages have their own headers.
 DOCUMENT_KINDS: Final[frozenset[str]] = frozenset(
-    {"pdf_page", "markdown_preamble", "markdown_section", "text_paragraph"}
+    {
+        "pdf_page", "markdown_preamble", "markdown_section",
+        "latex_front", "latex_section", "text_paragraph",
+    }
 )
 # Longest title kept; longer metadata is not a title.
 _TITLE_MAX_CHARACTERS: Final[int] = 300
@@ -180,13 +185,14 @@ def document_info(
     -------
     DocumentInfo
         The PDF or Word metadata title and first author when plausible;
-        otherwise the first ``#`` heading, or the file name without its
-        suffix if no title is available.
+        otherwise the first ``#`` heading, or the ``\\title`` of a LaTeX file
+        (in its setup, which is not indexed, so the file is read), or the
+        file name without its suffix if no title is available.
 
     Notes
     -----
-    Unreadable PDF and Word metadata is ignored, so indexing never fails
-    because of a document property.
+    Unreadable PDF and Word metadata, and unreadable LaTeX files, are
+    ignored, so indexing never fails because of a document property.
 
     """
 
@@ -209,6 +215,15 @@ def document_info(
                 title = _clean_title(match.group(1))
                 if title is not None:
                     break
+    if suffix == ".tex":
+        try:
+            text = (source / path).read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            text = ""
+        found = latex_title(text)
+        title = _clean_title(found) if found else None
     return DocumentInfo(title or path.stem, author)
 
 
@@ -224,7 +239,8 @@ def section_headings(chunks: Sequence[Chunk]) -> dict[str, str]:
     -------
     dict[str, str]
         Heading of each document passage that follows one, by passage
-        identifier. Markdown passages keep their own section name.
+        identifier. Markdown and LaTeX passages keep their own section
+        name.
 
     Notes
     -----
@@ -243,7 +259,7 @@ def section_headings(chunks: Sequence[Chunk]) -> dict[str, str]:
     for passages in by_path.values():
         current: str | None = None
         for chunk in sorted(passages, key=_reading_position):
-            if chunk.kind.startswith("markdown_"):
+            if chunk.kind.startswith(("markdown_", "latex_")):
                 if chunk.section:
                     headings[chunk.identifier] = chunk.section
                 continue
