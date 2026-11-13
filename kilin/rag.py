@@ -4371,6 +4371,7 @@ class RAGSession:
         # thinking for display; ``write`` streams a raw final model answer.
         context = ToolContext(
             project_root=Path(self.project.root),
+            source_root=Path(self.project.source),
             chunks=self.chunks,
             graph=self.indexes.code_graph,
             rank=lambda text: self._rank_everything(text, trace_turn_id),

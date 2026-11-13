@@ -8,8 +8,9 @@ into what the checker already works with:
 
 1. **Entries**: the references, numbered, with readable text for matching
    them to the project's files. ``\\bibitem`` entries keep the order LaTeX
-   prints them in; ``.bib`` entries are numbered in order of first citation
-   (as an unsorted style prints them), and only cited ones are listed.
+   prints them in; ``.bib`` entries have inferred numbers in order of
+   first citation, not necessarily the compiled bibliography's order.
+   Only cited ``.bib`` entries are listed.
 2. **Body**: the paper's passages with each citation command written as
    the numbers it prints ("[2, 5]") and the rest of the LaTeX reduced to
    readable text, line by line, so line numbers stay those of the file.
@@ -23,8 +24,9 @@ Key Features
 - **Three bibliography sources**
 
     ``thebibliography`` in the file, then the ``.bbl`` file beside it,
-    then the ``.bib`` files named by ``\\bibliography`` or
-    ``\\addbibresource``.
+    then explicitly selected ``.bib`` files named by
+    ``\\bibliography`` or ``\\addbibresource``. No file is
+    discovered or opened outside the authorized source selection.
 
 - **Citation commands**
 
@@ -55,9 +57,10 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
+import posixpath
 import re
 from typing import Final
 
@@ -77,7 +80,9 @@ _CITE: Final[re.Pattern[str]] = re.compile(
     r"(?:\s*\[[^\]]*\]){0,2}\s*\{(?P<keys>[^{}]*)\}"
 )
 # Citation-like commands that do not cite in the text.
-_NOT_CITING: Final[frozenset[str]] = frozenset({"nocite"})
+_NOT_CITING: Final[frozenset[str]] = frozenset({
+    "nocite", "citeauthor", "citeyear", "citeyearpar",
+})
 _COMMENT: Final[re.Pattern[str]] = re.compile(r"(?<!\\)%.*$")
 _INLINE_MATH: Final[re.Pattern[str]] = re.compile(
     r"\$([^$]*)\$|\\\((.*?)\\\)"
@@ -116,6 +121,9 @@ _BIBLIOGRAPHY_END: Final[re.Pattern[str]] = re.compile(
 _BIB_FILES: Final[re.Pattern[str]] = re.compile(
     r"\\(?:bibliography|addbibresource)\s*(?:\[[^\]]*\])?\s*\{([^{}]*)\}"
 )
+_VERBATIM_BEGIN: Final[re.Pattern[str]] = re.compile(
+    r"\\begin\s*\{(verbatim\*?|lstlisting|minted|comment|Verbatim)\}"
+)
 _BIB_HEAD: Final[re.Pattern[str]] = re.compile(r"@\s*(\w+)\s*([{(])")
 _BIB_FIELD: Final[re.Pattern[str]] = re.compile(r"\s*,?\s*([\w-]+)\s*=\s*")
 _BIB_BARE: Final[re.Pattern[str]] = re.compile(r"[^,#\s]+")
@@ -147,6 +155,8 @@ class LatexReferences:
         ``.bib`` file name, or ``""`` when none was found.
     undefined: tuple[str, ...]
         Keys cited in the text but not in the bibliography, in order.
+    unavailable: tuple[str, ...]
+        Bibliography declarations not resolved to an authorized file.
 
     """
 
@@ -155,6 +165,7 @@ class LatexReferences:
     keys: dict[int, str]
     source: str
     undefined: tuple[str, ...]
+    unavailable: tuple[str, ...] = ()
 
     @property
     def note(self) -> str:
@@ -171,7 +182,7 @@ class LatexReferences:
         if not self.source:
             notes.append(
                 "No bibliography found: no thebibliography environment, "
-                ".bbl file, or .bib file beside the paper."
+                "selected .bbl or .bib source file in the workspace."
             )
         elif self.source.endswith(".bib"):
             notes.append(
@@ -180,6 +191,11 @@ class LatexReferences:
             )
         else:
             notes.append(f"References from {self.source}.")
+        if self.unavailable:
+            notes.append(
+                "Bibliography files unavailable or ambiguous among selected "
+                "sources: " + ", ".join(self.unavailable) + "."
+            )
         if self.undefined:
             listed = ", ".join(f"`{key}`" for key in self.undefined)
             notes.append(f"Cited but not in the bibliography: {listed}.")
@@ -187,44 +203,68 @@ class LatexReferences:
 
 
 def latex_references(
-    passages: Sequence[Chunk], file: Path | None
+    passages: Sequence[Chunk],
+    file: Path | None,
+    *,
+    paper: Path | None = None,
+    bibliography_files: Mapping[Path, Path] | None = None,
 ) -> LatexReferences:
-    """Read a LaTeX paper's references and citations.
+    """Read a LaTeX paper's references from authorized source files.
 
     Parameters
     ----------
     passages: Sequence[Chunk]
         The paper's indexed passages.
     file: pathlib.Path | None
-        The ``.tex`` file on disk, for its setup (``\\bibliography``) and
-        the ``.bbl`` or ``.bib`` files beside it; None when unknown.
+        The citing ``.tex`` file, already authorized by the tool; None
+        when the complete source text is unavailable.
+    paper: pathlib.Path | None, optional
+        Relative source path for the citing paper. When omitted, use the
+        path of the first passage. Defaults to ``None``.
+    bibliography_files: Mapping[pathlib.Path, pathlib.Path] | None, optional
+        Explicitly selected and validated bibliography paths, mapped from
+        source-relative names to authorized workspace files. No other
+        bibliography file is opened. Defaults to ``None`` (no companions).
 
     Returns
     -------
     LatexReferences
-        Entries, readable body and notes. Without a bibliography there
-        are no entries, and every cited key is undefined.
+        Entries, readable body, and notes. Missing or ambiguous selected
+        bibliography files cannot silently resolve to unrelated files.
 
     """
 
     ordered = sorted(passages, key=lambda chunk: chunk.start_line)
+    path = paper or (ordered[0].path if ordered else Path("paper.tex"))
+    available = bibliography_files or {}
     source_text = _read(file) if file is not None else ""
-    text = source_text or "".join(chunk.text for chunk in ordered)
+    ignored = _verbatim_lines(source_text, ordered)
+    if source_text:
+        numbered = enumerate(source_text.splitlines(), 1)
+    else:
+        numbered = sorted({
+            (chunk.start_line + offset, line)
+            for chunk in ordered
+            for offset, line in enumerate(chunk.text.splitlines())
+        })
     uncommented = "\n".join(
-        _COMMENT.sub("", line) for line in text.splitlines()
+        "" if number in ignored else _COMMENT.sub("", line)
+        for number, line in numbered
     )
     cited = list(dict.fromkeys(
         key
         for match in _CITE.finditer(uncommented)
-        if match["name"] not in _NOT_CITING
+        if match["name"].lower() not in _NOT_CITING
         for key in _keys(match["keys"])
     ))
 
     items, source = _bibitems(uncommented), "thebibliography"
-    if not items and file is not None:
-        bbl = file.with_suffix(".bbl")
-        items = _bibitems(_read(bbl))
-        source = bbl.name
+    if not items:
+        bbl_path, _ = _companion(path.stem + ".bbl", path, available)
+        if bbl_path is not None:
+            items = _bibitems(_read(available[bbl_path]))
+            source = bbl_path.as_posix()
+    unavailable: tuple[str, ...] = ()
     if items:
         keys = {number: key for number, (key, _) in enumerate(items, 1)}
         entries = tuple(
@@ -232,7 +272,9 @@ def latex_references(
             for number, (_, text) in enumerate(items, 1)
         )
     else:
-        database, source = _bib_database(uncommented, file)
+        database, source, unavailable = _bib_database(
+            uncommented, path, available
+        )
         listed = [key for key in cited if key in database]
         keys = dict(enumerate(listed, 1))
         entries = tuple(
@@ -241,12 +283,13 @@ def latex_references(
         )
     numbers = {key: number for number, key in keys.items()}
     undefined = tuple(key for key in cited if key not in numbers)
-    listed = _bibliography_lines(source_text, ordered)
+    listed = _bibliography_lines(source_text, ordered) | ignored
     body = tuple(
         _readable_chunk(chunk, numbers, listed) for chunk in ordered
     )
     return LatexReferences(
-        entries, body, keys, source if entries else "", undefined
+        entries, body, keys, source if entries else "", undefined,
+        unavailable,
     )
 
 
@@ -325,42 +368,104 @@ def _bibitems(text: str) -> list[tuple[str, str]]:
     return items
 
 
+def _companion(
+    name: str,
+    paper: Path,
+    available: Mapping[Path, Path],
+) -> tuple[Path | None, str]:
+    """Find a selected companion, preferring the paper's own directory.
+
+    Parameters
+    ----------
+    name: str
+        A LaTeX bibliography argument or expected compiled bibliography.
+    paper: pathlib.Path
+        Source-relative path of the referring LaTeX document.
+    available: Mapping[pathlib.Path, pathlib.Path]
+        Selected bibliography files, validated by the calling tool.
+
+    Returns
+    -------
+    tuple[pathlib.Path | None, str]
+        Chosen source-relative path and an empty diagnostic, or ``None``
+        and an explanation. Duplicate basenames without a local match
+        remain ambiguous instead of selecting an unrelated bibliography.
+
+    """
+
+    raw = name.strip()
+    posix = PurePosixPath(raw)
+    windows = PureWindowsPath(raw)
+    if (
+        not raw or "\\" in raw or posix.is_absolute()
+        or windows.is_absolute() or windows.drive
+    ):
+        return None, f"{name} (invalid path)"
+    suffix = posix.suffix.lower()
+    if suffix not in {".bib", ".bbl"}:
+        posix = posix.with_name(posix.name + ".bib")
+    relative = PurePosixPath(posixpath.normpath(
+        (PurePosixPath(paper.parent.as_posix()) / posix).as_posix()
+    ))
+    if ".." in relative.parts or relative.is_absolute():
+        return None, f"{name} (outside sources)"
+    local = Path(relative.as_posix())
+    if local in available:
+        return local, ""
+    if len(posix.parts) != 1:
+        return None, name
+    matches = [
+        path for path in available
+        if path.name.casefold() == posix.name.casefold()
+    ]
+    if len(matches) == 1:
+        return matches[0], ""
+    if len(matches) > 1:
+        return None, f"{name} (ambiguous)"
+    return None, name
+
+
 def _bib_database(
-    text: str, file: Path | None
-) -> tuple[dict[str, dict[str, str]], str]:
-    """Read the ``.bib`` files a paper names.
+    text: str,
+    paper: Path,
+    available: Mapping[Path, Path],
+) -> tuple[dict[str, dict[str, str]], str, tuple[str, ...]]:
+    """Read only selected ``.bib`` files named by a LaTeX paper.
 
     Parameters
     ----------
     text: str
         The paper's LaTeX without comments, setup included.
-    file: pathlib.Path | None
-        The paper on disk; the ``.bib`` paths are relative to its folder.
+    paper: pathlib.Path
+        Source-relative path of the citing paper.
+    available: Mapping[pathlib.Path, pathlib.Path]
+        Selected bibliography files with validated workspace paths.
 
     Returns
     -------
-    tuple[dict[str, dict[str, str]], str]
-        The entries by key, from every file found (an earlier file's entry
-        wins), and the names of the files read, joined by ", ".
+    tuple[dict[str, dict[str, str]], str, tuple[str, ...]]
+        Entries, selected bibliography names, and unavailable/ambiguous
+        declarations. Earlier selected entries win on duplicate keys.
 
     """
 
-    if file is None:
-        return {}, ""
     database: dict[str, dict[str, str]] = {}
     found = []
+    unavailable = []
     for match in _BIB_FILES.finditer(text):
         for name in _keys(match.group(1)):
-            path = file.parent / name
-            if path.suffix.lower() != ".bib":
-                path = path.with_name(path.name + ".bib")
-            content = _read(path)
-            if not content:
+            path, problem = _companion(name, paper, available)
+            if path is None:
+                unavailable.append(problem)
                 continue
-            found.append(path.name)
+            content = _read(available[path])
+            if not content:
+                unavailable.append(name)
+                continue
+            found.append(path.as_posix())
             for key, fields in parse_bib(content).items():
                 database.setdefault(key, fields)
-    return database, ", ".join(found)
+    return database, ", ".join(found), tuple(unavailable)
 
 
 def parse_bib(text: str) -> dict[str, dict[str, str]]:
@@ -566,6 +671,53 @@ def bib_entry_text(fields: dict[str, str]) -> str:
     return text.strip()
 
 
+def _verbatim_lines(
+    source_text: str, passages: Sequence[Chunk]
+) -> frozenset[int]:
+    """Locate LaTeX example lines whose citation commands are not prose.
+
+    Parameters
+    ----------
+    source_text: str
+        Complete selected document, or empty when unavailable.
+    passages: Sequence[Chunk]
+        Indexed lines used when the original document is not readable.
+
+    Returns
+    -------
+    frozenset[int]
+        One-based lines in verbatim-like environments, including their
+        opening and closing commands. These cannot generate citations.
+
+    """
+
+    if source_text:
+        numbered = list(enumerate(source_text.splitlines(), 1))
+    else:
+        numbered = sorted({
+            (chunk.start_line + offset, line)
+            for chunk in passages
+            for offset, line in enumerate(chunk.text.splitlines())
+        })
+    inside: str | None = None
+    ignored = set()
+    for number, line in numbered:
+        if inside is not None:
+            ignored.add(number)
+            if re.search(rf"\\end\s*\{{{re.escape(inside)}\}}", line):
+                inside = None
+            continue
+        match = _VERBATIM_BEGIN.search(_COMMENT.sub("", line))
+        if match is not None:
+            ignored.add(number)
+            name = match.group(1)
+            if not re.search(
+                rf"\\end\s*\{{{re.escape(name)}\}}", line
+            ):
+                inside = name
+    return frozenset(ignored)
+
+
 def _bibliography_lines(
     source_text: str, passages: Sequence[Chunk]
 ) -> frozenset[int]:
@@ -654,8 +806,10 @@ def _citation_numbers(match: re.Match[str], numbers: dict[str, int]) -> str:
 
     """
 
-    if match["name"] in _NOT_CITING:
-        return ""
+    if match["name"].lower() in _NOT_CITING:
+        if match["name"].lower() == "nocite":
+            return ""
+        return ", ".join(_keys(match["keys"]))
     found = [
         str(numbers[key]) for key in _keys(match["keys"]) if key in numbers
     ]

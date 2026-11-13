@@ -264,8 +264,8 @@ def latex_title(text: str) -> str | None:
     """
 
     uncommented = "".join(
-        line for line in text.splitlines(keepends=True)
-        if not _is_comment(line)
+        re.sub(r"(?<!\\)%.*$", "", line)
+        for line in text.splitlines(keepends=True)
     )
     match = _TITLE.search(uncommented)
     if match is None:

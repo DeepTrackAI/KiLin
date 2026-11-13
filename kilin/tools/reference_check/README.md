@@ -45,12 +45,22 @@ For "check the references of the Smith paper", the tool:
 
    A LaTeX paper (`.tex`) is read by `_latex.py` instead of steps 2 and 4.
    Its references come from a `thebibliography` environment in the file,
-   else the `.bbl` file beside it, else the `.bib` files named by
-   `\bibliography` or `\addbibresource` (read from the paper's folder,
-   with `@string` abbreviations expanded). `\bibitem` entries keep their
-   printed order; `.bib` entries are numbered in order of first citation
-   and only cited ones are listed, since a `.bib` file often holds a whole
-   library. Each `\cite`-family command (`\citep`, `\citet`,
+   else a **selected and indexed** `.bbl` companion, else the **selected
+   and indexed** `.bib` files named by `\bibliography` or
+   `\addbibresource` (with `@string` abbreviations expanded). The
+   checker never opens unselected files, even when a LaTeX command names
+   them or an unselected copy exists beside the paper. All files must
+   already be in the project source inventory. A matching bibliography
+   beside the referring `.tex` file takes precedence; otherwise one
+   uniquely named selected file can be used. Ambiguous names, rejected
+   paths and unavailable files are reported rather than guessed. The
+   workspace source boundary, including symlink and traversal checks,
+   is described in [Security](../../../docs/security.md). `\bibitem` entries keep their
+   printed order; `.bib` entries are assigned inferred numbers in
+   order of first citation and only cited ones are listed, since a
+   `.bib` file often holds a whole library. These inferred numbers need
+   not match the order in a compiled bibliography. Each `\cite`-family
+   command (`\citep`, `\citet`,
    `\parencite`, `\autocite`, ...) is read as the numbers it prints, the
    rest of the LaTeX is reduced to readable text line by line, and the
    bibliography environment is left out of the text searched for

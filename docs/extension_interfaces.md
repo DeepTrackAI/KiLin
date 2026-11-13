@@ -83,6 +83,22 @@ router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the
 entire pipeline supports its source formats or domain reasoning.
 
+## Source access by built-in tools
+
+Source readers operate on the validated selection produced by the
+repository scanner/importer. Built-in tools that subsequently open source
+files must apply the same authorization, including when an indexed file
+names another file. `tools/_shared/source_access.py` provides a reusable
+selected-source resolver: it checks the active inventory, saved source
+root, workspace containment and symlinks, returning no path when an item
+is unavailable. It does not silently search other project folders.
+
+The LaTeX reference checker uses that helper for both `.tex` and selected
+`.bib`/`.bbl` files. For same-named bibliographies in several directories,
+it prefers the referring `.tex` file's directory and rejects ambiguous
+fallbacks. Consult the [security policy](security.md#workspace-source-access-policy)
+for explicit import exceptions and the limits of these checks.
+
 ## Source reader/extractor contract
 
 `sources/sources.py` dispatches by supported extension to modules under

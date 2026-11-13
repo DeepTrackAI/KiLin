@@ -125,6 +125,8 @@ class TestReadableLines(unittest.TestCase):
             ("Known \\cite{a,b}.", "Known [1, 2]."),
             ("Notes \\citep[see][p.~2]{b}.", "Notes [2]."),
             ("Unknown \\parencite{zzz}.", "Unknown [?]."),
+            ("Author \\citeauthor{a}.", "Author a."),
+            ("Year \\citeyear{a}.", "Year a."),
             ("Listed\\nocite{a} only.", "Listed only."),
             ("Range $[0,1]$ here.", "Range (0,1) here."),
             ("Text 5\\% % \\cite{a} commented", "Text 5% "),
@@ -144,7 +146,12 @@ class TestLatexReferences(unittest.TestCase):
             file = Path(folder) / "draft.tex"
             file.write_text(PAPER, encoding="utf-8")
             (Path(folder) / "refs.bib").write_text(BIB, encoding="utf-8")
-            found = latex_references(_chunks(PAPER), file)
+            found = latex_references(
+                _chunks(PAPER), file,
+                bibliography_files={
+                    Path("refs.bib"): file.parent / "refs.bib",
+                },
+            )
         self.assertEqual(found.keys, {1: "rubinov10", 2: "mij17"})
         self.assertTrue(found.entries[1].text.startswith("Mijalkov, Mite"))
         self.assertTrue(all(entry.printed for entry in found.entries))
@@ -187,9 +194,33 @@ class TestLatexReferences(unittest.TestCase):
             (Path(folder) / "draft.bbl").write_text(
                 BIBLIOGRAPHY, encoding="utf-8"
             )
-            found = latex_references(_chunks(PAPER), file)
+            found = latex_references(
+                _chunks(PAPER), file, bibliography_files={
+                    Path("draft.bbl"): file.parent / "draft.bbl",
+                },
+            )
         self.assertEqual(found.source, "draft.bbl")
         self.assertEqual(found.keys[2], "rubinov10")
+
+    def test_verbatim_citations_are_not_real_citations(self) -> None:
+        paper = (
+            "\\begin{document}\n"
+            "\\begin{verbatim}\n"
+            "\\cite{fake}\n"
+            "\\end{verbatim}\n"
+            "A real citation \\cite{real}.\n"
+            "\\end{document}\n"
+        )
+        passages = [Chunk(
+            "c", Path("draft.tex"), paper, 1,
+            len(paper.splitlines()), "latex_front", None, None,
+        )]
+        with TemporaryDirectory() as folder:
+            file = Path(folder) / "draft.tex"
+            file.write_text(paper, encoding="utf-8")
+            found = latex_references(passages, file)
+        self.assertEqual(found.undefined, ("real",))
+        self.assertNotIn("fake", "".join(c.text for c in found.body))
 
     def test_no_bibliography(self) -> None:
         found = latex_references(_chunks(PAPER), None)

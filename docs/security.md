@@ -23,6 +23,42 @@ where users or deployers remain responsible for security.
 | GUI | Loads local HTML/JS, disables remote-local-content access in its Qt view, and inserts answer text without evaluating arbitrary HTML. | Strong isolation from all hostile local programs or malicious instructions embedded in viewed documents. |
 | Tools | Selects from registered built-ins with validated settings and scoped context. | A general permission/policy sandbox or arbitrary external plugin containment. |
 
+## Workspace source-access policy
+
+**Project tools may read source content only from the project's explicit
+source selection within its workspace.** A path appearing in a document,
+a model response, a bibliography command or a tool argument is a reference,
+not permission to import or read another file. The active selected-source
+inventory establishes authorization; filesystem existence alone does not.
+
+The ordinary workflow is to **explicitly import** outside files into the
+workspace through the core import APIs. This authorized import operation
+may read the selected originals for copying; subsequent indexing and
+source-reading tools operate on the managed copies, not the originals.
+Installed package files, separately approved model caches and other
+application infrastructure are distinct from project source data.
+
+Source-reading tools must reject paths outside the workspace or saved
+source root, unselected filenames, traversal escapes, and symlinks that
+redirect reads. They must not fall back from an absent selected source to
+another file with the same name at the workspace root or in the original
+import directory. Missing or ambiguous dependencies are reported.
+
+The reusable `tools/_shared/source_access.py` helper applies these checks
+for reference checking. In particular, `.tex` references to `.bib` and
+`.bbl` files resolve **only** to explicitly selected workspace sources;
+when the same filename exists in several selected directories, the
+referring `.tex` directory is preferred. Other tools should use the same
+contract for future source-reading changes. Existing profiles that point
+to source directories outside their workspace must import those files
+before this helper can read them.
+
+These are **application-level rules**, not an OS-enforced sandbox or a
+claim of complete repository-wide filesystem isolation. Existing reads
+outside this tool are not exhaustively audited by this change. The helper
+performs best-effort validation; concurrent changes to the filesystem
+still require a stronger boundary for adversarial multi-user operation.
+
 ## Sensitive data paths
 
 The original sources, copied `sources/` tree, `sources.json` provenance,

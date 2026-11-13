@@ -51,6 +51,26 @@ no folder is renamed or moved. A single-source mirror made before the
 convention keeps its copy under the original's name, and
 `synchronize_project_workspace()` updates it there.
 
+### Selected sources and authorized reads
+
+A project tool's source-data access is limited to files **selected into the
+workspace**, not arbitrary files visible on the host filesystem. Imports
+from external folders are explicit user operations; a name or relative
+path written inside an imported document never authorizes another import.
+The current source manifest records selected relative paths. The
+project's configured source root determines where those names resolve,
+while a shared tool-side check rejects paths outside the workspace and
+symlinks. A selected file missing from its managed location is reported
+unavailable, not substituted from the workspace root or original folder.
+
+For example, `.bib` and `.bbl` are ordinary selectable literature sources:
+they are copied, indexed, and searchable like `.tex`. A reference checker
+may use their bibliography metadata only if those files were selected.
+Selection from a folder uses the active project extension/profile policy;
+users can control that selection before import. No LaTeX declaration
+silently adds additional files. See [Security](security.md#workspace-source-access-policy)
+for the limits of this application-level contract.
+
 ## Creation, opening, and explicit updates
 
 **Creating a new project never reuses an existing project or a nonempty

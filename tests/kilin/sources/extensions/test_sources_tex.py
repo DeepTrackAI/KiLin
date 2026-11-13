@@ -111,6 +111,12 @@ class TestLatexExtraction(unittest.TestCase):
         )
         self.assertIsNone(sources_tex.latex_title("% \\title{Old}\nText"))
         self.assertIsNone(sources_tex.latex_title("\\title{}"))
+        self.assertEqual(
+            sources_tex.latex_title(
+                "Text % \\title{Wrong}\n\\title{Actual title}\n"
+            ),
+            "Actual title",
+        )
 
 
 if __name__ == "__main__":

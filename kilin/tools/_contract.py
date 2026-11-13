@@ -251,6 +251,10 @@ class ToolContext:
         returns its index, or None when they cancel; None where nobody can
         be asked (notebooks), so tools fall back to their best guess.
         Defaults to ``None``.
+    source_root: pathlib.Path | None, optional
+        Saved project source directory. The selected-source reader rejects
+        this path when it is outside the project workspace. Defaults to
+        ``None`` for legacy test contexts.
     model_attempt_count: Callable[[], int] | None, optional
         Cumulative number of internal answering-model generation attempts,
         including incomplete attempts and bounded recovery, for this tool
@@ -279,6 +283,7 @@ class ToolContext:
     choose: Callable[[str, tuple[str, ...]], int | None] | None = None
     retrieve: Callable[[RetrievalRequest], RetrievalResult] | None = None
     model_attempt_count: Callable[[], int] | None = None
+    source_root: Path | None = None
 
 
 @dataclass(frozen=True, slots=True)

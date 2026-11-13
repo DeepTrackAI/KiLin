@@ -108,7 +108,7 @@ KíLín supplies the required tool context and conversation state.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import cache, partial
 from pathlib import Path
@@ -201,6 +201,9 @@ from kilin.tools._shared.claims import (
     quote_line_range,
 )
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
+from kilin.tools._shared.source_access import (
+    selected_paths, selected_source_file,
+)
 
 __all__ = [
     "ReferenceCheckSettings",
@@ -528,6 +531,8 @@ def check_references(
     file: Path | None,
     others: Sequence[PaperIdentity],
     which: int = -1,
+    *,
+    bibliography_files: Mapping[Path, Path] | None = None,
 ) -> ReferenceReport:
     """Check one paper's references against the project's files.
 
@@ -540,15 +545,17 @@ def check_references(
     passages: Sequence[Chunk]
         Its passages, in order.
     file: pathlib.Path | None
-        It on disk, for a PDF's column order and superscripts, or a LaTeX
-        paper's setup and the ``.bbl`` or ``.bib`` files beside it; None
-        when unknown.
+        Authorized citing document on disk, for PDF column order and
+        superscripts or the LaTeX setup; None when unavailable.
     others: Sequence[PaperIdentity]
         The project's other files.
     which: int, optional
         The reference list to check, as an index into the paper's lists
         (``ReferenceList.index``); ``-1``, the default, is the last.
         Citations are looked for in the text that cites that list.
+    bibliography_files: Mapping[pathlib.Path, pathlib.Path] | None, optional
+        Only explicitly selected and validated LaTeX bibliography sources,
+        keyed by their source-relative path. Defaults to ``None``.
 
     Returns
     -------
@@ -562,7 +569,10 @@ def check_references(
     # A LaTeX paper's \cite commands and bibliography are read as such:
     # its references become numbered entries, its citations numbers.
     latex = (
-        latex_references(passages, file)
+        latex_references(
+            passages, file, paper=paper,
+            bibliography_files=bibliography_files,
+        )
         if paper.suffix.lower() == ".tex"
         else None
     )
@@ -978,17 +988,26 @@ def run(
         request,
         context,
         question="Which paper's references should I check?",
-        example="check the references of smith2020.pdf",
-        prefer=(".pdf",),
+        example="check the references of smith2020.pdf or paper.tex",
+        prefer=(".pdf", ".tex"),
     )
     summary: dict[str, object] = {"name": "reference_check"}
     if isinstance(chosen, str):
         context.done("No paper chosen", evidence_count=0)
         return ToolResult(chosen, (), summary)
     path, reason, guessed = chosen
+    selected = selected_paths(context)
     summary.update(
         {"paper": path.as_posix(), "reason": reason, "guessed": guessed}
     )
+    if path not in selected:
+        context.done("Paper not selected", evidence_count=0)
+        summary["status"] = "incomplete"
+        return ToolResult(
+            "That paper is no longer in the project's selected sources. "
+            "Select it and refresh the indexes before checking references.",
+            (), summary,
+        )
 
     by_file: dict[Path, list[Chunk]] = defaultdict(list)
     for chunk in context.chunks:
@@ -999,18 +1018,21 @@ def run(
         paper_identity(
             other,
             passages,
-            _source_file(other, context),
+            _source_file(other, context, selected),
             _config.MATCH_RULES,
         )
         for other, passages in by_file.items()
-        if other != path
+        if (
+            other != path and other in selected
+            and other.suffix.lower() not in {".bib", ".bbl"}
+        )
     ]
 
     context.progress(f"Finding the reference lists of {path.name}")
     lists = reference_lists(
         by_file.get(path, []),
         _config.REFERENCE_LAYOUT,
-        _source_file(path, context),
+        _source_file(path, context, selected),
         accept_short=linkable_entry,
     )
     chosen_list = _choose_list(lists, path, request.question, context)
@@ -1020,12 +1042,21 @@ def run(
     which, list_note = chosen_list
 
     context.progress(f"Reading the references and citations of {path.name}")
+    bibliography_files = {}
+    if path.suffix.lower() == ".tex":
+        for name in selected:
+            if name.suffix.lower() not in {".bib", ".bbl"}:
+                continue
+            found = _source_file(name, context, selected)
+            if found is not None:
+                bibliography_files[name] = found
     report = check_references(
         path,
         by_file.get(path, []),
-        _source_file(path, context),
+        _source_file(path, context, selected),
         others,
         which,
+        bibliography_files=bibliography_files,
     )
     if list_note:
         report = replace(report, list_note=list_note)
@@ -1038,7 +1069,10 @@ def run(
 
     failures = [
         {
-            "item": f"Reference {v.claim.number}, line {v.claim.sentence.line}",
+            "item": (
+                f"Reference {v.claim.number}, "
+                f"line {v.claim.sentence.line}"
+            ),
             "message": v.comment,
             "reason": "model_result",
         }
@@ -2427,29 +2461,36 @@ def _where(sentence: Sentence) -> str:
     )
 
 
-def _source_file(path: Path, context: ToolContext) -> Path | None:
-    """Return a project file on disk.
+def _source_file(
+    path: Path,
+    context: ToolContext,
+    selected: frozenset[Path] | None = None,
+) -> Path | None:
+    """Return one authorized indexed source within the project workspace.
 
     Parameters
     ----------
     path: pathlib.Path
-        The file, as indexed.
+        Source-relative file path as indexed.
     context: ToolContext
-        For the project folder.
+        Tool services, source root and active source manifest.
+    selected: frozenset[pathlib.Path] | None, optional
+        Previously read source inventory. Defaults to ``None``, which
+        reads the current selection from the context.
 
     Returns
     -------
     pathlib.Path | None
-        The file under the project folder or its ``sources/`` folder; None
-        when neither exists.
+        Selected regular file under the saved source root, or ``None``.
+        No path outside the workspace or unselected candidate is opened.
 
     """
 
-    for candidate in (
-        context.project_root / path,
-        context.project_root / PROJECT_SOURCES_DIRECTORY / path,
-    ):
-        if candidate.is_file():
-            return candidate
-
-    return None
+    root = Path(context.project_root)
+    source = getattr(context, "source_root", None)
+    if source is None:
+        source = root / PROJECT_SOURCES_DIRECTORY
+    return selected_source_file(
+        root, Path(source), path,
+        selected if selected is not None else selected_paths(context),
+    )
