@@ -19,6 +19,10 @@ from unittest.mock import MagicMock, Mock, patch
 
 from kilin import rag
 from kilin.retrievals import build_lexical_index
+from kilin.retrievals.evidence_budget import (
+    COVERAGE_EXHAUSTIVE,
+    EvidenceLimits,
+)
 from kilin.retrievals.code_graph import CodeGraph
 from kilin.retrievals.source_cards.index import (
     SourceCardVector,
@@ -211,6 +215,70 @@ class TestSourceFirstRAG(unittest.TestCase):
         )
         self.assertIn(("cards", 1), discovered["channel_ranks"])
         self.assertTrue(discovered["chosen"])
+
+    def test_unrelated_sources_are_left_out_of_a_comparison(self):
+        session = fixtures._session()
+        session.chunks = [
+            chunk("a1", "memory capacity of brain networks", path="a.pdf"),
+            chunk("a2", "memory capacity in aging brains", path="a.pdf"),
+            chunk("b1", "memory capacity of brain graphs", path="b.pdf"),
+            chunk("b2", "memory capacity and cognition", path="b.pdf"),
+            chunk("c1", "plant stress and raman spectra", path="c.pdf"),
+            chunk("d1", "genomic results for psychiatry", path="d.pdf"),
+        ]
+        session.indexes = SimpleNamespace(
+            semantic=rag.SemanticIndex(
+                tuple(session.chunks),
+                ((1.0, 0.0), (0.95, 0.05), (0.9, 0.1), (0.85, 0.15),
+                 (0.1, 0.9), (0.0, 1.0)),
+            ),
+            lexical=build_lexical_index(session.chunks),
+            code_graph=CodeGraph((), ()),
+        )
+        session.embedding_session = Mock()
+        session.embedding_session.embed_query.return_value = [1.0, 0.0]
+        details = {}
+        evidence = session._retrieve(
+            "memory capacity", 4, source_first=(8, True),
+            source_report=details,
+        )
+        self.assertEqual(
+            {item.path for item in evidence}, {Path("a.pdf"), Path("b.pdf")}
+        )
+        self.assertEqual(
+            set(details["unrelated_sources"]), {Path("c.pdf"), Path("d.pdf")}
+        )
+        # A count of papers keeps at least that many.
+        evidence = session._retrieve(
+            "Review the four articles on memory capacity", 4,
+            source_first=(8, True),
+        )
+        self.assertEqual(len({item.path for item in evidence}), 4)
+        # Asking about every source keeps them all.
+        budget = EvidenceLimits(8, 1, 8, 5000, coverage=COVERAGE_EXHAUSTIVE)
+        evidence = session._retrieve(
+            "memory capacity", 8, source_first=(8, False),
+            source_limits=budget,
+        )
+        self.assertEqual(len({item.path for item in evidence}), 4)
+
+    def test_card_metadata_for_described_documents(self):
+        session = fixtures._session()
+        card = SimpleNamespace(
+            path=Path("a.pdf"),
+            metadata=(("title", "BRAPH: graph software"), ("year", "2017")),
+        )
+        session.source_cards = SimpleNamespace(records=(
+            SimpleNamespace(result=SimpleNamespace(card=card)),
+            SimpleNamespace(result=SimpleNamespace(card=None)),
+        ))
+        self.assertEqual(
+            session._card_metadata(),
+            {Path("a.pdf"): {"title": "BRAPH: graph software",
+                             "year": "2017"}},
+        )
+        session.source_cards = None
+        self.assertEqual(session._card_metadata(), {})
 
     def test_reject_invalid_source_first_requests(self):
         session = _session()

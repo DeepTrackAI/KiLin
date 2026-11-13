@@ -22,6 +22,10 @@ Module Structure
 
     Decide whether a question explicitly requests full source coverage.
 
+- ``requested_source_count``
+
+    How many sources a question asks about ("the five articles").
+
 Examples
 --------
 >>> asks_for_all_sources("Compare all five papers")
@@ -36,7 +40,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["asks_for_all_sources"]
+__all__ = ["asks_for_all_sources", "requested_source_count"]
 
 _DOCUMENTS: Final[str] = (
     r"(?:papers?|articles?|stud(?:y|ies)|documents?|sources?|pdfs?|works?)"
@@ -77,8 +81,6 @@ def asks_for_all_sources(question: str) -> bool:
     return bool(
         _ALL_SOURCES.search(question) and _EXHAUSTIVE_WORDS.search(question)
     )
-<<<<<<< Updated upstream
-=======
 
 
 # Number words of a source count ("the five articles").
@@ -126,4 +128,3 @@ def requested_source_count(question: str) -> int:
             _NUMBER_WORDS[token] if token in _NUMBER_WORDS else int(token)
         )
     return max(counts, default=0)
->>>>>>> Stashed changes

@@ -233,10 +233,14 @@ from kilin.retrievals.requests import RetrievalRequest, RetrievalResult
 from kilin.retrievals.strategies.retrieval_semantic import (
     _validate_semantic_embeddings,
 )
-from kilin.retrievals.source_coverage import asks_for_all_sources
+from kilin.retrievals.source_coverage import (
+    asks_for_all_sources,
+    requested_source_count,
+)
 from kilin.retrievals.strategies.retrieval_code import CodeResult
 from kilin.retrievals.strategies.retrieval_lexical import LexicalResult
 from kilin.retrievals.strategies.retrieval_sources import (
+    relevant_sources,
     select_source_passages,
     source_first_search,
 )
@@ -1717,6 +1721,7 @@ class RAGSession:
                     ),
                     self._ask_router,
                     list(dict.fromkeys(chunk.path for chunk in self.chunks)),
+                    self._card_metadata(),
                 )
                 source_limits = None
                 source_report: dict[str, object] = {}
@@ -3844,6 +3849,11 @@ class RAGSession:
                     if source_limits is not None else 1
                 ),
                 metadata=source_metadata,
+                exhaustive=(
+                    source_limits is not None
+                    and source_limits.coverage == COVERAGE_EXHAUSTIVE
+                ),
+                requested=requested_source_count(question),
             )
             chosen_source_paths = tuple(
                 source_metadata.get("selected_sources", ())
@@ -4598,6 +4608,31 @@ class RAGSession:
         known = set(indexed)
         return [path for path in self._source_files() if path not in known]
 
+    def _card_metadata(self: RAGSession) -> dict[Path, dict[str, str]]:
+        """Return each source's card metadata, for described documents.
+
+        Returns
+        -------
+        dict[pathlib.Path, dict[str, str]]
+            The metadata of every valid source card by source path (for a
+            source with several card kinds, their fields merged, the first
+            kind's value winning); empty without cards.
+
+        """
+
+        records = getattr(
+            getattr(self, "source_cards", None), "records", ()
+        )
+        merged: dict[Path, dict[str, str]] = {}
+        for record in records or ():
+            card = getattr(record.result, "card", None)
+            if card is None:
+                continue
+            fields = merged.setdefault(card.path, {})
+            for key, value in card.metadata:
+                fields.setdefault(key, value)
+        return merged
+
     def _source_passages(
         self: RAGSession,
         semantic: Sequence[SemanticResult],
@@ -4612,6 +4647,8 @@ class RAGSession:
         trace_turn_id: str | None,
         per_source: int = 1,
         metadata: dict[str, object] | None = None,
+        exhaustive: bool = False,
+        requested: int = 0,
     ) -> list[HybridResult]:
         """Select sources by four-channel RRF, then original passages.
 
@@ -4639,11 +4676,23 @@ class RAGSession:
             Target passages per source after the first. Defaults to ``1``.
         metadata: dict[str, object] | None, optional
             Mutable diagnostics with selected source paths. Defaults to None.
+        exhaustive: bool, optional
+            Whether the question asks about every source ("all the
+            papers"), so no source is left out as unrelated. Defaults to
+            ``False``.
+        requested: int, optional
+            How many sources the question asks about ("the five
+            articles"); at least that many are kept. Defaults to ``0``.
 
         Returns
         -------
         list[HybridResult]
             Original chunks selected from independently ranked sources.
+            Unless ``exhaustive`` or several sources are named, only
+            sources the question is about are used (``relevant_sources``:
+            a passage among the first ``count``, a named source, or the
+            best card match), at least two for a comparison and at least
+            ``requested``.
 
         Notes
         -----
@@ -4678,14 +4727,24 @@ class RAGSession:
             ]
             available = [*target, *others] if compare else target
 
-        limit = min(max_sources, count)
-        chosen = [item.path for item in available[:limit]]
         full_passages = hybrid_search(
             semantic=semantic,
             lexical=lexical,
             code=code,
             count=len(self.chunks),
         )
+        unrelated: list[Path] = []
+        if not exhaustive and len(named) < 2:
+            relevant = relevant_sources(
+                available, full_passages, depth=count, keep=named,
+                minimum=max(2 if compare else 1, requested),
+            )
+            unrelated = [
+                item.path for item in available if item not in relevant
+            ]
+            available = relevant
+        limit = min(max_sources, count)
+        chosen = [item.path for item in available[:limit]]
         passages = select_source_passages(
             full_passages, chosen, count=count,
             per_source=per_source,
@@ -4697,6 +4756,7 @@ class RAGSession:
                     item.path for item in available
                 ),
                 "ranked_source_count": len(available),
+                "unrelated_sources": tuple(unrelated),
             })
         trace = getattr(self, "trace", NullTraceLogger())
         trace.emit(
@@ -4716,6 +4776,7 @@ class RAGSession:
                 "selected_count": len(chosen),
                 "passage_count": len(passages),
                 "scope": named,
+                "unrelated": unrelated,
             },
             turn_id=trace_turn_id,
         )
@@ -5995,7 +6056,12 @@ def _answer_prompt(
 
     Notes
     -----
-    Evidence text is inserted without semantic validation. The current label
+    The prompt names the valid evidence numbers, because a passage's own
+    reference markers ("... memory capacity [23]") were copied as
+    citations. A question about several documents ("the five articles",
+    "all the papers") also asks for each source of the evidence in turn
+    (``_per_source_instruction``). Evidence text is inserted without
+    semantic validation. The current label
     includes path, line range, optional symbol and context role, but not
     notebook cell or PDF page metadata. This is prompt construction, not
     instruction isolation
@@ -6012,6 +6078,11 @@ def _answer_prompt(
     sections = [f"Question:\n{question}", "Evidence:"]
     for item in evidence:
         sections.append(evidence_block(item, item.citation))
+    numbers = sorted({item.citation for item in evidence})
+    cited = (
+        f"[{numbers[0]}]" if len(numbers) == 1
+        else f"[{numbers[0]}] to [{numbers[-1]}]"
+    )
     sections.append(
         "Prioritize direct evidence about the requested target. "
         "Related evidence can explain dependencies or alternatives. "
@@ -6019,11 +6090,16 @@ def _answer_prompt(
         "its actual source and do not equate differently qualified symbols "
         "without supporting evidence. "
         "Answer using the evidence above. Put [1], [2], and so on immediately "
-        "after the claims they support. Do not repeat the source text or "
-        "write a bibliography."
+        "after the claims they support. Cite only the evidence numbers "
+        f"{cited}: numbers in brackets inside the evidence text are the "
+        "documents' own references, not evidence. Do not repeat the source "
+        "text or write a bibliography."
     )
     if isinstance(guidance, str) and guidance.strip():
         sections[-1] += " " + guidance.strip()
+    per_source = _per_source_instruction(question, evidence)
+    if per_source:
+        sections[-1] += " " + per_source
     # The question again, last, so its own length or format wins.
     sections.append(
         "Answer this question as asked, including any length or format it "
@@ -6032,8 +6108,6 @@ def _answer_prompt(
     return "\n\n".join(sections)
 
 
-<<<<<<< Updated upstream
-=======
 def _per_source_instruction(
     question: str, evidence: Sequence[Evidence]
 ) -> str:
@@ -6076,7 +6150,6 @@ def _per_source_instruction(
     )
 
 
->>>>>>> Stashed changes
 def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
     """Convert one conversation turn to JSON-safe data.
 

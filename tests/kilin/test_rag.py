@@ -132,13 +132,20 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
         self.assertIn("[1] src/a.py:1-3 (func)\nFirst excerpt", prompt)
         self.assertIn("[2] src/a.py:1-3\nsource text", prompt)
         self.assertIn("bibliography. Short.", prompt)
+        self.assertIn(
+            "Cite only the evidence numbers [1] to [2]: numbers in brackets "
+            "inside the evidence text are the documents' own references",
+            prompt,
+        )
+        self.assertIn(
+            "evidence numbers [1]:",
+            rag._answer_prompt("Q", evidence[:1]),
+        )
         self.assertTrue(prompt.endswith("requests:\nExplain this"))
         self.assertNotIn("(None)", prompt)
         self.assertNotIn("cell=3", prompt)
         self.assertNotIn("Short.", rag._answer_prompt("Q", evidence, 3))
 
-<<<<<<< Updated upstream
-=======
     def test_answer_prompt_covers_each_document_asked_about(self) -> None:
         """Ask for each source in turn for questions about several."""
 
@@ -183,7 +190,6 @@ class TestRAGEvidenceHelpers(unittest.TestCase):
             len({item.path for item in evidence}), 2
         )
 
->>>>>>> Stashed changes
     def test_answer_prompt_normalizes_foreign_platform_paths(self) -> None:
         """Display evidence paths with forward slashes on every host."""
 

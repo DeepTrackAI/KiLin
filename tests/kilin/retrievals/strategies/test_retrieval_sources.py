@@ -18,6 +18,8 @@ from kilin.retrievals.source_cards.index import SourceCardMatch
 from kilin.retrievals.strategies.retrieval_hybrid import HybridResult
 from kilin.retrievals.strategies.retrieval_semantic import SemanticResult
 from kilin.retrievals.strategies.retrieval_sources import (
+    SourceResult,
+    relevant_sources,
     select_source_passages,
     source_first_search,
 )
@@ -195,6 +197,62 @@ class TestOriginalPassages(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     select_source_passages(self.ranked, [], count=value)
+
+
+
+class TestRelevantSources(unittest.TestCase):
+    """Keep only the ranked sources a question is about."""
+
+    def setUp(self) -> None:
+        self.ranked = [
+            SourceResult(Path(name), 1.0 - index / 10, ranks)
+            for index, (name, ranks) in enumerate((
+                ("a.pdf", (("cards", 2), ("semantic", 1))),
+                ("b.pdf", (("cards", 3), ("semantic", 2))),
+                ("c.pdf", (("cards", 1), ("semantic", 5))),
+                ("d.pdf", (("cards", 4), ("semantic", 3))),
+                ("e.pdf", (("cards", 5), ("semantic", 4))),
+            ))
+        ]
+        # The best passages are a's and b's; d and e only further down.
+        self.passages = [
+            HybridResult(1.0, _chunk(identifier, path), ("semantic",))
+            for identifier, path in (
+                ("a1", "a.pdf"), ("b1", "b.pdf"), ("a2", "a.pdf"),
+                ("b2", "b.pdf"), ("d1", "d.pdf"), ("e1", "e.pdf"),
+                ("c1", "c.pdf"),
+            )
+        ]
+
+    def _kept(self, **options: object) -> list[str]:
+        return [
+            item.path.name
+            for item in relevant_sources(self.ranked, self.passages,
+                                         **options)
+        ]
+
+    def test_sources_beyond_the_best_passages_are_left_out(self):
+        # c's passages rank low, but its card ranks first.
+        self.assertEqual(self._kept(depth=4), ["a.pdf", "b.pdf", "c.pdf"])
+        self.assertEqual(
+            self._kept(depth=5), ["a.pdf", "b.pdf", "c.pdf", "d.pdf"]
+        )
+
+    def test_named_sources_and_minimum_are_kept(self):
+        self.assertEqual(
+            self._kept(depth=1, keep={Path("e.pdf")}),
+            ["a.pdf", "c.pdf", "e.pdf"],
+        )
+        ranked = [item for item in self.ranked if item.path.name != "c.pdf"]
+        kept = relevant_sources(ranked, self.passages, depth=1, minimum=2)
+        self.assertEqual([item.path.name for item in kept],
+                         ["a.pdf", "b.pdf"])
+
+    def test_invalid_depth_or_minimum(self):
+        for options in ({"depth": 0}, {"depth": 2, "minimum": 0}):
+            with self.subTest(options=options):
+                with self.assertRaises(ValueError):
+                    relevant_sources(self.ranked, self.passages, **options)
 
 
 if __name__ == "__main__":

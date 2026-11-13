@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import unittest
 
-from kilin.retrievals.source_coverage import asks_for_all_sources
+from kilin.retrievals.source_coverage import (
+    asks_for_all_sources,
+    requested_source_count,
+)
 
 
 class TestSourceCoverage(unittest.TestCase):
@@ -47,8 +50,6 @@ class TestSourceCoverage(unittest.TestCase):
                 self.assertFalse(asks_for_all_sources(question))
 
 
-<<<<<<< Updated upstream
-=======
 class TestRequestedSourceCount(unittest.TestCase):
 
     def test_counts_of_sources(self):
@@ -69,6 +70,5 @@ class TestRequestedSourceCount(unittest.TestCase):
                 self.assertEqual(requested_source_count(question), count)
 
 
->>>>>>> Stashed changes
 if __name__ == "__main__":
     unittest.main()

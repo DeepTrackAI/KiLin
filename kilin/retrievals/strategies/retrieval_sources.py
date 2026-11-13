@@ -22,6 +22,11 @@ Key Features
     Reserve a first original passage for each selected source, then fill
     remaining places using the complete passage ranking.
 
+- **Relevant sources only**
+
+    Fusion ranks every source, so a source is kept only when one of its
+    passages is among the best passages, or its card is the best match.
+
 Module Structure
 ----------------
 
@@ -32,6 +37,10 @@ Module Structure
 - ``source_first_search``
 
     Fuse the four supplied rankings at source level.
+
+- ``relevant_sources``
+
+    Keep the ranked sources that the question is about.
 
 - ``select_source_passages``
 
@@ -48,7 +57,7 @@ Examples
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -61,6 +70,7 @@ from kilin.retrievals.strategies.retrieval_hybrid import (
 
 __all__ = [
     "SourceResult",
+    "relevant_sources",
     "select_source_passages",
     "source_first_search",
 ]
@@ -194,6 +204,74 @@ def source_first_search(
         ))
     results.sort(key=lambda item: (-item.score, item.path.as_posix()))
     return results[:count]
+
+
+def relevant_sources(
+    ranked: Sequence[SourceResult],
+    passages: Sequence[HybridResult],
+    *,
+    depth: int,
+    keep: Collection[Path] = (),
+    minimum: int = 1,
+) -> list[SourceResult]:
+    """Keep the ranked sources that the question is about.
+
+    Fusion gives every source a position in every channel, so in a small
+    project each one is ranked, however unrelated. Positions alone cannot
+    say how relevant a source is; where its best passage stands among all
+    passages can.
+
+    Parameters
+    ----------
+    ranked: Sequence[SourceResult]
+        Sources in fused order (``source_first_search``).
+    passages: Sequence[HybridResult]
+        The complete, best-first fused passage ranking.
+    depth: int
+        How many of the best passages count: usually the evidence count.
+    keep: Collection[pathlib.Path], optional
+        Sources always kept, such as those the question names. Defaults to
+        none.
+    minimum: int, optional
+        Fewest sources kept when that many are ranked (2 for a
+        comparison). Defaults to ``1``.
+
+    Returns
+    -------
+    list[SourceResult]
+        In fused order: the sources in ``keep``, those with a passage among
+        the first ``depth`` passages, and the source whose card ranks
+        first (a card can find a source whose passages rank low); then,
+        below ``minimum``, the next ranked sources.
+
+    Raises
+    ------
+    ValueError
+        If ``depth`` or ``minimum`` is not a positive integer.
+
+    """
+
+    if type(depth) is not int or depth < 1:
+        raise ValueError("depth must be a positive whole number.")
+    if type(minimum) is not int or minimum < 1:
+        raise ValueError("minimum must be a positive whole number.")
+
+    best: dict[Path, int] = {}
+    for position, result in enumerate(passages):
+        best.setdefault(result.chunk.path, position)
+    kept = [
+        item for item in ranked
+        if item.path in keep
+        or best.get(item.path, depth) < depth
+        or ("cards", 1) in item.channel_ranks
+    ]
+    for item in ranked:
+        if len(kept) >= minimum:
+            break
+        if item not in kept:
+            kept.append(item)
+    order = {item.path: index for index, item in enumerate(ranked)}
+    return sorted(kept, key=lambda item: order[item.path])
 
 
 def select_source_passages(
