@@ -90,7 +90,10 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/runtime.py`](../kilin/runtime.py) | Choose backend and device names without loading inference models. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
 | [`kilin/source_card_policy.py`](../kilin/source_card_policy.py) | Resolve core-owned source-card indexing policy for one project. | [Configuration](configuration.md) | [Policy tests](../tests/kilin/test_source_card_policy.py) |
 | [`kilin/sources/__init__.py`](../kilin/sources/__init__.py) | Expose source-file records and structured source extraction. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/_word_metadata.py`](../kilin/sources/_word_metadata.py) | Read optional title/author properties from Word files for citations and search. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/__init__.py`](../kilin/sources/extensions/__init__.py) | Group optional suffix-specific source readers and extractors. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_doc.py`](../kilin/sources/extensions/sources_doc.py) | Read the body text of old binary Word `.doc` files. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
+| [`kilin/sources/extensions/sources_docx.py`](../kilin/sources/extensions/sources_docx.py) | Read Word `.docx` files as Markdown-style text with heading sections. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_ipynb.py`](../kilin/sources/extensions/sources_ipynb.py) | Extract code and Markdown cell text from notebook JSON. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_m.py`](../kilin/sources/extensions/sources_m.py) | Partition MATLAB text using recognizable declaration boundaries. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
 | [`kilin/sources/extensions/sources_md.py`](../kilin/sources/extensions/sources_md.py) | Partition Markdown text at ATX-style heading lines. | [Source pipeline](source_pipeline.md) | [Source tests](../tests/kilin/sources/) |
@@ -180,12 +183,12 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Per-tool README | 41 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 28 |
-| Source pipeline | 12 |
+| Source pipeline | 15 |
 | Tool extension contracts | 22 |
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 144.**
+**Total production Python modules: 147.**
 
 ## Non-Python resources and UI assets
 

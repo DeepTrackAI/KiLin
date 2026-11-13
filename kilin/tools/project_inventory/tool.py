@@ -95,6 +95,8 @@ _TYPE_WORDS: Final[dict[str, tuple[str, ...]]] = {
     "readme": (".md",),
     "readmes": (".md",),
     "txt": (".txt",),
+    "doc": (".doc",),
+    "docx": (".docx",),
     "notebook": (".ipynb",),
     "notebooks": (".ipynb",),
     "python": (".py",),
@@ -107,6 +109,8 @@ _TYPE_NAMES: Final[dict[str, str]] = {
     ".pdf": "PDF",
     ".md": "Markdown",
     ".txt": "text",
+    ".doc": "Word",
+    ".docx": "Word",
     ".ipynb": "notebook",
     ".py": "Python",
     ".m": "MATLAB",
@@ -197,6 +201,9 @@ def file_types_in(question: str) -> tuple[str, ...]:
     # "text" alone is too common ("searchable text"); "text files" counts.
     if re.search(r"\btext files?\b", text):
         found.append(".txt")
+    # "word" alone is too common ("the word MRI"); "Word files" counts.
+    if re.search(r"\bword (?:files?|documents?|docs?)\b", text):
+        found.extend((".doc", ".docx"))
 
     for word in re.findall(r"\.?[a-z]+", text):
         if word.startswith(".") and word in _TYPE_NAMES:

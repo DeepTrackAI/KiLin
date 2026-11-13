@@ -35,6 +35,16 @@ There are two limited shortcuts for saved files:
 not automatically select a generated report. Files in `outputs/` are never
 indexed and are read only when explicitly selected by a tool.
 
+## Bibliographic citations for Word and PDF papers
+
+The report citation is assembled deterministically, without a model call.
+A PDF provides its title and author through PDF metadata; `.docx` and
+Word 97–2003 `.doc` use their stored document properties. The first
+passages may provide a DOI or publication year. If there is no plausible
+metadata title, the citation names the file and explicitly notes the
+missing title rather than inventing bibliographic details. Reading Word
+metadata does not require the other Word reader to be installed.
+
 The tool is a self-contained package:
 
 - `tool.py`: settings validation, resource declarations, and execution.

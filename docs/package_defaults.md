@@ -72,7 +72,7 @@ file would otherwise match an allowed extension.
 
 | Key | Meaning |
 | --- | --- |
-| `DEFAULT_EXTENSIONS` | Allowed literal file suffixes for repository scans that do not explicitly supply extension filters (for example `.py`, `.md`, `.ipynb` and `.pdf`). This is not a content-type detector. |
+| `DEFAULT_EXTENSIONS` | Allowed literal file suffixes for repository scans that do not explicitly supply extension filters (for example `.py`, `.md`, `.ipynb`, `.pdf`, `.doc` and `.docx`). This is not a content-type detector. |
 | `SKIP_DIRECTORIES` | Directory names not traversed, including VCS metadata, virtual environments, caches, generated output, and model weights. |
 | `SKIP_FILES` | Filenames skipped regardless of extension, including typical credentials and secret files. |
 | `BLOCKED_SUFFIXES` | Suffixes rejected even if included elsewhere, particularly model binaries and private-key formats. |
