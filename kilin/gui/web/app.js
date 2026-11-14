@@ -66,6 +66,9 @@ let settingsTab = "general";
 // Its absence must not change how settings work or how answers are made.
 let settingsCatalog = null;
 let settingsHelpSequence = 0;
+// Displayed tooltip lives in the document's top-level layer, outside the
+// scroll-clipped Settings dialog. Never retain more than one open tooltip.
+let activeSettingsHelp = null;
 // The last projects_folder event, to redraw the folder's note.
 let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
@@ -1393,6 +1396,80 @@ function requestToolSettings() {
 }
 
 /**
+ * Close the active tooltip and return it to its setting's label.
+ *
+ * The tooltip is portaled to the document while visible so the scrollable
+ * Settings dialog cannot clip it. Returning it preserves label ownership
+ * and avoids orphaned nodes when the Settings panel is reconstructed.
+ */
+function dismissSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { wrapper, trigger, tooltip } = activeSettingsHelp;
+  tooltip.classList.remove("is-visible");
+  wrapper.append(tooltip);
+  wrapper.classList.remove("is-open");
+  trigger.setAttribute("aria-expanded", "false");
+  activeSettingsHelp = null;
+}
+
+/**
+ * Keep the tooltip inside the viewport and aligned with its help icon.
+ *
+ * The small panel can scroll independently of the page, so screen-relative
+ * coordinates must be recalculated when the page or Settings panel scrolls.
+ */
+function positionSettingsHelp() {
+  if (!activeSettingsHelp) return;
+  const { trigger, tooltip } = activeSettingsHelp;
+  if (trigger.isConnected === false) {
+    dismissSettingsHelp();
+    return;
+  }
+  const icon = trigger.getBoundingClientRect();
+  const card = trigger.closest?.(".models-card")?.getBoundingClientRect();
+  if (card && (icon.bottom < card.top || icon.top > card.bottom)) {
+    dismissSettingsHelp();
+    return;
+  }
+  const margin = 12;
+  const gap = 6;
+  const width = tooltip.getBoundingClientRect().width;
+  const height = tooltip.getBoundingClientRect().height;
+  const rightLimit = Math.max(margin, window.innerWidth - width - margin);
+  const left = Math.max(margin, Math.min(icon.left, rightLimit));
+  const below = icon.bottom + gap;
+  const above = icon.top - height - gap;
+  const top = below + height <= window.innerHeight - margin
+    ? below : above >= margin ? above
+      : Math.max(margin, Math.min(below,
+        window.innerHeight - height - margin));
+  tooltip.style.left = `${Math.round(left)}px`;
+  tooltip.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * Show one core-owned setting summary outside any clipping ancestor.
+ *
+ * @param wrapper Help control belonging to the setting label.
+ * @param trigger Small focusable information button.
+ * @param tooltip Summary node to show in the top-level document.
+ * @param pinned Whether a click should keep it visible after hover ends.
+ */
+function showSettingsHelp(wrapper, trigger, tooltip, pinned = false) {
+  if (activeSettingsHelp?.trigger !== trigger) dismissSettingsHelp();
+  if (!activeSettingsHelp) {
+    document.body.append(tooltip);
+    tooltip.classList.add("is-visible");
+    wrapper.classList.add("is-open");
+    activeSettingsHelp = { wrapper, trigger, tooltip, pinned };
+  } else if (pinned) {
+    activeSettingsHelp.pinned = true;
+  }
+  trigger.setAttribute("aria-expanded", "true");
+  positionSettingsHelp();
+}
+
+/**
  * Add reusable explanatory popovers to controls with canonical setting IDs.
  * Labels and summaries are provided by the core, never authored in the UI.
  *
@@ -1425,18 +1502,32 @@ function applySettingsHelp(root = document) {
     trigger.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      const opened = wrapper.classList.contains("is-open");
-      for (const item of document.querySelectorAll(".setting-help.is-open")) {
-        item.classList.remove("is-open");
+      if (activeSettingsHelp?.trigger === trigger
+          && activeSettingsHelp.pinned) {
+        dismissSettingsHelp();
+        trigger.blur();
+      } else {
+        showSettingsHelp(wrapper, trigger, tooltip, true);
       }
-      wrapper.classList.toggle("is-open", !opened);
-      trigger.setAttribute("aria-expanded", String(!opened));
-      if (opened) trigger.blur();
+    });
+    trigger.addEventListener("pointerenter", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("pointerleave", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !activeSettingsHelp.pinned
+          && document.activeElement !== trigger) dismissSettingsHelp();
+    });
+    trigger.addEventListener("focus", () => {
+      showSettingsHelp(wrapper, trigger, tooltip);
+    });
+    trigger.addEventListener("blur", () => {
+      if (activeSettingsHelp?.trigger === trigger
+          && !trigger.matches(":hover")) dismissSettingsHelp();
     });
     trigger.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
-      wrapper.classList.remove("is-open");
-      trigger.setAttribute("aria-expanded", "false");
+      dismissSettingsHelp();
       trigger.blur();
       event.stopPropagation();
     });
@@ -1450,14 +1541,13 @@ function applySettingsHelp(root = document) {
   }
 }
 
+// Reposition the portaled popup as its anchor moves inside Settings.
+window.addEventListener("resize", positionSettingsHelp);
+document.addEventListener("scroll", positionSettingsHelp, true);
 // Clicking elsewhere dismisses a tooltip opened explicitly by clicking.
 document.addEventListener("click", (event) => {
   if (event.target.closest?.(".setting-help")) return;
-  for (const item of document.querySelectorAll(".setting-help.is-open")) {
-    item.classList.remove("is-open");
-    item.querySelector(".setting-help-trigger")?.setAttribute(
-      "aria-expanded", "false");
-  }
+  dismissSettingsHelp();
 });
 
 /**
@@ -2234,6 +2324,7 @@ function modelEditsPending() {
  * Close the model settings panel and refresh source-drop bounds.
  */
 function hideModels() {
+  dismissSettingsHelp();
   setupCompletionVisible = false;
   byId("models-panel").classList.add("hidden");
   syncSourceDropTarget();

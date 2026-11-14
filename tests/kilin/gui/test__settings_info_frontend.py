@@ -90,6 +90,29 @@ class TestSettingsInfoFrontend(unittest.TestCase):
             self.assertIn("Invalid metadata", events[-1]["message"])
             self.assertIsNone(manager.session)
 
+    def test_help_icons_are_small_and_popups_escape_dialog_clipping(self):
+        """Keep the icon circular and the visible tooltip viewport-fixed."""
+
+        styles = (_WEB / "styles.css").read_text(encoding="utf-8")
+        button = re.search(
+            r"\.setting-help-trigger\s*\{([^}]+)\}", styles,
+        )
+        popup = re.search(
+            r"\.setting-help-popup\s*\{([^}]+)\}", styles,
+        )
+        self.assertIsNotNone(button)
+        self.assertIsNotNone(popup)
+        rules = button.group(1)
+        self.assertRegex(rules, r"\bwidth:\s*15px;")
+        self.assertRegex(rules, r"\bheight:\s*15px;")
+        self.assertRegex(rules, r"\bmin-height:\s*15px;")
+        self.assertRegex(rules, r"\bpadding:\s*0;")
+        self.assertRegex(rules, r"\bborder-radius:\s*50%;")
+        self.assertRegex(popup.group(1), r"\bposition:\s*fixed;")
+        self.assertIn(
+            ".setting-help-popup.is-visible { display: block; }", styles,
+        )
+
     @unittest.skipUnless(shutil.which("node"), "Node.js unavailable")
     def test_help_is_populated_from_metadata_without_changing_inputs(self):
         source = (_WEB / "app.js").read_text(encoding="utf-8")
@@ -111,6 +134,9 @@ class FakeNode {
     this.listeners = {};
     this.attrs = {};
     this.className = "";
+    this.parentNode = null;
+    this.style = {};
+    this.isConnected = true;
     this.opened = new Set();
     this.classList = {
       contains: (value) => this.opened.has(value),
@@ -123,9 +149,28 @@ class FakeNode {
       },
     };
   }
-  append(...children) { this.childNodes.push(...children); }
+  append(...children) {
+    for (const child of children) {
+      if (child.parentNode) {
+        child.parentNode.childNodes = child.parentNode.childNodes
+          .filter((item) => item !== child);
+      }
+      child.parentNode = this;
+      this.childNodes.push(child);
+    }
+  }
   setAttribute(key, value) { this.attrs[key] = value; }
   addEventListener(name, callback) { this.listeners[name] = callback; }
+  getBoundingClientRect() {
+    return this.className === "setting-help-popup"
+      ? {left: 0, top: 0, right: 240, bottom: 60,
+        width: 240, height: 60}
+      : {left: 320, top: 180, right: 335, bottom: 195,
+        width: 15, height: 15};
+  }
+  closest() { return null; }
+  matches() { return false; }
+  blur() {}
   querySelector(selector) {
     if (selector === ".setting-help") {
       return this.childNodes.find((item) => item.className === "setting-help")
@@ -138,6 +183,7 @@ class FakeNode {
     const index = this.childNodes.indexOf(previous);
     assert.notEqual(index, -1);
     this.childNodes[index] = replacement;
+    replacement.parentNode = this;
   }
 }
 function textNode(text) { return {nodeType: 3, textContent: text}; }
@@ -151,6 +197,8 @@ second.dataset.settingsKey = "tools.reference_check.max_online";
 second.childNodes = [new FakeNode("input"), textNode("Old")];
 const labels = [first, second];
 const document = {
+  body: new FakeNode("body"),
+  activeElement: null,
   createElement: (name) => new FakeNode(name),
   createTextNode: textNode,
   querySelectorAll: (selector) => selector === ".setting-help.is-open"
@@ -159,9 +207,15 @@ const document = {
         && child.classList.contains("is-open")) : labels,
 };
 let settingsHelpSequence = 0;
+let activeSettingsHelp = null;
+const window = {innerWidth: 460, innerHeight: 240};
 let settingsCatalog = '''
         script += data + ";\n"
-        script += extract_function(source, "applySettingsHelp")
+        for function_name in (
+            "dismissSettingsHelp", "positionSettingsHelp",
+            "showSettingsHelp", "applySettingsHelp",
+        ):
+            script += extract_function(source, function_name)
         script += r'''
 applySettingsHelp({querySelectorAll: () => labels});
 assert.equal(input.value, "0.7");
@@ -180,12 +234,23 @@ assert.equal(used.prevented, true);
 assert.equal(used.stopped, true);
 assert.equal(marker.classList.contains("is-open"), true);
 assert.equal(button.attrs["aria-expanded"], "true");
-button.blur = () => {};
+assert.equal(document.body.childNodes.length, 1);
+assert.equal(document.body.childNodes[0], activeSettingsHelp.tooltip);
+assert.equal(activeSettingsHelp.pinned, true);
+assert.equal(activeSettingsHelp.tooltip.style.left, "208px");
+assert.equal(activeSettingsHelp.tooltip.style.top, "114px");
 button.listeners.click(used);
 assert.equal(marker.classList.contains("is-open"), false);
+assert.equal(document.body.childNodes.length, 0);
+assert.equal(marker.childNodes.length, 2);
+button.listeners.pointerenter();
+assert.equal(activeSettingsHelp.pinned, false);
+button.listeners.pointerleave();
+assert.equal(activeSettingsHelp, null);
 button.listeners.click(used);
 button.listeners.keydown({...used, key: "Escape"});
 assert.equal(marker.classList.contains("is-open"), false);
+assert.equal(document.body.childNodes.length, 0);
 applySettingsHelp({querySelectorAll: () => labels});
 assert.equal(first.childNodes.length, 2);
 settingsCatalog = null;
