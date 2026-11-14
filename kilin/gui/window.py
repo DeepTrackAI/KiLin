@@ -273,6 +273,13 @@ class ChatBridge(QObject):
     stopOperation()
         Terminate the active backend process immediately.
 
+    **Project behavior.**
+
+    requestProjectBehavior()
+        Request editable project-wide and intent configuration.
+    saveProjectBehavior(project, scope, intent_id, ...)
+        Submit one revision-checked project behavior editor.
+
     **Tool settings.**
 
     requestToolSettings()
@@ -1055,6 +1062,43 @@ class ChatBridge(QObject):
                 "project": payload.get("project"),
             }
         self.commandRequested.emit(command)
+
+    @Slot()
+    def requestProjectBehavior(self) -> None:
+        """Request project-wide and individual intent settings."""
+
+        self.commandRequested.emit({"action": "project_behavior"})
+
+    @Slot(str, str, str, str, str, int)
+    def saveProjectBehavior(
+        self, project: str, scope: str, intent_id: str,
+        values_json: str, revision: str, request_id: int,
+    ) -> None:
+        """Submit a revision-checked project behavior editor.
+
+        Parameters
+        ----------
+        project: str
+            Open project path captured by the page.
+        scope: str
+            ``global``, ``intent``, or ``capabilities`` editor.
+        intent_id: str
+            Intent ID, empty for global or indexing settings.
+        values_json: str
+            JSON object with the editor's complete settings.
+        revision: str
+            Last acknowledged project behavior revision.
+        request_id: int
+            Frontend sequence number for matching the acknowledgement.
+
+        """
+
+        self.commandRequested.emit({
+            "action": "save_project_behavior", "project": project,
+            "scope": scope, "intent_id": intent_id or None,
+            "values": json.loads(values_json), "revision": revision,
+            "request_id": request_id,
+        })
 
     @Slot()
     def requestToolSettings(self) -> None:

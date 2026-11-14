@@ -51,6 +51,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/model_settings.py`](../kilin/model_settings.py) | Resolve and persist auxiliary model settings in the KíLín core. | [Model management](model_management.md) | [Core tests](../tests/kilin/test_model_settings.py) |
 | [`kilin/project.py`](../kilin/project.py) | Create and open project workspaces independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_files.py`](../kilin/project_files.py) | Manage project-owned outputs and templates independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
+| [`kilin/project_behavior.py`](../kilin/project_behavior.py) | Resolve and edit validated project-local behavior. | [Configuration](configuration.md) | [Core tests](../tests/kilin/test_project_behavior.py) |
 | [`kilin/project_layout.py`](../kilin/project_layout.py) | Plan and materialize a project's core folders and tool resources. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_type.py`](../kilin/project_type.py) | Load project types from the JSON files in ``kilin/project_types/``. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
 | [`kilin/query_formats.py`](../kilin/query_formats.py) | Define the supported embedding-query formats and Qwen3 query formatter. | [Model management](model_management.md) | [Core tests](../tests/kilin/) |
@@ -182,7 +183,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | ---: |
 | Answering pipeline | 4 |
 | Architecture | 2 |
-| Configuration | 4 |
+| Configuration | 5 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 8 |
@@ -194,7 +195,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 153.**
+**Total production Python modules: 154.**
 
 ## Non-Python resources and UI assets
 

@@ -78,6 +78,14 @@ this field omitted or null, because their model calls are tool-owned.
 The parser rejects explicit overrides on tools. See the complete
 [thinking policy and precedence](configuration.md#per-intent-thinking-policy).
 
+The packaged project type is an inheritance baseline. Each project's
+optional `project_behavior.json` can override shared prompts, router
+settings, history, retrieval and existing intent behavior without changing
+intent IDs or tool bindings. It also stores the optional `code_graph` and
+`document_headers` index capabilities; source cards retain their profile
+ownership. The core validates each resolved type. See
+[project behavior overrides](configuration.md#project-behavior-overrides).
+
 Adding a new project type requires checking its source-selection defaults,
 router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the

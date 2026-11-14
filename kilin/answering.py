@@ -1224,6 +1224,17 @@ def _ignores_conversation(turn: object, project: ProjectType) -> bool:
     parameters = getattr(turn, "parameters", None)
     if not isinstance(parameters, dict):
         return False
+    policy = parameters.get("intent_history_policy")
+    mode = parameters.get("intent_retrieval_mode")
+    uses_tool = parameters.get("intent_tool_used")
+    if (
+        isinstance(policy, str) and isinstance(mode, str)
+        and type(uses_tool) is bool
+    ):
+        return (
+            not uses_tool and policy == HISTORY_POLICY_NONE
+            and mode == RETRIEVAL_MODE_NONE
+        )
     intent_id = parameters.get("intent")
     intent = (
         project.intents.get(intent_id)

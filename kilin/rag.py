@@ -201,6 +201,10 @@ from kilin.conversation_ownership import (
     conversation_write_ownership,
 )
 from kilin.project import QAProject, open_project
+from kilin.project_behavior import (
+    PROJECT_BEHAVIOR_FILE,
+    effective_project_type,
+)
 from kilin.model_settings import read_router_model, validate_model_id
 from kilin.project_layout import source_scan_exclusions
 from kilin.workspace import include_explicit_imports
@@ -1006,7 +1010,7 @@ class RAGSession:
                 thinking=profile.thinking,
                 temperature=profile.temperature,
                 max_new_tokens=profile.max_new_tokens,
-                system_prompt=project_type(profile.type_id).system_prompt,
+                system_prompt=self._behavior_config().system_prompt,
                 allow_download=profile.allow_download,
                 trace=self.trace,
                 block_unrequested_cjk=profile.block_unrequested_cjk,
@@ -1569,14 +1573,23 @@ class RAGSession:
 
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
-            config = project_type(self.project.profile.type_id)
+            config = self._behavior_config()
             decision = self._route(
                 question, config, use_router, turn_id, report_phase
             )
             intent = config.intents[decision.intent]
+            # Retain this turn's historical intent semantics across edits.
+            effective["intent_history_policy"] = intent.history_policy
+            effective["intent_retrieval_mode"] = intent.retrieval_mode
+            effective["intent_tool_used"] = intent.tool is not None
+            path = Path(self.project.root) / PROJECT_BEHAVIOR_FILE
+            if path.is_file():
+                effective["project_behavior_revision"] = sha256(
+                    path.read_bytes()
+                ).hexdigest()
             # Resolve once, including for tool-written answers. An explicit
             # empty string disables the project default, not intent guidance.
-            if intent.answer_guidance:
+            if intent.answer_guidance is not None:
                 resolved_guidance = intent.answer_guidance
             elif answer_guidance is not None:
                 resolved_guidance = answer_guidance
@@ -2454,7 +2467,7 @@ class RAGSession:
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
         policy = read_source_card_policy(
-            self.project.root, project_type(self.project.profile.type_id)
+            self.project.root, self._behavior_config()
         )
         if not policy.enabled:
             raise RuntimeError("Enable source cards before regenerating.")
@@ -2829,7 +2842,7 @@ class RAGSession:
             report = include_explicit_imports(self.project, report)
         cached_chunks = cached_chunks or {}
         selected = list(report.get("selected_files", []))
-        use_code_graph = project_type(profile.type_id).code_graph is not False
+        use_code_graph = self._behavior_config().code_graph is not False
 
         # Text read earlier is reused when the file's bytes are unchanged
         # (same SHA-256), so only new or changed files are read again;
@@ -4929,8 +4942,26 @@ class RAGSession:
         profile = self.project.profile
         if profile.query_format == QUERY_FORMAT_PLAIN:
             return question
-        instruction = project_type(profile.type_id).retrieval_instruction
+        instruction = self._behavior_config().retrieval_instruction
         return format_qwen3_query(question, instruction)
+
+    def _behavior_config(self: RAGSession):
+        """Return validated project behavior or the cached packaged type.
+
+        Projects with overrides are revalidated on each question, so new
+        settings take effect without reloading the chat model.
+
+        Returns
+        -------
+        ProjectType
+            Effective configuration for the active workspace.
+
+        """
+
+        path = Path(self.project.root) / PROJECT_BEHAVIOR_FILE
+        if path.exists():
+            return effective_project_type(self.project.root)
+        return project_type(self.project.profile.type_id)
 
     def _system_prompt(self: RAGSession) -> str:
         """Return the project type's base system prompt.
@@ -4944,7 +4975,7 @@ class RAGSession:
 
         """
 
-        return project_type(self.project.profile.type_id).system_prompt
+        return self._behavior_config().system_prompt
 
     def _route(
         self: RAGSession,
@@ -5206,7 +5237,7 @@ class RAGSession:
             "overlap_tokens": profile.overlap_tokens,
         }
         # Recorded only when off, so existing indexes stay valid by default.
-        if project_type(profile.type_id).code_graph is False:
+        if self._behavior_config().code_graph is False:
             metadata["code_graph"] = False
         # Indexes built from plain chunk text are rebuilt once.
         metadata["retrieval_text"] = RETRIEVAL_TEXT_FORMAT
@@ -5235,7 +5266,7 @@ class RAGSession:
         if type_id is None:
             return False
         try:
-            definition = project_type(type_id)
+            definition = self._behavior_config()
         except ValueError:
             # An unregistered type has no paper index.
             return False

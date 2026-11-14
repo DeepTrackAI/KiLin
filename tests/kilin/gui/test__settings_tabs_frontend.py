@@ -7,8 +7,8 @@ tab, is still drawn with the effort levels. Run the production
 covered only by the Qt/WebEngine smoke test and manual checks. KíLín
 setup holds the computation backend, Appearance and the projects folder
 above the tabs, since they cover the whole app; folded, it is one row.
-Below it, the Project region holds five tabs: General (the name),
-Indexing, Models, Answers and Tools. On/off settings are switches.
+Below it, the Project region holds six tabs: General (the name),
+Indexing, Models, Answers, Intents and Tools. On/off settings are switches.
 
 """
 
@@ -27,14 +27,14 @@ from tests.kilin.gui._frontend_support import (
 )
 
 _WEB = Path(__file__).resolve().parents[3] / "kilin/gui/web"
-_TABS = ["general", "indexing", "models", "answers", "tools"]
+_TABS = ["general", "indexing", "models", "answers", "intents", "tools"]
 
 
 class TestSettingsTabsFrontend(unittest.TestCase):
     """Show Settings one category at a time."""
 
     def test_every_section_belongs_to_one_tab(self):
-        """App-wide parts above four tabs; each other section has a tab."""
+        """App-wide parts above six tabs; each other section has a tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
         start = page.index('id="models-panel"')
@@ -46,7 +46,7 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             panel,
         )
         # The app-wide settings, then one section per tab.
-        self.assertEqual(len(sections), 6)
+        self.assertEqual(len(sections), 7)
         self.assertNotIn("data-settings-tab", sections[0])
         self.assertIn('id="settings-app"', sections[0])
         # These cover the whole app, so they sit above the tabs, inside
@@ -61,7 +61,7 @@ class TestSettingsTabsFrontend(unittest.TestCase):
             '<label for="workspace-path">Projects folder</label>',
         ):
             self.assertIn(part, setup)
-        # The four tabs share the full width.
+        # The six tabs share the full width.
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         self.assertIn(".settings-tab { position: relative; flex: 1 1 0;",
                       styles)

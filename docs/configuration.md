@@ -16,6 +16,7 @@ rewrite an existing project's configuration.
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
 | Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort choices and core-owned router settings | Persistent, authoritative for the opened project |
+| Project behavior | `<workspace>/project_behavior.json` | Sparse project-wide, per-intent and advanced indexing-capability overrides | Optional project-owned validated settings |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
 | Runtime state | Backend availability, cached revisions, loaded sessions | Selected implementation state | Resolved at execution, not a package default |
 
@@ -28,6 +29,36 @@ use its README and `_configuration.py`.
 ![Packaged defaults and validated project types initialize a new saved profile, while GUI preferences are separate and an existing profile remains authoritative.](figures/configuration-precedence.svg)
 
 *Figure: Packaged creation defaults do not overwrite saved project profiles; application-wide GUI preferences and tool-owned defaults have separate roles.*
+
+## Project behavior overrides
+
+Each existing project's optional `project_behavior.json` changes only that
+project's shared and per-intent behavior. Packaged project types remain
+immutable. `profile.ini` still owns backend, model, indexing filters, and
+answer settings. `[tool.<name>]` owns shared tool settings.
+
+The behavior file uses the `project-behavior-v1` format, a fixed
+`project_type_id`, sparse `global` and `intents` objects, and optional sparse
+`capabilities` for `code_graph` and `document_headers`. Nested differences
+merge into packaged settings before the normal project-type validation.
+An explicit `{ "$delete": true }` removes an optional inherited field
+when changing retrieval strategy. This is an internal marker, not an
+editor value.
+
+The APIs `kilin.effective_project_type()`,
+`kilin.project_behavior_settings()` and `kilin.save_project_behavior()`
+resolve and edit these settings without depending on the GUI. Saving an
+entire global, intent or capability editor computes sparse differences and
+checks an optional SHA-256 expected revision to reject stale changes.
+Prompts and routing edits apply to subsequent requests without model
+reload or index rebuild. New turns preserve original intent history and
+retrieval classifications so changes do not reinterpret their behavior.
+
+Advanced indexing exposes `code_graph` (true, false, or `"auto"`) and
+`document_headers` (true or false). Changes alter index metadata and require
+reindexing. In the desktop GUI, failed refreshes restore the previous
+behavior configuration and retry the old index. Other index settings and
+source-card policy remain owned by the project profile.
 
 ## Initialization versus reopening
 

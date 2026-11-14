@@ -298,6 +298,9 @@ const bridge = {
 let ready = true;
 let busy = false;
 let openProjectPath = "/projects/old";
+let projectPresentation = null;
+let projectBehaviorData = null;
+let behaviorSave = { nextId: 0, pending: null };
 const answerSettingsSave = {
   pending: null, queued: null, uncertain: false,
 };

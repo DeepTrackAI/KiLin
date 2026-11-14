@@ -1353,6 +1353,7 @@ function showSettingsTab(name) {
   settingsTab = name;
   // The open project's tools, read fresh each time the tab is shown.
   if (name === "tools") requestToolSettings();
+  if (name === "intents" || name === "indexing") requestProjectBehavior();
   for (const tab of document.querySelectorAll(".settings-tab")) {
     const selected = tab.dataset.tab === name;
     tab.classList.toggle("active", selected);
@@ -1524,6 +1525,557 @@ function renderToolSettings(data) {
   if (focused) holder.querySelector(`details[data-tool="${focused[0]}"] input[data-key="${focused[1]}"]`)?.focus();
 }
 
+// The core owns validation, persistence and revision. Only these editable
+// DOM controls are local to the GUI.
+let projectBehaviorData = null;
+let behaviorSave = { nextId: 0, pending: null };
+let projectPresentation = null;
+
+/**
+ * Request the currently opened project's saved behavior configuration.
+ * @param force Reload even when an editor already exists.
+ */
+function requestProjectBehavior(force = false) {
+  const holder = byId("intent-settings");
+  if (!bridge || !ready || !openProjectPath) {
+    holder.textContent = "Open a project to customize its intents.";
+    projectBehaviorData = null;
+    showIndexingCapabilities();
+    return;
+  }
+  if (!force && projectBehaviorData?.project === openProjectPath) return;
+  if (behaviorSave.pending) return;
+  if (force) projectBehaviorData = null;
+  holder.textContent = "Loading project behavior…";
+  bridge.requestProjectBehavior();
+}
+
+/**
+ * Construct a labeled form input from an effective JSON setting.
+ * @param path Dotted JSON key identifying the setting.
+ * @param title Human-readable field name.
+ * @param value Effective setting value.
+ * @param kind Field type: text, multiline, lines, number, select or checkbox.
+ * @param options Optional select choices, range, and disabled flag.
+ * @returns The labeled control container.
+ */
+function behaviorField(path, title, value, kind = "text", options = {}) {
+  const label = document.createElement("label");
+  label.className = kind === "checkbox" ? "check-row" : "behavior-field";
+  const control = kind === "lines" || kind === "multiline"
+    ? document.createElement("textarea")
+    : kind === "select" ? document.createElement("select")
+      : document.createElement("input");
+  control.dataset.behaviorPath = path;
+  control.dataset.behaviorKind = kind;
+  if (kind === "select") {
+    for (const [key, name] of options.choices || []) {
+      const choice = document.createElement("option");
+      choice.value = key;
+      choice.textContent = name;
+      control.append(choice);
+    }
+    control.value = value === null ? "inherit" : String(value);
+  } else if (kind === "checkbox") {
+    control.type = "checkbox";
+    control.checked = Boolean(value);
+  } else if (kind === "number") {
+    control.type = "number";
+    control.step = "1";
+    if (options.min !== undefined) control.min = String(options.min);
+    if (options.max !== undefined) control.max = String(options.max);
+    control.value = String(value);
+  } else if (kind === "lines") {
+    control.value = (value || []).join("\n");
+    control.rows = options.rows || 3;
+  } else {
+    control.value = value ?? "";
+    if (kind === "multiline") control.rows = options.rows || 4;
+  }
+  control.disabled = Boolean(options.disabled);
+  if (options.disabled) control.title = options.disabledMessage || "Not editable";
+  if (kind === "checkbox") label.append(control, ` ${title}`);
+  else label.append(title, control);
+  return label;
+}
+
+/**
+ * Display explicit inheritance or an override of answer guidance.
+ * @param value Effective optional intent guidance.
+ * @returns The two associated editing controls.
+ */
+function behaviorGuidance(value) {
+  const group = document.createElement("div");
+  group.className = "behavior-guidance";
+  const mode = behaviorField("_guidance_mode", "Answer guidance",
+    value === null ? "inherit" : "override", "select", {
+      choices: [["inherit", "Inherit project guidance"],
+        ["override", "Override for this intent"]],
+    });
+  const field = behaviorField("answer_guidance", "Override text", value ?? "",
+    "multiline", { rows: 4 });
+  field.querySelector("textarea").disabled = value === null;
+  mode.querySelector("select").addEventListener("change", (event) => {
+    field.querySelector("textarea").disabled = event.target.value === "inherit";
+  });
+  group.append(mode, field);
+  return group;
+}
+
+/**
+ * Turn an editor's controls into a complete JSON-compatible settings object.
+ * @param editor The editor containing dotted-path controls.
+ * @returns Current full values, excluding inactive source-first limits.
+ */
+function behaviorValues(editor) {
+  const values = JSON.parse(editor.dataset.initial);
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath;
+    if (path.startsWith("_")) continue;
+    const kind = field.dataset.behaviorKind;
+    if (kind === "number" && (!field.value.trim()
+        || !field.checkValidity() || !Number.isSafeInteger(Number(field.value)))) {
+      throw new Error(`${settingLabel(path.split(".").at(-1))} must be a valid whole number.`);
+    }
+    const value = kind === "checkbox" ? field.checked
+      : kind === "number" ? Number(field.value)
+        : kind === "lines" ? field.value.split("\n").map((x) => x.trim()).filter(Boolean)
+          : path === "thinking" ? field.value === "inherit" ? null : field.value === "on"
+            : field.value;
+    const segments = path.split(".");
+    const leaf = segments.pop();
+    let parent = values;
+    for (const segment of segments) parent = parent[segment] ??= {};
+    parent[leaf] = value;
+  }
+  if (editor.dataset.behaviorScope === "intent") {
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode?.value === "inherit") values.answer_guidance = null;
+    if (values.retrieval.mode !== "search"
+        || values.retrieval.strategy !== "source_first") {
+      for (const name of ["max_sources", "passages_per_source",
+        "max_passages", "evidence_tokens", "coverage"]) {
+        delete values.retrieval[name];
+      }
+    }
+  }
+  return values;
+}
+
+/**
+ * Show fields whose meaning depends on the selected retrieval strategy.
+ * @param editor An individual intent editor.
+ */
+function refreshBehaviorEditor(editor) {
+  if (editor.dataset.behaviorScope !== "intent") return;
+  const mode = editor.querySelector('[data-behavior-path="retrieval.mode"]');
+  const strategy = editor.querySelector('[data-behavior-path="retrieval.strategy"]');
+  const limits = editor.querySelector(".behavior-source-limits");
+  limits?.classList.toggle("hidden", mode?.value !== "search"
+    || strategy?.value !== "source_first");
+  const preview = editor.querySelector(".behavior-prompt-preview");
+  if (preview) {
+    const global = byId("intent-settings").querySelector(
+      '[data-behavior-scope="global"] [data-behavior-path="system_prompt"]');
+    const local = editor.querySelector('[data-behavior-path="system_prompt"]');
+    preview.textContent = `${global?.value || ""}\n\n${local?.value || ""}`;
+  }
+}
+
+/**
+ * Collect all field values, including incomplete drafts.
+ * @param editor The editor whose controls are captured.
+ * @returns A list of path, value snapshots.
+ */
+function behaviorFieldDraft(editor) {
+  return [...editor.querySelectorAll("[data-behavior-path]")].map((field) => ({
+    path: field.dataset.behaviorPath,
+    value: field.type === "checkbox" ? field.checked : field.value,
+  }));
+}
+
+/**
+ * Capture only dirty editors before refreshing after a different save.
+ * @returns A map from editor identity to unsaved field snapshots.
+ */
+function behaviorDrafts() {
+  const drafts = new Map();
+  for (const editor of byId("intent-settings").querySelectorAll(
+    ".behavior-editor")) {
+    const values = behaviorFieldDraft(editor);
+    if (JSON.stringify(values) !== editor.dataset.initialFields) {
+      drafts.set(`${editor.dataset.behaviorScope}:${editor.dataset.intentId}`,
+        values);
+    }
+  }
+  return drafts;
+}
+
+/**
+ * Save an editor with the current project identity and optimistic revision.
+ * @param editor Editor whose values are being persisted.
+ * @param values Complete JSON settings object.
+ */
+function saveBehaviorEditor(editor, values) {
+  const status = editor.querySelector(".behavior-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (behaviorSave.pending) {
+    status.textContent = "Complete the previous save first.";
+    return;
+  }
+  const requestId = ++behaviorSave.nextId;
+  const scope = editor.dataset.behaviorScope;
+  const intentId = editor.dataset.intentId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope, intentId };
+  status.textContent = "Saving…";
+  status.classList.remove("tool-error");
+  bridge.saveProjectBehavior(openProjectPath, scope, intentId,
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
+/**
+ * Build one editable project-wide or individual-intent panel.
+ * @param scope Either global or intent.
+ * @param record Effective values, defaults, and fixed intent tool.
+ * @param id Fixed intent ID, empty for global settings.
+ * @returns The editor DOM subtree.
+ */
+function createBehaviorEditor(scope, record, id = "") {
+  const editor = document.createElement("div");
+  editor.className = "behavior-editor";
+  editor.dataset.behaviorScope = scope;
+  editor.dataset.intentId = id;
+  editor.dataset.initial = JSON.stringify(record.values);
+  const values = record.values;
+  editor.append(behaviorField("description", "Routing description",
+    values.description, "multiline", { rows: 3 }));
+  editor.append(behaviorField("system_prompt", "System instructions",
+    values.system_prompt, "multiline", { rows: 6,
+      disabled: Boolean(record.tool),
+      disabledMessage: "A tool produces the answer for this intent." }));
+  if (scope === "global") {
+    editor.append(
+      behaviorField("answer_guidance", "Default answer guidance",
+        values.answer_guidance, "multiline"),
+      behaviorField("retrieval_instruction", "Embedding query instruction",
+        values.retrieval_instruction, "multiline", { rows: 3 }),
+      behaviorField("history.recent_turns", "Recent conversation turns",
+        values.history.recent_turns, "number", { min: 0, max: 100 }),
+      behaviorField("default_intent", "Default intent", values.default_intent,
+        "select", { choices: projectBehaviorData.intents.map((item) =>
+          [item.id, settingLabel(item.id)]) }),
+      behaviorField("welcome_prompts", "Welcome prompts (one per line)",
+        values.welcome_prompts, "lines"),
+      behaviorField("suggestions", "Suggested questions (one per line)",
+        values.suggestions, "lines"),
+    );
+  } else {
+    editor.append(behaviorGuidance(values.answer_guidance));
+    editor.append(behaviorField("history.policy", "Conversation history",
+      values.history.policy, "select", {
+        choices: [["none", "None"], ["recent", "Recent"],
+          ["relevant", "Relevant"]],
+      }));
+    if (record.tool) {
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = `Tool: ${record.tool}. Retrieval and thinking are managed by the tool.`;
+      editor.append(hint);
+    }
+    const restricted = { disabled: Boolean(record.tool) };
+    editor.append(
+      behaviorField("retrieval.mode", "Retrieval mode",
+        values.retrieval.mode, "select", { choices: [
+          ["search", "Search"], ["document", "Document"],
+          ["reuse", "Reuse evidence"], ["none", "None"]], ...restricted }),
+      behaviorField("retrieval.strategy", "Search strategy",
+        values.retrieval.strategy, "select", { choices: [
+          ["hybrid", "Hybrid"], ["source_first", "Source first"]],
+          ...restricted }),
+      behaviorField("retrieval.max_tokens", "Document token budget",
+        values.retrieval.max_tokens, "number", {
+          min: 1000, max: 200000, ...restricted }),
+      behaviorField("retrieval.include_related_evidence",
+        "Include related evidence", values.retrieval.include_related_evidence,
+        "checkbox", restricted),
+      behaviorField("retrieval.prefer_source_code", "Prefer source code",
+        values.retrieval.prefer_source_code, "checkbox", restricted),
+    );
+    const limits = document.createElement("div");
+    limits.className = "behavior-source-limits";
+    const valuesLimits = values.retrieval;
+    const defaults = record.source_first_defaults;
+    for (const [key, min, max, title] of [
+      ["max_sources", 1, 50, "Maximum sources"],
+      ["passages_per_source", 1, 10, "Passages per source"],
+      ["max_passages", 1, 200, "Maximum passages"],
+      ["evidence_tokens", 1000, 200000, "Evidence token budget"],
+    ]) {
+      limits.append(behaviorField(`retrieval.${key}`, title,
+        valuesLimits[key] ?? defaults[key], "number",
+        { min, max, ...restricted }));
+    }
+    limits.append(behaviorField("retrieval.coverage", "Coverage",
+      valuesLimits.coverage ?? defaults.coverage, "select", { choices: [
+        ["bounded", "Bounded"], ["exhaustive", "Exhaustive"]], ...restricted }));
+    editor.append(limits);
+    editor.append(behaviorField("thinking", "Thinking policy",
+      values.thinking === null ? "inherit" : values.thinking ? "on" : "off",
+      "select", { choices: [["inherit", "Inherit session setting"],
+        ["on", "On"], ["off", "Off"]], ...restricted }));
+    const advanced = document.createElement("details");
+    advanced.className = "behavior-advanced";
+    const advancedHeading = document.createElement("summary");
+    advancedHeading.textContent = "Advanced routing patterns";
+    advanced.append(advancedHeading);
+    for (const [field, title] of [["shortcuts", "Shortcuts"],
+      ["cues", "Cues"], ["requires", "Requirements"]]) {
+      advanced.append(behaviorField(field, `${title} (one regex per line)`,
+        values[field], "lines"));
+    }
+    editor.append(advanced);
+    if (!record.tool) {
+      const preview = document.createElement("details");
+      preview.className = "behavior-preview";
+      const heading = document.createElement("summary");
+      heading.textContent = "Effective system prompt preview";
+      const contents = document.createElement("pre");
+      contents.className = "behavior-prompt-preview";
+      preview.append(heading, contents);
+      editor.append(preview);
+    }
+  }
+  const actions = document.createElement("div");
+  actions.className = "behavior-actions";
+  const save = document.createElement("button");
+  save.className = "primary";
+  save.type = "button";
+  save.textContent = "Save settings";
+  const restore = document.createElement("button");
+  restore.className = "secondary";
+  restore.type = "button";
+  restore.textContent = "Restore defaults";
+  restore.disabled = JSON.stringify(record.values)
+    === JSON.stringify(record.defaults);
+  const status = document.createElement("p");
+  status.className = "hint behavior-status";
+  status.setAttribute("role", "status");
+  save.addEventListener("click", () => {
+    try { saveBehaviorEditor(editor, behaviorValues(editor)); }
+    catch (error) {
+      status.textContent = error.message;
+      status.classList.add("tool-error");
+    }
+  });
+  restore.addEventListener("click", () =>
+    saveBehaviorEditor(editor, record.defaults));
+  actions.append(save, restore);
+  editor.append(actions, status);
+  editor.addEventListener("input", () => {
+    refreshBehaviorEditor(editor);
+    if (scope === "global") {
+      for (const other of byId("intent-settings").querySelectorAll(
+        '[data-behavior-scope="intent"]')) refreshBehaviorEditor(other);
+    }
+  });
+  editor.addEventListener("change", () => refreshBehaviorEditor(editor));
+  editor.dataset.initialFields = JSON.stringify(behaviorFieldDraft(editor));
+  return editor;
+}
+
+/**
+ * Render a complete project editor and correlated save acknowledgment.
+ * @param data GUI event with effective behavior or correlated error.
+ */
+function renderProjectBehavior(data) {
+  const pending = behaviorSave.pending;
+  if (data.request_id !== undefined && (!pending
+      || pending.requestId !== data.request_id
+      || (pending.project !== data.behavior?.project
+          && pending.project !== data.project))) return;
+  if (data.behavior && data.behavior.project !== openProjectPath) return;
+  if (data.request_id !== undefined) behaviorSave.pending = null;
+  if (data.error) {
+    if (data.scope === "capabilities") {
+      applyingIndexing = false;
+      setBusy(false);
+      const status = byId("index-capabilities-status");
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+      showIndexingCapabilities();
+      return;
+    }
+    const editor = [...byId("intent-settings").querySelectorAll(
+      ".behavior-editor")].find((item) =>
+        item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    const status = editor?.querySelector(".behavior-status");
+    if (status) {
+      status.textContent = data.error;
+      status.classList.add("tool-error");
+    }
+    return;
+  }
+  if (!data.behavior) return;
+  const previous = projectBehaviorData?.project === openProjectPath
+    ? behaviorDrafts() : new Map();
+  const prior = projectBehaviorData;
+  projectBehaviorData = data.behavior;
+  if (data.scope === "capabilities" && data.saved) {
+    applyingIndexing = false;
+    setBusy(false);
+    const status = byId("index-capabilities-status");
+    status.textContent = "Saved. Affected indexes have been rebuilt.";
+    status.classList.remove("tool-error");
+  }
+  showIndexingCapabilities();
+  const holder = byId("intent-settings");
+  const opened = new Set([...holder.querySelectorAll(
+    "details.behavior-intent[open]")].map((item) => item.dataset.intentId));
+  holder.replaceChildren();
+  const global = document.createElement("details");
+  global.className = "behavior-intent";
+  global.open = true;
+  global.dataset.intentId = "";
+  const heading = document.createElement("summary");
+  heading.textContent = "Project-wide settings";
+  global.append(heading, createBehaviorEditor("global", data.behavior.global));
+  holder.append(global);
+  const title = document.createElement("h4");
+  title.textContent = "Individual intents";
+  holder.append(title);
+  for (const item of data.behavior.intents) {
+    const section = document.createElement("details");
+    section.className = "behavior-intent";
+    section.dataset.intentId = item.id;
+    section.open = opened.has(item.id)
+      || Boolean(data.saved && data.scope === "intent"
+        && data.intent_id === item.id);
+    const summary = document.createElement("summary");
+    const code = document.createElement("code");
+    code.textContent = item.id;
+    summary.append(code, ` — ${item.values.description}`);
+    section.append(summary, createBehaviorEditor("intent", item, item.id));
+    holder.append(section);
+  }
+  if (prior?.project === openProjectPath) {
+    for (const editor of holder.querySelectorAll(".behavior-editor")) {
+      const key = `${editor.dataset.behaviorScope}:${editor.dataset.intentId}`;
+      if (data.saved && data.scope === editor.dataset.behaviorScope
+          && (data.intent_id || "") === editor.dataset.intentId) continue;
+      for (const field of previous.get(key) || []) {
+        const control = [...editor.querySelectorAll("[data-behavior-path]")]
+          .find((item) => item.dataset.behaviorPath === field.path);
+        if (!control) continue;
+        if (control.type === "checkbox") control.checked = field.value;
+        else control.value = field.value;
+      }
+    }
+  }
+  for (const editor of holder.querySelectorAll(".behavior-editor")) {
+    refreshBehaviorEditor(editor);
+    const mode = editor.querySelector('[data-behavior-path="_guidance_mode"]');
+    if (mode) editor.querySelector(
+      '[data-behavior-path="answer_guidance"]').disabled
+      = mode.value === "inherit";
+  }
+  if (data.saved) {
+    const editor = [...holder.querySelectorAll(".behavior-editor")]
+      .find((item) => item.dataset.behaviorScope === data.scope
+        && item.dataset.intentId === (data.intent_id || ""));
+    if (editor) editor.querySelector(".behavior-status").textContent = "Saved.";
+    if (data.scope === "global") {
+      projectPresentation = {
+        welcome_prompts: data.behavior.global.values.welcome_prompts,
+        suggestions: data.behavior.global.values.suggestions,
+      };
+      if (conversation.querySelector(".conversation-empty"))
+        renderConversationEmpty();
+    }
+  }
+}
+
+/**
+ * Populate advanced Indexing controls from the effective project behavior.
+ */
+function showIndexingCapabilities() {
+  const data = projectBehaviorData?.project === openProjectPath
+    ? projectBehaviorData.capabilities : null;
+  const available = Boolean(ready && data);
+  const graph = byId("code-graph");
+  const headers = byId("document-headers");
+  const save = byId("save-index-capabilities");
+  const restore = byId("reset-index-capabilities");
+  if (data && !applyingIndexing) {
+    graph.value = data.values.code_graph === "auto" ? "auto"
+      : data.values.code_graph ? "on" : "off";
+    headers.checked = data.values.document_headers;
+  }
+  graph.disabled = !available || busy;
+  headers.disabled = !available || busy;
+  save.disabled = !available || busy;
+  restore.disabled = !available || busy || JSON.stringify(data.values)
+    === JSON.stringify(data.defaults);
+  if (!available) byId("index-capabilities-status").textContent =
+    "Open a project to edit indexing capabilities.";
+}
+
+/**
+ * Serialize the advanced indexing fields in the core's vocabulary.
+ * @returns The two capability settings.
+ */
+function indexingCapabilityValues() {
+  return {
+    code_graph: byId("code-graph").value === "auto" ? "auto"
+      : byId("code-graph").value === "on",
+    document_headers: byId("document-headers").checked,
+  };
+}
+
+/**
+ * Confirm and save index-affecting project behavior, rebuilding as needed.
+ * @param restore Restore packaged defaults rather than edited controls.
+ */
+async function saveIndexCapabilities(restore = false) {
+  const status = byId("index-capabilities-status");
+  if (!bridge || !ready || !projectBehaviorData
+      || projectBehaviorData.project !== openProjectPath) return;
+  if (busy || behaviorSave.pending) {
+    status.textContent = "Complete the current operation before saving.";
+    return;
+  }
+  const editingProject = openProjectPath;
+  const editingRevision = projectBehaviorData.revision;
+  const values = restore ? projectBehaviorData.capabilities.defaults
+    : indexingCapabilityValues();
+  if (JSON.stringify(values)
+      === JSON.stringify(projectBehaviorData.capabilities.values)) {
+    status.textContent = "These settings are already saved.";
+    return;
+  }
+  if (!await askKilin("Rebuild affected indexes?",
+    "Changing code graph or document headers requires rebuilding affected indexes. "
+      + "Your sources and conversations are preserved.",
+    "Save and rebuild")) {
+    showIndexingCapabilities();
+    return;
+  }
+  if (!ready || busy || !projectBehaviorData
+      || openProjectPath !== editingProject
+      || projectBehaviorData.project !== editingProject
+      || projectBehaviorData.revision !== editingRevision) return;
+  const requestId = ++behaviorSave.nextId;
+  behaviorSave.pending = { requestId, project: openProjectPath,
+    scope: "capabilities", intentId: "" };
+  applyingIndexing = true;
+  setBusy(true, "Rebuilding the index…");
+  status.textContent = "Saving capabilities and rebuilding the index…";
+  bridge.saveProjectBehavior(openProjectPath, "capabilities", "",
+    JSON.stringify(values), projectBehaviorData.revision, requestId);
+}
+
 /**
  * Render and open the models panel, then focus its close control.
  */
@@ -1541,6 +2093,9 @@ function openModels() {
   showProjectSettings();
   // The Tools tab may still be selected from another project.
   if (settingsTab === "tools") requestToolSettings();
+  if (settingsTab === "intents" || settingsTab === "indexing") {
+    requestProjectBehavior();
+  }
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
 }
@@ -2132,6 +2687,7 @@ function showIndexingFields() {
   for (const key of ["max_file_bytes", "target_tokens", "max_tokens", "overlap_tokens"]) {
     byId(key.replaceAll("_", "-")).value = profile[key] ?? "";
   }
+  showIndexingCapabilities();
 }
 
 /**
@@ -4712,7 +5268,8 @@ function clearAskingConversation() {
  */
 function renderConversationEmpty() {
   conversation.replaceChildren();
-  const type = projectTypes[activeProjectTypeId] || {};
+  const type = projectPresentation && openProjectPath
+    ? projectPresentation : projectTypes[activeProjectTypeId] || {};
   const content = {
     prompts: type.welcome_prompts?.length ? type.welcome_prompts : genericEmptyChat.welcome_prompts,
     suggestions: type.suggestions?.length ? type.suggestions : genericEmptyChat.suggestions,
@@ -5891,7 +6448,15 @@ function onEvent(raw) {
     const keepPendingAnswers = openProjectPath === data.project
       && Boolean(answerSettingsSave.pending);
     // Set before the lists are drawn: chats keep their order per project.
+    if (openProjectPath !== data.project) {
+      projectBehaviorData = null;
+      behaviorSave.pending = null;
+    }
     openProjectPath = data.project;
+    projectPresentation = data.behavior_presentation || null;
+    if (settingsTab === "indexing" || settingsTab === "intents") {
+      requestProjectBehavior();
+    }
     messageAttachments = [];
     renderAttachments();
     selectedSources.length = 0;
@@ -5997,6 +6562,8 @@ function onEvent(raw) {
     completeAfterAnswerStages(data.turn);
     renderUsage();
     if (data.workspace_files) renderWorkspace(data.workspace_files);
+  } else if (data.event === "project_behavior") {
+    renderProjectBehavior(data);
   } else if (data.event === "tool_settings") {
     renderToolSettings(data);
   } else if (data.event === "conversation_viewed") {
@@ -6163,6 +6730,15 @@ function onEvent(raw) {
 }
 
 // UI handlers validate user input before issuing bridge commands.
+byId("reload-project-behavior").addEventListener(
+  "click", () => requestProjectBehavior(true),
+);
+byId("save-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(),
+);
+byId("reset-index-capabilities").addEventListener(
+  "click", () => saveIndexCapabilities(true),
+);
 byId("browse-workspace").addEventListener("click", () => changeProjectsFolder(false));
 byId("default-workspace").addEventListener("click", () => changeProjectsFolder(true));
 byId("use-legacy-workspace").addEventListener(
@@ -6686,6 +7262,9 @@ function returnToLaunch() {
   answerSettingsSave.uncertain = false;
   bridge.closeProject();
   openProjectPath = "";
+  projectPresentation = null;
+  projectBehaviorData = null;
+  behaviorSave.pending = null;
   ready = false;
   updateFloatingHeader();
   chat.classList.add("hidden");

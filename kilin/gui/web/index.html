@@ -211,6 +211,7 @@
             <button class="settings-tab" type="button" role="tab" data-tab="indexing">Indexing</button>
             <button class="settings-tab" type="button" role="tab" data-tab="models">Models</button>
             <button class="settings-tab" type="button" role="tab" data-tab="answers">Answers</button>
+            <button class="settings-tab" type="button" role="tab" data-tab="intents">Intents</button>
             <button class="settings-tab" type="button" role="tab" data-tab="tools">Tools</button>
           </div>
           <section class="settings-section models-section" data-settings-tab="models">
@@ -257,6 +258,11 @@
             <div id="search-depth"></div>
             <label class="check-row thinking-row" for="thinking"><input id="thinking" type="checkbox"> Request thinking via chat template</label>
           </section>
+          <section id="settings-intents" class="settings-section" data-settings-tab="intents">
+            <p class="hint">Customize instructions, routing, and retrieval for this project. Packaged project types remain unchanged. Save each section explicitly.</p>
+            <button id="reload-project-behavior" type="button" class="secondary">Reload settings</button>
+            <div id="intent-settings" aria-live="polite"></div>
+          </section>
           <section id="settings-tools" class="settings-section" data-settings-tab="tools">
             <div id="tool-settings"></div>
           </section>
@@ -270,6 +276,18 @@
               <label for="extensions">Additional UTF-8 file types</label><input id="extensions" type="text" placeholder=".html, .css">
               <label for="max-file-bytes">Maximum file size (bytes)</label><input id="max-file-bytes" type="number" min="1">
               <div class="settings-grid"><label>Target chunk tokens<input id="target-tokens" type="number" min="1"></label><label>Maximum chunk tokens<input id="max-tokens" type="number" min="1"></label><label>Overlap tokens<input id="overlap-tokens" type="number" min="0"></label></div>
+              <section class="source-card-settings" aria-labelledby="index-capabilities-title">
+                <h4 id="index-capabilities-title">Advanced indexing</h4>
+                <p class="hint">These project-specific capabilities affect indexed data. Saving changes rebuilds affected indexes.</p>
+                <label for="code-graph">Code graph</label>
+                <select id="code-graph" disabled><option value="auto">Automatic</option><option value="on">Enabled</option><option value="off">Disabled</option></select>
+                <label class="check-row" for="document-headers"><input id="document-headers" type="checkbox" disabled> Extract scientific-paper document headers</label>
+                <p id="index-capabilities-status" class="hint" role="status">Open a project to edit indexing capabilities.</p>
+                <div class="source-card-actions">
+                  <button id="save-index-capabilities" class="secondary" type="button" disabled>Save indexing capabilities</button>
+                  <button id="reset-index-capabilities" class="secondary" type="button" disabled>Restore defaults</button>
+                </div>
+              </section>
               <section class="source-card-settings" aria-labelledby="card-index-title">
                 <h4 id="card-index-title">Source cards</h4>
                 <p class="hint">Scientific-paper cards are optional derived indexes. Original passages remain the evidence for answers. Other document kinds may be added later.</p>

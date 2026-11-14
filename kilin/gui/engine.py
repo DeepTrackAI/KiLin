@@ -150,6 +150,12 @@ from kilin.workspace import (
     sync_project_sources,
 )
 from kilin.tool_settings import project_tool_settings, save_tool_settings
+from kilin.project_behavior import (
+    PROJECT_BEHAVIOR_FILE,
+    effective_project_type,
+    project_behavior_settings,
+    save_project_behavior,
+)
 from kilin.workspace_resources import PROJECT_SOURCES_DIRECTORY
 from kilin.project_files import (
     add_project_files,
@@ -376,6 +382,13 @@ class ChatEngine:
         Send the tools the open project can use, with their settings.
     save_tool_settings(name, settings)
         Save one tool's settings for the open project.
+
+    **Project behavior.**
+
+    behavior_settings()
+        Send the project-wide and intent editors for the open project.
+    save_behavior_settings(project, scope, intent_id, ...)
+        Save validated behavior overrides with revision checking.
 
     **Conversations.**
 
@@ -2125,11 +2138,16 @@ class ChatEngine:
         """
 
         session = self.session
+        behavior = effective_project_type(project.root)
         self._send(
             "opened",
             project=str(project.root),
             source=str(project.source),
             type_id=project.profile.type_id,
+            behavior_presentation={
+                "welcome_prompts": list(behavior.welcome_prompts),
+                "suggestions": list(behavior.suggestions),
+            },
             profile=asdict(project.profile),
             effort_levels=_effort_levels_by_backend(
                 project.root, project.profile
@@ -2316,6 +2334,153 @@ class ChatEngine:
                 verified=verified,
                 message=f"Could not save the answer settings: {error}",
                 **response,
+            )
+
+    def behavior_settings(self) -> None:
+        """Send validated global and intent editors for the open project.
+
+        Notes
+        -----
+        Project identity and revision let the page reject stale responses.
+
+        """
+
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            self._send(
+                "project_behavior",
+                behavior=project_behavior_settings(self.session.project.root),
+            )
+        except Exception as error:
+            self._report_error(
+                "gui.project_behavior.read.failed", error,
+                f"Could not read the project behavior: {error}",
+            )
+
+    def save_behavior_settings(
+        self,
+        project: str,
+        scope: str,
+        intent_id: str | None,
+        values: object,
+        revision: str,
+        request_id: int,
+    ) -> None:
+        """Save a global, intent, or index-affecting capability editor.
+
+        Parameters
+        ----------
+        project: str
+            Project identity captured when editing began.
+        scope: str
+            ``global``, ``intent`` or ``capabilities`` editor.
+        intent_id: str | None
+            Target intent ID, if applicable.
+        values: object
+            Complete JSON editor settings, validated by the core.
+        revision: str
+            Revision originally received with the editor.
+        request_id: int
+            Frontend request ID for matching save acknowledgements.
+
+        Notes
+        -----
+        Ordinary behavior edits need no index rebuild. Capability edits
+        refresh the index and roll back saved configuration on failure.
+        The response is scoped to the requesting project.
+
+        """
+
+        recovery_root = None
+        previous_content = None
+        try:
+            if self.session is None:
+                raise RuntimeError("Open a project first.")
+            root = self.session.project.root
+            if not isinstance(project, str) or (
+                Path(project).expanduser().resolve() != root
+            ):
+                raise ValueError("A different project is now open.")
+            if type(request_id) is not int or request_id < 1:
+                raise ValueError("Invalid project behavior request ID.")
+            if not isinstance(revision, str):
+                raise ValueError("Invalid project behavior revision.")
+            if scope == "capabilities":
+                recovery_root = root
+                path = root / PROJECT_BEHAVIOR_FILE
+                previous_content = (
+                    path.read_bytes() if path.is_file() else None
+                )
+            updated = save_project_behavior(
+                root, scope, values, intent_id=intent_id,
+                expected_revision=revision, trace=self.active_trace,
+            )
+            if scope == "capabilities":
+                self._send("status", message="Rebuilding the index…")
+                refreshed = open_project(root)
+                self.session.refresh_sources(refreshed)
+                self.active_trace.emit(
+                    "gui.indexing.capabilities.refreshed",
+                    component="gui_engine",
+                    data={"index_status": self.session.index_status},
+                )
+                if self.active_conversation is not None:
+                    self._announce_project(
+                        refreshed, self.active_conversation
+                    )
+            self._send(
+                "project_behavior", behavior=updated, saved=True,
+                scope=scope, intent_id=intent_id, request_id=request_id,
+            )
+        except Exception as error:
+            recovery_error = None
+            if recovery_root is not None:
+                path = recovery_root / PROJECT_BEHAVIOR_FILE
+                try:
+                    current_content = (
+                        path.read_bytes() if path.is_file() else None
+                    )
+                    if current_content != previous_content:
+                        if previous_content is None:
+                            path.unlink(missing_ok=True)
+                        else:
+                            atomic_write_text(
+                                path, previous_content.decode("utf-8")
+                            )
+                        # Revalidate the old indexes after a failed build.
+                        self.session.refresh_sources(
+                            open_project(recovery_root)
+                        )
+                except Exception as failure:
+                    recovery_error = failure
+                    try:
+                        self.close()
+                    except Exception as close_error:
+                        recovery_error.add_note(
+                            f"Session cleanup failed: {close_error}"
+                        )
+                    self._send(
+                        "backend_failed",
+                        message=(
+                            "Indexing recovery failed. Reopen the project "
+                            "to revalidate its saved configuration."
+                        ),
+                    )
+            self.active_trace.exception(
+                "gui.project_behavior.save.failed", error,
+                component="gui_engine",
+            )
+            message = str(error)
+            if recovery_error is not None:
+                message += (
+                    f"; recovery failed: {recovery_error}. "
+                    "Reopen the project."
+                )
+            self._send(
+                "project_behavior", project=project,
+                error=message, scope=scope, intent_id=intent_id,
+                request_id=request_id,
             )
 
     def tool_settings(self) -> None:
@@ -4699,6 +4864,17 @@ def main() -> None:
                             command.get("settings"),
                             command.get("request_id"),
                             command.get("project"),
+                        )
+                    elif action == "project_behavior":
+                        engine.behavior_settings()
+                    elif action == "save_project_behavior":
+                        engine.save_behavior_settings(
+                            command.get("project"),
+                            command.get("scope"),
+                            command.get("intent_id"),
+                            command.get("values"),
+                            command.get("revision"),
+                            command.get("request_id"),
                         )
                     elif action == "tool_settings":
                         engine.tool_settings()

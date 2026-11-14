@@ -844,3 +844,28 @@ details[open]::details-content { block-size: auto; }
 }
 .source-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .source-card-actions button { flex: 0 1 auto; }
+
+/* Project-local behavior editors follow existing Settings visual hierarchy. */
+.behavior-intent { padding: 11px 0; border-bottom: 1px solid var(--line); }
+.behavior-intent > summary { cursor: pointer; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.behavior-intent > summary code { font-weight: 650; }
+#intent-settings > h4 { margin: 24px 0 3px; font-size: 14px; }
+.behavior-editor { display: grid; gap: 14px; margin: 14px 0; }
+.behavior-field { display: grid; gap: 6px; font-size: 13px; }
+.behavior-editor textarea { display: block; width: 100%; min-height: 65px; padding: 8px 10px; border: 1px solid var(--field-border); border-radius: 9px; color: var(--text); background: var(--surface-soft); font: inherit; font-size: 13px; line-height: 1.5; resize: vertical; }
+.behavior-editor textarea:focus { border-color: var(--focus); outline: 2px solid var(--focus-shadow); }
+.behavior-editor textarea:disabled { opacity: 0.6; cursor: not-allowed; }
+.behavior-guidance, .behavior-source-limits { display: grid; gap: 12px; }
+.behavior-source-limits { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 12px; border-radius: 9px; border: 1px solid var(--line); }
+.behavior-source-limits.hidden { display: none; }
+.behavior-advanced, .behavior-preview { border: 1px solid var(--line); border-radius: 9px; padding: 10px; }
+.behavior-advanced > summary, .behavior-preview > summary { cursor: pointer; font-size: 12px; font-weight: 600; }
+.behavior-advanced[open], .behavior-preview[open] { display: grid; gap: 12px; }
+.behavior-prompt-preview { overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; line-height: 1.5; max-height: 220px; overflow: auto; }
+.behavior-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.behavior-actions button { min-height: 32px; font-size: 12px; }
+.behavior-status { margin: 0; font-size: 12px; }
+@media (max-width: 540px) {
+  .behavior-source-limits { grid-template-columns: 1fr; }
+  .settings-tab { padding-inline: 5px; font-size: 12px; }
+}

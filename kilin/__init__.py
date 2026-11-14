@@ -104,6 +104,12 @@ from .project import (
     open_project,
     prepare_project_workspace,
 )
+from .project_behavior import (
+    PROJECT_BEHAVIOR_FILE,
+    effective_project_type,
+    project_behavior_settings,
+    save_project_behavior,
+)
 from .answering import (
     MACHINE_STATE_ANSWERING,
     MACHINE_STATE_CHOICES,
@@ -310,6 +316,7 @@ __all__ = [
     "LexicalIndex",
     "LexicalResult",
     "PersistentIndexes",
+    "PROJECT_BEHAVIOR_FILE",
     "PROJECT_TYPE_IDS",
     "ProjectTypeId",
     "QUERY_FORMAT_CHOICES",
@@ -355,6 +362,7 @@ __all__ = [
     "extract_source_units",
     "format_qwen3_query",
     "hybrid_search",
+    "effective_project_type",
     "initialize_project",
     "ProjectAlreadyExistsError",
     "WorkspaceOccupiedError",
@@ -446,5 +454,7 @@ __all__ = [
     "RetrievalMode",
     "RetrievalStrategy",
     "load_project_types",
+    "project_behavior_settings",
+    "save_project_behavior",
     "project_type",
 ]

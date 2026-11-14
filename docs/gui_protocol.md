@@ -131,10 +131,32 @@ paths and source paths remain subject to downstream core validation.
 | `save_source_cards` | `settings` | Save project-wide source-card policy and both backend generation models, then reconcile derived cards only; send `source_cards_applied` with resolved settings and outcome counts |
 | `regenerate_source_cards` | None | Confirmed user action regenerating derived cards without rescanning chunks or rebuilding ordinary retrieval indexes; send `source_cards_regenerated` with counts |
 | `save_answer_settings` | None at dispatcher | `settings` is forwarded (default `None`); the handler requires an object and an open project. Accepted updates are `temperature`, `thinking`, and `max_new_tokens`; other keys are ignored. The GUI additionally sends `request_id` (positive integer) and canonical `project` path to correlate the result. |
+| `project_behavior` | None | Read project-wide, capability and intent editors, defaults, identity and revision |
+| `save_project_behavior` | `project`, `scope`, `intent_id`, `values`, `revision`, `request_id` | Save global, intent or capability settings with project and revision checks; rebuild indexes for capabilities |
 | `tool_settings` | None | List the open project's tools and their settings |
 | `save_tool_settings` | `tool` | `settings` (object of the tool's changeable settings) saved for the open project |
 | `reset` | None | Start a new conversation; do not erase the previous trace |
 | `plan_choice` | None in the outer dispatcher | **Special:** consumed while awaiting a tool plan/option; otherwise ignored |
+
+### Project behavior editor
+
+The `project_behavior` command emits an event with the canonical project
+path, `project_type_id`, SHA-256 `revision`, global and capability editors
+(each with `values` and `defaults`), and ordered intents (`id`, fixed
+`tool`, `values`, `defaults`, `source_first_defaults`). The editor resolves
+packaged definitions with sparse project-local overrides.
+
+`save_project_behavior` accepts the project path, scope (`global`, `intent`,
+or `capabilities`), optional `intent_id`, complete editor values, revision
+and positive `request_id`. The core rejects different projects, stale
+revisions, invalid configurations and tool changes. On success it emits
+`project_behavior` with `saved: true` and the new revision; on error it
+returns a correlated error. Indexing capability edits trigger a rebuild,
+with configuration restoration and index recovery on failure.
+
+`opened.behavior_presentation` contains the project's effective welcome
+prompts and suggestions. The editable intent and project behavior settings
+apply only to subsequent requests.
 
 `save_answer_settings` updates the saved project profile and the live chat
 settings without asking a question. The Qt bridge accepts either the original
@@ -324,7 +346,7 @@ can accompany an event.
 | Setup | `readiness` (`backend`, `ready`, `environment_ready`, `unavailable_reason` (empty unless the selected backend is unsupported), `required_models`, `cached_models`, `missing_models`, `replacements`, `can_use_installed`, `install_command`, `install_commands` (backend-to-command map), `projects_folder`, `folder_confirmed`, `terms`, `terms_version`, `terms_accepted`, `copyright` (the Settings copyright line, built from the package authors)); `installed_models_used` (`replacements`, updated model settings); `backend_preference_saved`, `backend_preference_failed` (Qt events: saved `backend` or failed `backend` and `message`); `terms_acceptance_saved` (`version`); `terms_acceptance_failed` (`version`, `reason`, `message`, and `current_version` for outdated terms) |
 | Installation | `installation_started` (`total`, `backend`, `models`: the missing models in download order); `installation_progress` (`index`, `total`, `model_id`, progress details); `installation_model_complete` (`model_id`, elapsed times); `installation_complete` (`elapsed_seconds`) |
 | Projects folder (Qt) | `projects_folder` (`folder`: effective folder, `standard`: default without a saved choice, `saved`: saved choice or empty string, `missing`: whether a saved folder is unavailable, `legacy`: previous installed-app root with candidate profiles, or empty); `projects_folder_cancelled` (native Browse dialog dismissed); `projects_folder_failed` (`message`: unable to save or old folder no longer exists) |
-| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
+| Settings/models | `settings` (`profile`, project types, model choices, backend, search depth, `selection_reason_codes`, `thinking_switches`: cached model IDs mapped to `True` when toggling `enable_thinking` changes one sample rendered prompt, `False` when unchanged; omitted when unknown (not verified model reasoning)); `models_applied` (updated levels, models and profile, plus `thinking_switches`); `indexing_applied` (`profile` after the index was rebuilt); `source_cards_applied` (validated settings and card counts), `source_cards_regenerated` (card counts); `answer_settings_saved` (confirmed `temperature`, `thinking`, `max_new_tokens`, plus `request_id` and `project` for correlated saves); `answer_settings_failed` (`request_id`, `project`, `message`, `verified`, plus reconciled settings when verified); `model_download_started`, `model_download_progress`, `model_downloaded` (model ID and download status); `project_behavior` (validated project editor, defaults, revision, and correlated saved or error status); `tool_settings` (`tools`, each with `name`, `summary`, `intents`, `settings`, `type_settings`, `per_intent`; after a save also `tool` and `saved` or `error`) |
 | Source/project | `projects` (`projects`); `preview` (`roots`); `opened` (`project`, `type_id`, `profile`, `turns`, workspace and conversation metadata); `folder_changed` (`folder`, `operation`, `paths`, `workspace_files`); `source_changes` (`added`, `changed`, `deleted`, `edited`), sent after a saved project reopens if a file can be imported, updated or removed; `sources_checked` (`sources`; `add` with `name`, `kind`, number of `files` and `state`: `new`, `renamed` for a different source with a taken name, or `existing` when imported from the same path; left-out `files` with `path` and `reason_code`; `skipped_folders` without any file to copy; `changes` of existing sources since they were copied, by group), the answer to `check_sources`, which copies nothing |
 | Conversation | `conversation_opened` (`turns`, settings, usage, conversation metadata, `workspace_files`); `conversations` (catalog, active ID, `workspace_files`); `conversation_delete_started` (`conversation_id`); `reset` (`archived`); `conversation_viewed` (`conversation_id`, saved `turns`, or `turns` null when unreadable), sent by Qt for a chat read while an answer runs |
 | Answer | `status` (`message`); `answer_phase` (`phase` and phase-specific details); `answer_activity` (`index`, `phase`, `label`, `started_ms`); `answer_delta` (`text`); `usage_progress` (token counts); `answered` (`turn`, `usage`, `workspace_files`); `answer_cancelled` (`usage`); `progress` (core progress record) |

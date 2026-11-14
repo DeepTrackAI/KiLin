@@ -356,10 +356,10 @@ the normal project-opening path; it is not replaced by a new-project default.
 If switching projects fails after the former session has been released, the
 GUI returns to the start screen and displays the error. A profile rejected
 before the former session is released leaves that session open.
-The Project part has five tabs: General (the project's name and Delete),
-Indexing (file types, file size and chunk sizes), Models (effort levels,
-intent model, embedding model), Answers (temperature, answer length,
-search depth, thinking) and Tools. Changes are submitted when chosen or
+The Project part has six tabs: General (the project's name and Delete),
+Indexing (file types, chunking and advanced index capabilities), Models
+(effort levels, intent model, embedding model), Answers (temperature,
+answer length, search depth, thinking), Intents, and Tools. Changes are submitted when chosen or
 when a typed field is committed (Enter or leaving the field). Answer settings
 are not considered saved until the engine acknowledges the profile write.
 While one answer-settings save is pending, later edits remain available and
@@ -377,6 +377,24 @@ the previous conversation. If recovery also fails, the project is closed
 where possible and the GUI asks for inspection and reopening. Rollback
 covers the profile file, **not** every intermediate index artifact; those
 are validated when the project reopens.
+
+The **Intents** tab edits the effective behavior of the opened project.
+The Project-wide section contains shared description, instructions,
+guidance, embedding instruction, recent-turn limit, default intent, and
+welcome prompts and suggestions. Individual intent panels expose routing
+patterns, history, retrieval policy, thinking, and prompts. Tool-backed
+intents keep immutable tool bindings and omit incompatible editing controls.
+Each editor has **Save settings**, **Restore defaults**, and a separate
+**Reload settings** control for resolving stale revisions. A prompt preview
+shows the base project instructions with the intent's system instructions.
+Only project-local overrides are saved, never packaged project types.
+
+Advanced Indexing lets users change code-graph policy (Automatic, Enabled,
+Disabled) and scientific-paper document-header extraction. These settings
+require confirmation and an index rebuild. If rebuilding fails, the GUI
+restores the previous project configuration and retries the original index;
+failed recovery requires reopening the project. Existing source filters
+and source-card policies remain in `profile.ini`.
 
 The line under the tabs reports save status. On the start screen nothing
 is saved: the Project values set there are kept on the page and written only

@@ -65,6 +65,7 @@ const updateFloatingHeader = () => {};
 const renderSavedProjects = () => {};
 let savedProjects = [];
 let openProjectPath = "";
+let projectPresentation = null;
 let ready = false;
 '''
         script += "\n".join([*state, *functions])
