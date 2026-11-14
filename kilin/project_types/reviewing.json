@@ -1,0 +1,188 @@
+{
+  "display_name": "Reviewing Assistant",
+  "description": "A researcher-controlled workspace for examining manuscripts, grant proposals, and supporting documents without autonomous scientific evaluations.",
+  "extensions": [
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".md",
+    ".txt",
+    ".tex",
+    ".bib",
+    ".bbl"
+  ],
+  "max_file_bytes": 20971520,
+  "retrieval_instruction": "Given a factual question about a manuscript, grant proposal, or supporting material, retrieve the passages needed to report what those documents state without making scientific judgments.",
+  "system_prompt": "Assist the researcher with reviewing scientific manuscripts and grant proposals. Locate, extract, describe, and compare information from the provided project sources, and edit reviewer-authored text when requested. The researcher alone makes scientific assessments and decisions. Do not independently judge scientific quality, originality, rigor, significance, feasibility, strengths, weaknesses, suitability for publication or funding, or priority; do not produce scores or publication/funding recommendations. If asked for a judgment, offer source-grounded facts and comparisons for the researcher to consider instead. Distinguish statements made by the submission, statements made by background sources, and assessments explicitly supplied by the researcher. Never invent facts, citations, reviewer opinions, or conclusions. For source-grounded answers, cite retrieved evidence with numbered source references such as [1], and distinguish observed discrepancies from interpretations. State limitations of the available evidence and do not claim exhaustive coverage unless the relevant materials were examined exhaustively.",
+  "answer_guidance": "For factual questions, answer with precise, cited information and distinguish what documents say from what remains unknown. For comparisons, present documented similarities and differences without a verdict or ranking. For report editing, preserve the researcher's judgments and add none. Respect the requested format and level of detail.",
+  "capabilities": {
+    "code_graph": "auto",
+    "document_headers": true,
+    "source_cards": {
+      "enabled": false,
+      "automatic": false
+    }
+  },
+  "history": {
+    "recent_turns": 4
+  },
+  "default_intent": "question_answering",
+  "intents": {
+    "question_answering": {
+      "description": "Answer a factual question about a manuscript, grant proposal, or supporting document: its stated objectives, methods, findings, assumptions, or plans. Summarize what the documents report without assessing its merit. Not for a complete inventory of facts (fact_finding), whole-document reading (document_reading), specific quoted passages (passage_finding), comparisons, references, or editing reviewer comments.",
+      "system_prompt": "Report what the indexed documents state and cite the passages that support each substantive factual claim. Do not offer your own scientific evaluation.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 4,
+        "passages_per_source": 2,
+        "max_passages": 10,
+        "evidence_tokens": 6500,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "fact_finding": {
+      "description": "Find specific facts, numbers, settings, names, or complete lists reported in the project materials: sample sizes, experimental conditions, requested budgets, deliverables, milestones, or personnel. Use when exhaustive extraction is requested, not for interpreting or evaluating the facts.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_fact",
+        "part_tokens": 6000,
+        "max_model_calls": 200,
+        "confirmation": "always",
+        "large_batches": 0
+      }
+    },
+    "document_reading": {
+      "description": "Read or examine one whole manuscript, grant proposal, or supporting document in source order to locate, extract, or summarize the information it reports. Use for explicit requests to go through the entire document, not to assess scientific quality or recommend a decision.",
+      "cues": [
+        "^\\s*(?:please\\s+|now\\s+)?(?:read|go\\s+through|examine)\\s+(?:the\\s+)?(?:whole|entire|full)\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "batch_review",
+        "part_tokens": 6000,
+        "max_model_calls": 20,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "passage_finding": {
+      "description": "Find and list exact sentences or passages concerning a topic in the documents, such as reported experimental controls, stated limitations, risks, or work packages. Show matching passages without judging the significance of their content. Not for a specific value (fact_finding).",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:find|show|list|locate)\\b[^\\n]{0,100}\\b(?:passages?|sentences?)\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "find_passages",
+        "batch_tokens": 2500,
+        "max_model_calls": 200,
+        "quick_passages": 40,
+        "max_listed": 100,
+        "confirmation": "when_large",
+        "large_batches": 3
+      }
+    },
+    "reference_check": {
+      "description": "Inspect one document's bibliography and in-text citations: identify reference entries, local matches, missing source files, and citation consistency. This intent uses rule-based bibliographic checks; it does not issue model-based verdicts about whether claims are scientifically supported. Not for a general question about a paper's content.",
+      "requires": [
+        "\\b(?:referenc\\w*|citation\\w*|cit(?:e|es|ed|ing)|bibliograph\\w*)\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "reference_check",
+        "max_listed": 20,
+        "verify": false,
+        "online_lookup": false
+      }
+    },
+    "compare_sources": {
+      "description": "Compare documented statements, methods, measurements, results, or plans across a submission and other indexed materials. Present the relevant evidence side by side, including agreements and differences; do not rank, score, or judge the sources.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:compare|contrast)\\b",
+        "\\bhow\\s+does\\s+.+\\s+compare\\s+(?:with|to)\\b"
+      ],
+      "system_prompt": "Compare the specified materials point by point using citations to the corresponding passages in each source. Note factual agreements, differences, and missing information without evaluating which is better.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "search",
+        "strategy": "source_first",
+        "max_sources": 8,
+        "passages_per_source": 2,
+        "max_passages": 16,
+        "evidence_tokens": 9000,
+        "coverage": "bounded",
+        "include_related_evidence": true
+      }
+    },
+    "source_context": {
+      "description": "Show the exact source passage and surrounding context for a citation or passage from an earlier answer. Not for independent scientific evaluation.",
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "show_source",
+        "context_sentences": 2,
+        "max_passages": 3
+      }
+    },
+    "review_writing": {
+      "description": "Edit, structure, shorten, polish, or assemble referee comments or a report using assessments and notes explicitly written by the researcher. Preserve their substantive judgments and recommendations without adding new ones. Do not retrieve or invent evidence. Not for independent report evaluation or scientific criticism.",
+      "cues": [
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:rewrite|revise|edit|polish|proofread|rephrase|shorten|organize|structure|improve)\\s+(?:my|the|this|these)\\s+(?:reviewer\\s+)?(?:comments?|notes?|report|text|draft)\\b",
+        "^\\s*(?:(?:please|now)\\s+|(?:can|could|would)\\s+you\\s+)*(?:draft|write|prepare|assemble)\\b[^\\n]{0,140}\\b(?:from|using|based\\s+on)\\s+(?:my|the|these)\\s+(?:notes?|comments?|draft)\\b"
+      ],
+      "system_prompt": "Use only text and assessments explicitly supplied by the researcher in the current request or their earlier messages. Improve structure, clarity, tone, and grammar without changing the scientific meaning or adding independent judgments, concerns, claims, scores, or recommendations. Do not treat prior assistant-generated interpretations as the researcher's own judgments. Preserve references and technical details. If essential reviewer content is absent, leave it unfilled rather than writing an evaluation.",
+      "answer_guidance": "Return the edited reviewer-authored text directly. Do not add evaluations, scores, or citation claims that the researcher did not supply.",
+      "history": {
+        "policy": "recent"
+      },
+      "retrieval": {
+        "mode": "none"
+      }
+    }
+  },
+  "welcome_prompts": [
+    "Which manuscript or grant proposal are you reviewing?",
+    "What information would you like to locate or compare?",
+    "Paste your reviewer notes to revise, or ask about the sources."
+  ],
+  "suggestions": [
+    "What objectives and methods does this submission describe?",
+    "List the sample sizes and experimental conditions reported",
+    "Read the entire proposal and extract its planned milestones",
+    "Find passages discussing controls and limitations",
+    "Check the references of the manuscript",
+    "Compare the described methods with those in another paper",
+    "Show the original passage supporting the previous answer",
+    "Polish my reviewer comments without changing their meaning"
+  ]
+}
