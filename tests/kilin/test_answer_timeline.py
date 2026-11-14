@@ -63,11 +63,13 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
         recorder = _AnswerTimelineRecorder(clock=lambda: now[0])
         routed = recorder.record("routed", {
             "intent": "reference_check",
+            "tool_name": "reference_check",
             "history_turn_ids": [],
             "related_turn_ids": [],
         })
         self.assertEqual([item["label"] for item in routed], [
-            "Reference check identified",
+            "Reference check identified "
+            "(reference_check using reference_check)",
             "No earlier conversation needed",
         ])
         self.assertEqual([item["index"] for item in routed], [0, 1])
@@ -92,6 +94,7 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
         sequence = (
             ("routing", {"message": "Identifying intent"}),
             ("routed", {"intent": "reference_check",
+                        "tool_name": "reference_check",
                         "history_turn_ids": [], "related_turn_ids": []}),
             ("evidence_ready", {"message": "No retrieval needed",
                                 "skipped": True}),
@@ -105,7 +108,8 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
             now[0] += 0.25
         saved = recorder.finish()
         self.assertEqual([event["label"] for event in emitted], [
-            "Identifying intent", "Reference check identified",
+            "Identifying intent", "Reference check identified "
+            "(reference_check using reference_check)",
             "No earlier conversation needed", "No retrieval needed",
             "Finding the paper", "Identifying the project's files",
             "Reading references and citations",
@@ -127,10 +131,28 @@ class TestAnswerTimelineRecorder(unittest.TestCase):
             "history_turn_ids": [2, 3, 5],
             "related_turn_ids": [2, 5],
         })
+        self.assertEqual(
+            records[0]["label"],
+            "Question answering identified (question_answering)",
+        )
         self.assertEqual(records[1]["label"], (
             "Including the last 1 turn and turns 2, 5 "
             "from the conversation"
         ))
+
+    def test_routed_phase_handles_absent_optional_names(self) -> None:
+        """Retain the fallback label without inventing intent or tool IDs."""
+        for details, expected in (
+            ({}, "Intent identified"),
+            ({"intent": "test_intent", "tool_name": None},
+             "Test intent identified (test_intent)"),
+            ({"intent": "test_intent", "tool_name": ""},
+             "Test intent identified (test_intent)"),
+        ):
+            with self.subTest(details=details):
+                recorder = _AnswerTimelineRecorder(clock=lambda: 1.0)
+                routed = recorder.record("routed", details)
+                self.assertEqual(routed[0]["label"], expected)
 
     def test_no_phase_notifications_still_produces_timing(self) -> None:
         """Measure work when routing and retrieval produce no callbacks."""

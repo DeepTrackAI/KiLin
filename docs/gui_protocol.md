@@ -61,6 +61,8 @@ milliseconds relative to the answer's start). These are the exact activity
 identifiers and labels stored with completed answers; the browser does not
 infer or filter timeline entries from `answer_phase`. The latter describes
 control and status changes, including tool confirmation and completion.
+The `routed` phase includes `intent` and, only for tool-backed intents,
+`tool_name`; the core uses them to form the corresponding activity label.
 
 Core-owned answer timelines are stored in each completed conversation
 turn under `timeline` (`elapsed_ms`, `steps` containing `phase`, `label`,

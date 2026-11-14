@@ -174,6 +174,8 @@ def _activity_labels(
         Core answer phase.
     details: Mapping[str, object]
         Phase-specific details already known to the RAG coordinator.
+        Routed notifications include the intent identifier and optionally
+        the configured tool name for the user-facing description.
 
     Returns
     -------
@@ -186,9 +188,16 @@ def _activity_labels(
     if phase == "completed":
         return ()
     if phase == "routed":
-        intent = str(details.get("intent", "")).replace("_", " ")
-        name = intent.capitalize() if intent else "Intent"
-        return (f"{name} identified", _history_activity(details))
+        intent_id = str(details.get("intent", ""))
+        name = (
+            intent_id.replace("_", " ").capitalize() if intent_id else "Intent"
+        )
+        tool_name = details.get("tool_name")
+        identifier = intent_id
+        if isinstance(tool_name, str) and tool_name:
+            identifier = f"{identifier} using {tool_name}"
+        suffix = f" ({identifier})" if intent_id else ""
+        return (f"{name} identified{suffix}", _history_activity(details))
     message = details.get("message")
     if isinstance(message, str) and message.strip():
         return (message.strip(),)

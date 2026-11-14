@@ -75,6 +75,8 @@ skipped retrieval, detailed tool messages, and generation transitions. It
 reports each start through the optional `activity_callback` with an index,
 phase, label, and monotonic start offset (`started_ms`). The GUI uses these
 labels unchanged; it never derives, suppresses, or renames timeline entries.
+The routed activity shows the intent identifier in parentheses after its
+readable name, with `using <tool_name>` when the selected intent has a tool.
 Repeated notifications for an activity already in progress update that
 activity rather than creating artificial duplicate starts.
 

@@ -1674,13 +1674,15 @@ class RAGSession:
                     "retrieval_mode": mode,
                 }
             )
-            report_phase(
-                ANSWER_PHASE_ROUTED,
-                intent=intent.intent_id,
-                history_turn_ids=history_ids,
-                related_turn_ids=list(decision.related_turn_ids),
-                retrieval_mode=mode,
-            )
+            routed_details: dict[str, object] = {
+                "intent": intent.intent_id,
+                "history_turn_ids": history_ids,
+                "related_turn_ids": list(decision.related_turn_ids),
+                "retrieval_mode": mode,
+            }
+            if intent.tool is not None:
+                routed_details["tool_name"] = intent.tool.name
+            report_phase(ANSWER_PHASE_ROUTED, **routed_details)
             trace.emit(
                 "retrieval.plan",
                 component="rag",
