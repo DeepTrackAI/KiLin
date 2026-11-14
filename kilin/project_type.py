@@ -27,6 +27,13 @@ Key Features
     An intent may name a registered tool (``kilin.tools._registry``) with
     its settings; the tool validates them.
 
+- **New-project generation defaults**
+
+    A type may set ``generation.thinking`` or
+    ``generation.temperature`` for new project profiles. Omitted values
+    inherit packaged defaults. Saved profiles and explicit creation
+    settings take precedence.
+
 - **Request-local thinking**
 
     An ordinary intent may enable or disable thinking for its answer.
@@ -140,6 +147,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 import json
+from math import isfinite
 from pathlib import Path
 import re
 from typing import Final, Literal, TypeAlias
@@ -422,6 +430,10 @@ class ProjectType:
         Prefix searchable passages with document metadata, such as title,
         author, section, and page. Independent from source-card generation.
         Defaults to ``False``.
+    generation_thinking: bool | None
+        New-project thinking default, or None to use the packaged setting.
+    generation_temperature: float | None
+        New-project sampling temperature, or None to use the packaged value.
 
     """
 
@@ -443,6 +455,8 @@ class ProjectType:
     source_cards_enabled: bool = False
     source_card_kind: str | None = None
     source_cards_automatic: bool = False
+    generation_thinking: bool | None = None
+    generation_temperature: float | None = None
 
     @property
     def label(self) -> str:
@@ -851,6 +865,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "system_prompt",
             "capabilities",
             "history",
+            "generation",
             "default_intent",
             "intents",
             "answer_guidance",
@@ -934,6 +949,37 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             f"number from 0 to {_MAX_RECENT_TURNS}."
         )
 
+    generation = _object(type_id, data, "generation")
+    reject_unknown(
+        f"{type_id}.generation", generation,
+        ("thinking", "temperature"),
+    )
+    thinking = generation.get("thinking")
+    if "thinking" in generation and type(thinking) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} generation.thinking must be "
+            "true or false."
+        )
+    temperature = generation.get("temperature")
+    if "temperature" in generation:
+        if type(temperature) not in (int, float):
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            )
+        try:
+            temperature = float(temperature)
+        except OverflowError as error:
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            ) from error
+        if not isfinite(temperature) or temperature < 0:
+            raise ValueError(
+                f"Project type {type_id!r} generation.temperature must "
+                "be a finite nonnegative number."
+            )
+
     raw_intents = _object(type_id, data, "intents")
     if not raw_intents:
         raise ValueError(
@@ -972,6 +1018,8 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         source_cards_enabled=source_cards_enabled,
         source_card_kind=source_card_kind,
         source_cards_automatic=source_cards_automatic,
+        generation_thinking=thinking,
+        generation_temperature=temperature,
     )
 
 

@@ -14,7 +14,7 @@ integration with project profile defaults.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 import json
 from pathlib import Path
 import re
@@ -105,6 +105,100 @@ class ProjectTypeFixture(unittest.TestCase):
         return load_project_types(self._folder(name, {"samples": data}))[
             "samples"
         ]
+
+
+class TestProjectGenerationDefaults(ProjectTypeFixture):
+    """Check type-provided creation defaults and saved-profile precedence."""
+
+    def test_generation_defaults_are_optional_and_independent(self) -> None:
+        """Omitted keys inherit packaged settings independently."""
+
+        base = self._load("no-generation", _type_data())
+        self.assertIsNone(base.generation_thinking)
+        self.assertIsNone(base.generation_temperature)
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": False}
+        thinking = self._load("thinking-only", raw)
+        self.assertIs(thinking.generation_thinking, False)
+        self.assertIsNone(thinking.generation_temperature)
+
+        raw = _type_data()
+        raw["generation"] = {"temperature": 0.9}
+        temperature = self._load("temperature-only", raw)
+        self.assertIsNone(temperature.generation_thinking)
+        self.assertEqual(temperature.generation_temperature, 0.9)
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": True, "temperature": 0}
+        both = self._load("both", raw)
+        self.assertIs(both.generation_thinking, True)
+        self.assertEqual(both.generation_temperature, 0.0)
+
+    def test_generation_rejects_invalid_settings(self) -> None:
+        """Reject invalid, misspelled, and nonfinite defaults on load."""
+
+        cases = (
+            (None, "object"),
+            ([], "object"),
+            ({"unexpected": True}, "unknown settings"),
+            ({"thinking": None}, "generation.thinking"),
+            ({"thinking": 1}, "generation.thinking"),
+            ({"thinking": "false"}, "generation.thinking"),
+            ({"temperature": None}, "generation.temperature"),
+            ({"temperature": True}, "generation.temperature"),
+            ({"temperature": "0.9"}, "generation.temperature"),
+            ({"temperature": -0.1}, "generation.temperature"),
+            ({"temperature": float("nan")}, "generation.temperature"),
+            ({"temperature": float("inf")}, "generation.temperature"),
+        )
+        for index, (generation, error) in enumerate(cases):
+            with self.subTest(generation=generation):
+                raw = _type_data()
+                raw["generation"] = generation
+                with self.assertRaisesRegex(ValueError, error):
+                    self._load(f"bad-generation-{index}", raw)
+
+    def test_creation_writes_defaults_but_explicit_settings_win(self) -> None:
+        """Saved settings remain authoritative after type defaults change."""
+
+        from kilin.workspace import prepare_sources_workspace
+
+        raw = _type_data()
+        raw["generation"] = {"thinking": False, "temperature": 0.9}
+        definition = replace(self._load("creative", raw), id="code")
+        with patch(
+            "kilin.project.load_project_types",
+            return_value={"code": definition},
+        ):
+            default = project.default_project_profile("code")
+            self.assertIs(default.thinking, False)
+            self.assertEqual(default.temperature, 0.9)
+
+            created = project.initialize_project(
+                self.root / "default-project", "code"
+            )
+            self.assertIs(created.profile.thinking, False)
+            self.assertEqual(created.profile.temperature, 0.9)
+
+            explicit = prepare_sources_workspace(
+                [], "code", self.root / "explicit-project",
+                settings={"thinking": True, "temperature": 0.4},
+            )
+            self.assertIs(explicit.profile.thinking, True)
+            self.assertEqual(explicit.profile.temperature, 0.4)
+
+        reopened = project.open_project(created.root)
+        self.assertIs(reopened.profile.thinking, False)
+        self.assertEqual(reopened.profile.temperature, 0.9)
+        updated = project.configure_project(
+            created.root, {"thinking": True, "temperature": 0.3}
+        )
+        self.assertIs(updated.profile.thinking, True)
+        self.assertEqual(updated.profile.temperature, 0.3)
+        self.assertEqual(
+            project.open_project(created.root).profile.temperature, 0.3
+        )
 
 
 class TestPackagedProjectTypes(unittest.TestCase):

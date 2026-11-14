@@ -316,11 +316,22 @@ def _default_profile_text(
     Returns
     -------
     str
-        Complete profile text using the current shared backend, model, query,
-        chunking, retrieval, and generation defaults.
+        Complete profile text using packaged settings and optional project-
+        type defaults for thinking and temperature.
 
     """
 
+    definition = load_project_types()[type_id]
+    thinking = (
+        _PROFILE_THINKING
+        if definition.generation_thinking is None
+        else definition.generation_thinking
+    )
+    temperature = (
+        _PROFILE_TEMPERATURE
+        if definition.generation_temperature is None
+        else definition.generation_temperature
+    )
     return _DEFAULT_PROFILE.format(
         type_id=type_id,
         source=source,
@@ -331,8 +342,8 @@ def _default_profile_text(
         max_tokens=_PROFILE_MAX_TOKENS,
         overlap_tokens=_PROFILE_OVERLAP_TOKENS,
         retrieval_count=_PROFILE_RETRIEVAL_COUNT,
-        thinking=str(_PROFILE_THINKING).lower(),
-        temperature=_PROFILE_TEMPERATURE,
+        thinking=str(thinking).lower(),
+        temperature=temperature,
         max_new_tokens=_PROFILE_MAX_NEW_TOKENS,
         block_unrequested_cjk=str(_PROFILE_BLOCK_UNREQUESTED_CJK).lower(),
         backend=BACKEND_AUTO,
