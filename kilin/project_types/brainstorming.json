@@ -29,6 +29,10 @@
   "history": {
     "recent_turns": 6
   },
+  "generation": {
+    "temperature": 0.9,
+    "thinking": false
+  },
   "default_intent": "open_ideation",
   "intents": {
     "evidence_check": {
