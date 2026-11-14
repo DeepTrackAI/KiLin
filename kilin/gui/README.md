@@ -224,23 +224,29 @@ remain the effective configuration.
 ## Project types
 
 Project types live in `kilin/project_types/`, one JSON file per type
-(`code.json`, `literature.json`); the file name is the type's ID and types
-are listed in file-name order. Each file sets the display name shown in the
+(currently `brainstorming.json`, `code.json`, `literature.json`,
+`reviewing.json`, and `writing.json`). The filename is the type ID; types
+are listed in filename order. Each file sets the display name shown in the
 type menu, a one-line description (shown to the router), default file
 suffixes and size limit for new projects, the retrieval instruction added
 to Qwen3-format embedding queries, the base system prompt, the answer
 guidance the desktop app adds to each question (for example the 150-300
 word target), `capabilities.code_graph` (true, false, or "auto": only when
-selected files include Python or MATLAB), `history.recent_turns`, the
-`default_intent`, the `intents`, and the empty-chat headings and
-suggestions. The first suggestion is always shown with two others; a "…"
-in a suggestion is selected when it is clicked, ready to be replaced.
+selected files include Python or MATLAB), `history.recent_turns`,
+`default_intent`, `intents`, and the empty-chat headings and suggestions.
+An optional `generation` object sets initial `temperature` and `thinking`
+for new projects. Explicit creation settings take precedence, and saved
+profiles are not overwritten. The first suggestion is always displayed
+alongside two others; a "…" in a suggestion is selected when clicked,
+ready to be replaced.
 
 Each intent has a description, a system prompt added to the base prompt, an
 optional answer guidance that replaces the type's (and always applies, also
 in notebooks), a `history.policy` (none, recent, or relevant), and
 `retrieval.mode` (search, document, reuse, or none) with
-`retrieval.strategy` (only "hybrid" exists). An intent can also list
+`retrieval.strategy` (`hybrid` or `source_first`). Source-first search
+can additionally set source, passage and evidence-token limits. An intent
+can also list
 `shortcuts`: case-insensitive regular expressions for whole messages that
 obviously have that intent (the default `small_talk` lists greetings,
 thanks, and "how are you"). A match selects the intent without a router
@@ -532,12 +538,16 @@ finite context limit. The values used for a completed answer are recorded with
 that turn. Temperature, thinking, and answer length belong to the project:
 a change is saved and acknowledged when committed in Settings or the
 Thinking control. Every chat uses the confirmed project-wide settings,
-switching chats keeps them, and another project loads its own values. A
+switching chats keeps them, and another project loads its own values.
+The completed-turn model line is formatted by the core and includes the
+model ID, effective thinking mode (when recorded), temperature (`T=`),
+and maximum output tokens. The GUI reuses this saved description and
+falls back to saved fields for older conversations. A
 question never silently commits unconfirmed settings; it must wait until
 the corresponding profile save has been acknowledged.
 
 An ordinary answer intent can override thinking for that reply without
-changing these controls or the saved project setting. Both packaged
+changing these controls or the saved project setting. Packaged
 `small_talk` intents disable thinking; an omitted or null intent policy
 inherits the configured value. A following intent without an override
 therefore uses the configured value again. This uses the selected model/template

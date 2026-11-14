@@ -219,6 +219,12 @@ chat history if a pre-commit failure would otherwise leave uncommitted
 messages in memory. A model's `finish_reason = length` is checked by the completion contract
 below; truncated text is not accepted as a successful final answer.
 
+The core also records `model_summary` in completed-turn parameters,
+using the active chat model ID and the recorded thinking, temperature and
+maximum output tokens. For direct answers it reports effective per-intent
+thinking when present. The GUI renders the saved description rather than
+reconstructing it; older turns use their separately saved fields.
+
 When the question is about several documents (a number of them, "review
 the five articles", or all of them, "all the papers") and the evidence
 comes from at least two, the evidence prompt names those documents and

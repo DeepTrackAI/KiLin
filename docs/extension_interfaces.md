@@ -25,8 +25,9 @@ snapshot.
 Packaged JSON files serve as examples. A new type is a
 `<type_id>.json` resource with validated `display_name`, `description`,
 `extensions`, `max_file_bytes`, `retrieval_instruction`, `system_prompt`,
-optional `answer_guidance`, `capabilities`, history settings, a valid
-`default_intent`, an `intents` object and optional empty-chat prompts. The
+optional `answer_guidance`, `capabilities`, history settings, optional
+`generation` defaults, a valid `default_intent`, an `intents` object and
+optional empty-chat prompts. The
 loader derives the type ID from the filename, rejects duplicate JSON keys,
 and validates **all** type files on load.
 
@@ -70,6 +71,14 @@ in custom project-type JSON without enabling `document_headers`; the
 packaged literature answering intents already use `source_first`. A missing tool
 name or an unregistered name fails validation rather than importing a
 module by string.
+
+For new projects, the top-level `generation` object may specify
+`temperature` (finite and nonnegative) or `thinking` (a boolean), or
+both. Missing fields inherit the packaged `PROJECT_PROFILE` defaults.
+Explicit creation settings override these values, and opening a saved
+project never reapplies them. The active project's `profile.ini` owns
+subsequent user edits; see
+[initialization and precedence](configuration.md#new-project-generation-defaults).
 
 Ordinary intents can also declare `thinking: true`, `false`, or `null`.
 An omitted or null field inherits the configured chat setting; a boolean

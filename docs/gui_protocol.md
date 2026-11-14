@@ -371,6 +371,12 @@ can accompany an event.
 | Diagnostics | `trace_ready` (`trace_path`, `scope`, `conversation_id`); `error` (`message`, optionally `trace_path`, `pending_choice`; `resume_released` for saved-project opening failures); `backend_failed` (`message`) |
 | Process recovery | `stopped` (optional `removed_projects`: empty creation claims removed; `preserved_projects`: known workspaces left intact); `backend_restarted` (`message`, `exit_code`, `diagnostic`) |
 
+`answered.turn.parameters.model_summary` is a core-produced model
+description that includes the active chat model, thinking, `T=`,
+and the maximum answer-token setting. The frontend displays it
+unchanged; for older turns without that field it reconstructs the
+line from available saved parameters.
+
 The engine also emits `startup` and `saved_project`, but the current
 `web/app.js` `onEvent()` implementation has no branches for these names.
 Deleting a conversation moves its JSON into `logs/traces/.deleted/`; the

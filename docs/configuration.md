@@ -11,7 +11,7 @@ rewrite an existing project's configuration.
 | Layer | Source | Scope and owner | Mutability |
 | --- | --- | --- | --- |
 | Core packaged defaults | `kilin/kilin_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
-| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, routing/retrieval behavior for a project type | Packaged declarations; not editable user profiles |
+| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, retrieval behavior and optional new-project generation defaults | Packaged declarations; not editable user profiles |
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
@@ -104,7 +104,9 @@ source-card policy remain owned by the project profile.
 
 A new project's `type_id` selects a validated `ProjectType`; the core then
 constructs and validates a `ProjectProfile` using `PROJECT_PROFILE` defaults
-and the type's file-selection defaults. This initializes saved state; it is
+and the type's file-selection and optional generation defaults. Explicit
+creation settings take precedence over those defaults. This initializes
+saved state; it is
 not permission to overwrite an existing profile or reinstall user resources.
 Creation, read-only reopening and explicit updates are different operations,
 owned by [Project workspaces](project_workspaces.md#creation-opening-and-explicit-updates).
@@ -185,8 +187,10 @@ cards. See [Retrieval pipeline](retrieval_pipeline.md#automatic-source-card-inde
 - **Default chunking vs profile chunking:** direct `chunk_source_units()`
   defaults are not identical to a newly created project's persisted sizes.
 - **Project-type defaults vs project overrides:** type JSON affects intent
-  resolution, instruction and default scope, while saved profile values
-  determine current model, filters and indexing settings.
+  resolution, instructions and new-project generation defaults. The saved
+  profile determines active models, temperature, thinking, filters and
+  indexing settings; `project_behavior.json` may override an existing
+  project's prompts, routing and per-intent retrieval behavior.
 - **Router/effort/depth:** routing selects an intent, effort chooses an
   answering model as supported by the backend, and search depth chooses the
   number of passages; these are separate controls.
@@ -230,8 +234,8 @@ The type loader reads `project_types/*.json` in filename order, uses each
 filename stem as its type ID and caches validated records. An invalid
 project type is an error, not silently skipped. The top-level object defines
 its display metadata, extensions, size limit, base prompts,
-retrieval instruction, code-graph policy, history defaults, default intent,
-intents, welcome prompts and suggestions.
+retrieval instruction, capabilities, history defaults, optional
+generation defaults, default intent, intents, welcome prompts and suggestions.
 
 An intent can override inherited prompt/history/retrieval settings, specify
 shortcut regexes and select a registered tool. The parser gives missing
@@ -240,6 +244,29 @@ fields documented defaults (including `search` for ordinary intents and
 combinations. A project type cannot load arbitrary Python code by naming
 it in JSON; only registered tool IDs are accepted. See
 [Extension interfaces](extension_interfaces.md).
+
+### New-project generation defaults
+
+A project type can optionally set `generation.temperature` (a finite,
+nonnegative number) and `generation.thinking` (a boolean). Each field is
+independent. When omitted, the corresponding value comes from the
+packaged `PROJECT_PROFILE` defaults. For example:
+
+```json
+{
+  "generation": {
+    "temperature": 0.9,
+    "thinking": false
+  }
+}
+```
+
+These settings initialize `profile.ini` only when creating a project.
+Explicit creation settings override them. Once saved, a project's own
+profile is authoritative; reopening it never re-applies project-type
+or packaged creation defaults. An ordinary intent may separately
+override thinking for a single direct reply, while tool-internal model
+settings remain tool-owned.
 
 ### Source-first evidence limits per intent
 
@@ -253,13 +280,14 @@ and related-turn evidence. `coverage` accepts `bounded` (default) or
 source coverage regardless of that default. Omitted sources cause a
 saved coverage record and, in exhaustive mode, a deterministic notice.
 
-These settings are owned by the **selected project-type intent**, not the
-answering model's context-token setting, the GUI, or a tool's internal
-batch parameters. Missing values have validated core defaults; packaged
+These settings belong to the **selected effective intent**, not the
+answering model's context-token setting or a tool's internal batch
+parameters. Missing values have validated core defaults; packaged
 literature intent values are documented in
 [Retrieval pipeline](retrieval_pipeline.md#per-intent-source-first-configuration).
-Changing the project type changes future retrieval; a saved project does
-not acquire a separate per-project override for these per-intent limits.
+An existing project can change them through its validated per-intent
+`project_behavior.json` overrides, without modifying the packaged type.
+Changes affect subsequent retrieval, not previously saved answers.
 A tool-backed intent instead uses its tool's validated settings and does
 not automatically execute source-first retrieval. See the tool precedence
 section below.
@@ -276,7 +304,7 @@ setting for **that reply only**, including a thinking setting passed in
 `RAGSession.ask(generation_settings=...)`. Those generation updates still
 persist on the session; the intent override never rewrites them, the project
 profile, or GUI preferences. It does not switch models, change token budgets,
-or add a model call. Both packaged `small_talk` intents set `thinking` to
+or add a model call. Packaged `small_talk` intents set `thinking` to
 `false`; other packaged intents inherit the session setting.
 
 For example, a minimal ordinary intent can declare:

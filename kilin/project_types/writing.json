@@ -1,6 +1,6 @@
 {
   "display_name": "Writing Assistant",
-  "description": "A scientific writing workspace for drafting, revising, sresearching, and checking manuscript text.",
+  "description": "A scientific writing workspace for drafting, revising, researching, and checking manuscript text.",
   "extensions": [
     ".pdf",
     ".md",
