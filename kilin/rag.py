@@ -455,6 +455,41 @@ def _incomplete_answer(error: IncompleteModelResponse) -> str:
     )
 
 
+def _model_summary(
+    model_id: str,
+    *,
+    thinking: bool,
+    temperature: float,
+    max_new_tokens: int,
+) -> str:
+    """Format an answering model's settings for saved conversation logs.
+
+    Parameters
+    ----------
+    model_id: str
+        Model selected for the turn.
+    thinking: bool
+        Effective thinking mode for the direct answer, when applicable.
+    temperature: float
+        Temperature recorded for this turn.
+    max_new_tokens: int
+        Maximum output tokens recorded for this turn.
+
+    Returns
+    -------
+    str
+        Stable model description reusable by any client interface.
+
+    """
+
+    mode = "thinking on" if thinking else "thinking off"
+    tokens = f"{max_new_tokens:,}".replace(",", " ")
+    return (
+        f"Model: {model_id} "
+        f"({mode}, T={temperature}, {tokens} max tokens)"
+    )
+
+
 def _invalid_citations(
     answer: str, evidence: Sequence[Evidence]
 ) -> tuple[int | str, ...]:
@@ -2094,6 +2129,16 @@ class RAGSession:
                 # avoid an additional trace event on the answer path.
                 effective["invalid_citations"] = list(invalid)
 
+            # The core owns this human-readable summary so all clients
+            # display the generation settings from the same saved turn.
+            effective["model_summary"] = _model_summary(
+                self.chat_session.model_id,
+                thinking=effective.get(
+                    "thinking_effective", self.chat_session.thinking
+                ),
+                temperature=self.chat_session.temperature,
+                max_new_tokens=self.chat_session.max_new_tokens,
+            )
             # Tokens the models read and generated for this answer.
             effective["usage"] = self.usage_since(usage)
             # The last recorded activity is the checkpoint boundary. Its

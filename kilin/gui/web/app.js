@@ -5722,9 +5722,18 @@ function renderTimeline(record, turn) {
     const parameters = turn.parameters || {};
     const model = typeof parameters.chat_model === "string"
       ? parameters.chat_model : "";
+    const modelSummary = typeof parameters.model_summary === "string"
+      ? parameters.model_summary : "";
     const settings = [];
-    if (typeof parameters.thinking === "boolean") {
-      settings.push(parameters.thinking ? "thinking on" : "thinking off");
+    const thinking = typeof parameters.thinking_effective === "boolean"
+      ? parameters.thinking_effective : parameters.thinking;
+    if (typeof thinking === "boolean") {
+      settings.push(thinking ? "thinking on" : "thinking off");
+    }
+    // Previous conversations have no core-formatted model summary.
+    if (!modelSummary && typeof parameters.temperature === "number"
+        && Number.isFinite(parameters.temperature)) {
+      settings.push(`T=${parameters.temperature}`);
     }
     if (Number.isInteger(parameters.max_new_tokens)
         && parameters.max_new_tokens > 0) {
@@ -5736,11 +5745,11 @@ function renderTimeline(record, turn) {
     ].join(", ");
     row.append(label);
     list.append(row);
-    if (model) {
+    if (modelSummary || model) {
       const modelRow = document.createElement("li");
       modelRow.className = "timeline-model";
       const modelLabel = document.createElement("span");
-      modelLabel.textContent = `Model: ${model}${settings.length
+      modelLabel.textContent = modelSummary || `Model: ${model}${settings.length
         ? ` (${settings.join(", ")})` : ""}`;
       modelRow.append(modelLabel);
       list.append(modelRow);

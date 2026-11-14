@@ -120,23 +120,42 @@ const usage = { input_tokens: 5127, output_tokens: 545 };
 const record = { elapsed_ms: 36000, steps: [] };
 const savedTurn = { parameters: {
   usage, chat_model: "Qwen/Qwen3-8B-MLX-4bit",
-  thinking: true, max_new_tokens: 8192,
+  thinking: true, temperature: 0.9, max_new_tokens: 8192,
+  model_summary: "Model: Qwen/Qwen3-8B-MLX-4bit "
+    + "(thinking on, T=0.9, 8 192 max tokens)",
 } };
 const labels = turn => renderTimeline(record, turn)
   .children[1].children.map(row => row.children[0].textContent);
 assert.deepEqual(labels(savedTurn), [
   "Tokens: 5,127 read, 545 written",
-  "Model: Qwen/Qwen3-8B-MLX-4bit (thinking on, 8,192 max tokens)",
+  "Model: Qwen/Qwen3-8B-MLX-4bit (thinking on, T=0.9, 8 192 max tokens)",
 ]);
 const line = renderTimeline(record, savedTurn);
 assert.equal(line.children[0].textContent, "Took 36s · 5672 tokens");
 assert.equal(line.children[1].children.length, 2);
 assert.deepEqual(labels({ parameters: {
   usage, chat_model: "other-model", thinking: false,
-  max_new_tokens: 1024,
+  temperature: 0.3, max_new_tokens: 1024,
 } }), [
   "Tokens: 5,127 read, 545 written",
-  "Model: other-model (thinking off, 1,024 max tokens)",
+  "Model: other-model (thinking off, T=0.3, 1,024 max tokens)",
+]);
+assert.deepEqual(labels({ parameters: {
+  usage, chat_model: "legacy-override", thinking: true,
+  thinking_effective: false, temperature: 0.9,
+  max_new_tokens: 8192,
+} }), [
+  "Tokens: 5,127 read, 545 written",
+  "Model: legacy-override (thinking off, T=0.9, 8,192 max tokens)",
+]);
+assert.deepEqual(labels({ parameters: {
+  usage, chat_model: "configured-model", thinking: true,
+  thinking_effective: false, temperature: 0.9,
+  model_summary: "Model: configured-model "
+    + "(thinking off, T=0.9, 8 192 max tokens)",
+} }), [
+  "Tokens: 5,127 read, 545 written",
+  "Model: configured-model (thinking off, T=0.9, 8 192 max tokens)",
 ]);
 assert.deepEqual(labels({ parameters: { usage } }),
   ["Tokens: 5,127 read, 545 written"]);
