@@ -1,6 +1,6 @@
 {
   "display_name": "Writing Assistant",
-  "description": "A scientific writing workspace for drafting, revising, source-grounded drafting, researching, and checking manuscript text.",
+  "description": "A scientific writing workspace for drafting, revising, sresearching, and checking manuscript text.",
   "extensions": [
     ".pdf",
     ".md",
@@ -10,7 +10,7 @@
   "max_file_bytes": 20971520,
   "retrieval_instruction": "Retrieve relevant scientific or technical material when the user asks to draft from project sources, research a topic, or verify a manuscript claim.",
   "system_prompt": "Assist with scientific and technical writing. Follow the user's requested language, format, and level of detail. Preserve scientific meaning, equations, LaTeX commands, labels, and existing bibliography keys when editing supplied text, unless the user explicitly requests changes. Do not invent research findings, bibliographic references, or technical details. Distinguish manuscript text from research evidence: numbered KíLín evidence labels are not manuscript citation keys. Ask for missing essential information or clearly flag it rather than fabricate it.",
-  "answer_guidance": "For ordinary drafting or editing, provide the requested text without an unnecessary preamble. For source-grounded drafting, give a clean manuscript draft followed by separate evidence notes. For research or verification, give a clear evidence-based answer; respect any requested length or format.",
+  "answer_guidance": "For ordinary drafting or editing, provide the requested text without an unnecessary preamble. For source-grounded drafting, give a clean manuscript draft followed by separate evidence notes. For research or verification, give a clear evidence-based answer. Respect any requested length or format.",
   "capabilities": {
     "code_graph": "auto",
     "document_headers": true,
@@ -20,7 +20,7 @@
     }
   },
   "history": {
-    "recent_turns": 4
+    "recent_turns": 10
   },
   "default_intent": "writing",
   "intents": {
@@ -39,9 +39,9 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 6,
+        "max_sources": 10,
         "passages_per_source": 3,
-        "max_passages": 16,
+        "max_passages": 30,
         "evidence_tokens": 9000,
         "coverage": "bounded",
         "include_related_evidence": true
@@ -75,9 +75,9 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 6,
+        "max_sources": 10,
         "passages_per_source": 3,
-        "max_passages": 16,
+        "max_passages": 30,
         "evidence_tokens": 9000,
         "coverage": "bounded",
         "include_related_evidence": true
@@ -96,9 +96,9 @@
       "retrieval": {
         "mode": "search",
         "strategy": "source_first",
-        "max_sources": 8,
+        "max_sources": 12,
         "passages_per_source": 3,
-        "max_passages": 20,
+        "max_passages": 36,
         "evidence_tokens": 12000,
         "coverage": "bounded",
         "include_related_evidence": true
