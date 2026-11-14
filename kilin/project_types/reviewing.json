@@ -115,7 +115,7 @@
       "tool": {
         "name": "reference_check",
         "max_listed": 20,
-        "verify": false,
+        "verify": true,
         "online_lookup": false
       }
     },
