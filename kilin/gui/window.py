@@ -273,6 +273,11 @@ class ChatBridge(QObject):
     stopOperation()
         Terminate the active backend process immediately.
 
+    **Setting descriptions.**
+
+    requestSettingsInfo()
+        Request shared metadata independently of projects and models.
+
     **Project behavior.**
 
     requestProjectBehavior()
@@ -1062,6 +1067,12 @@ class ChatBridge(QObject):
                 "project": payload.get("project"),
             }
         self.commandRequested.emit(command)
+
+    @Slot()
+    def requestSettingsInfo(self) -> None:
+        """Request core- and tool-owned setting descriptions."""
+
+        self.commandRequested.emit({"action": "settings_info"})
 
     @Slot()
     def requestProjectBehavior(self) -> None:

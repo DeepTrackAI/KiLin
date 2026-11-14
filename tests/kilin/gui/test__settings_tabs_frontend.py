@@ -56,9 +56,13 @@ class TestSettingsTabsFrontend(unittest.TestCase):
         start = app.index('id="first-run-setup"')
         setup = app[start : app.index("</details>")]
         for part in (
-            '<label for="backend">Computation backend</label>',
-            '<label for="appearance">Appearance</label>',
-            '<label for="workspace-path">Projects folder</label>',
+            '<label for="backend" data-settings-key="interface.backend">'
+            'Computation backend</label>',
+            '<label for="appearance" data-settings-key="interface.appearance">'
+            'Appearance</label>',
+            '<label for="workspace-path" '
+            'data-settings-key="interface.workspace_folder">'
+            'Projects folder</label>',
         ):
             self.assertIn(part, setup)
         # The six tabs share the full width.
@@ -102,7 +106,10 @@ class TestSettingsTabsFrontend(unittest.TestCase):
         """Labels above full-width boxes of one size, on every tab."""
 
         page = (_WEB / "index.html").read_text(encoding="utf-8")
-        self.assertIn('<label for="appearance">Appearance</label>', page)
+        self.assertIn(
+            '<label for="appearance" data-settings-key="interface.appearance">'
+            'Appearance</label>', page,
+        )
         self.assertNotIn("<h3>Appearance</h3>", page)
         styles = (_WEB / "styles.css").read_text(encoding="utf-8")
         self.assertIn(

@@ -62,6 +62,10 @@ let workspacePaths = new Set();
 let sidePanelChoice = null;
 // The Settings tab shown when Settings open; kept while KíLín runs.
 let settingsTab = "general";
+// Explanatory metadata belongs to KíLín core and registered tool packages.
+// Its absence must not change how settings work or how answers are made.
+let settingsCatalog = null;
+let settingsHelpSequence = 0;
 // The last projects_folder event, to redraw the folder's note.
 let projectsFolderInfo = null;
 // Workspace folders the user edits directly; neither is indexed.
@@ -1075,6 +1079,9 @@ function modelGroupHeader(role, title) {
   header.className = "model-group-header";
   const heading = document.createElement("h3");
   heading.textContent = title;
+  const groupKeys = { chat: "effort_levels", depth: "search_depth",
+    router: "router_models", embedding: "embedding_models" };
+  heading.dataset.settingsKey = `model_settings.${groupKeys[role]}`;
   const restore = document.createElement("button");
   restore.type = "button";
   restore.className = "secondary restore-defaults";
@@ -1162,6 +1169,9 @@ function renderModelsPanel() {
   for (const label of ["Level", "Language model"]) {
     const cell = document.createElement("span");
     cell.textContent = label;
+    cell.dataset.settingsKey = label === "Level"
+      ? "model_settings.effort_levels.name"
+      : "model_settings.effort_levels.model";
     columns.append(cell);
   }
   chat.append(columns);
@@ -1268,6 +1278,8 @@ function renderModelsPanel() {
   const notice = downloadNotice(current, installed);
   if (notice) embedding.append(notice);
   host.append(embedding);
+  applySettingsHelp(host);
+  applySettingsHelp(depthHost);
   if (focused) {
     (host.querySelector(`[data-focus-key="${focused}"]`)
       || depthHost.querySelector(`[data-focus-key="${focused}"]`))?.focus();
@@ -1381,6 +1393,74 @@ function requestToolSettings() {
 }
 
 /**
+ * Add reusable explanatory popovers to controls with canonical setting IDs.
+ * Labels and summaries are provided by the core, never authored in the UI.
+ *
+ * @param root DOM subtree to decorate, or the document on first load.
+ */
+function applySettingsHelp(root = document) {
+  if (!settingsCatalog?.settings) return;
+  for (const label of root.querySelectorAll("[data-settings-key]")) {
+    if (label.querySelector(".setting-help")) continue;
+    const info = settingsCatalog.settings[label.dataset.settingsKey];
+    if (!info) continue;
+    // Keep the title and help icon together above a nested input.
+    const caption = [...label.childNodes].find((node) =>
+      node.nodeType === 3 && node.textContent.trim());
+    const wrapper = document.createElement("span");
+    wrapper.className = "setting-help";
+    const trigger = document.createElement("button");
+    trigger.className = "setting-help-trigger";
+    trigger.type = "button";
+    trigger.textContent = "i";
+    trigger.setAttribute("aria-label", `Help: ${info.title}`);
+    const tooltip = document.createElement("span");
+    tooltip.className = "setting-help-popup";
+    tooltip.setAttribute("role", "tooltip");
+    const id = `setting-help-${++settingsHelpSequence}`;
+    tooltip.id = id;
+    tooltip.textContent = info.summary;
+    trigger.setAttribute("aria-describedby", id);
+    // A button nested in a label must not edit or submit that field.
+    trigger.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const opened = wrapper.classList.contains("is-open");
+      for (const item of document.querySelectorAll(".setting-help.is-open")) {
+        item.classList.remove("is-open");
+      }
+      wrapper.classList.toggle("is-open", !opened);
+      trigger.setAttribute("aria-expanded", String(!opened));
+      if (opened) trigger.blur();
+    });
+    trigger.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      wrapper.classList.remove("is-open");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.blur();
+      event.stopPropagation();
+    });
+    trigger.setAttribute("aria-expanded", "false");
+    wrapper.append(trigger, tooltip);
+    const captionGroup = document.createElement("span");
+    captionGroup.className = "setting-help-caption";
+    captionGroup.append(document.createTextNode(info.title), wrapper);
+    if (caption) label.replaceChild(captionGroup, caption);
+    else label.append(captionGroup);
+  }
+}
+
+// Clicking elsewhere dismisses a tooltip opened explicitly by clicking.
+document.addEventListener("click", (event) => {
+  if (event.target.closest?.(".setting-help")) return;
+  for (const item of document.querySelectorAll(".setting-help.is-open")) {
+    item.classList.remove("is-open");
+    item.querySelector(".setting-help-trigger")?.setAttribute(
+      "aria-expanded", "false");
+  }
+});
+
+/**
  * Turn a setting name such as "max_model_calls" into "Max model calls".
  *
  * @param key Setting name from a tool's defaults.json.
@@ -1396,10 +1476,12 @@ function settingLabel(key) {
  *
  * @param key Setting name.
  * @param value Current value: a Boolean, number, string, or list.
+ * @param toolName Registered owner of the setting.
  * @returns Label element holding the field.
  */
-function toolSettingField(key, value) {
+function toolSettingField(key, value, toolName) {
   const label = document.createElement("label");
+  label.dataset.settingsKey = `tools.${toolName}.${key}`;
   const input = document.createElement("input");
   input.dataset.key = key;
   if (typeof value === "boolean") {
@@ -1483,8 +1565,8 @@ function renderToolSettings(data) {
     fields.className = "tool-fields";
     // Values first, then the on/off switches together, one per row.
     const entries = Object.entries(tool.settings);
-    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value));
-    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value));
+    for (const [key, value] of entries) if (typeof value !== "boolean") fields.append(toolSettingField(key, value, tool.name));
+    for (const [key, value] of entries) if (typeof value === "boolean") fields.append(toolSettingField(key, value, tool.name));
     item.append(summary, fields);
     // Settings each use sets differently, such as a template, stay as set.
     const perIntent = Object.entries(tool.per_intent);
@@ -1522,6 +1604,7 @@ function renderToolSettings(data) {
     item.append(actions, status);
     holder.append(item);
   }
+  applySettingsHelp(holder);
   if (focused) holder.querySelector(`details[data-tool="${focused[0]}"] input[data-key="${focused[1]}"]`)?.focus();
 }
 
@@ -1884,6 +1967,13 @@ function createBehaviorEditor(scope, record, id = "") {
     }
   });
   editor.addEventListener("change", () => refreshBehaviorEditor(editor));
+  for (const field of editor.querySelectorAll("[data-behavior-path]")) {
+    const path = field.dataset.behaviorPath === "_guidance_mode"
+      ? "answer_guidance" : field.dataset.behaviorPath;
+    field.closest("label").dataset.settingsKey =
+      `project_behavior.${scope === "global" ? "global" : "intents"}.${path}`;
+  }
+  applySettingsHelp(editor);
   editor.dataset.initialFields = JSON.stringify(behaviorFieldDraft(editor));
   return editor;
 }
@@ -6567,6 +6657,11 @@ function onEvent(raw) {
     if (data.workspace_files) renderWorkspace(data.workspace_files);
   } else if (data.event === "project_behavior") {
     renderProjectBehavior(data);
+  } else if (data.event === "settings_info") {
+    settingsCatalog = data.catalog;
+    applySettingsHelp(document);
+  } else if (data.event === "settings_info_failed") {
+    console.warn("Could not load settings explanations:", data.message);
   } else if (data.event === "tool_settings") {
     renderToolSettings(data);
   } else if (data.event === "conversation_viewed") {
@@ -7469,6 +7564,7 @@ new QWebChannel(qt.webChannelTransport, (channel) => {
     }
     renderAttachments();
   });
+  bridge.requestSettingsInfo();
   bridge.requestSettings(byId("type-id").value, "");
   bridge.requestReadiness();
   bridge.requestProjectsFolder();

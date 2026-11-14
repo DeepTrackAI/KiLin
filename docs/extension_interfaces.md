@@ -91,6 +91,17 @@ router prompts, installed tool requirements, selected template resources,
 and how the GUI lists it. Merely adding a type ID is not proof that the
 entire pipeline supports its source formats or domain reasoning.
 
+## Metadata contract for configurable settings
+
+Shared setting explanations belong to `kilin/settings_info.json`. Each
+registered tool must provide `settings_info.json` with one record per
+normalized `SETTINGS` key from its `defaults.json`. Records have only
+`title`, `summary` and `description` and are served through KíLín's
+core `get_settings_info()` interface without importing the GUI. Values,
+validity and precedence remain owned by the existing settings parsers.
+The new metadata resource must be included in the tool package-data table
+and verified in wheel tests. See [configuration metadata](configuration.md#settings-information-explanations-not-configuration).
+
 ## Source access by built-in tools
 
 Source readers operate on the validated selection produced by the

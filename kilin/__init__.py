@@ -104,6 +104,11 @@ from .project import (
     open_project,
     prepare_project_workspace,
 )
+from .settings_info import (
+    get_setting_info,
+    get_settings_info,
+    get_tool_settings_info,
+)
 from .project_behavior import (
     PROJECT_BEHAVIOR_FILE,
     effective_project_type,
@@ -270,6 +275,9 @@ from .workspace import (
 )
 
 __all__ = [
+    "get_setting_info",
+    "get_settings_info",
+    "get_tool_settings_info",
     "__version__",
     "ANSWER_PHASE_CHOICES",
     "ANSWER_PHASE_COMPLETED",

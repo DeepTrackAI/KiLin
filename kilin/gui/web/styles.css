@@ -869,3 +869,68 @@ details[open]::details-content { block-size: auto; }
   .behavior-source-limits { grid-template-columns: 1fr; }
   .settings-tab { padding-inline: 5px; font-size: 12px; }
 }
+
+/* Explanatory metadata is supplied by the core; styles are presentation only. */
+.setting-help-caption {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  vertical-align: middle;
+  flex-wrap: wrap;
+}
+.setting-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  font-size: 12px;
+  font-weight: 400;
+}
+.setting-help-trigger {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface-soft);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: help;
+}
+.setting-help-trigger:hover,
+.setting-help-trigger:focus-visible {
+  color: var(--text);
+  outline: 2px solid var(--focus-shadow);
+  outline-offset: 1px;
+}
+.setting-help-popup {
+  display: none;
+  position: absolute;
+  z-index: 100;
+  top: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 56px));
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 5px 18px rgb(0 0 0 / 18%);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.setting-help:hover .setting-help-popup,
+.setting-help:focus-within .setting-help-popup,
+.setting-help.is-open .setting-help-popup {
+  display: block;
+}

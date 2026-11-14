@@ -30,6 +30,46 @@ use its README and `_configuration.py`.
 
 *Figure: Packaged creation defaults do not overwrite saved project profiles; application-wide GUI preferences and tool-owned defaults have separate roles.*
 
+## Settings information: explanations, not configuration
+
+The public core API exposes explanatory metadata in
+`kilin/settings_info.json`, while each registered tool owns its own
+`kilin/tools/<name>/settings_info.json`. These resources describe **all
+public configurable settings**, including settings that are not displayed
+in the desktop GUI. The files use `format: "settings-info-v1"` and map
+canonical dotted setting identifiers to `title`, `summary`, and
+`description` strings. They do not store values, accepted ranges,
+serialization policy or validation rules.
+
+The core provides three functions independent of GUI, model initialization
+and project creation:
+
+```python
+import kilin
+
+catalog = kilin.get_settings_info()
+entry = kilin.get_setting_info("project.profile.temperature")
+tool = kilin.get_tool_settings_info("reference_check")
+```
+
+`get_settings_info()` returns one versioned document with a `settings`
+mapping. Tool entries have IDs such as
+`tools.reference_check.max_checked_claims`; the tool-specific function
+returns the tool's own unprefixed lowercase keys. Each read returns a
+separate copy of cached resource contents. Metadata parsers reject
+malformed or incomplete records, duplicates and tool keys that do not
+match that tool's `defaults.json` `SETTINGS` section. Invalid metadata
+is an error only when a client explicitly requests metadata: answering,
+retrieval, loading a project and validating its settings do not depend
+on these descriptions. Repository tests enforce coverage of public
+project/profile, behavior, source-card and registered tool settings.
+
+Consumers may render `title` as a field label and `summary` as brief
+contextual help; `description` is available for CLI help and documentation.
+The GUI uses the public core API via its engine and does not read these
+JSON files itself. This resource does not supersede the separately owned
+[package defaults](package_defaults.md) or project-specific overrides.
+
 ## Project behavior overrides
 
 Each existing project's optional `project_behavior.json` changes only that

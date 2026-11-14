@@ -150,6 +150,7 @@ from kilin.workspace import (
     sync_project_sources,
 )
 from kilin.tool_settings import project_tool_settings, save_tool_settings
+from kilin.settings_info import get_settings_info
 from kilin.project_behavior import (
     PROJECT_BEHAVIOR_FILE,
     effective_project_type,
@@ -382,6 +383,11 @@ class ChatEngine:
         Send the tools the open project can use, with their settings.
     save_tool_settings(name, settings)
         Save one tool's settings for the open project.
+
+    **Setting descriptions.**
+
+    settings_info()
+        Return core- and tool-owned setting metadata for clients.
 
     **Project behavior.**
 
@@ -2335,6 +2341,22 @@ class ChatEngine:
                 message=f"Could not save the answer settings: {error}",
                 **response,
             )
+
+    def settings_info(self) -> None:
+        """Send core- and tool-owned setting explanations to clients.
+
+        Notes
+        -----
+        Descriptions are read from packaged, validated core and tool JSON
+        resources. Failure affects only contextual help, not model or
+        configuration operations.
+
+        """
+
+        try:
+            self._send("settings_info", catalog=get_settings_info())
+        except (OSError, ValueError) as error:
+            self._send("settings_info_failed", message=str(error))
 
     def behavior_settings(self) -> None:
         """Send validated global and intent editors for the open project.
@@ -4865,6 +4887,8 @@ def main() -> None:
                             command.get("request_id"),
                             command.get("project"),
                         )
+                    elif action == "settings_info":
+                        engine.settings_info()
                     elif action == "project_behavior":
                         engine.behavior_settings()
                     elif action == "save_project_behavior":

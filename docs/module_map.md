@@ -51,6 +51,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/model_settings.py`](../kilin/model_settings.py) | Resolve and persist auxiliary model settings in the KíLín core. | [Model management](model_management.md) | [Core tests](../tests/kilin/test_model_settings.py) |
 | [`kilin/project.py`](../kilin/project.py) | Create and open project workspaces independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_files.py`](../kilin/project_files.py) | Manage project-owned outputs and templates independently of the GUI. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
+| [`kilin/settings_info.py`](../kilin/settings_info.py) | Read and validate shared and tool-owned setting descriptions without GUI dependencies. | [Configuration](configuration.md) | [Metadata tests](../tests/kilin/test_settings_info.py) |
 | [`kilin/project_behavior.py`](../kilin/project_behavior.py) | Resolve and edit validated project-local behavior. | [Configuration](configuration.md) | [Core tests](../tests/kilin/test_project_behavior.py) |
 | [`kilin/project_layout.py`](../kilin/project_layout.py) | Plan and materialize a project's core folders and tool resources. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
 | [`kilin/project_type.py`](../kilin/project_type.py) | Load project types from the JSON files in ``kilin/project_types/``. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
@@ -183,7 +184,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | --- | ---: |
 | Answering pipeline | 4 |
 | Architecture | 2 |
-| Configuration | 5 |
+| Configuration | 6 |
 | Conversation ownership | 4 |
 | GUI architecture | 10 |
 | Model management | 8 |
@@ -195,19 +196,20 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 154.**
+**Total production Python modules: 155.**
 
 ## Non-Python resources and UI assets
 
 | Resource family | Implemented role | Primary reference |
 | --- | --- | --- |
+| [`kilin/settings_info.json`](../kilin/settings_info.json) | Public setting names and explanations, separate from default values | [Configuration](configuration.md) |
 | [`kilin/kilin_defaults.json`](../kilin/kilin_defaults.json) | Validated, packaged core settings | [Package defaults](package_defaults.md) |
 | [`kilin/repository_reason_codes.json`](../kilin/repository_reason_codes.json) | Shared scanner/GUI reason-code vocabulary | [Source pipeline](source_pipeline.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/project_types/`](../kilin/project_types/) | Validated packaged project type definitions | [Configuration](configuration.md), [Extension interfaces](extension_interfaces.md) |
 | [`kilin/gui/defaults.json`](../kilin/gui/defaults.json) | Immutable GUI initial settings | [Configuration](configuration.md), [GUI README](../kilin/gui/README.md) |
 | [`kilin/gui/web/`](../kilin/gui/web/) | HTML layout, styling and JavaScript state/events | [GUI architecture](gui_architecture.md), [GUI protocol](gui_protocol.md) |
 | [`kilin/gui/icons/`](../kilin/gui/icons/) | Packaged native GUI icon assets | [GUI architecture](gui_architecture.md) |
-| [`kilin/tools/`](../kilin/tools/) | Registered tools' READMEs, `defaults.json` files and summary templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
+| [`kilin/tools/`](../kilin/tools/) | Registered tools' READMEs, `defaults.json`, `settings_info.json` and templates | [Tool packages](tool_packages.md), [Extension interfaces](extension_interfaces.md) |
 | [`tutorials/`](../tutorials/) | Eighteen executable numbered learning notebooks and reference SVGs | [Development](development.md) |
 | [`assets/`](../assets/) | Maintenance, benchmark and notebook-validation assets | [Development](development.md), [Performance](performance.md) |
 | [`pyproject.toml`](../pyproject.toml) | Python requirements, dependency extras, package data, tooling | [Development](development.md) |

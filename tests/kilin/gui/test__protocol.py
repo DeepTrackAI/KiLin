@@ -80,6 +80,7 @@ class TestGUIProtocolCommands(unittest.TestCase):
             ({"action": "close"}, "close"),
             ({"action": "reset"}, "reset"),
             ({"action": "new_conversation"}, "create_conversation"),
+            ({"action": "settings_info"}, "settings_info"),
             ({"action": "project_behavior"}, "behavior_settings"),
             ({"action": "tool_settings"}, "tool_settings"),
             (
@@ -751,7 +752,7 @@ class TestGUIProtocolEvents(unittest.TestCase):
             "reference_error",
             "reference_preview", "reset", "settings", "source_changes",
             "sources_checked", "status", "stopped", "tool_settings",
-            "project_behavior",
+            "settings_info", "settings_info_failed", "project_behavior",
             "terms_acceptance_failed", "terms_acceptance_saved",
             "trace_ready",
             "usage_progress",

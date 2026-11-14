@@ -82,23 +82,25 @@ include = ["kilin*"]
 # Data-only folders: project types and report templates.
 "kilin" = [
     "kilin_defaults.json",
+    "settings_info.json",
     "repository_reason_codes.json",
     "project_types/*.json",
 ]
-"kilin.tools.project_inventory" = ["README.md", "defaults.json"]
-"kilin.tools.scan_and_list" = ["README.md", "defaults.json"]
-"kilin.tools.batch_classify" = ["README.md", "defaults.json"]
-"kilin.tools.batch_review" = ["README.md", "defaults.json"]
-"kilin.tools.filter_results" = ["README.md", "defaults.json"]
-"kilin.tools.find_fact" = ["README.md", "defaults.json"]
-"kilin.tools.find_passages" = ["README.md", "defaults.json"]
-"kilin.tools.paper_overview" = ["README.md", "defaults.json"]
-"kilin.tools.reference_check" = ["README.md", "defaults.json"]
-"kilin.tools.show_source" = ["README.md", "defaults.json"]
-"kilin.tools.suggest_reference" = ["README.md", "defaults.json"]
+"kilin.tools.project_inventory" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.scan_and_list" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.batch_classify" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.batch_review" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.filter_results" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.find_fact" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.find_passages" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.paper_overview" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.reference_check" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.show_source" = ["README.md", "defaults.json", "settings_info.json"]
+"kilin.tools.suggest_reference" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",
+    "settings_info.json",
     "templates/*.md",
 ]
 "kilin.gui" = [

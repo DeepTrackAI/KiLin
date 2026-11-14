@@ -378,6 +378,15 @@ where possible and the GUI asks for inspection and reopening. Rollback
 covers the profile file, **not** every intermediate index artifact; those
 are validated when the project reopens.
 
+Settings field labels and ⓘ help popovers come from the core and
+registered tools' `settings_info.json` resources. The desktop GUI receives
+these descriptions through the existing engine protocol; it does not
+maintain a second copy of the explanation strings. Hover, focus or click
+an information icon for a brief description. Click elsewhere or press
+Escape to close an opened popup. Help metadata has no effect on saved
+settings or answer generation. The longer `description` in each metadata
+record is also available to other clients through KíLín's public API.
+
 The **Intents** tab edits the effective behavior of the opened project.
 The Project-wide section contains shared description, instructions,
 guidance, embedding instruction, recent-turn limit, default intent, and
