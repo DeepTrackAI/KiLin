@@ -1749,7 +1749,10 @@ function createBehaviorEditor(scope, record, id = "") {
   editor.dataset.intentId = id;
   editor.dataset.initial = JSON.stringify(record.values);
   const values = record.values;
-  editor.append(behaviorField("description", "Routing description",
+  const descriptionLabel = scope === "global"
+    ? "Project description (for routing)"
+    : "Intent description (for routing)";
+  editor.append(behaviorField("description", descriptionLabel,
     values.description, "multiline", { rows: 3 }));
   editor.append(behaviorField("system_prompt", "System instructions",
     values.system_prompt, "multiline", { rows: 6,

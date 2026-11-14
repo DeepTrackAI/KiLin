@@ -10,6 +10,7 @@ engine tests check core validation and index recovery.
 # pylint: disable=C0103:invalid-name
 
 from pathlib import Path
+import re
 import shutil
 import unittest
 
@@ -39,6 +40,38 @@ class TestIntentSettingsFrontend(unittest.TestCase):
             'reset-index-capabilities', 'index-capabilities-status',
         ):
             self.assertIn(f'id="{key}"', page)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js unavailable")
+    def test_description_labels_are_specific_to_editor_scope(self):
+        """Check the actual GUI label expression for both editor scopes."""
+
+        source = (_WEB / "app.js").read_text(encoding="utf-8")
+        editor = extract_function(source, "createBehaviorEditor")
+        match = re.search(
+            r'const descriptionLabel = scope === "global".*?;',
+            editor,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn(
+            'behaviorField("description", descriptionLabel', editor
+        )
+        script = r"""
+const assert = require("node:assert/strict");
+for (const [scope, expected] of [
+  ["global", "Project description (for routing)"],
+  ["intent", "Intent description (for routing)"],
+]) {
+"""
+        script += match.group(0) + "\n"
+        script += r"""
+  assert.equal(descriptionLabel, expected);
+}
+console.log("description labels passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("description labels passed", result.stdout)
 
     @unittest.skipUnless(shutil.which("node"), "Node.js unavailable")
     def test_editor_values_and_revision_aware_saving(self):
