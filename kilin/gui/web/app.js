@@ -1364,13 +1364,18 @@ function restoreDefaultModels(role) {
 /**
  * Show one Settings tab and hide the sections of the others.
  *
- * @param name Tab name: project, models, answers, or tools.
+ * @param name Project settings tab name.
  */
 function showSettingsTab(name) {
   settingsTab = name;
   // The open project's tools, read fresh each time the tab is shown.
   if (name === "tools") requestToolSettings();
-  if (name === "intents" || name === "indexing") requestProjectBehavior();
+  if (["intents", "indexing", "memory"].includes(name)) {
+    requestProjectBehavior();
+  }
+  if (name === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
+  }
   for (const tab of document.querySelectorAll(".settings-tab")) {
     const selected = tab.dataset.tab === name;
     tab.classList.toggle("active", selected);
@@ -2506,8 +2511,11 @@ function openModels() {
   showProjectSettings();
   // The Tools tab may still be selected from another project.
   if (settingsTab === "tools") requestToolSettings();
-  if (settingsTab === "intents" || settingsTab === "indexing") {
+  if (["intents", "indexing", "memory"].includes(settingsTab)) {
     requestProjectBehavior();
+  }
+  if (settingsTab === "memory" && bridge && ready && openProjectPath) {
+    bridge.requestMemoryStatus(openProjectPath);
   }
   byId("models-panel").classList.remove("hidden");
   byId("close-models").focus();
@@ -4826,8 +4834,7 @@ function appendMemoryProvenance(answer, turn) {
   const heading = document.createElement("p");
   heading.textContent = "Earlier conversation memory (not source evidence)";
   panel.append(heading);
-  // Two memories may be a question and answer from the same turn.
-  // Group by the saved turn identity, not by message text or label.
+  // Group by durable turn identity; distinct messages retain their labels.
   const groups = new Map();
   for (const [index, reference] of references.entries()) {
     const origins = Array.isArray(reference.origins) ? reference.origins : [];
@@ -4842,25 +4849,38 @@ function appendMemoryProvenance(answer, turn) {
     if (!group.origin && origin) group.origin = origin;
     const role = reference.role === "user" ? "Question"
       : reference.role === "assistant" ? "Answer" : "Message";
-    group.messages.push(`${reference.label} · ${role}`);
+    group.messages.push({label: reference.label, role});
   }
   for (const group of groups.values()) {
     const origin = group.origin;
     const details = lastConversationData?.conversations?.find((item) =>
       item.conversation_id === origin?.conversation_id);
-    const button = document.createElement("button");
-    button.type = "button";
-    const messages = group.messages.join(" · ");
-    button.textContent = origin
-      ? `${details.name} · turn ${origin.turn_number} — ${messages}`
-      : `Conversation unavailable — ${messages}`;
-    button.title = "Open the earlier conversation; not source evidence.";
-    button.disabled = !origin;
-    if (origin) button.addEventListener("click", (event) => {
+    const item = document.createElement("section");
+    item.className = "memory-turn";
+    const link = document.createElement("button");
+    link.type = "button";
+    link.className = "memory-turn-link";
+    link.textContent = origin
+      ? `${details.name} · turn ${origin.turn_number}`
+      : "Conversation unavailable";
+    link.title = "Open the earlier conversation; not source evidence.";
+    link.disabled = !origin;
+    if (origin) link.addEventListener("click", (event) => {
       event.stopPropagation();
       openMemoryOrigin(origin);
     });
-    panel.append(button);
+    const messages = document.createElement("div");
+    messages.className = "memory-turn-messages";
+    for (const message of group.messages) {
+      const bubble = document.createElement("div");
+      const alignment = message.role === "Question" ? "memory-question"
+        : message.role === "Answer" ? "memory-answer" : "memory-other";
+      bubble.className = `memory-message ${alignment}`;
+      bubble.textContent = `${message.label} · ${message.role}`;
+      messages.append(bubble);
+    }
+    item.append(link, messages);
+    panel.append(item);
   }
   answer.append(panel);
 }

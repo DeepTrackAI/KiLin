@@ -362,10 +362,11 @@ the normal project-opening path; it is not replaced by a new-project default.
 If switching projects fails after the former session has been released, the
 GUI returns to the start screen and displays the error. A profile rejected
 before the former session is released leaves that session open.
-The Project part has six tabs: General (the project's name and Delete),
-Indexing (file types, chunking and advanced index capabilities), Models
-(effort levels, intent model, embedding model), Answers (temperature,
-answer length, search depth, thinking), Intents, and Tools. Changes are submitted when chosen or
+The Project part has seven tabs: General (the project's name and Delete),
+Indexing (file types, chunking and advanced index capabilities), Memory
+(conversation policy and index status), Models (effort levels, intent
+model, embedding model), Answers (temperature, answer length, search
+depth, thinking), Intents, and Tools. Changes are submitted when chosen or
 when a typed field is committed (Enter or leaving the field). Answer settings
 are not considered saved until the engine acknowledges the profile write.
 While one answer-settings save is pending, later edits remain available and
@@ -404,8 +405,8 @@ Each editor has **Save settings**, **Restore defaults**, and a separate
 shows the base project instructions with the intent's system instructions.
 Only project-local overrides are saved, never packaged project types.
 
-The **Indexing** tab also contains an independent **Conversation memory**
-section. Project-wide controls enable memory, select automatic user-question
+The dedicated **Memory** tab contains the project-wide conversation
+memory policy and index status. Controls select automatic user-question
 and assistant-answer inclusion, bound retrieved memory hits and token budget,
 and configure exclusion of disliked answers from ordinary chat context.
 Memory is enabled by default for new Writing, Brainstorming and Reviewing

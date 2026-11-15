@@ -226,9 +226,12 @@ feedback store's optimistic revision. They are disabled during answer
 processing and while a write is pending. A stale write does not alter the
 checkpoint: the page reloads authoritative feedback instead. Archiving a
 conversation removes it as a new feedback target, without erasing ratings
-that remain relevant through branches.
+that remain relevant through branches. Selected controls use filled icons;
+unselected controls remain outlined. This reflects confirmed feedback
+without changing the independent Save and reaction values.
 
-The **Indexing** tab edits global memory policy and displays counts from
+The dedicated **Memory** tab edits global memory policy and displays
+counts from
 the last saved derived index. **Update memory index** explicitly invokes
 ``RAGSession.sync_conversation_memory()`` through the GUI engine. It may
 embed new messages, but does not rebuild document/source indexes. The

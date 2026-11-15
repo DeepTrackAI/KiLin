@@ -50,6 +50,24 @@ class TestConversationMemoryFrontend(unittest.TestCase):
                       self.source)
         self.assertIn('"intent_memory"', self.source)
 
+    def test_selected_feedback_icons_are_filled(self) -> None:
+        """Use filled icons only for feedback confirmed as selected."""
+
+        styles = (_WEB.parent / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(
+            ".message-feedback.feedback-active svg { fill: currentColor; }",
+            styles,
+        )
+        self.assertIn(
+            ".message-action svg { width: 15px; height: 15px; "
+            "fill: none;",
+            styles,
+        )
+        self.assertIn('button.classList.toggle("feedback-active", active)',
+                      self.source)
+        self.assertIn('button.setAttribute("aria-pressed", String(active))',
+                      self.source)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_feedback_save_and_correlated_acknowledgement(self) -> None:
         """Ignore wrong replies and restore controls on rejected writes."""
@@ -238,16 +256,25 @@ appendMemoryProvenance(answer, {parameters: {memory_references: [
   ]},
 ]}});
 assert.equal(answer.children.length, 1);
-const buttons = answer.children[0].children.slice(1);
-assert.equal(buttons.length, 3);
-assert.match(buttons[0].textContent, /Brainstorming branch · turn 2/);
-assert.match(buttons[0].textContent, /M1 · Question/);
-assert.match(buttons[0].textContent, /M2 · Answer/);
-assert.match(buttons[1].textContent, /Other discussion · turn 1/);
-assert.match(buttons[1].textContent, /M3 · Question/);
-assert.equal(buttons[2].disabled, true);
-assert.match(buttons[2].textContent, /M4 · Answer/);
-buttons[0].listeners.click({stopPropagation() {}});
+const groups = answer.children[0].children.slice(1);
+assert.equal(groups.length, 3);
+const firstLink = groups[0].children[0];
+const firstMessages = groups[0].children[1].children;
+assert.match(firstLink.textContent, /Brainstorming branch · turn 2/);
+assert.equal(firstMessages.length, 2);
+assert.equal(firstMessages[0].textContent, "M1 · Question");
+assert.equal(firstMessages[0].className,
+  "memory-message memory-question");
+assert.equal(firstMessages[1].textContent, "M2 · Answer");
+assert.equal(firstMessages[1].className,
+  "memory-message memory-answer");
+assert.match(groups[1].children[0].textContent, /Other discussion · turn 1/);
+assert.equal(groups[1].children[1].children[0].textContent,
+  "M3 · Question");
+assert.equal(groups[2].children[0].disabled, true);
+assert.equal(groups[2].children[1].children[0].textContent,
+  "M4 · Answer");
+firstLink.listeners.click({stopPropagation() {}});
 assert.deepEqual(navigation, {conversation_id: "branch", turn_number: 2});
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
 console.log("grouped memory provenance passed");
@@ -288,9 +315,13 @@ assert.equal(answer.children.length, 1);
 const panel = answer.children[0];
 assert.equal(panel.className, "memory-provenance");
 assert.match(panel.children[0].textContent, /not source evidence/);
-const button = panel.children[1];
+const group = panel.children[1];
+const button = group.children[0];
 assert.equal(button.disabled, false);
 assert.match(button.textContent, /Original brainstorming/);
+assert.equal(group.children[1].children[0].textContent, "M1 · Answer");
+assert.equal(group.children[1].children[0].className,
+  "memory-message memory-answer");
 button.listeners.click({stopPropagation: () => {}});
 assert.deepEqual(memoryNavigation, {conversation_id: "c-1", turn_number: 2});
 lastConversationData.conversations = [];
@@ -298,7 +329,7 @@ appendMemoryProvenance(answer, {
   parameters: {memory_references: [{label: "M1",
     origins: [{conversation_id: "c-1", turn_number: 2}]}]},
 });
-assert.equal(answer.children[1].children[1].disabled, true);
+assert.equal(answer.children[1].children[1].children[0].disabled, true);
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
 console.log("memory provenance separate passed");
 """
