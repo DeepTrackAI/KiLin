@@ -184,6 +184,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/tools/suggest_reference/tool.py`](../kilin/tools/suggest_reference/tool.py) | Tool ``suggest_reference``: find papers in the project to cite. | [Per-tool README](../kilin/tools/suggest_reference/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/__init__.py`](../kilin/tools/writing_check/__init__.py) | The ``writing_check`` tool: grammar and style of a long document. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tools/writing_check/_document.py`](../kilin/tools/writing_check/_document.py) | Read a document into sections and paragraphs of prose. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
+| [`kilin/tools/writing_check/_scope.py`](../kilin/tools/writing_check/_scope.py) | Choose the part of a document a question asks to check. | [Per-tool README](../kilin/tools/writing_check/README.md) | [Tool tests](../tests/kilin/tools/) |
 | [`kilin/tool_settings.py`](../kilin/tool_settings.py) | List and change the tool settings of one KíLín project. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
 | [`kilin/trace_logging.py`](../kilin/trace_logging.py) | Record structured execution events and resumable conversation state. | [Trace recording](trace_recording.md) | [Core tests](../tests/kilin/) |
 | [`kilin/workspace.py`](../kilin/workspace.py) | Copy selected local sources into a managed multi-source workspace. | [Project workspaces](project_workspaces.md) | [Core tests](../tests/kilin/) |
@@ -200,7 +201,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Conversation memory | 8 |
 | GUI architecture | 10 |
 | Model management | 8 |
-| Per-tool README | 44 |
+| Per-tool README | 45 |
 | Project workspaces | 6 |
 | Retrieval pipeline | 29 |
 | Source pipeline | 18 |
