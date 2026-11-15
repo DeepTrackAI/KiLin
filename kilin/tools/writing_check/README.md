@@ -9,6 +9,14 @@ paragraph is checked by the answering model, and every suggestion it
 makes is checked before it is reported. A plan is shown for confirmation
 when required by the confirmation policy.
 
+The `writing_check` intent is offered in the literature and the writing
+(Writing Assistant) project types. Its cues send questions such as "check
+the grammar of …", "proofread the manuscript" or "are there typos …" to it
+without the router, ahead of the writing assistant's own rewriting intent;
+"rewrite this", "polish the introduction" or "proofread this: <text>" stay
+with that intent. Other questions reach it only when they use words such as
+grammar, spelling, typos, style or wording (`requires`).
+
 For "check the grammar and style of the methods of draft.tex", the tool:
 
 1. Chooses the document with `choose_document` (the named file, the file

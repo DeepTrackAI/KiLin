@@ -22,6 +22,7 @@ from unittest.mock import Mock
 
 from docx import Document as WordDocument
 
+from kilin.answering import _cued_intent
 from kilin.project_type import project_type
 from kilin.tools import writing_check as tool
 from kilin.tools._contract import ToolRequest
@@ -81,6 +82,38 @@ class TestWritingCheckPackage(unittest.TestCase):
     def test_literature_intent_uses_the_tool(self) -> None:
         intent = project_type("literature").intents["writing_check"]
         self.assertEqual(intent.tool.name, TOOL_WRITING_CHECK)
+
+    def test_writing_questions_are_cued_in_both_project_types(self) -> None:
+        for type_id in ("literature", "writing"):
+            project = project_type(type_id)
+            self.assertEqual(
+                project.intents["writing_check"].tool.name,
+                TOOL_WRITING_CHECK,
+            )
+            for question in (
+                "check the grammar of the methods of draft.tex",
+                "proofread the methods section",
+                "check the English of the second paragraph",
+                "are there typos in my manuscript?",
+            ):
+                with self.subTest(type_id=type_id, question=question):
+                    self.assertEqual(_cued_intent(project, question),
+                                     "writing_check")
+            for question in (
+                "check the references of draft.tex",
+                "which papers discuss writing style?",
+                "summarize the paper",
+            ):
+                with self.subTest(type_id=type_id, question=question):
+                    self.assertNotEqual(_cued_intent(project, question),
+                                        "writing_check")
+        # Rewriting stays with the writing assistant's own intent.
+        writing = project_type("writing")
+        for question in ("rewrite this abstract",
+                         "proofread this: The cells was moving."):
+            with self.subTest(question=question):
+                self.assertEqual(_cued_intent(writing, question), "writing")
+        self.assertIn(".tex", writing.extensions)
 
 
 class TestWritingCheckRun(unittest.TestCase):
@@ -150,6 +183,12 @@ class TestWritingCheckRun(unittest.TestCase):
                       text)
         self.assertEqual(result.summary["findings"],
                          {"grammar": 2, "consistency": 1, "style": 2})
+        # Progress names each paragraph once, grammar then style.
+        steps = [c.args[0] for c in context.progress.call_args_list
+                 if c.args[0].startswith("Checking ") and "paragraph" in
+                 c.args[0]]
+        self.assertEqual(steps[:2], ["Checking grammar of paragraph 1 of 4",
+                                     "Checking style of paragraph 1 of 4"])
 
     def test_part_and_card(self) -> None:
         card = Mock(return_value={"title": "Tracking", "aim": "Diffusion."})

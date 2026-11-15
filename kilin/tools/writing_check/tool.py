@@ -341,12 +341,12 @@ def run(
             context.progress("Describing the document")
             brief = document_brief(document, context.ask_model)
         about = document_context(card, brief, glossary)
-        total = len(paragraphs) * len(levels)
-        for index in paragraphs:
+        for position, index in enumerate(paragraphs, start=1):
             for level in levels:
                 checked += 1
                 context.progress(
-                    f"Checking paragraph {checked} of {total} ({level})"
+                    f"Checking {level} of paragraph {position} of "
+                    f"{len(paragraphs)}"
                 )
                 kept, rejected, failure = review_paragraph(
                     level, document, index, about, glossary,
