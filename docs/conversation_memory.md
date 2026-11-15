@@ -243,12 +243,14 @@ project revisions still protect all editor writes against stale updates.
 When an answer retrieves earlier conversation memory, the completed turn
 persists navigational ``parameters.memory_references`` metadata: labels,
 source turn UUIDs and active conversation/one-based-turn origins. No memory
-text is copied into this metadata. The GUI shows these links beneath the
-answer, **separately from scientific source citations**. It groups matching
-turn UUIDs so a retrieved question and answer from the same conversation
-turn appear together, with their separate memory labels and roles, rather
-than as duplicate navigation links. Selecting a link
-opens the recorded conversation and highlights its turn. An archived or
+text is copied into this metadata. The answer's action row shows a
+small memory icon and the number of retrieved messages, alongside Save,
+Like, and Dislike. The reference details are collapsed by default; clicking
+the icon expands the original grouped references below the action row.
+They remain **separate from scientific source citations**. Matching turn
+UUIDs group a retrieved question and answer with separate labels and roles
+instead of duplicate navigation links. Selecting a link opens the recorded
+conversation and highlights its turn. An archived or
 missing conversation yields an unavailable link rather than an invented
 source citation. A branch can provide another active origin of the same
 turn. Existing source citation numbering and evidence previews are

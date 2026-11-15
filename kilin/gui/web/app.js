@@ -4767,7 +4767,6 @@ function renderAnswer(answer, turn, item, thinkingMs = null) {
     return superscript;
   });
   answer.append(body);
-  appendMemoryProvenance(answer, turn);
   if (turn.parameters?.finish_reason === "length") {
     const notice = document.createElement("p");
     notice.className = "answer-limit-notice";
@@ -4822,15 +4821,22 @@ function openMemoryOrigin(origin) {
 }
 
 /**
- * Render memory origins separately from documentary source citations.
- * @param answer Completed answer container.
+ * Add a compact, expandable memory reference control to the answer actions.
+ * Memory origins remain separate from documentary source citations.
+ * @param row Completed answer's action row.
  * @param turn Saved turn including optional memory references.
  */
-function appendMemoryProvenance(answer, turn) {
+function appendMemoryProvenance(row, turn) {
   const references = turn.parameters?.memory_references;
   if (!Array.isArray(references) || !references.length) return;
-  const panel = document.createElement("div");
+  const wrapper = document.createElement("div");
+  wrapper.className = "memory-provenance-wrapper";
+  wrapper.hidden = true;
+  const panel = document.createElement("section");
   panel.className = "memory-provenance";
+  panel.id = `memory-provenance-${turn.conversation_turn_uuid}`;
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "Earlier conversation memory (not source evidence)");
   const heading = document.createElement("p");
   heading.textContent = "Earlier conversation memory (not source evidence)";
   panel.append(heading);
@@ -4882,7 +4888,43 @@ function appendMemoryProvenance(answer, turn) {
     item.append(link, messages);
     panel.append(item);
   }
-  answer.append(panel);
+  const count = references.length;
+  const description = `${count} conversation ${count === 1 ? "memory" : "memories"}`
+    + ` from ${groups.size} ${groups.size === 1 ? "turn" : "turns"}`
+    + " (not source evidence)";
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "message-action memory-toggle";
+  toggle.title = description;
+  toggle.innerHTML = '<svg aria-hidden="true" viewBox="0 0 24 24">'
+    + '<path d="M4 5h16v12H9l-5 4V5z"/>'
+    + '<path d="M8 9h8M8 13h5"/></svg>';
+  const badge = document.createElement("span");
+  badge.className = "memory-toggle-count";
+  badge.textContent = String(count);
+  toggle.append(badge);
+  toggle.setAttribute("aria-controls", panel.id);
+  const setExpanded = (expanded) => {
+    wrapper.hidden = !expanded;
+    row.classList.toggle("memory-expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-label", `${expanded ? "Hide" : "Show"} ${description}`);
+  };
+  setExpanded(false);
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    setExpanded(wrapper.hidden);
+  });
+  row.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || wrapper.hidden) return;
+    event.stopPropagation();
+    setExpanded(false);
+    toggle.focus();
+  });
+  row.classList.add("memory-available");
+  row.prepend(toggle);
+  wrapper.append(panel);
+  row.append(wrapper);
 }
 
 // Markdown blocks the renderer recognizes at the start of a line.
@@ -5525,6 +5567,7 @@ function addMessageActions(item, turn) {
     const row = messageActions(answerCopyText(turn), turn.timestamp, "answer",
       () => branchFromMessage(item, true, ""));
     appendFeedbackActions(row, turn, "assistant");
+    appendMemoryProvenance(row, turn);
     answer.after(row);
   }
 }

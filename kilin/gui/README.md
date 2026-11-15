@@ -616,13 +616,15 @@ in the project's `memory/feedback.json`, independently of conversation
 checkpoints. A stale or invalid update shows an error and reloads the saved
 feedback. Controls remain unavailable while an answer is in progress.
 
-When a generated answer uses conversation memory, **Earlier conversation
-memory** links appear beneath it. These navigate to the original saved
-conversation and highlight its turn when the conversation is still active;
-otherwise the link is unavailable. They are explicitly **not scientific
-source citations** and do not alter the evidence preview or source citation
-numbers. A branch retaining the same turn UUID can share feedback and provide
-another active memory origin.
+When an answer uses conversation memory, its action row shows a compact
+memory icon with a count of retrieved messages next to the feedback controls.
+The details are collapsed by default; activating the icon expands the
+**Earlier conversation memory** references below the action row. The
+references navigate to the original saved conversation and highlight its
+turn when still active; otherwise the link is unavailable. They are
+explicitly **not scientific source citations** and do not alter evidence
+previews or source citation numbers. A branch retaining the same turn UUID
+can share feedback and provide another active memory origin.
 
 Clicking an answer selects its evidence when the side panels are visible;
 selecting text does not change the current reference. Ordinary answer clicks

@@ -216,6 +216,43 @@ console.log("memory settings scope passed");
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("scope passed", result.stdout)
 
+    def test_memory_disclosure_stays_in_action_row(self) -> None:
+        """Keep memory references collapsed below the answer, not in it."""
+
+        self.assertNotIn("appendMemoryProvenance(answer, turn)", self.source)
+        self.assertIn(
+            'appendMemoryProvenance(row, turn);',
+            extract_function(self.source, "addMessageActions"),
+        )
+        styles = (_WEB.parent / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('.memory-provenance-wrapper[hidden] { display: none; }',
+                      styles)
+        self.assertIn('.message-actions.memory-available { opacity: 1;',
+                      styles)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
+    def test_no_memory_does_not_add_an_action(self) -> None:
+        """Answers without memory keep the existing action row unchanged."""
+
+        script = r"""
+const assert = require("node:assert/strict");
+const document = {createElement: () => {
+  throw Error("unexpected DOM access");
+}};
+const row = {children: [], append(item) {this.children.push(item);}};
+const lastConversationData = null;
+"""
+        script += extract_function(self.source, "appendMemoryProvenance")
+        script += r"""
+appendMemoryProvenance(row, {});
+appendMemoryProvenance(row, {parameters: {memory_references: []}});
+assert.equal(row.children.length, 0);
+console.log("no memory action passed");
+"""
+        result = run_node(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("no memory action passed", result.stdout)
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is not available")
     def test_grouped_memory_origin_preserves_message_roles(self) -> None:
         """Group one question and answer without losing labels or links."""
@@ -225,8 +262,12 @@ const assert = require("node:assert/strict");
 const elements = [];
 const document = {createElement: (kind) => {
   const element = {kind, children: [], disabled: false, textContent: "",
-    listeners: {}, append(...items) {this.children.push(...items);},
-    addEventListener(name, callback) {this.listeners[name] = callback;}};
+    listeners: {}, attributes: {}, hidden: false,
+    append(...items) {this.children.push(...items);},
+    prepend(...items) {this.children.unshift(...items);},
+    setAttribute(name, value) {this.attributes[name] = value;},
+    addEventListener(name, callback) {this.listeners[name] = callback;},
+    focus() {this.focused = true;}};
   elements.push(element);
   return element;
 }};
@@ -234,13 +275,22 @@ let lastConversationData = {conversations: [
   {conversation_id: "branch", name: "Brainstorming branch"},
   {conversation_id: "different", name: "Other discussion"},
 ]};
-const answer = {children: [], append(item) {this.children.push(item);}};
+const row = document.createElement("div");
+const rowClasses = new Set();
+row.classList = {
+  add(name) {rowClasses.add(name);},
+  toggle(name, active) {
+    active ? rowClasses.add(name) : rowClasses.delete(name);
+  },
+};
 let navigation = null;
 const openMemoryOrigin = (origin) => {navigation = origin;};
 """
         script += extract_function(self.source, "appendMemoryProvenance")
         script += r"""
-appendMemoryProvenance(answer, {parameters: {memory_references: [
+appendMemoryProvenance(row, {
+  conversation_turn_uuid: "a".repeat(32),
+  parameters: {memory_references: [
   {label: "M1", turn_uuid: "first", role: "user", origins: [
     {conversation_id: "archived", turn_number: 2},
     {conversation_id: "branch", turn_number: 2},
@@ -255,8 +305,23 @@ appendMemoryProvenance(answer, {parameters: {memory_references: [
     {conversation_id: "missing", turn_number: 5},
   ]},
 ]}});
-assert.equal(answer.children.length, 1);
-const groups = answer.children[0].children.slice(1);
+assert.equal(row.children.length, 2);
+assert.equal(rowClasses.has("memory-available"), true);
+const toggle = row.children[0], wrapper = row.children[1];
+const panel = wrapper.children[0];
+assert.equal(toggle.className, "message-action memory-toggle");
+assert.equal(toggle.children[0].textContent, "4");
+assert.equal(toggle.attributes["aria-controls"], panel.id);
+assert.equal(toggle.attributes["aria-expanded"], "false");
+assert.equal(wrapper.hidden, true);
+assert.equal(panel.attributes.role, "region");
+let stopped = 0;
+toggle.listeners.click({stopPropagation() {stopped++;}});
+assert.equal(stopped, 1);
+assert.equal(wrapper.hidden, false);
+assert.equal(toggle.attributes["aria-expanded"], "true");
+assert.equal(rowClasses.has("memory-expanded"), true);
+const groups = panel.children.slice(1);
 assert.equal(groups.length, 3);
 const firstLink = groups[0].children[0];
 const firstMessages = groups[0].children[1].children;
@@ -277,6 +342,15 @@ assert.equal(groups[2].children[1].children[0].textContent,
 firstLink.listeners.click({stopPropagation() {}});
 assert.deepEqual(navigation, {conversation_id: "branch", turn_number: 2});
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
+row.listeners.keydown({key: "Escape", stopPropagation() {stopped++;}});
+assert.equal(stopped, 2);
+assert.equal(wrapper.hidden, true);
+assert.equal(toggle.attributes["aria-expanded"], "false");
+assert.equal(toggle.focused, true);
+toggle.listeners.click({stopPropagation() {stopped++;}});
+assert.equal(wrapper.hidden, false);
+toggle.listeners.click({stopPropagation() {stopped++;}});
+assert.equal(wrapper.hidden, true);
 console.log("grouped memory provenance passed");
 """
         result = run_node(script)
@@ -292,8 +366,12 @@ const assert = require("node:assert/strict");
 const elements = [];
 const document = {createElement: (kind) => {
   const element = {kind, children: [], disabled: false, textContent: "",
-    listeners: {}, append(...items) {this.children.push(...items);},
-    addEventListener(name, callback) {this.listeners[name] = callback;}};
+    listeners: {}, attributes: {}, hidden: false,
+    append(...items) {this.children.push(...items);},
+    prepend(...items) {this.children.unshift(...items);},
+    setAttribute(name, value) {this.attributes[name] = value;},
+    addEventListener(name, callback) {this.listeners[name] = callback;},
+    focus() {this.focused = true;}};
   elements.push(element);
   return element;
 }};
@@ -302,18 +380,29 @@ let lastConversationData = {conversations: [
 ]};
 let busy = false, bridge = {}, reading = null, activeConversationId = "c-2";
 let memoryNavigation = null;
-const answer = {children: [], append(item) {this.children.push(item);}};
+const row = document.createElement("div");
+const rowClasses = new Set();
+row.classList = {
+  add(name) {rowClasses.add(name);},
+  toggle(name, active) {
+    active ? rowClasses.add(name) : rowClasses.delete(name);
+  },
+};
 const openMemoryOrigin = (origin) => {memoryNavigation = origin;};
 """
         script += extract_function(self.source, "appendMemoryProvenance")
         script += r"""
-appendMemoryProvenance(answer, {
+appendMemoryProvenance(row, {
+  conversation_turn_uuid: "b".repeat(32),
   parameters: {memory_references: [{label: "M1", role: "assistant",
     origins: [{conversation_id: "c-1", turn_number: 2}]}]},
 });
-assert.equal(answer.children.length, 1);
-const panel = answer.children[0];
+assert.equal(row.children.length, 2);
+const toggle = row.children[0], wrapper = row.children[1];
+const panel = wrapper.children[0];
+assert.equal(wrapper.hidden, true);
 assert.equal(panel.className, "memory-provenance");
+assert.match(toggle.title, /not source evidence/);
 assert.match(panel.children[0].textContent, /not source evidence/);
 const group = panel.children[1];
 const button = group.children[0];
@@ -325,11 +414,13 @@ assert.equal(group.children[1].children[0].className,
 button.listeners.click({stopPropagation: () => {}});
 assert.deepEqual(memoryNavigation, {conversation_id: "c-1", turn_number: 2});
 lastConversationData.conversations = [];
-appendMemoryProvenance(answer, {
+appendMemoryProvenance(row, {
+  conversation_turn_uuid: "c".repeat(32),
   parameters: {memory_references: [{label: "M1",
     origins: [{conversation_id: "c-1", turn_number: 2}]}]},
 });
-assert.equal(answer.children[1].children[1].children[0].disabled, true);
+assert.equal(row.children[3].children[0].children[1].children[0]
+  .disabled, true);
 assert.equal(elements.filter((element) => element.kind === "sup").length, 0);
 console.log("memory provenance separate passed");
 """
