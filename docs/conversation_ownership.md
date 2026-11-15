@@ -86,6 +86,21 @@ creating another timing file or introducing a post-commit update. The
 GUI consumes the saved turn directly; it does not maintain a separate
 presentation timing file for notebook, API, or GUI answers.
 
+## Stable turn IDs and separate feedback ownership
+
+Each committed turn includes a `conversation_turn_uuid` allocated when the
+completed turn is constructed, alongside its timestamp. Branching preserves
+these IDs, and invalid or duplicate stored identities are not repaired.
+The original checkpoint remains authoritative for questions and answers.
+
+User Save/Like/Dislike feedback is stored in a separate project-local
+`memory/feedback.json`. Its independent companion-file lock and atomic
+replacement protect feedback without rewriting conversation checkpoints
+or changing their hashes. Archiving a conversation does not delete shared
+feedback; another branch retaining the turn UUID can still use it.
+See [Conversation memory](conversation_memory.md) for the strict schema,
+revision checks, and active-origin rules.
+
 ## Switching, resetting, and archiving
 
 When switching conversations, RAG acquires (or validates) the target lock

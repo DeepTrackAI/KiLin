@@ -103,9 +103,10 @@ The additional core editor scopes are `memory` for the complete
 project-wide conversation-memory policy and `intent_memory` for one
 intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
 remain unchanged. The current core validates and persists these settings;
-answer feedback, memory ingestion, prompt integration and disliked-history
-filtering are not yet implemented. The GUI does not yet expose these new
-controls.
+turn UUIDs and feedback persistence are implemented independently of the
+editor, while memory ingestion, prompt integration and disliked-history
+filtering remain pending. The GUI does not yet expose these new controls.
+See [Conversation memory](conversation_memory.md) for feedback storage.
 
 ### Conversation memory policies
 

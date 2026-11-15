@@ -146,6 +146,7 @@ from kilin.model_defaults import (
 )
 from kilin.project_type import ProjectTypeId, load_project_types
 from kilin.project_layout import (
+    CORE_PROJECT_FOLDERS,
     ensure_project_folders,
     install_project_resources,
     plan_project_layout,
@@ -890,7 +891,7 @@ def _preparing_project(
         root = actual_root
         profile_path = root / "profile.ini"
         journal = _InitializationJournal(root)
-        for name in ("indexes", "logs", "outputs", "templates"):
+        for name in CORE_PROJECT_FOLDERS:
             journal.note(root / name)
         for resource in layout.resources:
             journal.note(root / resource.destination)
@@ -1263,7 +1264,7 @@ def open_project(directory: str | Path) -> QAProject:
     if not source.is_dir():
         raise NotADirectoryError(f"Choose a source folder: {source}")
 
-    for name in ("indexes", "logs", "outputs", "templates"):
+    for name in CORE_PROJECT_FOLDERS:
         folder = root / name
         if folder.is_symlink():
             raise ValueError(f"Project folder must not be a link: {folder}")

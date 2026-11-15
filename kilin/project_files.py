@@ -50,6 +50,7 @@ from tempfile import NamedTemporaryFile
 from typing import Sequence
 
 from kilin.project import QAProject
+from kilin.project_layout import CORE_PROJECT_FOLDERS
 from kilin.workspace_resources import (
     OUTPUTS_FOLDER,
     PROJECT_SOURCES_DIRECTORY,
@@ -486,8 +487,8 @@ def list_project_files(project: QAProject) -> list[str]:
     """
 
     root = _project_root(project)
-    names = {PROJECT_SOURCES_DIRECTORY, "indexes", "logs", OUTPUTS_FOLDER,
-             TEMPLATES_FOLDER}
+    names = set(CORE_PROJECT_FOLDERS)
+    names.add(PROJECT_SOURCES_DIRECTORY)
     if project.source.is_relative_to(root) and project.source != root:
         names.add(project.source.relative_to(root).parts[0])
     found = ["profile.ini"]

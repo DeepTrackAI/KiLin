@@ -19,6 +19,7 @@ import unittest
 
 from kilin._model_completion import GenerationCancelled
 from kilin.conversation_format import conversation_state
+from kilin.conversation_memory.models import new_turn_uuid
 from kilin.gui.engine import ChatEngine
 from kilin.project_behavior import (
     effective_project_type,
@@ -624,7 +625,10 @@ class TestEngineWorkflow(unittest.TestCase):
         first = engine.active_conversation
         path = store.state_path(first)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        conversation_state(payload)["turns"] = [{"question": "Asked"}]
+        conversation_state(payload)["turns"] = [{
+            "conversation_turn_uuid": new_turn_uuid(),
+            "question": "Asked",
+        }]
         path.write_text(json.dumps(payload), encoding="utf-8")
 
         engine.create_conversation()
@@ -651,9 +655,13 @@ class TestEngineWorkflow(unittest.TestCase):
         parent = engine.active_conversation
         path = engine.conversation_store.state_path(parent)
         payload = json.loads(path.read_text(encoding="utf-8"))
-        conversation_state(payload)["turns"] = [
-            {"question": "First"}, {"question": "Second"},
+        turns = [
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "First"},
+            {"conversation_turn_uuid": new_turn_uuid(),
+             "question": "Second"},
         ]
+        conversation_state(payload)["turns"] = turns
         path.write_text(json.dumps(payload), encoding="utf-8")
 
         engine.create_conversation(branch=True, turn_count=1)
@@ -668,8 +676,7 @@ class TestEngineWorkflow(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(conversation_state(saved)["turns"],
-                         [{"question": "First"}])
+        self.assertEqual(conversation_state(saved)["turns"], turns[:1])
 
     @patch("kilin.gui.engine.RAGSession")
     def test_deleting_active_chat_preserves_trace_and_switches(self, rag):

@@ -32,6 +32,9 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | [`kilin/chunking.py`](../kilin/chunking.py) | Split source units into token-budgeted retrieval chunks. | [Source pipeline](source_pipeline.md) | [Core tests](../tests/kilin/) |
 | [`kilin/cli.py`](../kilin/cli.py) | Launch KíLín's optional graphical interface from the command line. | [Architecture](architecture.md) | [Core tests](../tests/kilin/) |
 | [`kilin/conversation_format.py`](../kilin/conversation_format.py) | Define the canonical persisted conversation-record structure in KíLín. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
+| [`kilin/conversation_memory/__init__.py`](../kilin/conversation_memory/__init__.py) | Manage project-local feedback for persisted conversation messages. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/) |
+| [`kilin/conversation_memory/models.py`](../kilin/conversation_memory/models.py) | Define durable turn identities and conversation feedback values. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/) |
+| [`kilin/conversation_memory/feedback.py`](../kilin/conversation_memory/feedback.py) | Persist project-local conversation feedback with independent ownership. | [Conversation memory](conversation_memory.md) | [Memory tests](../tests/kilin/conversation_memory/) |
 | [`kilin/conversation_ownership.py`](../kilin/conversation_ownership.py) | Provide exclusive write ownership for one conversation JSON path. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/conversations.py`](../kilin/conversations.py) | Manage named conversation records in a project's trace directory. | [Conversation ownership](conversation_ownership.md) | [Core tests](../tests/kilin/) |
 | [`kilin/defaults.py`](../kilin/defaults.py) | Load and validate KíLín's packaged configuration defaults. | [Configuration](configuration.md) | [Core tests](../tests/kilin/) |
@@ -186,6 +189,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Architecture | 2 |
 | Configuration | 6 |
 | Conversation ownership | 4 |
+| Conversation memory | 3 |
 | GUI architecture | 10 |
 | Model management | 8 |
 | Per-tool README | 42 |
@@ -196,7 +200,7 @@ unit test. Consult source docstrings and nearby tests for exact contracts.
 | Tool packages | 2 |
 | Trace recording | 1 |
 
-**Total production Python modules: 155.**
+**Total production Python modules: 158.**
 
 ## Non-Python resources and UI assets
 

@@ -19,11 +19,16 @@ project/
     sources/
     indexes/
     logs/
+    memory/
     outputs/
     templates/
 ```
 
-The `templates/` directory **always exists**, including in projects that do
+The `templates/` and `memory/` directories **always exist**. The latter
+owns user feedback about completed questions and answers; its files are not
+ordinary project sources. Feedback JSON is created only on a user update.
+See [Conversation memory](conversation_memory.md) for the ownership contract.
+The templates folder also exists in projects that do
 not currently use a templated tool. Users can add Markdown templates or
 other resources manually. The `outputs/` directory is a general area for
 project-owned results. Neither `outputs/` nor `templates/` is indexed as a

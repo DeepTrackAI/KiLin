@@ -143,7 +143,7 @@ dependencies must already be suitable for its profile.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import asdict, dataclass, is_dataclass, replace
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
@@ -164,6 +164,11 @@ from kilin._model_completion import (
     thinking_is_open,
 )
 from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_memory.models import (
+    new_turn_uuid,
+    require_saved_turn_ids,
+    require_turn_uuid,
+)
 from kilin.answer_timeline import (
     AnswerTimeline,
     _AnswerTimelineRecorder,
@@ -703,6 +708,9 @@ class ConversationTurn:
     timeline: AnswerTimeline | None, optional
         Core-measured activities and elapsed time before the checkpoint.
         None for a turn without a recorded timeline. Defaults to ``None``.
+    conversation_turn_uuid: str, optional
+        Stable UUID4 allocated when this completed turn is constructed and
+        persisted with the checkpoint. Preserved by branching.
 
     Attributes
     ----------
@@ -718,6 +726,8 @@ class ConversationTurn:
         Exact project and model settings used for this turn.
     timeline: AnswerTimeline | None
         Persisted execution timeline when available.
+    conversation_turn_uuid: str
+        Unique persistent identifier of this completed turn.
 
     Notes
     -----
@@ -733,6 +743,7 @@ class ConversationTurn:
     evidence: tuple[Evidence, ...]
     parameters: dict[str, object]
     timeline: AnswerTimeline | None = None
+    conversation_turn_uuid: str = field(default_factory=new_turn_uuid)
 
 
 class RAGSession:
@@ -5527,9 +5538,9 @@ class RAGSession:
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
             conversation = conversation_state(payload)
-            turns = [
-                _turn_from_data(item) for item in conversation.get("turns", [])
-            ]
+            saved_turns = conversation.get("turns", [])
+            require_saved_turn_ids(saved_turns)
+            turns = [_turn_from_data(item) for item in saved_turns]
             system_prompt = str(
                 conversation.get("system_prompt", _SYSTEM_PROMPT)
             )
@@ -6246,6 +6257,9 @@ def _turn_to_data(turn: ConversationTurn) -> dict[str, object]:
     """
 
     return {
+        "conversation_turn_uuid": require_turn_uuid(
+            turn.conversation_turn_uuid
+        ),
         "timestamp": turn.timestamp,
         "question": turn.question,
         "answer": turn.answer,
@@ -6314,6 +6328,9 @@ def _turn_from_data(data: dict[str, object]) -> ConversationTurn:
     if not isinstance(parameters, dict):
         raise ValueError("Saved parameters must be a mapping.")
     return ConversationTurn(
+        conversation_turn_uuid=require_turn_uuid(
+            data["conversation_turn_uuid"]
+        ),
         timestamp=str(data["timestamp"]),
         question=str(data["question"]),
         answer=str(data["answer"]),

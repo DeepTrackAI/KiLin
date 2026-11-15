@@ -150,4 +150,5 @@ class TestAnswerTimelines(unittest.TestCase):
         self.assertEqual(_turn_payloads([turn]), [{
             "timestamp": "t", "question": "Q", "answer": "A",
             "evidence": (), "parameters": {"x": 1}, "timeline": None,
+            "conversation_turn_uuid": turn.conversation_turn_uuid,
         }])

@@ -67,6 +67,7 @@ import re
 from uuid import uuid4
 
 from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_memory.models import require_saved_turn_ids
 from kilin.conversation_ownership import (
     ConversationFileLock,
     conversation_write_ownership,
@@ -200,6 +201,8 @@ class ConversationStore:
         Move a conversation's file aside and select another conversation.
     state_path(conversation)
         Resolve the registered file path of a conversation.
+    contains_turn(conversation_id, turn_uuid)
+        Check whether an active saved conversation contains a turn.
 
     Notes
     -----
@@ -414,8 +417,7 @@ class ConversationStore:
                     else None
                 )
                 turns = saved.get("turns", [])
-                if not isinstance(turns, list):
-                    raise ValueError("The saved conversation is invalid.")
+                require_saved_turn_ids(turns)
                 kept = len(turns) if turn_count is None else turn_count
                 if (
                     isinstance(kept, bool)
@@ -672,6 +674,40 @@ class ConversationStore:
             self._active_id = replacement.conversation_id
 
         return self.active(), destination
+
+    def contains_turn(self, conversation_id: str, turn_uuid: str) -> bool:
+        """Check active conversation ownership of one committed turn UUID.
+
+        Parameters
+        ----------
+        conversation_id: str
+            ID of an active conversation within this project.
+        turn_uuid: str
+            Canonical UUID of a saved completed turn.
+
+        Returns
+        -------
+        bool
+            True only if an active conversation contains this exact turn.
+
+        Raises
+        ------
+        ValueError
+            If the stored turn list is not in the current format.
+
+        Notes
+        -----
+        Discovery and JSON reading are read-only. Archived records are not
+        scanned; another active branch may still own an inherited turn.
+
+        """
+
+        self._scan()
+        if conversation_id not in self._items:
+            return False
+        path = self._paths[conversation_id]
+        saved = conversation_state(_read_json(path))
+        return turn_uuid in require_saved_turn_ids(saved.get("turns", []))
 
     def state_path(self, conversation: ConversationInfo | str) -> Path:
         """Resolve the registered file path of a conversation.
