@@ -103,9 +103,9 @@ The additional core editor scopes are `memory` for the complete
 project-wide conversation-memory policy and `intent_memory` for one
 intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
 remain unchanged. The current core validates and persists these settings;
-turn UUIDs and feedback persistence are implemented independently of the
-editor, while memory ingestion, prompt integration and disliked-history
-filtering remain pending. The GUI does not yet expose these new controls.
+turn UUIDs, feedback persistence and disliked-history filtering are
+implemented independently of the editor. Memory indexing/retrieval and
+GUI controls remain pending.
 See [Conversation memory](conversation_memory.md) for feedback storage.
 
 ### Conversation memory policies
@@ -122,7 +122,7 @@ pipeline:
 | `answers` | `none`, `selected`, `all` | Forbid answer indexing, require explicit Save/Like, or index eligible non-disliked answers automatically |
 | `max_hits` | Integer 1–20 | Maximum retrieved memory entries per answer |
 | `max_tokens` | Integer 128–20,000 | Independent memory-context token budget |
-| `history.exclude_disliked_answers` | Boolean | Suppress rejected answers from ordinary conversational context when feedback filtering is installed; defaults to true |
+| `history.exclude_disliked_answers` | Boolean | Exclude rejected question/answer pairs from ordinary conversational context, routing, evidence reuse and tools; defaults to true |
 
 The packaged defaults use `questions: all`, `answers: selected`,
 `max_hits: 4`, and `max_tokens: 2000` for every project type.

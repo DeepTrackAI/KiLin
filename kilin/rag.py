@@ -164,6 +164,7 @@ from kilin._model_completion import (
     thinking_is_open,
 )
 from kilin.atomic_writes import atomic_write_text
+from kilin.conversation_memory.feedback import FeedbackStore
 from kilin.conversation_memory.models import (
     new_turn_uuid,
     require_saved_turn_ids,
@@ -1620,9 +1621,37 @@ class RAGSession:
             # Machine state "answering": route, select history, retrieve,
             # then answer. Configuration, not the router, decides behavior.
             config = self._behavior_config()
-            decision = self._route(
-                question, config, use_router, turn_id, report_phase
+            excluded_turn_ids = self._excluded_history_turns(
+                self.turns, config=config
             )
+            route_options = (
+                {"excluded_turn_ids": excluded_turn_ids}
+                if excluded_turn_ids else {}
+            )
+            decision = self._route(
+                question, config, use_router, turn_id, report_phase,
+                **route_options,
+            )
+            # The boundary is enforced even if a custom router returns a
+            # rejected turn. Router numbering remains the saved numbering.
+            rejected = tuple(
+                number for number in decision.related_turn_ids
+                if number in excluded_turn_ids
+            )
+            if rejected:
+                related = tuple(
+                    number for number in decision.related_turn_ids
+                    if number not in excluded_turn_ids
+                )
+                decision = replace(
+                    decision,
+                    related_turn_ids=related,
+                    standalone=decision.standalone or not related,
+                    dropped_turns=(
+                        *decision.dropped_turns,
+                        *((number, "answer disliked") for number in rejected),
+                    ),
+                )
             intent = config.intents[decision.intent]
             # Retain this turn's historical intent semantics across edits.
             effective["intent_history_policy"] = intent.history_policy
@@ -1661,12 +1690,14 @@ class RAGSession:
                     intent.history_policy,
                     config.recent_turns,
                     decision,
+                    excluded_turn_ids=excluded_turn_ids,
                 )
             recent_ids = select_history(
                 len(self.turns),
                 HISTORY_POLICY_RECENT,
                 config.recent_turns,
                 decision,
+                excluded_turn_ids=excluded_turn_ids,
             )
             trace.emit(
                 "history.selection.result",
@@ -1687,12 +1718,20 @@ class RAGSession:
                 # Reuse the related turns' evidence, or the last turn's
                 # when the router related none.
                 candidates = list(decision.related_turn_ids) or [
-                    len(self.turns)
+                    next(
+                        (
+                            number
+                            for number in range(len(self.turns), 0, -1)
+                            if number not in excluded_turn_ids
+                        ),
+                        0,
+                    )
                 ]
                 source_turns = [
                     number
                     for number in candidates
                     if 0 < number <= len(self.turns)
+                    and number not in excluded_turn_ids
                     and self.turns[number - 1].evidence
                 ]
                 if not source_turns:
@@ -1707,7 +1746,8 @@ class RAGSession:
                     # The user's own words; a question that points back
                     # also carries its related turns' questions.
                     search_text = answering_search_text(
-                        question, self.turns, decision
+                        question, self.turns, decision,
+                        excluded_turn_ids=excluded_turn_ids,
                     )
 
             effective.update(
@@ -1778,7 +1818,9 @@ class RAGSession:
                     ToolRequest(
                         question,
                         search_text,
-                        earlier=self._earlier_turns(decision),
+                        earlier=self._earlier_turns(
+                            decision, excluded_turn_ids=excluded_turn_ids
+                        ),
                     ),
                     self._ask_router,
                     list(dict.fromkeys(chunk.path for chunk in self.chunks)),
@@ -1835,6 +1877,7 @@ class RAGSession:
                     number
                     for number in decision.related_turn_ids
                     if 0 < number <= len(self.turns)
+                    and number not in excluded_turn_ids
                 ]
                 if intent.include_related_evidence and related_turns:
                     # Follow-ups keep the sources their earlier answers
@@ -2002,6 +2045,10 @@ class RAGSession:
                     intent.tool,
                     question,
                     decision,
+                    **(
+                        {"excluded_turn_ids": excluded_turn_ids}
+                        if excluded_turn_ids else {}
+                    ),
                     trace_turn_id=turn_id,
                     report_phase=report_phase,
                     confirm_callback=confirm_callback,
@@ -2036,7 +2083,10 @@ class RAGSession:
                 self.chat_session.restore_history(
                     [
                         {"role": SYSTEM_ROLE, "content": system_prompt},
-                        *history_messages(self.turns, history_ids),
+                        *history_messages(
+                            self.turns, history_ids,
+                            excluded_turn_ids=excluded_turn_ids,
+                        ),
                     ]
                 )
                 prompt = _answer_prompt(
@@ -2075,7 +2125,8 @@ class RAGSession:
                         *(
                             message["content"]
                             for message in history_messages(
-                                self.turns, history_ids
+                                self.turns, history_ids,
+                                excluded_turn_ids=excluded_turn_ids,
                             )
                             if message["role"] == USER_ROLE
                         ),
@@ -2586,7 +2637,9 @@ class RAGSession:
         if self._closed:
             raise RuntimeError("This RAG session is closed.")
         previous = self.chat_session
-        messages = [dict(message) for message in previous.messages]
+        messages = self._history_without_disliked(
+            [dict(message) for message in previous.messages]
+        )
         options = {
             "thinking": previous.thinking,
             "temperature": previous.temperature,
@@ -2692,7 +2745,9 @@ class RAGSession:
 
         old = self.chat_session
         old_model_id = old.model_id
-        messages = [dict(message) for message in old.messages]
+        messages = self._history_without_disliked(
+            [dict(message) for message in old.messages]
+        )
         settings = {
             "thinking": old.thinking,
             "temperature": old.temperature,
@@ -4288,6 +4343,7 @@ class RAGSession:
         ) = None,
         token_callback: Callable[[str], None] | None = None,
         answer_guidance: str | None = None,
+        excluded_turn_ids: frozenset[int] = frozenset(),
     ) -> ToolResult:
         """Run an intent's tool with this session's services.
 
@@ -4318,6 +4374,8 @@ class RAGSession:
             generated. Defaults to ``None``.
         answer_guidance: str | None, optional
             Answer guidance for model-written answers. Defaults to ``None``.
+        excluded_turn_ids: frozenset[int], optional
+            Rejected turns never supplied to this tool's context.
 
         Returns
         -------
@@ -4332,7 +4390,9 @@ class RAGSession:
         language_context = (
             *(
                 turn.question
-                for turn in reversed(self._earlier_turns(decision))
+                for turn in reversed(self._earlier_turns(
+                    decision, excluded_turn_ids=excluded_turn_ids
+                ))
             ),
             question,
         )
@@ -4505,9 +4565,14 @@ class RAGSession:
 
         request = ToolRequest(
             question=question,
-            text=answering_search_text(question, self.turns, decision),
+            text=answering_search_text(
+                question, self.turns, decision,
+                excluded_turn_ids=excluded_turn_ids,
+            ),
             guidance=answer_guidance,
-            earlier=self._earlier_turns(decision),
+            earlier=self._earlier_turns(
+                decision, excluded_turn_ids=excluded_turn_ids
+            ),
         )
         # Every tool run is recorded: the tool, the settings it ran with,
         # its own fixed values, how long it took, and whether it completed
@@ -4563,7 +4628,10 @@ class RAGSession:
         )
 
     def _earlier_turns(
-        self: RAGSession, decision: RouteDecision
+        self: RAGSession,
+        decision: RouteDecision,
+        *,
+        excluded_turn_ids: frozenset[int] = frozenset(),
     ) -> tuple[EarlierTurn, ...]:
         """Return the turns a question points back to, newest first.
 
@@ -4580,6 +4648,8 @@ class RAGSession:
         ----------
         decision: RouteDecision
             The checked routing decision for the new question.
+        excluded_turn_ids: frozenset[int], optional
+            Rejected turns skipped both as results and as lineage nodes.
 
         Returns
         -------
@@ -4590,14 +4660,28 @@ class RAGSession:
 
         """
 
-        pending = list(decision.related_turn_ids)
-        if not pending and decision.refers_back and self.turns:
-            pending = [len(self.turns)]
+        last_eligible = next(
+            (
+                number for number in range(len(self.turns), 0, -1)
+                if number not in excluded_turn_ids
+            ),
+            None,
+        )
+        pending = [
+            number for number in decision.related_turn_ids
+            if 0 < number <= len(self.turns)
+            and number not in excluded_turn_ids
+        ]
+        if not pending and decision.refers_back and last_eligible:
+            pending = [last_eligible]
 
         found: set[int] = set()
         while pending:
             number = pending.pop()
-            if number in found or not 1 <= number <= len(self.turns):
+            if (
+                number in found or not 1 <= number <= len(self.turns)
+                or number in excluded_turn_ids
+            ):
                 continue
             found.add(number)
             related = self.turns[number - 1].parameters.get("related_turn_ids")
@@ -4609,8 +4693,8 @@ class RAGSession:
                 )
 
         linked = set(found)
-        if found:
-            found.add(len(self.turns))
+        if found and last_eligible is not None:
+            found.add(last_eligible)
 
         earlier: list[EarlierTurn] = []
         for number in sorted(found, reverse=True)[:_MAX_EARLIER_TURNS]:
@@ -5021,6 +5105,93 @@ class RAGSession:
             return effective_project_type(self.project.root)
         return project_type(self.project.profile.type_id)
 
+    def _excluded_history_turns(
+        self: RAGSession,
+        turns: Sequence[ConversationTurn],
+        *,
+        config: object | None = None,
+    ) -> frozenset[int]:
+        """Find saved answers rejected by project-local feedback.
+
+        Parameters
+        ----------
+        turns: Sequence[ConversationTurn]
+            Saved turns whose original one-based positions are preserved.
+        config: ProjectType | None, optional
+            Effective project settings, reused when already loaded.
+            None resolves current project behavior.
+
+        Returns
+        -------
+        frozenset[int]
+            Positions of disliked assistant answers if exclusion is on.
+            The memory-indexing enabled flag does not affect this policy.
+
+        Notes
+        -----
+        A malformed feedback file fails explicitly rather than allowing
+        rejected material into a model prompt. Reading is side-effect free.
+
+        """
+
+        if not turns:
+            return frozenset()
+        settings = self._behavior_config() if config is None else config
+        if not settings.exclude_disliked_answers:
+            return frozenset()
+        ratings = FeedbackStore(self.project.root).load()
+        return frozenset(
+            number
+            for number, turn in enumerate(turns, 1)
+            if ratings.get(
+                turn.conversation_turn_uuid, ASSISTANT_ROLE
+            ).reaction == "disliked"
+        )
+
+    def _history_without_disliked(
+        self: RAGSession,
+        messages: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        """Rebuild model-switch history only when feedback excludes turns.
+
+        Parameters
+        ----------
+        messages: list[dict[str, str]]
+            Current model messages to preserve when nothing is excluded.
+
+        Returns
+        -------
+        list[dict[str, str]]
+            Unchanged messages, or a safe system and saved Q/A sequence.
+
+        Notes
+        -----
+        The current model may hold a rich user prompt with source evidence.
+        When filtering is necessary, rebuilding from committed turns avoids
+        trying to identify an assistant response inside that prompt.
+
+        """
+
+        excluded = self._excluded_history_turns(self.turns)
+        if not excluded:
+            return messages
+        system = next(
+            (
+                message["content"] for message in messages
+                if message.get("role") == SYSTEM_ROLE
+            ),
+            None,
+        )
+        if system is None:
+            system = self._system_prompt()
+        return [
+            {"role": SYSTEM_ROLE, "content": system},
+            *history_messages(
+                self.turns, list(range(1, len(self.turns) + 1)),
+                excluded_turn_ids=excluded,
+            ),
+        ]
+
     def _system_prompt(self: RAGSession) -> str:
         """Return the project type's base system prompt.
 
@@ -5042,6 +5213,8 @@ class RAGSession:
         use_router: bool,
         turn_id: str,
         report_phase: Callable[..., None],
+        *,
+        excluded_turn_ids: frozenset[int] = frozenset(),
     ) -> RouteDecision:
         """Classify a question's intent and trace the resulting decision.
 
@@ -5060,6 +5233,8 @@ class RAGSession:
             Correlation identifier for trace events generated by this turn.
         report_phase: Callable[..., None]
             Callback notifying the frontend when intent classification starts.
+        excluded_turn_ids: frozenset[int], optional
+            Rejected saved turns, without changing their original numbers.
 
         Returns
         -------
@@ -5073,7 +5248,10 @@ class RAGSession:
         if not use_router:
             decision = RouteDecision(
                 intent=config.default_intent,
-                standalone=not self.turns,
+                standalone=not any(
+                    number not in excluded_turn_ids
+                    for number in range(1, len(self.turns) + 1)
+                ),
                 fallback="routing off",
             )
         else:
@@ -5097,7 +5275,11 @@ class RAGSession:
                 turn_id=turn_id,
             ):
                 decision = route_question(
-                    self._router_chat(), config, self.turns, question
+                    self._router_chat(), config, self.turns, question,
+                    **(
+                        {"excluded_turn_ids": excluded_turn_ids}
+                        if excluded_turn_ids else {}
+                    ),
                 )
         intent = config.intents[decision.intent]
         data: dict[str, object] = {
@@ -5547,7 +5729,10 @@ class RAGSession:
             messages = [{"role": SYSTEM_ROLE, "content": system_prompt}]
             # Earlier evidence stays with its turn; history is Q/A only.
             messages.extend(
-                history_messages(turns, list(range(1, len(turns) + 1)))
+                history_messages(
+                    turns, list(range(1, len(turns) + 1)),
+                    excluded_turn_ids=self._excluded_history_turns(turns),
+                )
             )
         except (KeyError, TypeError, json.JSONDecodeError) as error:
             raise ValueError("The saved conversation is invalid.") from error

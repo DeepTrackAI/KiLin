@@ -813,6 +813,8 @@ def route_question(
     project: ProjectType,
     turns: list[object],
     question: str,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> RouteDecision:
     """Classify a question with the router model.
 
@@ -826,6 +828,10 @@ def route_question(
         Earlier conversation turns.
     question: str
         The new question.
+    excluded_turn_ids: frozenset[int], optional
+        Saved one-based turn numbers excluded from routing. Their stored
+        representations are not read or shown to the router; numbering
+        of other turns remains unchanged. Defaults to empty.
 
     Returns
     -------
@@ -864,11 +870,15 @@ def route_question(
                 )
 
     representations = [
-        {
-            **_stored_representation(turn, index + 1),
-            "skip": _ignores_conversation(turn, project),
-        }
-        for index, turn in enumerate(turns)
+        (
+            {"turn_id": index, "skip": True}
+            if index in excluded_turn_ids
+            else {
+                **_stored_representation(turn, index),
+                "skip": _ignores_conversation(turn, project),
+            }
+        )
+        for index, turn in enumerate(turns, 1)
     ]
     pointing = refers_back(question)
     system, prompt = _router_prompt(project, representations, question)
@@ -880,7 +890,9 @@ def route_question(
     except Exception as error:  # A routing failure must not stop answers.
         return RouteDecision(
             intent=project.default_intent,
-            standalone=not turns,
+            standalone=not any(
+                not item["skip"] for item in representations
+            ),
             fallback=f"router failed: {error}",
             refers_back=pointing,
         )
@@ -1110,7 +1122,11 @@ def refers_back(question: str) -> bool:
 
 
 def search_text(
-    question: str, turns: list[object], decision: RouteDecision
+    question: str,
+    turns: list[object],
+    decision: RouteDecision,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> str:
     """Build the search query from the user's own words.
 
@@ -1122,6 +1138,8 @@ def search_text(
         Earlier conversation turns with ``question``.
     decision: RouteDecision
         The checked routing decision.
+    excluded_turn_ids: frozenset[int], optional
+        Turn numbers whose questions must not extend this query.
 
     Returns
     -------
@@ -1140,6 +1158,7 @@ def search_text(
         " ".join(str(getattr(turns[number - 1], "question", "")).split())
         for number in decision.related_turn_ids
         if 0 < number <= len(turns)
+        and number not in excluded_turn_ids
     ]
     return " ".join([question.strip(), *[text for text in earlier if text]])
 
@@ -1300,6 +1319,8 @@ def select_history(
     policy: HistoryPolicy,
     recent_turns: int,
     decision: RouteDecision,
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> list[int]:
     """Choose which earlier turns enter the prompt.
 
@@ -1317,6 +1338,9 @@ def select_history(
         How many of the latest turns count as recent.
     decision: RouteDecision
         The router's decision for the new question.
+    excluded_turn_ids: frozenset[int], optional
+        Saved turns to omit without renumbering eligible history. Recent
+        history counts the most recent *eligible* turns.
 
     Returns
     -------
@@ -1328,18 +1352,42 @@ def select_history(
     if policy == HISTORY_POLICY_NONE or turn_count == 0:
         return []
 
-    recent = list(range(max(1, turn_count - recent_turns + 1), turn_count + 1))
+    # Preserve the constant-window cost and unchanged selection when
+    # no rejected turns need filtering.
+    if not excluded_turn_ids:
+        recent = list(range(
+            max(1, turn_count - recent_turns + 1), turn_count + 1
+        ))
+        if policy == HISTORY_POLICY_RECENT:
+            return recent
+        if decision.standalone:
+            return [turn_count]
+        return sorted(set(recent) | set(decision.related_turn_ids))
+
+    eligible = [
+        number for number in range(1, turn_count + 1)
+        if number not in excluded_turn_ids
+    ]
+    if not eligible:
+        return []
+    recent = eligible[-recent_turns:] if recent_turns else []
     if policy == HISTORY_POLICY_RECENT:
         return recent
 
     if decision.standalone:
-        return [turn_count]
+        return [eligible[-1]]
 
-    return sorted(set(recent) | set(decision.related_turn_ids))
+    return sorted(set(recent) | {
+        number for number in decision.related_turn_ids
+        if number in eligible
+    })
 
 
 def history_messages(
-    turns: list[object], numbers: list[int]
+    turns: list[object],
+    numbers: list[int],
+    *,
+    excluded_turn_ids: frozenset[int] = frozenset(),
 ) -> list[dict[str, str]]:
     """Return selected turns as user and assistant messages.
 
@@ -1349,6 +1397,8 @@ def history_messages(
         Conversation turns with ``question`` and ``answer``.
     numbers: list[int]
         One-based numbers of the turns to include.
+    excluded_turn_ids: frozenset[int], optional
+        Turns excluded from model context, including their questions.
 
     Returns
     -------
@@ -1364,6 +1414,8 @@ def history_messages(
 
     messages: list[dict[str, str]] = []
     for number in numbers:
+        if number in excluded_turn_ids:
+            continue
         turn = turns[number - 1]
         answer = _neutral_citations(strip_thinking(turn.answer)).strip()
         completion = getattr(turn, "parameters", {}).get("completion", {})

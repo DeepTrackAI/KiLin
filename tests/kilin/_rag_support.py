@@ -165,6 +165,7 @@ def _type_config(
         default_intent=intent.intent_id,
         intents={intent.intent_id: intent},
         recent_turns=2,
+        exclude_disliked_answers=True,
         system_prompt="Project instruction",
         code_graph=True,
         answer_guidance=guidance,

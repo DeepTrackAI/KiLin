@@ -185,6 +185,26 @@ that it found no earlier answer. The router is then asked once more with
 the ruled-out intents left out of the list; when that call fails or still
 names one of them, the default intent is used.
 
+Disliked-answer exclusion is controlled by the saved project setting
+`history.exclude_disliked_answers` and is enabled by default for every
+project type, independently of long-term memory indexing. At the start of
+an answer, the core reads project-local feedback for the saved turn UUIDs.
+A rejected assistant answer excludes the **complete question/answer pair**
+from automatic model context, while leaving the original saved turn intact.
+The router never receives the rejected turn's question, summary or sources.
+Related-turn numbers are not renumbered; references to rejected turns are
+dropped, recent history selects the last eligible turns, and deterministic
+fallback skips rejected last turns.
+
+The same eligibility set controls follow-up search wording, source-evidence
+reuse and merging, tool `EarlierTurn` records, transitive related-turn links,
+and model/tool language context. Reopening a conversation or switching chat
+models rebuilds safe history as necessary. Invalid feedback causes an error,
+not permissive fallback. Disabling the project policy or resetting Dislike
+restores ordinary context behavior; the stored conversation is unchanged.
+The feedback store adds only local file reads and no model calls. Details
+are in [Conversation memory](conversation_memory.md).
+
 The prompt history contains selected prior **questions and answers**, not
 full prior evidence payloads. Related-turn evidence may be carried forward
 separately when an intent permits it. This distinction affects privacy,

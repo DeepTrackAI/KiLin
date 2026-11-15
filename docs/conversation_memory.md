@@ -1,12 +1,12 @@
 # Conversation memory: committed identities and feedback
 
-This document describes the first implemented conversation-memory runtime
-component: **durable turn identities and authoritative user feedback**.
-Project/intent policies are defined in [Configuration](configuration.md).
-Semantic memory indexing, memory retrieval, filtering disliked answers from
-model context, and GUI Save/Like/Dislike controls are **not yet implemented**.
-They belong to later PRs. Source evidence and remembered discussions must
-remain distinct in prompts when retrieval is added.
+This document describes implemented conversation-memory foundations:
+**durable turn identities, authoritative feedback and disliked-answer context
+exclusion**. Project/intent policies are defined in
+[Configuration](configuration.md). Semantic memory indexing and retrieval,
+and GUI Save/Like/Dislike controls are **not yet implemented**. Source
+evidence and remembered discussions must remain distinct in prompts when
+retrieval is added.
 
 ## Persistent turn identity
 
@@ -108,6 +108,37 @@ stage must re-check active origins before including content.
 The on-disk schema is strict and has no automatic migration path. Invalid,
 oversized, or symlinked feedback files cause a clear error and are not
 silently reset. Feedback is retained across rebuilds of disposable indexes.
+
+## Excluding disliked answers from conversational context
+
+When `history.exclude_disliked_answers` is true (the default for all five
+project types), `RAGSession` reads the project-owned `feedback.json` before
+each question and excludes saved turns whose **assistant** feedback is
+`disliked`. This policy works even when long-term conversation memory is
+disabled. Feedback on the `user` message does not exclude its paired answer
+from chat history; the question and answer can be rated independently.
+
+The exclusion applies consistently to router summaries, related-turn
+references, recent/relevant model history, search-query follow-up wording,
+reused evidence, tool `EarlierTurn` inputs, tool language context, and
+transitive related-turn traversal. If a follow-up does not name an eligible
+turn, deterministic fallback uses the last eligible turn, not the last saved
+turn. Recent history counts eligible turns but retains the original one-based
+numbers; removing an entry never renumbers a saved conversation.
+
+For model prompts, the complete disliked question/answer pair is omitted.
+The original question and answer, evidence, and diagnostic checkpoints remain
+stored and visible in the conversation. They are not erased or edited by a
+reaction. Reopening a conversation and changing answering models also restore
+filtered chat context. Resetting Dislike, or changing the saved project setting
+to `exclude_disliked_answers: false`, restores normal history behavior.
+
+Malformed feedback fails explicitly instead of silently including rejected
+answers. A missing feedback file means no exclusions and does not create a
+file or call an LLM. The history filter does not affect source indexes or
+implement memory retrieval; separately indexed conversation memory is part
+of the next PR. Explicit quotations typed by the user remain the user's
+current question, regardless of the earlier answer's feedback.
 
 ## Tests and follow-on integration
 
