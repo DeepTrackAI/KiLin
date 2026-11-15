@@ -324,6 +324,45 @@ class TestEngineWorkflow(unittest.TestCase):
         )
         self.assertEqual(session.refresh_sources.call_count, 2)
 
+    def test_memory_policy_saves_do_not_refresh_source_indexes(self):
+        """Memory edits use the existing GUI bridge without reindexing."""
+
+        events: list[dict[str, object]] = []
+        engine = ChatEngine(self.root, events.append)
+        session = self.model_session()
+        engine.session = session
+        root = str(session.project.root)
+        settings = project_behavior_settings(root)
+        values = dict(settings["memory"]["values"])
+        values["enabled"] = True
+        engine.save_behavior_settings(
+            root, "memory", None, values, settings["revision"], 51,
+        )
+        self.assertEqual(events[-1]["event"], "project_behavior")
+        self.assertTrue(events[-1]["saved"])
+        self.assertEqual(events[-1]["scope"], "memory")
+        self.assertTrue(effective_project_type(root)
+                        .conversation_memory.enabled)
+        session.refresh_sources.assert_not_called()
+
+        current = events[-1]["behavior"]
+        item = next(x for x in current["intents"]
+                    if x["id"] == "code_explanation")
+        intent_values = dict(item["memory"]["values"])
+        intent_values["indexing"] = "explicit"
+        engine.save_behavior_settings(
+            root, "intent_memory", "code_explanation", intent_values,
+            current["revision"], 52,
+        )
+        self.assertEqual(events[-1]["scope"], "intent_memory")
+        self.assertEqual(events[-1]["request_id"], 52)
+        self.assertEqual(
+            effective_project_type(root)
+            .intents["code_explanation"].memory_indexing,
+            "explicit",
+        )
+        session.refresh_sources.assert_not_called()
+
     def test_indexing_capability_failure_removes_new_override(self):
         """First-time failed rebuild cannot leave a behavior override."""
 

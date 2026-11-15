@@ -51,6 +51,14 @@ def _type_data() -> dict[str, object]:
         "max_file_bytes": 4096,
         "retrieval_instruction": "Find relevant information.",
         "system_prompt": "Ground answers in the documents.",
+        "history": {"exclude_disliked_answers": True},
+        "conversation_memory": {
+            "enabled": False,
+            "questions": "all",
+            "answers": "selected",
+            "max_hits": 4,
+            "max_tokens": 2000,
+        },
         "intents": {
             "explain": {
                 "description": "Explain a document.",

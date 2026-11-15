@@ -11,12 +11,12 @@ rewrite an existing project's configuration.
 | Layer | Source | Scope and owner | Mutability |
 | --- | --- | --- | --- |
 | Core packaged defaults | `kilin/kilin_defaults.json` | Initial models, project profile, chunking, retrieval, routing, scanner heuristics | Read-only packaged resource; loaded/validated by core |
-| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, retrieval behavior and optional new-project generation defaults | Packaged declarations; not editable user profiles |
+| Project types | `kilin/project_types/<type_id>.json` | Eligible sources, intents, prompts, retrieval and memory policies, optional new-project generation defaults | Packaged declarations; not editable user profiles |
 | Tool defaults | `kilin/tools/<tool>/defaults.json` | Parameter defaults owned by each built-in tool | Packaged and validated by that tool |
 | GUI packaged defaults | `kilin/gui/defaults.json` | Appearance and initial GUI model/search preferences | Read-only application resource |
 | User GUI preferences | Per-user `preferences.json` | Sparse overrides of GUI defaults, e.g. appearance | Atomic user-owned write |
 | Project profile | `<workspace>/profile.ini` | Backend, model IDs, source filters, chunk sizes, search and generation values; GUI effort choices and core-owned router settings | Persistent, authoritative for the opened project |
-| Project behavior | `<workspace>/project_behavior.json` | Sparse project-wide, per-intent and advanced indexing-capability overrides | Optional project-owned validated settings |
+| Project behavior | `<workspace>/project_behavior.json` | Sparse project-wide, per-intent, memory and source-index-capability overrides | Optional project-owned validated settings |
 | Per-answer arguments | `RAGSession.ask(...)` | Retrieval count, routing choice, generation updates, answer guidance | In-memory until saved according to the parameter contract |
 | Runtime state | Backend availability, cached revisions, loaded sessions | Selected implementation state | Resolved at execution, not a package default |
 
@@ -77,10 +77,15 @@ project's shared and per-intent behavior. Packaged project types remain
 immutable. `profile.ini` still owns backend, model, indexing filters, and
 answer settings. `[tool.<name>]` owns shared tool settings.
 
-The behavior file uses the `project-behavior-v1` format, a fixed
-`project_type_id`, sparse `global` and `intents` objects, and optional sparse
-`capabilities` for `code_graph` and `document_headers`. Nested differences
-merge into packaged settings before the normal project-type validation.
+The behavior file uses the **`project-behavior-v2`** format, a fixed
+`project_type_id`, and four required sparse objects: `global`, `intents`,
+`capabilities`, and `memory`. Only differences from the packaged defaults
+are stored. `capabilities` controls source indexing (`code_graph` and
+`document_headers`); `memory` controls conversation-memory indexing,
+retrieval and disliked-history exclusion. Intent-local memory settings
+are stored inside `intents.<id>.memory`, independently of the same intent's
+ordinary routing, tool and retrieval settings. Nested differences merge
+into packaged settings before the normal project-type validation.
 An explicit `{ "$delete": true }` removes an optional inherited field
 when changing retrieval strategy. This is an internal marker, not an
 editor value.
@@ -88,11 +93,66 @@ editor value.
 The APIs `kilin.effective_project_type()`,
 `kilin.project_behavior_settings()` and `kilin.save_project_behavior()`
 resolve and edit these settings without depending on the GUI. Saving an
-entire global, intent or capability editor computes sparse differences and
+entire global, intent, capability or memory editor computes sparse differences and
 checks an optional SHA-256 expected revision to reject stale changes.
 Prompts and routing edits apply to subsequent requests without model
 reload or index rebuild. New turns preserve original intent history and
 retrieval classifications so changes do not reinterpret their behavior.
+
+The additional core editor scopes are `memory` for the complete
+project-wide conversation-memory policy and `intent_memory` for one
+intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
+remain unchanged. The current core validates and persists these settings;
+answer feedback, memory ingestion, prompt integration and disliked-history
+filtering are not yet implemented. The GUI does not yet expose these new
+controls.
+
+### Conversation memory policies
+
+Every current project-type JSON defines `conversation_memory` with five
+required values and `history.exclude_disliked_answers` with a required
+Boolean. Values are deliberately independent of the source-retrieval
+pipeline:
+
+| Setting | Accepted values | Purpose |
+| --- | --- | --- |
+| `enabled` | Boolean | Permits independent conversation-memory indexing and reading when runtime support is implemented |
+| `questions` | `all`, `none` | Automatic indexing of eligible user questions |
+| `answers` | `none`, `selected`, `all` | Forbid answer indexing, require explicit Save/Like, or index eligible non-disliked answers automatically |
+| `max_hits` | Integer 1–20 | Maximum retrieved memory entries per answer |
+| `max_tokens` | Integer 128–20,000 | Independent memory-context token budget |
+| `history.exclude_disliked_answers` | Boolean | Suppress rejected answers from ordinary conversational context when feedback filtering is installed; defaults to true |
+
+The packaged defaults use `questions: all`, `answers: selected`,
+`max_hits: 4`, and `max_tokens: 2000` for every project type.
+Conversation memory is enabled by default for new `writing`,
+`brainstorming`, and `reviewing` projects and disabled for new `code`
+and `literature` projects. Every type defaults to excluding disliked
+answers from chat context, independently of memory enablement.
+
+An intent may set `memory.indexing` to `automatic`, `explicit`, or `never`.
+`automatic` follows the project-wide content policies; `explicit` requires
+Save/Like before indexing the eligible content; `never` forbids indexing,
+even after Save/Like. `memory.read` independently controls whether the
+intent may retrieve earlier memories. Intents omitting `memory` default
+to `automatic` and `read: true`. The built-in small-talk intents use
+`never` and `read: false`; file inventories and whole-document overviews
+are typically `explicit`, some with memory reading disabled. The reviewing
+type has no small-talk intent and retains its strict no-review-writing
+role boundary regardless of memory settings.
+
+Source passages, retrieved memories, and recent conversation history
+have different purposes. Memory cannot constitute primary evidence or
+produce numbered scientific citations; answering integration must place
+source evidence and remembered discussions in distinct prompt
+sections with independent budgets and provenance.
+
+The policy scopes do not affect the document index compatibility
+signature. Changing memory settings will not refresh or invalidate
+document/source-card indexes. The behavior format is prerelease and is
+not backward compatible with `project-behavior-v1`: incompatible older
+project behavior files raise an error and are not rewritten or migrated.
+No workspace data is deleted automatically.
 
 Advanced indexing exposes `code_graph` (true, false, or `"auto"`) and
 `document_headers` (true or false). Changes alter index metadata and require

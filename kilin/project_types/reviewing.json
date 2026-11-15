@@ -24,7 +24,15 @@
     }
   },
   "history": {
-    "recent_turns": 4
+    "recent_turns": 4,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": true,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
   },
   "default_intent": "question_answering",
   "intents": {
@@ -83,7 +91,11 @@
         "large_batches": 3
       },
       "system_prompt": "Read the requested material in source order and provide a neutral account or factual inventory. Do not critique, evaluate, score, rank, or write a referee report. If asked for a review, explicitly state that only the researcher can judge and author one.",
-      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Use neutral wording, source citations, and explicit uncertainty."
+      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Use neutral wording, source citations, and explicit uncertainty.",
+      "memory": {
+        "indexing": "explicit",
+        "read": false
+      }
     },
     "passage_finding": {
       "description": "Find and list exact sentences or passages concerning a topic in the documents, such as reported experimental controls, stated limitations, risks, or work packages. Show matching passages without judging the significance of their content. Not for a specific value (fact_finding).",
@@ -106,7 +118,11 @@
         "large_batches": 3
       },
       "system_prompt": "Return relevant passages with exact source references and neutral context. Do not interpret them as strengths, weaknesses, flaws, or grounds for acceptance/rejection. Do not write review comments.",
-      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Use neutral wording, source citations, and explicit uncertainty."
+      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Use neutral wording, source citations, and explicit uncertainty.",
+      "memory": {
+        "indexing": "explicit",
+        "read": false
+      }
     },
     "reference_check": {
       "description": "Check references, bibliographic consistency, and citation evidence. Tool-generated evidence scores may be displayed, but never treated as scientific merit scores or reviewer judgments. No review writing.",
@@ -126,7 +142,11 @@
         "online_lookup": false
       },
       "system_prompt": "Report bibliographic checks and citation-evidence results without making a judgment about the manuscript or proposal. Any scores produced by the existing tool are automated reference-evidence indicators, NOT referee scores; explain that distinction explicitly. Do not convert citation findings into criticisms, review comments, or publication/funding recommendations.",
-      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Reference-tool scores are automated citation-evidence indicators, not referee scores. Use neutral wording, source citations, and explicit uncertainty."
+      "answer_guidance": "Evidence-only response; no independent scientific judgments, review comments, review drafting, scores, or recommendations. Explicitly state that the researcher must evaluate and write the review if asked to do so. Reference-tool scores are automated citation-evidence indicators, not referee scores. Use neutral wording, source citations, and explicit uncertainty.",
+      "memory": {
+        "indexing": "explicit",
+        "read": false
+      }
     },
     "compare_sources": {
       "description": "Compare documented statements, methods, measurements, results, or plans across a submission and other indexed materials. Present the relevant evidence side by side, including agreements and differences; do not rank, score, or judge the sources.",
@@ -179,6 +199,10 @@
       },
       "retrieval": {
         "mode": "none"
+      },
+      "memory": {
+        "indexing": "never",
+        "read": false
       }
     }
   },

@@ -3,8 +3,10 @@
 A project type (for example a code repository or a literature collection)
 decides which files a new project reads by default, which intents the
 router may choose, and for each intent the instructions, history,
-retrieval, thinking override, or tool. Editing a JSON file changes
-behaviour without code changes; restart KíLín afterwards. Saved conversations
+retrieval, thinking override, memory policy, or tool. Editing these JSON
+files changes behavior without code changes, including project-wide
+conversation-memory defaults independent of source indexing and recent
+conversation history. Restart KíLín afterwards. Saved conversations
 keep the system prompt they were answered with.
 
 Files are read once per folder and cached for the process. A malformed
@@ -34,6 +36,13 @@ Key Features
     inherit packaged defaults. Saved profiles and explicit creation
     settings take precedence.
 
+- **Independent conversation-memory policy**
+
+    Every project type defines its memory enablement, question/answer
+    inclusion, retrieval limits, and disliked-history exclusion. Intents
+    may restrict memory indexing to explicit selection, forbid it entirely,
+    or disable reading memory. Memory remains distinct from source evidence.
+
 - **Request-local thinking**
 
     An ordinary intent may enable or disable thinking for its answer.
@@ -58,6 +67,14 @@ Module Structure
 
     Default evidence budget for document reading, taken from the packaged
     ``PROJECT_TYPES`` section when the intent JSON omits a budget.
+
+- ``MEMORY_QUESTION_CHOICES`` and ``MEMORY_ANSWER_CHOICES``
+
+    Allowed project-wide policies for including questions and answers.
+
+- ``MEMORY_INDEXING_CHOICES``
+
+    Automatic, explicit, and never indexing policies for intents.
 
 - ``HISTORY_POLICY_NONE``, ``HISTORY_POLICY_RECENT``, and
   ``HISTORY_POLICY_RELEVANT``
@@ -94,6 +111,15 @@ Module Structure
 - ``CodeGraphSetting``
 
     Type alias for ``True``, ``False``, or ``"auto"``.
+
+- ``ConversationMemorySettings``
+
+    Validated project-wide conversation-memory settings and limits.
+
+- ``MemoryQuestionPolicy``, ``MemoryAnswerPolicy``, and
+  ``MemoryIndexingPolicy``
+
+    Type aliases for project-wide content and per-intent indexing policies.
 
 - ``HistoryPolicy``
 
@@ -167,6 +193,9 @@ from kilin.tools._registry import ToolUse, parse_tool
 __all__ = [
     "CODE_GRAPH_AUTO",
     "CODE_GRAPH_CHOICES",
+    "MEMORY_ANSWER_CHOICES",
+    "MEMORY_INDEXING_CHOICES",
+    "MEMORY_QUESTION_CHOICES",
     "DOCUMENT_MAX_TOKENS",
     "HISTORY_POLICY_CHOICES",
     "HISTORY_POLICY_NONE",
@@ -182,8 +211,12 @@ __all__ = [
     "RETRIEVAL_STRATEGY_HYBRID",
     "RETRIEVAL_STRATEGY_SOURCE_FIRST",
     "CodeGraphSetting",
+    "ConversationMemorySettings",
     "HistoryPolicy",
     "Intent",
+    "MemoryAnswerPolicy",
+    "MemoryIndexingPolicy",
+    "MemoryQuestionPolicy",
     "ProjectType",
     "ProjectTypeId",
     "RetrievalMode",
@@ -272,6 +305,53 @@ CODE_GRAPH_CHOICES: Final[tuple[CodeGraphSetting, ...]] = (
     CODE_GRAPH_AUTO,
 )
 
+# Conversation memory is separate from indexed source evidence and from
+# recent conversation history. These policies configure future ingestion;
+# they do not turn remembered model output into verifiable source evidence.
+MemoryQuestionPolicy: TypeAlias = Literal["all", "none"]
+MEMORY_QUESTION_CHOICES: Final[tuple[MemoryQuestionPolicy, ...]] = (
+    "all", "none",
+)
+MemoryAnswerPolicy: TypeAlias = Literal["none", "selected", "all"]
+MEMORY_ANSWER_CHOICES: Final[tuple[MemoryAnswerPolicy, ...]] = (
+    "none", "selected", "all",
+)
+MemoryIndexingPolicy: TypeAlias = Literal[
+    "automatic", "explicit", "never"
+]
+MEMORY_INDEXING_CHOICES: Final[tuple[MemoryIndexingPolicy, ...]] = (
+    "automatic", "explicit", "never",
+)
+_MEMORY_MAX_HITS_LIMIT: Final[int] = 20
+_MEMORY_MIN_TOKENS: Final[int] = 128
+_MEMORY_MAX_TOKENS: Final[int] = 20_000
+
+
+@dataclass(frozen=True, slots=True)
+class ConversationMemorySettings:
+    """Validated project-wide policy for independent conversation memory.
+
+    Attributes
+    ----------
+    enabled: bool
+        Whether long-term conversation-memory ingestion and search are on.
+    questions: "all" | "none"
+        Whether eligible user questions enter memory automatically.
+    answers: "none" | "selected" | "all"
+        Whether answers are forbidden, explicitly selected, or automatic.
+    max_hits: int
+        Maximum independently retrieved memory entries per answer.
+    max_tokens: int
+        Memory-only context budget; never consumes source-evidence budget.
+
+    """
+
+    enabled: bool
+    questions: MemoryQuestionPolicy
+    answers: MemoryAnswerPolicy
+    max_hits: int
+    max_tokens: int
+
 
 @dataclass(frozen=True, slots=True)
 class Intent:
@@ -335,6 +415,11 @@ class Intent:
     coverage: "bounded" | "exhaustive"
         Whether ordinary questions require all indexed sources. Explicit
         questions asking about all sources always request exhaustive mode.
+    memory_indexing: "automatic" | "explicit" | "never"
+        Whether this intent can enter long-term memory automatically, only
+        when selected, or never. Applies independently to questions/answers.
+    memory_read: bool
+        Whether this intent can retrieve previous conversation memory.
 
     """
 
@@ -358,6 +443,8 @@ class Intent:
     max_passages: int = 8
     evidence_tokens: int = 5_000
     coverage: str = "bounded"
+    memory_indexing: MemoryIndexingPolicy = "automatic"
+    memory_read: bool = True
 
     def source_limits(self) -> EvidenceLimits:
         """Resolve the validated source-first limits for this intent.
@@ -409,6 +496,11 @@ class ProjectType:
         selected files include code the graph understands).
     recent_turns: int
         Earlier turns kept as conversation history by default.
+    exclude_disliked_answers: bool
+        Whether rejected answers are omitted from conversational context.
+        Does not delete the original saved question or answer.
+    conversation_memory: ConversationMemorySettings
+        Independent memory settings and retrieval budget.
     default_intent: str
         Intent used when routing is off or its reply is unusable.
     intents: dict[str, Intent]
@@ -446,6 +538,8 @@ class ProjectType:
     system_prompt: str
     code_graph: CodeGraphSetting
     recent_turns: int
+    exclude_disliked_answers: bool
+    conversation_memory: ConversationMemorySettings
     default_intent: str
     intents: dict[str, Intent]
     answer_guidance: str = ""
@@ -666,10 +760,22 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
             "requires",
             "tool",
             "thinking",
+            "memory",
         ),
     )
     history = _object(where, data, "history")
     reject_unknown(f"{where}.history", history, ("policy",))
+    memory = _object(where, data, "memory")
+    reject_unknown(f"{where}.memory", memory, ("indexing", "read"))
+    memory_indexing = memory.get("indexing", "automatic")
+    if memory_indexing not in MEMORY_INDEXING_CHOICES:
+        raise ValueError(
+            f"Intent {where!r} memory.indexing must be one of: "
+            f"{', '.join(MEMORY_INDEXING_CHOICES)}."
+        )
+    memory_read = memory.get("read", True)
+    if type(memory_read) is not bool:
+        raise ValueError(f"Intent {where!r} memory.read must be boolean.")
     retrieval = _object(where, data, "retrieval")
     reject_unknown(
         f"{where}.retrieval",
@@ -818,6 +924,8 @@ def _parse_intent(type_id: str, intent_id: object, data: object) -> Intent:
         max_passages=retrieval.get("max_passages", 8),
         evidence_tokens=retrieval.get("evidence_tokens", 5000),
         coverage=coverage,
+        memory_indexing=memory_indexing,
+        memory_read=memory_read,
     )
 
 
@@ -865,6 +973,7 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             "system_prompt",
             "capabilities",
             "history",
+            "conversation_memory",
             "generation",
             "default_intent",
             "intents",
@@ -938,7 +1047,21 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         raise ValueError("Source-card kind must be a snake-case identifier.")
 
     history = _object(type_id, data, "history")
-    reject_unknown(f"{type_id}.history", history, ("recent_turns",))
+    reject_unknown(
+        f"{type_id}.history", history,
+        ("recent_turns", "exclude_disliked_answers"),
+    )
+    if "exclude_disliked_answers" not in history:
+        raise ValueError(
+            f"Project type {type_id!r} requires "
+            "history.exclude_disliked_answers."
+        )
+    exclude_disliked = history["exclude_disliked_answers"]
+    if type(exclude_disliked) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} "
+            "history.exclude_disliked_answers must be boolean."
+        )
     recent_turns = history.get("recent_turns", _DEFAULT_RECENT_TURNS)
     if (
         type(recent_turns) is not int
@@ -948,6 +1071,54 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
             f"Project type {type_id!r} history.recent_turns must be a whole "
             f"number from 0 to {_MAX_RECENT_TURNS}."
         )
+
+    if "conversation_memory" not in data:
+        raise ValueError(
+            f"Project type {type_id!r} requires conversation_memory."
+        )
+    memory = _object(type_id, data, "conversation_memory")
+    memory_fields = frozenset((
+        "enabled", "questions", "answers", "max_hits", "max_tokens",
+    ))
+    reject_unknown(f"{type_id}.conversation_memory", memory,
+                   memory_fields)
+    if set(memory) != memory_fields:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory requires "
+            "enabled, questions, answers, max_hits, and max_tokens."
+        )
+    if type(memory["enabled"]) is not bool:
+        raise ValueError(
+            f"Project type {type_id!r} "
+            "conversation_memory.enabled must be boolean."
+        )
+    if memory["questions"] not in MEMORY_QUESTION_CHOICES:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory.questions "
+            f"must be one of: {', '.join(MEMORY_QUESTION_CHOICES)}."
+        )
+    if memory["answers"] not in MEMORY_ANSWER_CHOICES:
+        raise ValueError(
+            f"Project type {type_id!r} conversation_memory.answers "
+            f"must be one of: {', '.join(MEMORY_ANSWER_CHOICES)}."
+        )
+    for key, minimum, maximum in (
+        ("max_hits", 1, _MEMORY_MAX_HITS_LIMIT),
+        ("max_tokens", _MEMORY_MIN_TOKENS, _MEMORY_MAX_TOKENS),
+    ):
+        value = memory[key]
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError(
+                f"Project type {type_id!r} conversation_memory.{key} "
+                f"must be a whole number from {minimum} to {maximum}."
+            )
+    memory_settings = ConversationMemorySettings(
+        enabled=memory["enabled"],
+        questions=memory["questions"],
+        answers=memory["answers"],
+        max_hits=memory["max_hits"],
+        max_tokens=memory["max_tokens"],
+    )
 
     generation = _object(type_id, data, "generation")
     reject_unknown(
@@ -1007,6 +1178,8 @@ def _parse_project_type(type_id: object, data: object) -> ProjectType:
         system_prompt=_text(type_id, data, "system_prompt"),
         code_graph=code_graph,
         recent_turns=recent_turns,
+        exclude_disliked_answers=exclude_disliked,
+        conversation_memory=memory_settings,
         default_intent=default_intent,
         intents=intents,
         answer_guidance=_text(

@@ -103,11 +103,19 @@ class TestSettingsInfo(unittest.TestCase):
             "project_behavior.capabilities." + key
             for key in _CAPABILITY_FIELDS
         }
-        from kilin.project_behavior import _RETRIEVAL_FIELDS
+        from kilin.project_behavior import (
+            _INTENT_MEMORY_FIELDS, _MEMORY_FIELDS, _RETRIEVAL_FIELDS,
+        )
 
         expected |= {
             "project_behavior.intents.retrieval." + key
             for key in _RETRIEVAL_FIELDS
+        }
+        expected |= {
+            "project_behavior.memory." + key for key in _MEMORY_FIELDS
+        } | {
+            "project_behavior.intents.memory." + key
+            for key in _INTENT_MEMORY_FIELDS
         }
         self.assertFalse(expected - keys)
 

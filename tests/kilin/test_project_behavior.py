@@ -64,6 +64,29 @@ class ProjectBehaviorFixture(unittest.TestCase):
             expected_revision=payload["revision"],
         )
 
+    def save_memory(self, **changes: object) -> dict:
+        """Save the independent memory policy with a revision check."""
+
+        payload = project_behavior_settings(self.first)
+        values = deepcopy(payload["memory"]["values"])
+        values.update(changes)
+        return save_project_behavior(
+            self.first, "memory", values,
+            expected_revision=payload["revision"],
+        )
+
+    def save_intent_memory(self, name: str, **changes: object) -> dict:
+        """Save one intent's independent memory settings."""
+
+        payload = project_behavior_settings(self.first)
+        item = next(x for x in payload["intents"] if x["id"] == name)
+        values = deepcopy(item["memory"]["values"])
+        values.update(changes)
+        return save_project_behavior(
+            self.first, "intent_memory", values, intent_id=name,
+            expected_revision=payload["revision"],
+        )
+
 
 class TestProjectBehavior(ProjectBehaviorFixture):
 
@@ -267,6 +290,158 @@ class TestProjectBehavior(ProjectBehaviorFixture):
         self.assertNotIn("document_headers", changed)
         self.assertNotEqual(previous, changed)
         self.assertEqual(session._index_metadata(), changed)
+
+    def test_memory_overrides_are_project_local_and_revision_checked(self):
+        """Global memory is saved independently of profile and sources."""
+
+        initial = project_behavior_settings(self.first)
+        self.assertEqual(initial["memory"]["values"],
+                         initial["memory"]["defaults"])
+        self.assertFalse(initial["memory"]["values"]["enabled"])
+        self.assertEqual(initial["global"]["values"]["history"],
+                         {"recent_turns": 2})
+        updated = self.save_memory(
+            enabled=True, questions="none", answers="all",
+            max_hits=6, max_tokens=2400,
+            exclude_disliked_answers=False,
+        )
+        effective = effective_project_type(self.first)
+        self.assertTrue(effective.conversation_memory.enabled)
+        self.assertEqual(effective.conversation_memory.questions, "none")
+        self.assertEqual(effective.conversation_memory.answers, "all")
+        self.assertEqual(effective.conversation_memory.max_hits, 6)
+        self.assertEqual(effective.conversation_memory.max_tokens, 2400)
+        self.assertFalse(effective.exclude_disliked_answers)
+        self.assertFalse(effective_project_type(self.second)
+                         .conversation_memory.enabled)
+        self.assertTrue(effective_project_type(self.second)
+                        .exclude_disliked_answers)
+        self.assertEqual(updated["memory"]["values"]["max_hits"], 6)
+        path = self.first / PROJECT_BEHAVIOR_FILE
+        state = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(state["format"], "project-behavior-v2")
+        self.assertEqual(state["memory"]["max_hits"], 6)
+        self.assertEqual(state["global"], {})
+        with self.assertRaisesRegex(ValueError, "changed since"):
+            save_project_behavior(
+                self.first, "memory", updated["memory"]["defaults"],
+                expected_revision=initial["revision"],
+            )
+        self.assertEqual(path.read_text(encoding="utf-8"),
+                         json.dumps(state, ensure_ascii=False, indent=2)
+                         + "\n")
+
+    def test_memory_and_standard_intent_editors_do_not_erase_each_other(self):
+        """Changing ordinary intent options retains memory selections."""
+
+        self.save_intent_memory("question_answering", indexing="never",
+                                read=False)
+        self.save_intent("question_answering", thinking=True)
+        current = project_behavior_settings(self.first)
+        item = next(x for x in current["intents"]
+                    if x["id"] == "question_answering")
+        self.assertEqual(item["memory"]["values"],
+                         {"indexing": "never", "read": False})
+        self.assertTrue(item["values"]["thinking"])
+        self.save_intent_memory("question_answering", indexing="explicit")
+        state = json.loads(
+            (self.first / PROJECT_BEHAVIOR_FILE).read_text()
+        )
+        self.assertEqual(state["intents"]["question_answering"], {
+            "thinking": True,
+            "memory": {"indexing": "explicit", "read": False},
+        })
+        self.save_global(history={"recent_turns": 8})
+        self.save_memory(exclude_disliked_answers=False)
+        self.assertEqual(effective_project_type(self.first).recent_turns, 8)
+        self.assertFalse(effective_project_type(self.first)
+                         .exclude_disliked_answers)
+        # Reset either editor without altering the other editor's changes.
+        current = project_behavior_settings(self.first)
+        item = next(x for x in current["intents"]
+                    if x["id"] == "question_answering")
+        save_project_behavior(
+            self.first, "intent", item["defaults"],
+            intent_id="question_answering",
+        )
+        current = project_behavior_settings(self.first)
+        item = next(x for x in current["intents"]
+                    if x["id"] == "question_answering")
+        self.assertEqual(item["memory"]["values"],
+                         {"indexing": "explicit", "read": False})
+        save_project_behavior(
+            self.first, "intent_memory", item["memory"]["defaults"],
+            intent_id="question_answering",
+        )
+        state = json.loads((self.first / PROJECT_BEHAVIOR_FILE).read_text())
+        self.assertNotIn("question_answering", state["intents"])
+        self.assertEqual(effective_project_type(self.first).recent_turns, 8)
+
+    def test_invalid_memory_saves_are_atomic(self):
+        """Malformed policies never replace the saved behavior file."""
+
+        initial = self.save_memory(enabled=True)
+        path = self.first / PROJECT_BEHAVIOR_FILE
+        before = path.read_bytes()
+        values = initial["memory"]["values"]
+        for invalid in (
+            {**values, "max_tokens": False},
+            {**values, "max_hits": 0},
+            {**values, "enabled": 1},
+            {**values, "answers": "likes"},
+            {**values, "exclude_disliked_answers": "false"},
+            {key: value for key, value in values.items()
+             if key != "questions"},
+        ):
+            with self.subTest(value=invalid):
+                with self.assertRaises(ValueError):
+                    save_project_behavior(self.first, "memory", invalid)
+                self.assertEqual(path.read_bytes(), before)
+        item = next(x for x in initial["intents"]
+                    if x["id"] == "question_answering")
+        for invalid in (
+            {"indexing": "sometimes", "read": True},
+            {"indexing": "never", "read": 1},
+            {"indexing": "never"},
+        ):
+            with self.subTest(intent_memory=invalid):
+                with self.assertRaises(ValueError):
+                    save_project_behavior(
+                        self.first, "intent_memory", invalid,
+                        intent_id=item["id"],
+                    )
+                self.assertEqual(path.read_bytes(), before)
+        with self.assertRaises(ValueError):
+            save_project_behavior(self.first, "intent_memory", {
+                "indexing": "never", "read": False,
+            }, intent_id="not_an_intent")
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_memory_policy_never_changes_source_index_compatibility(self):
+        """Memory changes cannot invalidate document/source indexes."""
+
+        from kilin.rag import RAGSession
+
+        session = object.__new__(RAGSession)
+        session.project = kilin.open_project(self.first)
+        session.backend = "mlx"
+        before = session._index_metadata()
+        self.save_memory(enabled=True, max_tokens=3000)
+        self.save_intent_memory("question_answering", indexing="explicit")
+        self.assertEqual(session._index_metadata(), before)
+
+    def test_previous_behavior_format_is_not_implicitly_upgraded(self):
+        """Reject unsupported prerelease snapshots without changing them."""
+
+        path = self.first / PROJECT_BEHAVIOR_FILE
+        content = json.dumps({
+            "format": "project-behavior-v1", "project_type_id": "literature",
+            "global": {}, "intents": {}, "capabilities": {},
+        })
+        path.write_text(content, encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Unsupported.*format"):
+            effective_project_type(self.first)
+        self.assertEqual(path.read_text(encoding="utf-8"), content)
 
     def test_corrupted_or_foreign_overrides_fail_closed(self):
         path = self.first / PROJECT_BEHAVIOR_FILE

@@ -4,6 +4,8 @@ A project stores only differences from the immutable packaged definition in
 ``project_behavior.json``. Every effective type passes the existing core
 validator; saving an editor checks revision and validates before atomic
 replacement. Tool bindings and the profile's settings remain independent.
+Conversation-memory policy is a separate editor scope from source indexing,
+and an intent's ordinary settings and memory policy are saved independently.
 
 Key Features
 ------------
@@ -15,6 +17,12 @@ Key Features
 - **Validated atomic saves**
 
     The entire effective project type is validated before an update.
+
+- **Independent memory configuration**
+
+    Global memory and per-intent policies use separate revision-checked
+    editor scopes, without triggering source reindexing or changing the
+    existing GUI's global and intent editor payloads.
 
 Module Structure
 ----------------
@@ -66,7 +74,7 @@ __all__ = [
 ]
 
 PROJECT_BEHAVIOR_FILE: Final[str] = "project_behavior.json"
-_FORMAT: Final[str] = "project-behavior-v1"
+_FORMAT: Final[str] = "project-behavior-v2"
 _DELETE: Final[dict[str, bool]] = {"$delete": True}
 _MAX_BYTES: Final[int] = 1_048_576
 _GLOBAL_FIELDS: Final[frozenset[str]] = frozenset((
@@ -76,6 +84,13 @@ _GLOBAL_FIELDS: Final[frozenset[str]] = frozenset((
 ))
 _CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset((
     "code_graph", "document_headers",
+))
+_MEMORY_FIELDS: Final[frozenset[str]] = frozenset((
+    "enabled", "questions", "answers", "max_hits", "max_tokens",
+    "exclude_disliked_answers",
+))
+_INTENT_MEMORY_FIELDS: Final[frozenset[str]] = frozenset((
+    "indexing", "read",
 ))
 _INTENT_FIELDS: Final[frozenset[str]] = frozenset((
     "description", "system_prompt", "answer_guidance", "history",
@@ -133,6 +148,53 @@ def _capability_values(definition: ProjectType) -> dict[str, object]:
     return {
         "code_graph": definition.code_graph,
         "document_headers": definition.document_headers,
+    }
+
+
+def _memory_values(definition: ProjectType) -> dict[str, object]:
+    """Return editable memory and disliked-history settings.
+
+    Parameters
+    ----------
+    definition: ProjectType
+        Validated effective or packaged project definition.
+
+    Returns
+    -------
+    dict[str, object]
+        Independent memory limits, inclusion, and history filtering policy.
+
+    """
+
+    memory = definition.conversation_memory
+    return {
+        "enabled": memory.enabled,
+        "questions": memory.questions,
+        "answers": memory.answers,
+        "max_hits": memory.max_hits,
+        "max_tokens": memory.max_tokens,
+        "exclude_disliked_answers": definition.exclude_disliked_answers,
+    }
+
+
+def _intent_memory_values(intent: Intent) -> dict[str, object]:
+    """Return the per-intent indexing and memory-search policy.
+
+    Parameters
+    ----------
+    intent: Intent
+        Validated effective or packaged intent.
+
+    Returns
+    -------
+    dict[str, object]
+        Memory indexing mode and retrieval permission.
+
+    """
+
+    return {
+        "indexing": intent.memory_indexing,
+        "read": intent.memory_read,
     }
 
 
@@ -242,13 +304,21 @@ def _check_override_shape(saved: dict, defaults: ProjectType) -> None:
         saved.get("capabilities", {}), _CAPABILITY_FIELDS,
         "Behavior indexing capabilities",
     )
+    _check_keys(
+        saved.get("memory", {}), _MEMORY_FIELDS,
+        "Behavior conversation memory",
+    )
     intents = saved.get("intents", {})
     _check_keys(intents, frozenset(defaults.intents), "Behavior intents")
     for name, value in intents.items():
-        fields = _check_keys(value, _INTENT_FIELDS, f"Behavior intent {name}")
+        fields = _check_keys(
+            value, _INTENT_FIELDS | frozenset(("memory",)),
+            f"Behavior intent {name}",
+        )
         for key, allowed in (
             ("history", frozenset(("policy",))),
             ("retrieval", _RETRIEVAL_FIELDS),
+            ("memory", _INTENT_MEMORY_FIELDS),
         ):
             if key in fields and fields[key] != _DELETE:
                 _check_keys(fields[key], allowed,
@@ -340,7 +410,10 @@ def _state(root: Path, type_id: str) -> tuple[dict, str]:
 
     path = root / PROJECT_BEHAVIOR_FILE
     if not path.exists() and not path.is_symlink():
-        return {"global": {}, "intents": {}, "capabilities": {}}, (
+        return {
+            "global": {}, "intents": {}, "capabilities": {},
+            "memory": {},
+        }, (
             sha256(b"").hexdigest()
         )
     if path.is_symlink() or not path.is_file():
@@ -355,15 +428,15 @@ def _state(root: Path, type_id: str) -> tuple[dict, str]:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("Project behavior file is not valid UTF-8 JSON.") \
             from error
-    _check_keys(
-        saved,
-        frozenset((
-            "format", "project_type_id", "global", "intents", "capabilities"
-        )),
-        "Project behavior",
-    )
+    expected = frozenset((
+        "format", "project_type_id", "global", "intents",
+        "capabilities", "memory",
+    ))
+    _check_keys(saved, expected, "Project behavior")
     if saved.get("format") != _FORMAT:
         raise ValueError("Unsupported project behavior format.")
+    if set(saved) != expected:
+        raise ValueError("Project behavior has missing required settings.")
     if saved.get("project_type_id") != type_id:
         raise ValueError("Project behavior belongs to another project type.")
     _check_override_shape(saved, project_type(type_id))
@@ -385,11 +458,25 @@ def _merged_overrides(saved: dict) -> dict:
 
     """
 
-    return {
+    result = {
         **saved.get("global", {}),
         "capabilities": saved.get("capabilities", {}),
         "intents": saved.get("intents", {}),
     }
+    memory = dict(saved.get("memory", {}))
+    if "exclude_disliked_answers" in memory:
+        history = result.get("history", {})
+        if history == _DELETE:
+            history = {}
+        result["history"] = {
+            **history,
+            "exclude_disliked_answers": memory.pop(
+                "exclude_disliked_answers"
+            ),
+        }
+    if memory:
+        result["conversation_memory"] = memory
+    return result
 
 
 def _resolved(root: Path, type_id: str) -> tuple[ProjectType, str]:
@@ -411,7 +498,7 @@ def _resolved(root: Path, type_id: str) -> tuple[ProjectType, str]:
 
     saved, revision = _state(root, type_id)
     if not any(saved.get(key) for key in (
-        "global", "intents", "capabilities"
+        "global", "intents", "capabilities", "memory"
     )):
         return project_type(type_id), revision
     path = PROJECT_TYPES_DIR / f"{type_id}.json"
@@ -452,7 +539,7 @@ def project_behavior_settings(directory: str | Path) -> dict[str, object]:
     Returns
     -------
     dict[str, object]
-        Global, capability, and ordered intent editors plus revision.
+        Global, capability, memory, and ordered intent editors plus revision.
 
     """
 
@@ -471,6 +558,10 @@ def project_behavior_settings(directory: str | Path) -> dict[str, object]:
             "values": _capability_values(effective),
             "defaults": _capability_values(defaults),
         },
+        "memory": {
+            "values": _memory_values(effective),
+            "defaults": _memory_values(defaults),
+        },
         "intents": [
             {
                 "id": intent_id,
@@ -478,6 +569,12 @@ def project_behavior_settings(directory: str | Path) -> dict[str, object]:
                          else None),
                 "values": _intent_values(effective.intents[intent_id]),
                 "defaults": _intent_values(intent),
+                "memory": {
+                    "values": _intent_memory_values(
+                        effective.intents[intent_id]
+                    ),
+                    "defaults": _intent_memory_values(intent),
+                },
                 "source_first_defaults": {
                     "max_sources": (
                         effective.intents[intent_id]
@@ -520,7 +617,8 @@ def save_project_behavior(
     directory: str | pathlib.Path
         Existing project directory.
     scope: str
-        ``global``, ``intent``, or ``capabilities``.
+        ``global``, ``intent``, ``capabilities``, ``memory``, or
+        ``intent_memory``. Memory edits never require source reindexing.
     values: dict[str, object]
         Complete editor values excluding tool bindings.
     intent_id: str | None, optional
@@ -562,6 +660,10 @@ def save_project_behavior(
         if set(values) != _CAPABILITY_FIELDS:
             raise ValueError("Supply all indexing capability fields.")
         saved["capabilities"] = _diff(_capability_values(defaults), values)
+    elif scope == "memory" and intent_id is None:
+        if set(values) != _MEMORY_FIELDS:
+            raise ValueError("Supply all conversation memory fields.")
+        saved["memory"] = _diff(_memory_values(defaults), values)
     elif scope == "intent" and intent_id in defaults.intents:
         if set(values) != _INTENT_FIELDS:
             raise ValueError("Supply all editable intent fields.")
@@ -571,13 +673,37 @@ def save_project_behavior(
                     "Intent retrieval")
         changed = _diff(_intent_values(defaults.intents[intent_id]), values)
         intents = dict(saved.get("intents", {}))
+        # The existing GUI edits ordinary intent settings without touching
+        # the separately owned memory policy saved for the same intent.
+        memory = intents.get(intent_id, {}).get("memory")
+        updated = dict(changed)
+        if memory:
+            updated["memory"] = memory
+        if updated:
+            intents[intent_id] = updated
+        else:
+            intents.pop(intent_id, None)
+        saved["intents"] = intents
+    elif scope == "intent_memory" and intent_id in defaults.intents:
+        if set(values) != _INTENT_MEMORY_FIELDS:
+            raise ValueError("Supply all intent memory fields.")
+        intents = dict(saved.get("intents", {}))
+        updated = dict(intents.get(intent_id, {}))
+        updated.pop("memory", None)
+        changed = _diff(
+            _intent_memory_values(defaults.intents[intent_id]), values
+        )
         if changed:
-            intents[intent_id] = changed
+            updated["memory"] = changed
+        if updated:
+            intents[intent_id] = updated
         else:
             intents.pop(intent_id, None)
         saved["intents"] = intents
     else:
-        raise ValueError("Choose a project-wide, indexing, or intent editor.")
+        raise ValueError(
+            "Choose a global, indexing, memory, or intent editor."
+        )
     _check_override_shape(saved, defaults)
     path = PROJECT_TYPES_DIR / f"{defaults.id}.json"
     raw = json.loads(path.read_text(encoding="utf-8"),
@@ -589,6 +715,7 @@ def save_project_behavior(
         "global": saved["global"],
         "intents": saved["intents"],
         "capabilities": saved.get("capabilities", {}),
+        "memory": saved.get("memory", {}),
     }
     content = json.dumps(state, indent=2, ensure_ascii=False) + "\n"
     if len(content.encode("utf-8")) > _MAX_BYTES:

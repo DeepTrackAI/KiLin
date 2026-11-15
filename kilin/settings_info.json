@@ -121,6 +121,36 @@
       "summary": "Sets the maximum number of recent conversation turns considered.",
       "description": "Controls how much prior conversation is available to eligible intents. History policies can exclude or further select those turns."
     },
+    "project_behavior.memory.enabled": {
+      "title": "Conversation memory",
+      "summary": "Enables project-local indexing and retrieval of prior conversations.",
+      "description": "Conversation memory is distinct from primary sources and immediate conversation history. This setting controls future memory ingestion and retrieval, not source indexing."
+    },
+    "project_behavior.memory.questions": {
+      "title": "Questions in memory",
+      "summary": "Choose whether eligible questions are indexed automatically.",
+      "description": "All automatically includes questions from eligible intents. None disables automatic question entries; intent policies can further restrict indexing."
+    },
+    "project_behavior.memory.answers": {
+      "title": "Answers in memory",
+      "summary": "Choose whether assistant answers are indexed automatically, by selection, or never.",
+      "description": "Selected requires an explicit Save or Like; all permits eligible non-disliked answers automatically; none forbids answer indexing even when liked. Intent never and Dislike remain hard exclusions."
+    },
+    "project_behavior.memory.max_hits": {
+      "title": "Maximum memory results",
+      "summary": "Limits retrieved conversation-memory entries to 1–20 per answer.",
+      "description": "This is an independent retrieval limit, not a limit on retrieved source evidence or recent conversation turns."
+    },
+    "project_behavior.memory.max_tokens": {
+      "title": "Memory context budget",
+      "summary": "Limits memory-only context to 128–20,000 estimated tokens.",
+      "description": "The memory budget is separate from the primary-source evidence budget. Conversation memory cannot be represented as numbered scientific evidence."
+    },
+    "project_behavior.memory.exclude_disliked_answers": {
+      "title": "Exclude disliked answers from chat context",
+      "summary": "Controls whether previously rejected answers are supplied as conversation history.",
+      "description": "Enabled by default. A Dislike will exclude the rejected answer from automatic conversation context once feedback and filtering are implemented; the saved original turn remains untouched. This policy is independent of long-term memory indexing."
+    },
     "project_behavior.global.default_intent": {
       "title": "Default intent",
       "summary": "Selects the fallback intent when classification is inconclusive.",
@@ -155,6 +185,16 @@
       "title": "Conversation history policy",
       "summary": "Controls whether and how prior turns are used.",
       "description": "Choose no history, recent turns, or relevant turns as supported by the intent. This changes the context supplied for new questions."
+    },
+    "project_behavior.intents.memory.indexing": {
+      "title": "Intent memory indexing",
+      "summary": "Choose automatic indexing, explicit selection, or never for this intent.",
+      "description": "Automatic follows project question and answer policies, explicit requires user Save or Like, and never prevents memory indexing even when explicitly selected. The rule applies to turns produced by this intent."
+    },
+    "project_behavior.intents.memory.read": {
+      "title": "Intent memory retrieval",
+      "summary": "Controls whether the intent can search prior conversation memory.",
+      "description": "Independent from whether the intent creates new memory entries or retrieves primary sources. Disabling this option does not remove recent chat history."
     },
     "project_behavior.intents.retrieval.mode": {
       "title": "Retrieval mode",

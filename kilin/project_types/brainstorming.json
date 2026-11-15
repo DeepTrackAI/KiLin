@@ -27,7 +27,15 @@
     }
   },
   "history": {
-    "recent_turns": 6
+    "recent_turns": 6,
+    "exclude_disliked_answers": true
+  },
+  "conversation_memory": {
+    "enabled": true,
+    "questions": "all",
+    "answers": "selected",
+    "max_hits": 4,
+    "max_tokens": 2000
   },
   "generation": {
     "temperature": 0.9,
@@ -168,7 +176,11 @@
         "how (are|r) (you|u)( doing)?( today)?",
         "how('s| is) it going( today)?|how('s| is) your day( going)?|what'?s up|sup",
         "(bye|goodbye|see you|see you later|good night|have a (nice|good) day)"
-      ]
+      ],
+      "memory": {
+        "indexing": "never",
+        "read": false
+      }
     }
   },
   "welcome_prompts": [
