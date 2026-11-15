@@ -105,9 +105,13 @@ intent's `indexing`/`read` pair. Existing `global` and `intent` payloads
 remain unchanged. The current core validates and persists these settings;
 turn UUIDs, feedback persistence and disliked-history filtering are
 implemented independently of the editor. Conversation-memory indexing
-and retrieval are now core operations; only their GUI controls and idle-phase
-synchronization are pending. See [Conversation memory](conversation_memory.md)
-for the indexing and persistence contracts.
+and retrieval are core operations, independent of the GUI. The desktop
+**Memory** tab edits project-wide policy, inspects eligible saved messages,
+provides Exclude/Restore, and explicitly synchronizes the derived index
+through an idle-phase Update action. The **Intents** tab edits indexing and
+reading permissions for each intent. These controls use the core's validated
+editors and revision checks; the GUI does not own memory persistence.
+See [Conversation memory](conversation_memory.md) for their contracts.
 
 ### Conversation memory policies
 

@@ -1,7 +1,11 @@
 # KíLín
 
-KíLín runs locally to answer questions about your code and literature,
-with citations to your files and customizable project types, intents, and tools.
+KíLín is a local, extensible AI assistant for scientific and technical work.
+Its project types cover code, literature, writing, brainstorming, and
+researcher-directed reviewing. Source-grounded answers cite project files;
+conversation memory can separately recall eligible prior discussions without
+treating them as scientific evidence. Projects have customizable intents,
+tools, and memory policies.
 
 ## Citation
 
@@ -112,9 +116,10 @@ recovery, and GUI metadata updates, see
 
 ## Tutorials
 
-KíLín includes 18 notebooks introducing the framework, from local models
+KíLín includes 19 notebooks introducing the framework, from local models
 and source processing to retrieval, project chat, diagnostic traces, project
-types, custom tools, and a final end-to-end research-assistant exercise.
+types, conversation memory, custom tools, and a final end-to-end
+research-assistant exercise.
 
 Start with the [tutorial guide](tutorials/README.md) for prerequisites,
 recommended learning paths, model requirements, example datasets, and safe
@@ -136,6 +141,6 @@ source files distributed with KíLín. Tutorials involving literature can
 optionally use the supplementary article corpus in
 `_si_article_/literature_repo/` and provide bundled PDF fallbacks when
 that corpus is unavailable. The final
-[end-to-end tutorial](tutorials/180_end_to_end_research_assistant.ipynb)
+[end-to-end tutorial](tutorials/190_end_to_end_research_assistant.ipynb)
 uses a bundled fictional corpus for offline retrieval checks and an
 optional model-based RAG run.

@@ -51,8 +51,9 @@ resuming a project preserves its existing setting.
 - [140 · Project chat](./140_project_chat.ipynb): Prepare or resume a project and ask questions with citations and saved history.
 - [150 · Execution traces](./150_logging_trace.ipynb): Inspect the recorded inputs, outputs, retrieval steps, and timings of a session.
 - [160 · Project types](./160_project_types.ipynb): Customize project types, instructions, and intents using JSON configuration.
-- [170 · Custom tools](./170_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
-- [180 · Research-assistant capstone](./180_end_to_end_research_assistant.ipynb): Create a literature project from bundled example notes, evaluate offline retrieval and citations, and optionally run a complete RAG session.
+- [170 · Conversation memory](./170_conversation_memory.ipynb): Explore project-local indexing, Save/Like/Dislike, exclusion, branch origins, and verified historical recall using a model-free example.
+- [180 · Custom tools](./180_create_custom_tool.ipynb): Explore a paper-summary tool and build a custom tool.
+- [190 · Research-assistant capstone](./190_end_to_end_research_assistant.ipynb): Create a literature project from bundled example notes, evaluate offline retrieval and citations, and optionally run a complete RAG session.
 
 ## Choose a learning path
 
@@ -65,11 +66,12 @@ resuming a project preserves its existing setting.
 | Combine evidence and examine retrieval guarantees | [110](./110_hybrid_ranking.ipynb), [120](./120_context_expansion.ipynb) | Embedding |
 | Inspect source-card indexing and source-first retrieval | [130](./130_source_cards.ipynb) | No |
 | Use the complete project-question-answering workflow | [140](./140_project_chat.ipynb), [150](./150_logging_trace.ipynb) | Chat and embedding |
-| Design project-specific behavior and tools | [160](./160_project_types.ipynb), [170](./170_create_custom_tool.ipynb) | No for the main examples; real-model sections are optional |
-| Apply and verify the complete research workflow | [180](./180_end_to_end_research_assistant.ipynb) | No for the core checks; chat and embedding models optional |
+| Configure project behavior and conversation memory | [160](./160_project_types.ipynb), [170](./170_conversation_memory.ipynb) | No for the memory exercise (deterministic stand-in vectors) |
+| Design tools for research workflows | [180](./180_create_custom_tool.ipynb) | No for the main example; real-model section optional |
+| Apply and verify the complete research workflow | [190](./190_end_to_end_research_assistant.ipynb) | No for the core checks; chat and embedding models optional |
 
 If you only want an introduction to KíLín as an end user, start with 10,
-20, and 140, then try the integrated example in 180. The intermediate
+20, and 140, then try the integrated example in 190. The intermediate
 notebooks explain the internals; they are not prerequisites for the GUI
 or project chat.
 
@@ -77,7 +79,7 @@ or project chat.
 
 Most tutorials work with the included `kilin/` Python package. The source
 code is itself a realistic, reproducible example repository.
-Tutorials 150 and 170 use literature PDFs:
+Tutorials 150 and 180 use literature PDFs:
 
 - The complete supplementary article corpus, if available, lives under
   `_si_article_/literature_repo/`, with PDF files under `papers/`.
@@ -85,13 +87,15 @@ Tutorials 150 and 170 use literature PDFs:
   are intentionally absent from space-saving source ZIP exports. Their
   contents remain part of the full supplementary materials, not mandatory
   dependencies of the tutorial series.
-- When a paper is absent from that corpus, Tutorials 150 and 170 use the
+- When a paper is absent from that corpus, Tutorials 150 and 180 use the
   small PDFs provided in `tests/fixtures/`. They tell you which file was
   selected. If neither location exists, the notebook raises an informative
   `FileNotFoundError` instead of silently choosing unrelated documents.
 
-Tutorial 180 instead uses four small, fictional Markdown research notes
-from `tutorials/data/180_research_pilot/`. Its deterministic steps work
+Tutorial 170 uses fictional saved conversation turns and a deterministic
+stand-in embedding model; it does not download weights or call an LLM.
+Tutorial 190 instead uses four small, fictional Markdown research notes
+from `tutorials/data/190_research_pilot/`. Its deterministic steps work
 without a language model; the full RAG run is explicitly opt-in. The
 fictional measurements must not be cited as research findings.
 
@@ -108,7 +112,7 @@ after checking the smaller examples. Some notebooks use embedding batches
 to avoid processing the entire corpus in one model call.
 
 Example workspaces and indexes are created below `sandbox/`, not in the
-original source directory. Tutorials 150, 170, and 180 automatically
+original source directory. Tutorials 150, 170, 180, and 190 automatically
 choose a new numbered workspace if an earlier run exists; they do not
 recursively delete an earlier one. The other tutorials may write to documented paths below `sandbox/`; inspect these paths before changing them. Do not add
 `sandbox/`, Hugging Face model caches, or source PDFs to version control.

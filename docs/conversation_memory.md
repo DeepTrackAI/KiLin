@@ -266,6 +266,9 @@ dropping the reply when a partial slot remains. Directly matching assistant
 messages without an eligible matching question can also appear alone, with
 their separate turn identity and unverified status.
 
+For an executable, no-model illustration of these policies, see
+[Tutorial 170 — Conversation memory](../tutorials/170_conversation_memory.ipynb).
+
 For non-historical questions, memory query formatting has its own
 instruction rather than reusing the source-evidence retrieval instruction.
 There is no new summarizing model call. Memory is not used to validate
