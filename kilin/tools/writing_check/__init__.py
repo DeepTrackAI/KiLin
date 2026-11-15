@@ -1,44 +1,56 @@
-"""The ``writing_check`` tool: grammar and style of a long document.
+"""Expose the registered ``writing_check`` tool.
 
-The tool is being built in stages; this package holds its parts so far.
-It reads a document into sections and paragraphs (``_document``) so that
-each paragraph can be checked with its section as context and each
-finding reported with its line, chooses the part a question asks to
-check (``_scope``), runs the checks that need no model (``_checks``), and
-checks one paragraph at a time with the model (``_review``).
+It checks the grammar and style of one document of the project, or a part
+of it, and suggests changes without making them. Its implementation and
+configuration are local to this package.
 
 Key Features
 ------------
 
-- **Paragraphs with their place**
+- **Tool execution**
 
-    Section, number and source lines for every paragraph of prose.
+    Parse validated settings and execute the named tool.
+
+- **Independent defaults**
+
+    Read this package's ``defaults.json`` configuration.
 
 Module Structure
 ----------------
 
-- ``_document``
+- ``parse_settings`` and ``run``
 
-    Sections and paragraphs of a ``.tex``, ``.md`` or ``.txt`` source.
+    The registry entry points for this tool.
 
-- ``_scope``
+- ``WritingCheckSettings``, ``report_markdown`` and ``chat_answer``
 
-    The part of the document a question asks to check.
+    The settings, the saved report and the chat answer.
 
-- ``_checks`` and ``_configuration``
+- ``_document``, ``_scope``, ``_checks`` and ``_review``
 
-    The checks done in code, the glossary for the model, and their
-    validated word lists and limits.
-
-- ``_review``
-
-    One paragraph checked by the model for grammar or style, with every
-    suggested change checked before it is kept.
+    Sections and paragraphs of a source, the part a question names, the
+    checks done in code, and the paragraph checks done by the model.
 
 Examples
 --------
->>> import kilin.tools.writing_check
+>>> from kilin.tools.writing_check import parse_settings
+>>> callable(parse_settings)
+True
 
 """
 
-__all__: list[str] = []
+from kilin.tools.writing_check.tool import (
+    WritingCheckSettings,
+    chat_answer,
+    parse_settings,
+    report_markdown,
+    run,
+)
+
+__all__ = [
+    "WritingCheckSettings",
+    "chat_answer",
+    "parse_settings",
+    "report_markdown",
+    "run",
+]

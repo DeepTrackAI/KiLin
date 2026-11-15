@@ -97,7 +97,7 @@ include = ["kilin*"]
 "kilin.tools.reference_check" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.show_source" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.suggest_reference" = ["README.md", "defaults.json", "settings_info.json"]
-"kilin.tools.writing_check" = ["README.md", "checks.json"]
+"kilin.tools.writing_check" = ["README.md", "defaults.json", "settings_info.json"]
 "kilin.tools.generate_paper_summary" = [
     "README.md",
     "defaults.json",

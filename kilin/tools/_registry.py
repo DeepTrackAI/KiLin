@@ -99,6 +99,7 @@ from kilin.tools import (
     scan_and_list,
     show_source,
     suggest_reference,
+    writing_check,
 )
 from kilin.tools._contract import ToolContext, ToolRequest, ToolResult
 from kilin.tools._defaults import load_tool_defaults
@@ -123,6 +124,7 @@ __all__ = [
     "TOOL_SCAN_AND_LIST",
     "TOOL_SHOW_SOURCE",
     "TOOL_SUGGEST_REFERENCE",
+    "TOOL_WRITING_CHECK",
     "Tool",
     "ToolName",
     "ToolUse",
@@ -144,6 +146,7 @@ ToolName: TypeAlias = Literal[
     "reference_check",
     "show_source",
     "suggest_reference",
+    "writing_check",
 ]
 TOOL_PROJECT_INVENTORY: Final[ToolName] = "project_inventory"
 TOOL_SCAN_AND_LIST: Final[ToolName] = "scan_and_list"
@@ -157,6 +160,7 @@ TOOL_PAPER_OVERVIEW: Final[ToolName] = "paper_overview"
 TOOL_REFERENCE_CHECK: Final[ToolName] = "reference_check"
 TOOL_SHOW_SOURCE: Final[ToolName] = "show_source"
 TOOL_SUGGEST_REFERENCE: Final[ToolName] = "suggest_reference"
+TOOL_WRITING_CHECK: Final[ToolName] = "writing_check"
 TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_PROJECT_INVENTORY,
     TOOL_SCAN_AND_LIST,
@@ -170,6 +174,7 @@ TOOL_CHOICES: Final[tuple[ToolName, ...]] = (
     TOOL_REFERENCE_CHECK,
     TOOL_SHOW_SOURCE,
     TOOL_SUGGEST_REFERENCE,
+    TOOL_WRITING_CHECK,
 )
 
 
@@ -332,6 +337,14 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "statement, judging each with a quote from its own passages.",
         suggest_reference.parse_settings,
         suggest_reference.run,
+    ),
+    TOOL_WRITING_CHECK: Tool(
+        TOOL_WRITING_CHECK,
+        "Check the grammar and style of one document or part of it, "
+        "paragraph by paragraph, and suggest changes without making them; "
+        "save the report to outputs/.",
+        writing_check.parse_settings,
+        writing_check.run,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,

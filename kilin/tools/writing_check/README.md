@@ -1,17 +1,45 @@
 # writing_check
 
-This package will own the `writing_check` registered tool, which checks the
-grammar and style of one long document (an article, thesis chapter, report
-or proposal) and returns suggested edits; it never rewrites the text. It is
-being built in stages and is not registered yet.
+This package owns the `writing_check` registered tool. It checks the
+grammar and style of one document of the project (an article, thesis
+chapter, report or proposal), or a part of it, and suggests changes; it
+never changes the document. The checks across the whole document
+(acronyms, terms, spelling) are done in code, deterministically; each
+paragraph is checked by the answering model, and every suggestion it
+makes is checked before it is reported. A plan is shown for confirmation
+when required by the confirmation policy.
 
-So far it reads a document into sections and paragraphs (`_document.py`),
-chooses the part of it a question asks to check (`_scope.py`), runs the
-checks that need no model (`_checks.py`), and checks one paragraph at a
-time with the model (`_review.py`).
+For "check the grammar and style of the methods of draft.tex", the tool:
+
+1. Chooses the document with `choose_document` (the named file, the file
+   the earlier turns discussed, or the user's choice) and reads its
+   selected source file (`_shared/source_access.py`): `.tex`, `.md` and
+   `.txt` as written; `.docx` through its source reader, as Markdown;
+   `.doc` and `.pdf` through theirs, as plain text (their line numbers are
+   those of the extracted text).
+2. Reads it into sections and paragraphs (`_document.py`) and chooses the
+   part the question names (`_scope.py`). When it names a part the
+   document does not have, the user chooses among the headings (or the
+   whole document); where nobody can be asked, the answer lists them.
+3. Runs the checks done in code on the whole document (`_checks.py`) and
+   keeps the findings in the chosen part; their glossary goes into every
+   model call.
+4. Plans one model call per paragraph and check (grammar, and style at
+   level `all` or `style`), plus one to describe the document when it has
+   no card, and asks first when the plan is large. The quick version
+   checks the grammar of the first `QUICK_PARAGRAPHS` paragraphs;
+   cancelling keeps the findings made in code.
+5. Checks each paragraph (`_review.py`) and drops suggestions that fail
+   the checks below.
+6. Answers with the first `CHAT_FINDINGS` findings under their section
+   headings ("line 12 · grammar: “We tracks” → “We tracked”
+   (agreement)") and saves the full report, one table per section, as
+   `outputs/<document>_writing_check.md`.
+
+Failed model calls are reported per paragraph (a partial result); the
+other paragraphs are still checked.
 
 ## Sections and paragraphs
-
 
 - **LaTeX** (`.tex`): the document text between `\begin{document}` and
   `\end{document}` (the whole file for an `\input` chapter). Sections come
@@ -105,9 +133,25 @@ a defined acronym or preferred term, or writes a term form the document
 does not use. A failed call is reported for that paragraph and the others
 are still checked; without a brief, the paragraphs are checked without it.
 
-### Settings (`checks.json`, section `CHECKS`)
+## Settings (`defaults.json`)
 
-The file becomes the tool's `defaults.json` when the tool is registered.
+### `SETTINGS`
+
+Project types may override these in the intent's `tool` object (lower
+case), and users per project.
+
+- `LEVEL` (default `all`): model checks to run: `grammar`, `style` or
+  `all` (both). The checks done in code always run.
+- `CONFIRMATION` (default `when_large`): when to show the plan first:
+  `always`, `when_large` or `never`.
+- `LARGE_BATCHES` (default `30`, range 0–1000): with `when_large`, plans
+  with more model calls than this ask first.
+- `QUICK_PARAGRAPHS` (default `10`, range 1–1000): paragraphs checked for
+  grammar by the quick version.
+- `CHAT_FINDINGS` (default `20`, range 0–200): findings shown in the chat;
+  all are in the saved report.
+
+### `CHECKS`
 
 - `LONG_SENTENCE_WORDS` (default `40`, range 10–200): sentence length, in
   words, reported as long.
@@ -118,3 +162,15 @@ The file becomes the tool's `defaults.json` when the tool is registered.
   their inflected forms.
 - `KNOWN_ACRONYMS`: lowercase acronyms readers know without a definition
   ("dna", "mri", roman numerals).
+
+### `ESTIMATES`
+
+Planning assumptions for one paragraph call, shown in the plan; not
+limits: `PROMPT_TOKENS_PER_SECOND` (`700`), `REPLY_TOKENS_PER_SECOND`
+(`25`), `CALL_SECONDS` (`1`), `PROMPT_OVERHEAD_TOKENS` (`700`, the
+context, paragraph and instructions) and `REPLY_TOKENS` (`150`).
+
+### `MODEL_CALLS`
+
+- `THINKING` (default `off`): the tool's paragraph calls are short and
+  many, so thinking is off, as for the batch tools.

@@ -43,6 +43,10 @@ Module Structure
 
     Read the part from a question.
 
+- ``section_scope``
+
+    One section's paragraphs, for a section the user picks.
+
 Examples
 --------
 >>> from pathlib import Path
@@ -66,6 +70,7 @@ __all__ = [
     "Scope",
     "ScopeProblem",
     "choose_scope",
+    "section_scope",
 ]
 
 # Fewest words of quoted text or text after a colon taken as the text to
@@ -196,7 +201,7 @@ def choose_scope(question: str, document: Document) -> Scope | ScopeProblem:
         if named:
             return _named_scope(named["name"], document)
     for index in _titles_used(asked, document):
-        return _section_scope(index, document)
+        return section_scope(index, document)
     return Scope(
         tuple(range(len(document.paragraphs))), "the whole document"
     )
@@ -362,7 +367,7 @@ def _numbered_scope(number: str, document: Document) -> Scope | ScopeProblem:
 
     for index, section in enumerate(document.sections):
         if section.number == number:
-            return _section_scope(index, document)
+            return section_scope(index, document)
     return ScopeProblem(
         f"There is no section {number}.", _headings(document)
     )
@@ -402,7 +407,7 @@ def _named_scope(name: str, document: Document) -> Scope | ScopeProblem:
     ]
     found = exact or within
     if len(found) == 1:
-        return _section_scope(found[0], document)
+        return section_scope(found[0], document)
     if len(found) > 1:
         return ScopeProblem(
             f"Several sections match “{name.strip()}”.",
@@ -459,7 +464,7 @@ def _titles_used(question: str, document: Document) -> list[int]:
     return []
 
 
-def _section_scope(index: int, document: Document) -> Scope:
+def section_scope(index: int, document: Document) -> Scope:
     """Return a section's paragraphs, subsections included.
 
     Parameters

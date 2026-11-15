@@ -92,9 +92,9 @@ class TestModelCallSettings(unittest.TestCase):
     def test_all_shipped_policies_match_owned_configuration(self) -> None:
         off = {
             "batch_classify", "batch_review", "filter_results",
-            "find_passages", "generate_paper_summary",
+            "find_passages", "generate_paper_summary", "writing_check",
         }
-        self.assertEqual(len(TOOL_REGISTRY), 12)
+        self.assertEqual(len(TOOL_REGISTRY), 13)
         for name, tool in TOOL_REGISTRY.items():
             with self.subTest(tool=name):
                 config = importlib.import_module(

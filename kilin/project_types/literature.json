@@ -165,6 +165,21 @@
         "name": "suggest_reference"
       }
     },
+    "writing_check": {
+      "description": "Check the grammar, spelling and style of one document of the project, usually the user's own draft, or a part of it, and suggest corrections ('check the grammar and style of draft.tex', 'proofread the methods section', 'check the English of the second paragraph of the introduction', 'are there typos in my manuscript?', 'check this sentence: ...'). Asks which document when none is named. Not for checking references or citations (reference_check), not for whether claims are supported, and not for writing or rewriting text.",
+      "requires": [
+        "\\b(?:grammar\\w*|proofread\\w*|spelling|typos?|stylistic|style|wording|copy-?edit\\w*)\\b|\\b(?:the|my|its|our)\\s+english\\b"
+      ],
+      "history": {
+        "policy": "relevant"
+      },
+      "retrieval": {
+        "mode": "none"
+      },
+      "tool": {
+        "name": "writing_check"
+      }
+    },
     "research_briefing": {
       "description": "Generate a structured research briefing for a single scientific paper, emphasizing the research question, key findings, strength of evidence, limitations, and implications. Examples: \"write a research briefing for patil25\", \"prepare a research briefing of the Smith paper\". Use even without an explicit request to save a file. Not for a short informal summary (paper_overview).",
       "history": {
