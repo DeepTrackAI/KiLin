@@ -190,7 +190,11 @@ that works on an earlier answer (`follows_up`, such as `show_source` or
 `filter_results`) is not used when the question names a file and says
 nothing of earlier answers ("In Figure 1G of smith20.pdf, what does 79.7
 represent?"), since such a question is new and the tool would only report
-that it found no earlier answer. The router is then asked once more with
+that it found no earlier answer. A question sent to such a tool always
+relates to an earlier turn (the last one that is not small talk, when the
+router names none); a tool with `follows_up_when` (`writing_check`, for
+"rephrase line 75") does so only for the questions it accepts, and is not
+ruled out for naming a file. The router is then asked once more with
 the ruled-out intents left out of the list; when that call fails or still
 names one of them, the default intent is used.
 

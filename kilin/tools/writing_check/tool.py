@@ -470,7 +470,7 @@ def _rewrite(
     path = None
     for turn in request.earlier:  # Latest first.
         shown = shown_findings(turn.answer)
-        if shown or turn.answer.lstrip().startswith("**Writing check of"):
+        if shown or "**Writing check of" in turn.answer:
             findings = shown
             path = turn.paths[0] if turn.paths else None
             break

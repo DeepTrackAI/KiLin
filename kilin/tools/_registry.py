@@ -12,7 +12,8 @@ Adding a tool means providing a package with a settings
 dataclass, ``parse_settings(data, where)``, and ``run(settings, request,
 context)`` (see ``kilin.tools._contract``), then adding it here. A tool
 marked ``follows_up`` works on an earlier answer, so routing relates a
-question sent to it to an earlier turn even when the router named none.
+question sent to it to an earlier turn even when the router named none;
+one with ``follows_up_when`` does so only for the questions it accepts.
 
 Key Features
 ------------
@@ -195,6 +196,11 @@ class Tool:
     follows_up: bool
         True when the tool works on an earlier answer, so a question
         routed to it always relates to an earlier turn.
+    follows_up_when: Callable[[str], bool] | None
+        For a tool that works on an earlier answer only for some
+        questions: True for those questions, which then relate to an
+        earlier turn like ``follows_up``. They are not ruled out for
+        naming a file.
     model_calls: ModelCallSettings
         Tool-owned policy for internal answering-model calls.
     workspace_resources: Callable | None
@@ -207,6 +213,7 @@ class Tool:
     parse_settings: Callable[[dict, str], object]
     run: Callable[[object, ToolRequest, ToolContext], ToolResult]
     follows_up: bool = False
+    follows_up_when: Callable[[str], bool] | None = None
     workspace_resources: (
         Callable[[object], tuple[WorkspaceResource, ...]] | None
     ) = None
@@ -345,6 +352,7 @@ TOOL_REGISTRY: Final[dict[ToolName, Tool]] = {
         "save the report to outputs/.",
         writing_check.parse_settings,
         writing_check.run,
+        follows_up_when=writing_check.asks_rewrite,
     ),
     TOOL_SHOW_SOURCE: Tool(
         TOOL_SHOW_SOURCE,

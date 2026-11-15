@@ -204,7 +204,7 @@ card representation, indexing and persistence. See
 The [standard tool layout](tool_packages.md#standard-tool-layout) specifies
 the package, configuration and resource files. `tools/_registry.py` pairs a
 canonical `TOOL_*` identifier with its parser, runner, optional `follows_up`
-behavior and optional `workspace_resources` callback. Project-type JSON can
+or `follows_up_when` behavior and optional `workspace_resources` callback. Project-type JSON can
 select an existing entry, not load another implementation by string.
 
 Implement an extension in this order:

@@ -26,10 +26,16 @@ Module Structure
 
     The settings, the saved report and the chat answer.
 
-- ``_document``, ``_scope``, ``_checks`` and ``_review``
+- ``asks_rewrite``
+
+    Whether a question asks to rewrite a line: a follow-up of a check,
+    so routing passes the earlier turn.
+
+- ``_document``, ``_scope``, ``_checks``, ``_review`` and ``_followup``
 
     Sections and paragraphs of a source, the part a question names, the
-    checks done in code, and the paragraph checks done by the model.
+    checks done in code, the paragraph checks done by the model, and line
+    rewrites after a check.
 
 Examples
 --------
@@ -39,6 +45,7 @@ True
 
 """
 
+from kilin.tools.writing_check._followup import asks_rewrite
 from kilin.tools.writing_check.tool import (
     WritingCheckSettings,
     chat_answer,
@@ -49,6 +56,7 @@ from kilin.tools.writing_check.tool import (
 
 __all__ = [
     "WritingCheckSettings",
+    "asks_rewrite",
     "chat_answer",
     "parse_settings",
     "report_markdown",

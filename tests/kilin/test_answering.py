@@ -1196,6 +1196,21 @@ class TestRelatedTurnChecks(unittest.TestCase):
         self.assertEqual(decision.related_turn_ids, (2,))
         self.assertFalse(decision.standalone)
 
+    def test_rewrite_of_a_line_relates_the_last_turn(self) -> None:
+        """Pass a writing check to its line-rewrite follow-up."""
+
+        # Cued to writing_check whatever the router says, with no word
+        # pointing back: the tool still needs the check's answer.
+        decision, _ = self._route(
+            "suggest a better phrasing for line 75", "[]"
+        )
+        self.assertEqual(decision.intent, "writing_check")
+        self.assertEqual(decision.related_turn_ids, (2,))
+        decision, _ = self._route(
+            "check the grammar of draft.tex", "[]", "writing_check"
+        )
+        self.assertEqual(decision.related_turn_ids, ())
+
     def test_reuse_without_meaningful_turn_has_no_related_id(self) -> None:
         """Never reuse a small-talk-only conversation as evidence."""
 

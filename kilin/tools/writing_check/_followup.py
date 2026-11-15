@@ -36,7 +36,7 @@ Module Structure
 
     The findings an earlier check's answer listed.
 
-- ``rewrite_request`` and ``target_text``
+- ``asks_rewrite``, ``rewrite_request`` and ``target_text``
 
     Whether a question asks for a rewrite of a line, and the text to
     rewrite.
@@ -67,6 +67,7 @@ from kilin.tools.writing_check._review import locate, meaning_change
 
 __all__ = [
     "ShownFinding",
+    "asks_rewrite",
     "option_rejection",
     "parse_options",
     "rewrite_prompt",
@@ -174,6 +175,27 @@ def rewrite_request(question: str) -> int | None:
     return int(line.group(1))
 
 
+def asks_rewrite(question: str) -> bool:
+    """Tell whether a question asks to rewrite a line.
+
+    The registry uses it as ``follows_up_when``: such a question follows
+    up a check, so routing passes it the earlier turn.
+
+    Parameters
+    ----------
+    question: str
+        The question as typed.
+
+    Returns
+    -------
+    bool
+        True when ``rewrite_request`` finds a line.
+
+    """
+
+    return rewrite_request(question) is not None
+
+
 def shown_findings(answer: str) -> list[ShownFinding]:
     """Return the findings an earlier writing check's answer listed.
 
@@ -190,7 +212,7 @@ def shown_findings(answer: str) -> list[ShownFinding]:
 
     """
 
-    if not answer.lstrip().startswith(_CHECK_ANSWER):
+    if _CHECK_ANSWER not in answer:
         return []
     return [
         ShownFinding(
