@@ -39,9 +39,14 @@ Module Structure
 
     What every call is told about the document.
 
-- ``paragraph_prompt`` and ``parse_findings``
+- ``paragraph_prompt``, ``neighbours`` and ``parse_findings``
 
-    One paragraph's prompt, and the findings in the reply.
+    One paragraph's prompt with its context, and the findings in the
+    reply.
+
+- ``trim_change``
+
+    A change cut to the words it changes.
 
 - ``locate`` and ``rejection``
 
@@ -84,16 +89,22 @@ from kilin.tools.writing_check._checks import (
 from kilin.tools.writing_check._document import Document
 
 __all__ = [
+    "CONTEXT_QUOTED",
     "Dropped",
     "brief_prompt",
     "document_brief",
     "document_context",
     "locate",
+    "neighbours",
     "paragraph_prompt",
     "parse_findings",
     "rejection",
     "review_paragraph",
+    "trim_change",
 ]
+
+# Why a suggestion quoting the context, not the paragraph, is dropped.
+CONTEXT_QUOTED: Final[str] = "it quotes the context, not the paragraph"
 
 # Card fields shown to the model, in order, each cut to a length.
 _CARD_FIELDS: Final[tuple[str, ...]] = (
@@ -131,6 +142,16 @@ _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(
     r"\[cite\]|\[author\]|\[year\]|\(ref\)"
 )
 _SENTENCE_END: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+")
+# Hedges and modal verbs: a suggestion may not add, drop or swap them.
+_HEDGE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:would|could|may|might|can|should|must|will|shall|virtually|"
+    r"approximately|nearly|almost|roughly|likely|possibly|potentially|"
+    r"probably|perhaps|presumably|apparently|largely|mostly|partly|"
+    r"somewhat|relatively|typically|usually|often|generally)\b",
+    re.IGNORECASE,
+)
+# Words of shared context kept on each side of a trimmed change.
+_TRIM_CONTEXT: Final[int] = 2
 # Characters a model may write differently when it quotes the text; each
 # is replaced by one character, so positions are kept.
 _SAME: Final[dict[int, str]] = str.maketrans({
@@ -300,24 +321,18 @@ def paragraph_prompt(
         role = _role(found.title)
         if role:
             section += f" ({role})"
-    before = (
-        _SENTENCE_END.split(document.paragraphs[index - 1].text)[-1]
-        if index > 0 else ""
-    )
-    after = (
-        _SENTENCE_END.split(document.paragraphs[index + 1].text)[0]
-        if index + 1 < len(document.paragraphs) else ""
-    )
+    before, after = neighbours(document, index)
     if level == LEVEL_GRAMMAR:
         system = (
             "You are a careful copy editor of scientific writing. You "
             "correct only clear errors; you never rewrite for taste."
         )
         task = (
-            "Find the grammar errors in the paragraph only: agreement, "
-            "verb forms, wrong tense, articles, prepositions, punctuation, "
+            "Find the grammar errors in the paragraph: agreement, verb "
+            "forms, wrong tense, articles, prepositions, punctuation, "
             "spelling, missing or extra words. Do not report style or "
-            "wording choices."
+            "wording choices, and never replace a correct word with "
+            "another."
         )
     else:
         system = (
@@ -326,31 +341,111 @@ def paragraph_prompt(
         )
         task = (
             "Suggest at most "
-            f"{_STYLE_MAX} changes that clearly improve clarity or "
-            "concision: wordy phrases, ambiguous references (\"it\", "
-            "\"this\"), informal words, a sentence hard to follow. Give "
-            "the most useful first. Do not report grammar errors, and do "
-            "not change the meaning."
+            f"{_STYLE_MAX} changes, and only where a reader would "
+            "stumble: a wordy phrase, an ambiguous reference (\"it\", "
+            "\"this\"), an awkward or hard-to-follow construction. Give "
+            "the most useful first; suggesting nothing is often right. "
+            "Never replace a correct word with a synonym or to sound more "
+            "formal, never add, remove or soften a claim, a hedge "
+            "(\"virtually\", \"approximately\") or a modal verb "
+            "(\"would\", \"could\", \"may\"), and do not report grammar "
+            "errors."
         )
     parts = []
     if context:
         parts.append(f"The document:\n{context}")
     if section:
         parts.append(f"Section: {section}")
-    if before:
-        parts.append(f"Sentence before the paragraph: {before}")
-    parts.append(f'Paragraph:\n"""\n{paragraph.text}\n"""')
-    if after:
-        parts.append(f"Sentence after the paragraph: {after}")
+    if before or after:
+        lines = ["Context, for reference only (do not check or quote it):"]
+        if before:
+            lines.append(f"Sentence before the paragraph: {before}")
+        if after:
+            lines.append(f"Sentence after the paragraph: {after}")
+        parts.append("\n".join(lines))
     parts.append(
-        f"{task} Keep the authors' acronyms, terms and spelling, field "
-        "terminology, numbers, and the placeholders [cite], [author], "
-        "[year] and (ref).\n\nFor each change, write exactly:\n"
+        f'Paragraph to check:\n"""\n{paragraph.text}\n"""'
+    )
+    parts.append(
+        f"{task} Check only the paragraph between the triple quotes. "
+        "Keep the authors' acronyms, terms and spelling, field "
+        "terminology and names in the software, numbers, and the "
+        "placeholders [cite], [author], [year] and (ref).\n\nFor each "
+        "change, write exactly:\n"
         "ORIGINAL: <the shortest exact words from the paragraph that "
-        "need the change>\nSUGGESTION: <those words changed>\n"
-        "REASON: <a few words>\n\nWrite NONE if nothing needs changing."
+        "need the change, a few words, not the whole sentence>\n"
+        "SUGGESTION: <those words changed>\n"
+        "REASON: <a few words, on one line>\n\nWrite NONE if nothing "
+        "needs changing."
     )
     return system, "\n\n".join(parts)
+
+
+def neighbours(document: Document, index: int) -> tuple[str, str]:
+    """Return the sentences around a paragraph, given as context.
+
+    Parameters
+    ----------
+    document: Document
+        The document.
+    index: int
+        The paragraph.
+
+    Returns
+    -------
+    tuple[str, str]
+        The last sentence of the paragraph before and the first sentence
+        of the paragraph after, ``""`` where there is none.
+
+    """
+
+    before = (
+        _SENTENCE_END.split(document.paragraphs[index - 1].text)[-1]
+        if index > 0 else ""
+    )
+    after = (
+        _SENTENCE_END.split(document.paragraphs[index + 1].text)[0]
+        if index + 1 < len(document.paragraphs) else ""
+    )
+    return before, after
+
+
+def trim_change(words: str, suggestion: str) -> tuple[str, str, int]:
+    """Return a change cut to its changed words, with a little context.
+
+    Parameters
+    ----------
+    words: str
+        The paragraph's words the change replaces.
+    suggestion: str
+        The suggested words.
+
+    Returns
+    -------
+    tuple[str, str, int]
+        The original and suggested words without the words they share
+        at the start and the end, keeping up to two of those words on
+        each side for context, and how many characters were cut from the
+        start of the original.
+
+    """
+
+    old, new = words.split(), suggestion.split()
+    start = 0
+    while start < min(len(old), len(new)) and old[start] == new[start]:
+        start += 1
+    end = 0
+    while (
+        end < min(len(old), len(new)) - start
+        and old[-1 - end] == new[-1 - end]
+    ):
+        end += 1
+    keep_start = max(0, start - _TRIM_CONTEXT)
+    keep_end = max(0, end - _TRIM_CONTEXT)
+    original = " ".join(old[keep_start:len(old) - keep_end])
+    changed = " ".join(new[keep_start:len(new) - keep_end])
+    cut = len(" ".join(old[:keep_start])) + (1 if keep_start else 0)
+    return original, changed, cut
 
 
 def _role(title: str) -> str:
@@ -387,15 +482,19 @@ def parse_findings(reply: str) -> list[tuple[str, str, str]]:
     -------
     list[tuple[str, str, str]]
         Original words, suggestion and reason of each complete block, with
-        surrounding quotation marks removed; empty for NONE.
+        surrounding quotation marks removed and the reason cut to its
+        first line (a NONE the model adds after it is not part of it);
+        empty for NONE.
 
     """
 
     found = []
     for match in _BLOCK.finditer(strip_thinking(reply)):
+        reason = match["reason"].strip().split("\n", 1)[0]
+        reason = re.sub(r"\s*\bNONE\s*$", "", reason)
         original, suggestion, reason = (
-            _unquoted(match[name])
-            for name in ("original", "suggestion", "reason")
+            _unquoted(text)
+            for text in (match["original"], match["suggestion"], reason)
         )
         if original:
             found.append((original, suggestion, reason))
@@ -497,9 +596,10 @@ def rejection(
         ``""`` when the change can be kept; otherwise the first reason it
         cannot: the words are not in the paragraph (``locate``), nothing
         changes, or the suggestion changes numbers, negations, citation
-        placeholders, a defined acronym or a preferred term, or brings back
-        a form the document does not use. The suggestion is compared with
-        the paragraph's own words.
+        placeholders, a hedge or modal verb ("virtually", "would"), a
+        defined acronym or a preferred term, or brings back a form the
+        document does not use. The suggestion is compared with the
+        paragraph's own words.
 
     """
 
@@ -520,6 +620,10 @@ def rejection(
         _NEGATION.findall(suggestion)
     ):
         return "it changes a negation"
+    if Counter(word.casefold() for word in _HEDGE.findall(original)) != (
+        Counter(word.casefold() for word in _HEDGE.findall(suggestion))
+    ):
+        return "it changes a hedge or modal verb"
     kept = [*glossary.acronyms, *set(glossary.terms.values())]
     for term in kept:
         pattern = rf"(?<![\w-]){re.escape(term)}(?![\w-])"
@@ -563,9 +667,11 @@ def review_paragraph(
     -------
     tuple[list[Finding], list[Dropped], str]
         The kept findings (level ``grammar`` or ``style``, check
-        ``model``, quoting the paragraph's own words), the suggestions
-        dropped by ``rejection`` with the reason, and why the call failed
-        (``""`` when it did not). A failed call is reported, not fatal.
+        ``model``, quoting the paragraph's own words, cut to the changed
+        words by ``trim_change``), the suggestions dropped by
+        ``rejection`` with the reason (``CONTEXT_QUOTED`` for words from
+        the surrounding sentences), and why the call failed (``""`` when
+        it did not). A failed call is reported, not fatal.
 
     """
 
@@ -580,17 +686,21 @@ def review_paragraph(
     found = parse_findings(reply)
     if level == LEVEL_STYLE:
         found = found[:_STYLE_MAX]
+    context_text = " ".join(neighbours(document, index))
     kept: list[Finding] = []
     dropped: list[Dropped] = []
     for original, suggestion, reason in found:
         why = rejection(original, suggestion, text, glossary)
         located = locate(original, text)
+        if located is None and locate(original, context_text) is not None:
+            why = CONTEXT_QUOTED
         if why or located is None:
             dropped.append(Dropped(original, suggestion, why))
             continue
         words, offset = located
+        words, suggestion, cut = trim_change(words, suggestion)
         kept.append(make_finding(
             document.paragraphs, index, level, "model", words,
-            suggestion, reason, offset,
+            suggestion, reason, offset + cut,
         ))
     return kept, dropped, ""

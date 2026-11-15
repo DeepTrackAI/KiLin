@@ -1,6 +1,6 @@
 {
   "SETTINGS": {
-    "LEVEL": "all",
+    "LEVEL": "auto",
     "CONFIRMATION": "when_large",
     "LARGE_BATCHES": 30,
     "QUICK_PARAGRAPHS": 10,
@@ -149,7 +149,8 @@
       "viii",
       "ix",
       "xi",
-      "xii"
+      "xii",
+      "mit"
     ]
   },
   "ESTIMATES": {

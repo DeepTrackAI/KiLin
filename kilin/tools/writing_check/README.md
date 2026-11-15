@@ -32,11 +32,11 @@ For "check the grammar and style of the methods of draft.tex", the tool:
 3. Runs the checks done in code on the whole document (`_checks.py`) and
    keeps the findings in the chosen part; their glossary goes into every
    model call.
-4. Plans one model call per paragraph and check (grammar, and style at
-   level `all` or `style`), plus one to describe the document when it has
-   no card, and asks first when the plan is large. The quick version
-   checks the grammar of the first `QUICK_PARAGRAPHS` paragraphs;
-   cancelling keeps the findings made in code.
+4. Plans one model call per paragraph and check (grammar, and style when the
+   question asks for it or at level `all` or `style`), plus one to describe
+   the document when it has no card, and asks first when the plan is large.
+   The quick version checks the grammar of the first `QUICK_PARAGRAPHS`
+   paragraphs; cancelling keeps the findings made in code.
 5. Checks each paragraph (`_review.py`) and drops suggestions that fail
    the checks below.
 6. Answers with the first `CHAT_FINDINGS` findings under their section
@@ -120,8 +120,11 @@ variant.
 Each paragraph is sent to the answering model on its own: once for
 grammar (clear errors only: agreement, verb forms, tense, articles,
 prepositions, punctuation, spelling, missing or extra words) and, when
-asked, once for style (at most five changes that clearly improve clarity
-or concision). Each call is told:
+asked, once for style (at most five changes, only where a reader would
+stumble: wordy phrases, ambiguous references, awkward constructions).
+Neither may replace a correct word with a synonym or to sound more
+formal, nor add, remove or soften a claim, hedge or modal verb. Each call
+is told:
 
 1. the document: its card's title, venue, aim, methods and findings
    (`ToolContext.card`), or, without a card, a two- or three-sentence brief
@@ -130,20 +133,26 @@ or concision). Each call is told:
    spelling), to keep;
 3. the section, with what it is for when the title says ("methods: what
    was done, usually in the past tense");
-4. the paragraph's readable text, with the last sentence before it and
-   the first sentence after it.
+4. the paragraph's readable text, to check, and the last sentence before
+   it and the first sentence after it, marked as context not to check or
+   quote.
 
 The model answers with `ORIGINAL`, `SUGGESTION` and `REASON` blocks, or
 `NONE`. Its quoted words are found in the paragraph with spaces, quotation
 marks, dashes and case ignored, and without a full stop, comma or ellipsis
-it added at either end; the finding then shows the paragraph's own words.
+it added at either end; the finding then shows the paragraph's own words,
+cut to the words that change with up to two words of context on each side
+(models often quote a whole sentence to change one word).
 A suggested change is dropped, not reported, when its original
 words are not in the paragraph, when nothing changes, or when it changes
-numbers, negations, citation placeholders (`[cite]`, `(ref)`, ...), removes
+numbers, negations, citation placeholders (`[cite]`, `(ref)`, ...), hedges
+or modal verbs ("virtually", "approximately", "would", "may", ...), removes
 a defined acronym or preferred term, or writes a term form the document
-does not use. Dropped suggestions are counted by reason in the chat and
-listed in the report's "Dropped suggestions" table, with why each was
-dropped. A failed call is reported for that paragraph and the others
+does not use, or when it quotes the surrounding sentences instead of the
+paragraph. Dropped suggestions are counted by reason in the chat and listed
+in the report's "Dropped suggestions" table with why each was dropped,
+except those that only quote the context or change nothing, which are only
+counted. A failed call is reported for that paragraph and the others
 are still checked; without a brief, the paragraphs are checked without it.
 
 ## Settings (`defaults.json`)
@@ -153,8 +162,10 @@ are still checked; without a brief, the paragraphs are checked without it.
 Project types may override these in the intent's `tool` object (lower
 case), and users per project.
 
-- `LEVEL` (default `all`): model checks to run: `grammar`, `style` or
-  `all` (both). The checks done in code always run.
+- `LEVEL` (default `auto`): model checks to run: `auto` (grammar, and
+  style when the question asks about style, wording, clarity, concision,
+  readability, flow or tone), `grammar`, `style` or `all` (both). The
+  checks done in code always run.
 - `CONFIRMATION` (default `when_large`): when to show the plan first:
   `always`, `when_large` or `never`.
 - `LARGE_BATCHES` (default `30`, range 0–1000): with `when_large`, plans

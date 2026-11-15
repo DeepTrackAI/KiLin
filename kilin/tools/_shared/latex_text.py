@@ -82,6 +82,23 @@ _WRAPPED: Final[re.Pattern[str]] = re.compile(
     r"\\[A-Za-z]+\*?\s*(?:\[[^\]]*\])?\{([^{}]*)\}"
 )
 _COMMAND: Final[re.Pattern[str]] = re.compile(r"\\[A-Za-z]+\*?")
+# Symbols written as commands, mostly in math ("15\times15\,\mu m").
+_SYMBOLS: Final[dict[str, str]] = {
+    "times": "×", "mu": "µ", "pm": "±", "approx": "≈", "le": "≤",
+    "leq": "≤", "ge": "≥", "geq": "≥", "sim": "~", "cdot": "·",
+    "degree": "°", "circ": "°", "alpha": "α", "beta": "β", "gamma": "γ",
+    "delta": "δ", "lambda": "λ", "sigma": "σ", "tau": "τ", "theta": "θ",
+    "Delta": "Δ",
+}
+_SYMBOL: Final[re.Pattern[str]] = re.compile(
+    r"\\(" + "|".join(sorted(_SYMBOLS, key=len, reverse=True))
+    + r")(?![A-Za-z])"
+)
+# Spacing commands ("vs.\ 81", "15\,µm") and TeX dashes and quotes.
+_SPACING: Final[re.Pattern[str]] = re.compile(r"\\[ ,;:!]")
+_TYPOGRAPHY: Final[tuple[tuple[str, str], ...]] = (
+    ("---", "—"), ("--", "–"), ("``", "“"), ("''", "”"),
+)
 # A command that writes a character with an accent ("\'e", "\"{o}",
 # "\v{c}"); a letter accent is not the start of a longer command.
 _ACCENT: Final[re.Pattern[str]] = re.compile(
@@ -107,6 +124,8 @@ def readable_latex(
     str
         The line without its comment, citations as ``cite`` writes them,
         math kept without brackets (so "[0, 1]" is not a citation),
+        common symbols printed ("\\times" as "×", "\\mu" as "µ"),
+        spacing commands as spaces, TeX dashes and quotes printed,
         section titles ending with a full stop so they do not join the
         next sentence, cross-references as "(ref)", formatting commands
         reduced to their words, other commands and braces removed.
@@ -116,10 +135,19 @@ def readable_latex(
     text = LATEX_COMMENT.sub("", line)
     text = LATEX_CITE.sub(cite, text)
     text = _INLINE_MATH.sub(
-        lambda match: (match.group(1) or match.group(2) or "")
-        .replace("[", "(").replace("]", ")"),
+        lambda match: _SYMBOL.sub(
+            lambda symbol: _SYMBOLS[symbol.group(1)],
+            (match.group(1) or match.group(2) or "")
+            .replace("^\\circ", "°").replace("^{\\circ}", "°"),
+        ).replace("[", "(").replace("]", ")"),
         text,
     )
+    text = _SYMBOL.sub(lambda match: _SYMBOLS[match.group(1)], text)
+    text = _SPACING.sub(
+        lambda match: " " if match.group(0)[1] in " ," else "", text
+    )
+    for tex, printed in _TYPOGRAPHY:
+        text = text.replace(tex, printed)
     heading = _HEADING.match(text) is not None
     text = _REFERENCE.sub("(ref)", text)
     text = _DROPPED.sub("", text)

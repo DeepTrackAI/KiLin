@@ -66,6 +66,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 import importlib
 from pathlib import Path
+import re
 from typing import Final
 
 from kilin.tools._contract import (
@@ -109,6 +110,7 @@ from kilin.tools.writing_check._document import (
     read_document,
 )
 from kilin.tools.writing_check._review import (
+    CONTEXT_QUOTED,
     Dropped,
     document_brief,
     document_context,
@@ -140,6 +142,16 @@ _LEVEL_ORDER: Final[tuple[str, ...]] = (
     LEVEL_GRAMMAR, LEVEL_CONSISTENCY, LEVEL_STYLE,
 )
 _WHOLE_DOCUMENT: Final[str] = "The whole document"
+# Words that ask for a style check with level "auto".
+_ASKS_STYLE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:style|stylistic|wording|clarity|clearer|concis\w*|readab\w*|"
+    r"flow|tone)\b",
+    re.IGNORECASE,
+)
+# Drops listed in the report; the others are only counted.
+_UNLISTED_DROPS: Final[frozenset[str]] = frozenset(
+    {"no change", "context quoted"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,8 +161,10 @@ class WritingCheckSettings:
     Attributes
     ----------
     level: str
-        Model checks to run: ``grammar``, ``style`` or ``all`` (both).
-        The checks done in code always run.
+        Model checks to run: ``auto`` (grammar, and style when the
+        question asks about style, wording, clarity or concision),
+        ``grammar``, ``style`` or ``all`` (both). The checks done in code
+        always run.
     confirmation: ConfirmationPolicy
         When to show the plan first: always, when_large, or never.
     large_batches: int
@@ -293,10 +307,7 @@ def run(
 
     card_reader = getattr(context, "card", None)
     card = card_reader(path) if card_reader is not None else None
-    levels = (
-        (LEVEL_GRAMMAR, LEVEL_STYLE) if settings.level == "all"
-        else (settings.level,)
-    )
+    levels = _levels(settings.level, request.question)
     paragraphs = scope.paragraphs
     calls = len(paragraphs) * len(levels) + (0 if card else 1)
     quick = min(len(paragraphs), settings.quick_paragraphs)
@@ -516,6 +527,32 @@ def _example(headings: Sequence[str]) -> str:
     return number if number[:1].isdigit() else f"“{first}”"
 
 
+def _levels(level: str, question: str) -> tuple[str, ...]:
+    """Return the model checks to run.
+
+    Parameters
+    ----------
+    level: str
+        The ``level`` setting.
+    question: str
+        The question.
+
+    Returns
+    -------
+    tuple[str, ...]
+        Grammar and style for ``all``; grammar, and style when the
+        question asks about style, wording, clarity or concision, for
+        ``auto``; otherwise the one level.
+
+    """
+
+    if level == "all" or (level == "auto" and _ASKS_STYLE.search(question)):
+        return LEVEL_GRAMMAR, LEVEL_STYLE
+    if level == "auto":
+        return (LEVEL_GRAMMAR,)
+    return (level,)
+
+
 def _why_kind(why: str) -> str:
     """Return the kind of reason a suggestion was dropped.
 
@@ -527,18 +564,20 @@ def _why_kind(why: str) -> str:
     Returns
     -------
     str
-        A short name for counting: "words not found", "no change",
-        "numbers changed", "citations changed", "negations changed" or
-        "terms changed".
+        A short name for counting: "context quoted", "words not found",
+        "no change", "numbers changed", "citations changed", "negations
+        changed", "hedges changed" or "terms changed".
 
     """
 
     for start, kind in (
+        (CONTEXT_QUOTED, "context quoted"),
         ("the words are not", "words not found"),
         ("nothing changes", "no change"),
         ("it changes numbers", "numbers changed"),
         ("it changes citations", "citations changed"),
         ("it changes a negation", "negations changed"),
+        ("it changes a hedge", "hedges changed"),
     ):
         if why.startswith(start):
             return kind
@@ -556,8 +595,10 @@ def _dropped_note(dropped: Sequence[tuple[int, str, Dropped]]) -> str:
     Returns
     -------
     str
-        "15 suggested changes were dropped (9 words not found, 4 numbers
-        changed, 2 terms changed); they are listed in the report."
+        "15 suggested changes were dropped (8 context quoted, 5 no change,
+        2 numbers changed); the others are listed in the report." Drops
+        that only quote the context or change nothing are counted, not
+        listed.
 
     """
 
@@ -569,9 +610,13 @@ def _dropped_note(dropped: Sequence[tuple[int, str, Dropped]]) -> str:
         "1 suggested change was" if len(dropped) == 1
         else f"{len(dropped)} suggested changes were"
     )
-    return (
-        f"{changes} dropped ({reasons}); they are listed in the report."
+    listed = any(
+        _why_kind(item.why) not in _UNLISTED_DROPS for _, _, item in dropped
     )
+    where = "; the others are listed in the report" if listed and any(
+        _why_kind(item.why) in _UNLISTED_DROPS for _, _, item in dropped
+    ) else ("; they are listed in the report" if listed else "")
+    return f"{changes} dropped ({reasons}){where}."
 
 
 def _call_seconds() -> float:
@@ -708,7 +753,8 @@ def report_markdown(
         Notes on how the check ran.
     dropped: Sequence[tuple[int, str, Dropped]], optional
         Suggestions the model made that were not kept, each with its
-        paragraph's first line and its level. Defaults to ``()``.
+        paragraph's first line and its level; those quoting the context
+        or changing nothing are not listed. Defaults to ``()``.
 
     Returns
     -------
@@ -730,7 +776,7 @@ def report_markdown(
         if name != current:
             current = name
             lines += [
-                "", f"## {name or 'Text'}", "",
+                "", f"## {name or 'Findings'}", "",
                 "| Line | Level | Original | Suggestion | Reason |",
                 "| ---: | --- | --- | --- | --- |",
             ]
@@ -739,6 +785,10 @@ def report_markdown(
             f" | {_cell(finding.suggestion) or '—'} | "
             f"{_cell(finding.reason)} |"
         )
+    dropped = [
+        entry for entry in dropped
+        if _why_kind(entry[2].why) not in _UNLISTED_DROPS
+    ]
     if dropped:
         lines += [
             "", "## Dropped suggestions", "",

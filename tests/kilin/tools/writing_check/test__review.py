@@ -25,6 +25,7 @@ from kilin.tools.writing_check._checks import (
 )
 from kilin.tools.writing_check._document import read_document
 from kilin.tools.writing_check._review import (
+    CONTEXT_QUOTED,
     brief_prompt,
     document_brief,
     document_context,
@@ -33,6 +34,7 @@ from kilin.tools.writing_check._review import (
     parse_findings,
     rejection,
     review_paragraph,
+    trim_change,
 )
 
 LATEX = r"""\begin{document}
@@ -99,10 +101,12 @@ class TestPrompts(unittest.TestCase):
             "Title: Diffusion in cells",
             "Section: 2 Methods (methods: what was done, usually in the "
             "past tense)",
+            "Context, for reference only (do not check or quote it):\n"
             "Sentence before the paragraph: Single-particle tracking (SPT) "
             "reveals diffusion of molecules in cells.",
-            '"""\nWe tracks 120 particles in order to estimate the '
-            'diffusion [cite]. It was not trivial.\n"""',
+            'Paragraph to check:\n"""\nWe tracks 120 particles in order '
+            'to estimate the diffusion [cite]. It was not trivial.\n"""',
+            "Check only the paragraph between the triple quotes.",
             "Sentence after the paragraph: The MSD grew linearly.",
             "Find the grammar errors",
             "ORIGINAL:", "Write NONE",
@@ -137,6 +141,12 @@ class TestReplies(unittest.TestCase):
              "agreement; methods in the past tense"),
             ("in order to estimate", "to estimate", "concise"),
         ])
+        # The reason is one line; a NONE after the last block is not in it.
+        self.assertEqual(
+            parse_findings("ORIGINAL: one\nSUGGESTION: a single\nREASON: "
+                           "precise NONE\nmore\n\nNONE"),
+            [("one", "a single", "precise")],
+        )
         # An unfinished block is not a finding.
         self.assertEqual(
             parse_findings("ORIGINAL: a\nSUGGESTION: b\n"), []
@@ -159,6 +169,8 @@ class TestReplies(unittest.TestCase):
              "paragraph"),
             ("did not use", "did  not use", "nothing changes"),
             ("as shown in (ref)", "as seen in (ref)", ""),
+            ("did not use the", "would not use the",
+             "it changes a hedge or modal verb"),
         ):
             with self.subTest(original=original):
                 self.assertEqual(
@@ -202,6 +214,26 @@ class TestLocate(unittest.TestCase):
         self.assertEqual(kept[0].original, "We used “raw” data")
 
 
+class TestTrim(unittest.TestCase):
+
+    def test_cut_to_the_changed_words(self) -> None:
+        for words, suggestion, expected in (
+            ("the simulation and any network form one differentiable "
+             "graph, so gradients reach",
+             "the simulation and any network form a single differentiable "
+             "graph, so gradients reach",
+             ("network form one differentiable graph,",
+              "network form a single differentiable graph,", 23)),
+            ("We tracks", "We tracked", ("We tracks", "We tracked", 0)),
+            ("the experiment itself the central object",
+             "the experiment itself as the central object",
+             ("experiment itself the central",
+              "experiment itself as the central", 4)),
+        ):
+            with self.subTest(words=words):
+                self.assertEqual(trim_change(words, suggestion), expected)
+
+
 class TestReviewParagraph(unittest.TestCase):
 
     def setUp(self) -> None:
@@ -240,6 +272,28 @@ class TestReviewParagraph(unittest.TestCase):
                 )
                 self.assertEqual((kept, dropped), ([], []))
                 self.assertTrue(failure.startswith(start))
+
+    def test_quotes_from_the_context_are_dropped_as_such(self) -> None:
+        reply = ("ORIGINAL: The MSD grew linearly\nSUGGESTION: The MSD "
+                 "increased linearly\nREASON: clearer\n")
+        kept, dropped, _ = review_paragraph(
+            LEVEL_STYLE, self.document, 1, "", self.glossary,
+            Mock(return_value=reply),
+        )
+        self.assertEqual(kept, [])
+        self.assertEqual([item.why for item in dropped], [CONTEXT_QUOTED])
+
+    def test_kept_findings_are_trimmed(self) -> None:
+        reply = ("ORIGINAL: We tracks 120 particles in order to estimate\n"
+                 "SUGGESTION: We tracks 120 particles to estimate\n"
+                 "REASON: concise\n")
+        kept, _, _ = review_paragraph(
+            LEVEL_STYLE, self.document, 1, "", self.glossary,
+            Mock(return_value=reply),
+        )
+        self.assertEqual((kept[0].original, kept[0].suggestion),
+                         ("120 particles in order to estimate",
+                          "120 particles to estimate"))
 
     def test_style_keeps_at_most_five(self) -> None:
         block = ("ORIGINAL: It was not trivial\nSUGGESTION: It was not "

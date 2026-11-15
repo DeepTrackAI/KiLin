@@ -70,6 +70,19 @@ class TestWritingCheckPackage(unittest.TestCase):
     def test_packaged_defaults_are_documented(self) -> None:
         assert_packaged_defaults(self, tool, tool.WritingCheckSettings)
 
+    def test_levels(self) -> None:
+        from kilin.tools.writing_check.tool import _levels
+        for level, question, expected in (
+            ("auto", "check the grammar of draft.tex", ("grammar",)),
+            ("auto", "check the wording of the methods",
+             ("grammar", "style")),
+            ("auto", "make the results clearer", ("grammar", "style")),
+            ("all", "check draft.tex", ("grammar", "style")),
+            ("style", "check draft.tex", ("style",)),
+        ):
+            with self.subTest(level=level, question=question):
+                self.assertEqual(_levels(level, question), expected)
+
     def test_invalid_project_type_settings(self) -> None:
         for values in (
             {"level": "everything"}, {"unknown": 1}, {"chat_findings": 201},
@@ -251,6 +264,20 @@ class TestWritingCheckRun(unittest.TestCase):
         )
         self.assertIn("(section 2 Methods)", result.answer)
         self.assertEqual(choose.call_args.args[1][-1], "The whole document")
+
+    def test_document_without_sections(self) -> None:
+        (self.root / "sources" / "notes.txt").write_text(
+            "We tracks the the particles.\n", encoding="utf-8"
+        )
+        context = self._context(
+            chunks=[chunk("n1", "notes", path="notes.txt")],
+            source_files=lambda: {Path("notes.txt"): 1},
+            card=Mock(return_value={"title": "Notes"}),
+        )
+        result, _ = self._run("check the grammar of notes.txt", context)
+        report = (self.root / "outputs" / "notes_writing_check.md")
+        self.assertIn("## Findings", report.read_text(encoding="utf-8"))
+        self.assertNotIn("**", result.answer.split("\n", 2)[2])
 
     def test_quoted_text_not_in_the_document(self) -> None:
         result, context = self._run(

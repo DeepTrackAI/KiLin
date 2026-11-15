@@ -36,6 +36,11 @@ class TestReadableLatex(unittest.TestCase):
              "Naive bold Fig. (ref)"),
             ("\\section{The \\emph{X} tool}\\label{s}", "The X tool."),
             ("\\textbf{Bold} \\v{c}a \\bibitem", "Bold ca "),
+            ("vs.\\ 81 in ($15\\times15\\,\\mu$m) at 37$^\\circ$C",
+             "vs. 81 in (15×15 µm) at 37°C"),
+            ("one stage --- a change --- in Fig.~\\ref{f}b--g, $x^2$",
+             "one stage — a change — in Fig. (ref)b–g, x^2"),
+            ("``quoted''", "“quoted”"),
         ):
             with self.subTest(line=line):
                 self.assertEqual(readable_latex(line, _keys), readable)

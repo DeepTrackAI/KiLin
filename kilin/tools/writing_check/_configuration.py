@@ -105,8 +105,9 @@ for _group, _keys in _GROUPS.items():
         require_section(_DEFAULTS, _group, _TOOL), _keys, f"{_TOOL}.{_group}"
     )
 
-# Which model passes run: grammar only, style only, or both.
-LEVELS: Final[tuple[str, ...]] = ("grammar", "style", "all")
+# Which model passes run: grammar only, style only, both, or grammar and,
+# when the question asks for it, style ("auto").
+LEVELS: Final[tuple[str, ...]] = ("auto", "grammar", "style", "all")
 
 _SETTINGS = require_section(_DEFAULTS, "SETTINGS", _TOOL)
 _WHERE = f"{_TOOL}.SETTINGS"
